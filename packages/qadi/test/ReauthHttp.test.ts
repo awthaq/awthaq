@@ -22,7 +22,7 @@ import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as AuthorizedSubject from "../src/AuthorizedSubject.ts";
 import * as Resolvers from "../src/Resolvers.ts";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, UserAgent } from "@awthaq/test";
 
 // A window of 0 makes any elapsed time "stale" without needing a test clock the
 // router's own runtime would not share; a wide window is never stale.
@@ -114,21 +114,14 @@ describe("Path A reauth over real HTTP (EEM-005)", () => {
       Effect.gen(function* () {
         const { handler } = HttpRouter.toWebHandler(AppLayer);
         const evaluation = yield* Layer.build(EvaluationServicesNone);
-        const loginResponse = yield* Effect.promise(() =>
-          handler(new Request("http://localhost/login", { method: "POST" }), evaluation),
-        );
-        const cookie = (loginResponse.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+        // A browser over the handler (with the evaluation services as each request's context): it signs in
+        // through `/login` and keeps the session cookie itself.
+        const browser = UserAgent.make({ handler: (request) => handler(request, evaluation) });
+        const loginResponse = yield* Effect.promise(() => browser.request("POST", "/login"));
+        assert.strictEqual(loginResponse.status, 200);
         yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 15)));
 
-        const stale = yield* Effect.promise(() =>
-          handler(
-            new Request("http://localhost/sensitive/stale", {
-              method: "POST",
-              headers: { cookie },
-            }),
-            evaluation,
-          ),
-        );
+        const stale = yield* Effect.promise(() => browser.request("POST", "/sensitive/stale"));
         assert.strictEqual(stale.status, 403);
         const decoded = Schema.decodeUnknownSync(Api.ReauthRequired)(
           yield* Effect.promise(() => stale.json()),
@@ -137,15 +130,7 @@ describe("Path A reauth over real HTTP (EEM-005)", () => {
         assert.strictEqual(decoded.maxAgeSeconds, 0);
 
         // A session within its window discharges the same obligation.
-        const fresh = yield* Effect.promise(() =>
-          handler(
-            new Request("http://localhost/sensitive/fresh", {
-              method: "POST",
-              headers: { cookie },
-            }),
-            evaluation,
-          ),
-        );
+        const fresh = yield* Effect.promise(() => browser.request("POST", "/sensitive/fresh"));
         assert.strictEqual(fresh.status, 200);
       }),
     ),

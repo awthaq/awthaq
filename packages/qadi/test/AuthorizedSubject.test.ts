@@ -95,21 +95,11 @@ describe("AuthorizedSubject (real HTTP)", () => {
     "BEH-EA-145: with a real session cookie, the handler sees the user's own subject id",
     () =>
       Effect.gen(function* () {
-        const { handler } = TestAuth.app(AppLayer);
-        const loginResponse = yield* Effect.promise(() =>
-          handler(new Request("http://localhost/login", { method: "POST" })),
-        );
-        const cookie = loginResponse.headers.get("set-cookie");
-        if (cookie === null) {
-          throw new Error("expected /login to set a session cookie");
-        }
-        const cookieValue = cookie.split(";")[0];
-
-        const whoamiResponse = yield* Effect.promise(() =>
-          handler(
-            new Request("http://localhost/whoami", { headers: { cookie: cookieValue ?? "" } }),
-          ),
-        );
+        // A browser signs in through the test's `/login` endpoint and keeps the session cookie itself.
+        const browser = yield* Effect.promise(() => TestAuth.app(AppLayer).agent());
+        const loginResponse = yield* Effect.promise(() => browser.request("POST", "/login"));
+        assert.strictEqual(loginResponse.status, 200);
+        const whoamiResponse = yield* Effect.promise(() => browser.request("GET", "/whoami"));
         assert.strictEqual(whoamiResponse.status, 200);
         const body = (yield* Effect.promise(() => whoamiResponse.json())) as {
           subjectId: string;

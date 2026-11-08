@@ -1,7 +1,7 @@
 // A real `HttpRouter.toWebHandler` test of `SubjectApi.ts`'s "whoami"
 // contract, the same harness shape `AuthorizedSubject.test.ts` already uses
-// (a tiny `/login` endpoint mints a real session cookie the second request
-// carries) — proving the real, exported `SubjectApi`/`SubjectHandlers`
+// (a tiny `/login` endpoint mints a real session cookie; the agent that called
+// it carries the cookie on its next request) — proving the real, exported `SubjectApi`/`SubjectHandlers`
 // actually serve a decodable `SubjectDto`, not just that the underlying
 // `AuthorizedSubject` middleware chain resolves a subject in memory.
 import { SubjectContract, SessionContract, SessionLifecycle } from "@awthaq/api";
@@ -19,7 +19,7 @@ import * as AuthorizedSubject from "../src/AuthorizedSubject.ts";
 import * as Resolvers from "../src/Resolvers.ts";
 import * as SubjectApi from "../src/SubjectApi.ts";
 import * as UserClaims from "../src/UserClaims.ts";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, UserAgent } from "@awthaq/test";
 
 // The real, shipped `SubjectApi.SubjectGroup`/`SubjectHandlers` exactly as `@awthaq/react` consumes them, plus a tiny
 // `/login` group of the test's own (it mints a real session cookie the second request carries), both riding as
@@ -73,10 +73,13 @@ const ExposingLayer = TestAuth.layer(built, {
   ),
 });
 
-const loginCookie = (handler: (request: Request) => Promise<Response>) =>
+/** A browser that signed in through the test's own `/login` endpoint: it keeps the session cookie itself. */
+const loggedIn = (app: { readonly agent: () => Promise<UserAgent.UserAgent> }) =>
   Effect.promise(async () => {
-    const response = await handler(new Request("http://localhost/login", { method: "POST" }));
-    return response.headers.get("set-cookie")?.split(";")[0] ?? "";
+    const browser = await app.agent();
+    const response = await browser.request("POST", "/login");
+    assert.strictEqual(response.status, 200);
+    return browser;
   });
 
 describe("SubjectApi exposedAttributes (AAPS-008)", () => {
@@ -84,11 +87,8 @@ describe("SubjectApi exposedAttributes (AAPS-008)", () => {
     "an exposed resolver-backed attribute appears in GET /subject, unexposed ones do not",
     () =>
       Effect.gen(function* () {
-        const { handler } = TestAuth.app(ExposingLayer);
-        const cookie = yield* loginCookie(handler);
-        const response = yield* Effect.promise(() =>
-          handler(new Request("http://localhost/subject", { headers: { cookie } })),
-        );
+        const browser = yield* loggedIn(TestAuth.app(ExposingLayer));
+        const response = yield* Effect.promise(() => browser.request("GET", "/subject"));
         assert.strictEqual(response.status, 200);
         const dto = Schema.decodeUnknownSync(SubjectContract.SubjectDto)(
           yield* Effect.promise(() => response.json()),
@@ -102,11 +102,8 @@ describe("SubjectApi exposedAttributes (AAPS-008)", () => {
 
   it.effect("by default (nothing exposed) no resolver-backed attribute reaches the client", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(AppLayer);
-      const cookie = yield* loginCookie(handler);
-      const response = yield* Effect.promise(() =>
-        handler(new Request("http://localhost/subject", { headers: { cookie } })),
-      );
+      const browser = yield* loggedIn(TestAuth.app(AppLayer));
+      const response = yield* Effect.promise(() => browser.request("GET", "/subject"));
       const dto = Schema.decodeUnknownSync(SubjectContract.SubjectDto)(
         yield* Effect.promise(() => response.json()),
       );
@@ -153,21 +150,8 @@ describe("SubjectApi (real HTTP)", () => {
     "BEH-EA-179: with a real session cookie, /subject resolves the user's own subject id",
     () =>
       Effect.gen(function* () {
-        const { handler } = TestAuth.app(AppLayer);
-        const loginResponse = yield* Effect.promise(() =>
-          handler(new Request("http://localhost/login", { method: "POST" })),
-        );
-        const cookie = loginResponse.headers.get("set-cookie");
-        if (cookie === null) {
-          throw new Error("expected /login to set a session cookie");
-        }
-        const cookieValue = cookie.split(";")[0];
-
-        const subjectResponse = yield* Effect.promise(() =>
-          handler(
-            new Request("http://localhost/subject", { headers: { cookie: cookieValue ?? "" } }),
-          ),
-        );
+        const browser = yield* loggedIn(TestAuth.app(AppLayer));
+        const subjectResponse = yield* Effect.promise(() => browser.request("GET", "/subject"));
         assert.strictEqual(subjectResponse.status, 200);
         const body = (yield* Effect.promise(() => subjectResponse.json())) as { id: string };
         assert.match(body.id, /^user:/);

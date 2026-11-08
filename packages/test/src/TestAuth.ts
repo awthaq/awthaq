@@ -463,6 +463,36 @@ export const csrfToken = (
   return `${signed}.${createHmac("sha256", key).update(signed).digest("hex")}`;
 };
 
+/**
+ * The `Set-Cookie` of a freshly minted `__Host-csrf` (see `csrfToken`), for seeding an agent over a hand-wired
+ * handler the way `TestAuth.app` seeds its own: `agent.cookies.receive(TestAuth.csrfSetCookie(secret))`.
+ * `sameSite`/`partitioned` follow `SessionCookie.csrfCookieOptions` (default `Strict`).
+ */
+export const csrfSetCookie = (
+  secret: Redacted.Redacted<string> | string,
+  options?: {
+    readonly issuedAt?: number;
+    readonly sameSite?: "strict" | "none";
+    readonly partitioned?: true;
+  },
+): string =>
+  Effect.runSync(
+    serialize(
+      Api.CSRF_COOKIE_NAME,
+      csrfToken(
+        secret,
+        options?.issuedAt === undefined ? undefined : { issuedAt: options.issuedAt },
+      ),
+      {
+        path: "/",
+        secure: true,
+        httpOnly: false,
+        sameSite: options?.sameSite ?? "strict",
+        ...(options?.partitioned === undefined ? {} : { partitioned: options.partitioned }),
+      },
+    ),
+  );
+
 /** What a request through `TestAuth.app` may carry: an agent's `RequestInit`. */
 export type RequestInit = UserAgent.RequestInit & {
   /**
@@ -607,7 +637,7 @@ export const app = <A, E>(
   let csrfConfig:
     | Promise<{
         readonly secret: Redacted.Redacted<string>;
-        readonly cookie: Cookies.Cookie["options"];
+        readonly cookie: ReturnType<typeof SessionCookie.csrfCookieOptions>;
       }>
     | undefined;
   const csrfCookie = async () => {
@@ -615,20 +645,11 @@ export const app = <A, E>(
       Effect.gen(function* () {
         const config = yield* Csrf.CsrfConfig;
         const cookieConfig = yield* SessionCookie.SessionCookieConfig;
-        return {
-          secret: config.secret,
-          cookie: {
-            path: "/",
-            secure: true,
-            httpOnly: false,
-            ...SessionCookie.csrfCookieOptions(cookieConfig),
-          },
-        };
+        return { secret: config.secret, cookie: SessionCookie.csrfCookieOptions(cookieConfig) };
       }),
     );
     const { secret, cookie } = await csrfConfig;
-    const token = csrfToken(secret, { issuedAt: Math.floor(now() / 1000) });
-    return Effect.runSync(serialize(Api.CSRF_COOKIE_NAME, token, cookie));
+    return csrfSetCookie(secret, { issuedAt: Math.floor(now() / 1000), ...cookie });
   };
 
   const agent = async (agentOptions: AgentOptions = {}) => {

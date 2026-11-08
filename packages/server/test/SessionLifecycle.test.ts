@@ -168,6 +168,10 @@ const bodyOf = (response: Response) =>
 
 const bearer = { [Api.TOKEN_DELIVERY_HEADER]: "bearer" };
 
+/** The one `Set-Cookie` line naming `name` (not whichever cookie the joined header happens to list first). */
+const setCookieNamed = (response: Response, name: string): string =>
+  response.headers.getSetCookie().find((line) => line.startsWith(`${name}=`)) ?? "";
+
 describe("SessionLifecycle markers (ADR-EA-045)", () => {
   it.effect(
     "Mints: an unknown X-Awthaq-Token-Delivery answers 400 and the handler never runs",
@@ -226,7 +230,7 @@ describe("SessionDelivery over the grants (ADR-EA-045, MNA-001)", () => {
         const response = yield* mint("respond");
         assert.strictEqual(response.status, 200);
         assert.include(
-          response.headers.get("set-cookie") ?? "",
+          setCookieNamed(response, Sessions.SESSION_COOKIE_NAME),
           `${Sessions.SESSION_COOKIE_NAME}=${TOKEN}`,
         );
         assert.isNull(response.headers.get(Api.ROTATED_TOKEN_HEADER));
@@ -265,7 +269,7 @@ describe("SessionDelivery over the grants (ADR-EA-045, MNA-001)", () => {
         const response = yield* post("/end", bearer);
         assert.strictEqual(response.status, 204);
         assert.match(
-          response.headers.get("set-cookie") ?? "",
+          setCookieNamed(response, Sessions.SESSION_COOKIE_NAME),
           new RegExp(`^${Sessions.SESSION_COOKIE_NAME}=;`),
         );
         assert.strictEqual(response.headers.get(Api.SESSION_ENDED_HEADER), "1");
@@ -284,13 +288,13 @@ describe("SessionDelivery over the grants (ADR-EA-045, MNA-001)", () => {
         const swapped = yield* post("/swap-in");
         assert.strictEqual(swapped.status, 204);
         assert.include(
-          swapped.headers.get("set-cookie") ?? "",
+          setCookieNamed(swapped, Api.IMPERSONATION_COOKIE_NAME),
           `${Api.IMPERSONATION_COOKIE_NAME}=${TOKEN}`,
         );
         const back = yield* post("/swap-out");
         assert.strictEqual(back.status, 204);
         assert.match(
-          back.headers.get("set-cookie") ?? "",
+          setCookieNamed(back, Api.IMPERSONATION_COOKIE_NAME),
           new RegExp(`^${Api.IMPERSONATION_COOKIE_NAME}=;`),
         );
       }),
@@ -316,7 +320,7 @@ describe("SessionDelivery over the grants (ADR-EA-045, MNA-001)", () => {
       assert.strictEqual(response.status, 302);
       assert.strictEqual(response.headers.get("location"), "http://localhost/landed");
       assert.include(
-        response.headers.get("set-cookie") ?? "",
+        setCookieNamed(response, Sessions.SESSION_COOKIE_NAME),
         `${Sessions.SESSION_COOKIE_NAME}=${TOKEN}`,
       );
     }),

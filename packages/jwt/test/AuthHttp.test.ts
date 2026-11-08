@@ -3,9 +3,9 @@
 // `HttpRouter.toWebHandler`, real HTTP request/response, mirroring every
 // other plugin's own `AuthHttp.test.ts`. `jwks` needs no `Authentication`
 // middleware/session at all — it is public by definition; `token` does,
-// mirroring `packages/organization/test/AuthHttp.test.ts`'s own
-// `issueSessionCookieHeader` pattern for setting one up.
-import { Auth, Sessions, Users } from "@awthaq/core";
+// and a signed-in agent (`TestAuth.app(...).signIn`) holds the session
+// cookie that authenticates it.
+import { Auth, SessionCookie, Sessions, type Users } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -13,7 +13,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
+import * as Cookies from "effect/http/Cookies";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtCodec from "../src/JwtCodec.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
@@ -43,28 +43,30 @@ const buildHandler = () => {
   const { handler } = app;
   const withAppContext = app.run;
 
-  /** Mirrors `@awthaq/organization`'s own `AuthHttp.test.ts`: a real session cookie against the same running `Sessions` instance. */
-  const issueSessionCookieHeader = (userId: string): Promise<string> =>
-    withAppContext(
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
-        return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
-      }),
-    );
+  /** A browser holding a real session against the same running `Sessions` instance. */
+  const signIn = (email: string) => app.signIn(email);
 
-  /** TIR-007: a second, separate session for the same user, plus a way to revoke one by its id. */
-  const issueSession = (userId: string) =>
+  /**
+   * TIR-007: a second, separate session for the same user (an agent holding it, seeded with the session's
+   * cookie), plus its id so one can be revoked.
+   */
+  const issueSession = (userId: Users.UserId) =>
     withAppContext(
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
-        return {
-          cookie: `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`,
-          sessionId: issued.session.id,
-        };
+        const issued = yield* sessions.issue({ userId });
+        // The `Set-Cookie` the server would answer, rendered under the composition's cookie config.
+        const rendered = yield* SessionCookie.render(issued.session, issued.token);
+        const setCookie = Cookies.serializeCookie(
+          Cookies.makeCookieUnsafe(rendered.name, rendered.value, rendered.options),
+        );
+        return { setCookie, sessionId: issued.session.id };
       }),
-    );
+    ).then(async ({ setCookie, sessionId }) => {
+      const browser = await app.agent();
+      browser.cookies.receive(setCookie);
+      return { browser, sessionId };
+    });
 
   const revokeSession = (sessionId: Sessions.SessionId): Promise<void> =>
     withAppContext(
@@ -111,7 +113,7 @@ const buildHandler = () => {
       }),
     );
 
-  return { handler, issueSessionCookieHeader, issueSession, revokeSession, revokeJti, verifyToken };
+  return { handler, signIn, issueSession, revokeSession, revokeJti, verifyToken };
 };
 
 describe("AuthHttp + Jwt (real HTTP)", () => {
@@ -152,19 +154,17 @@ describe("AuthHttp + Jwt (real HTTP)", () => {
 
   // AVS-007: minting a credential is an action, so it is POST-only — a GET must not reach it.
   it("GET /jwt/token is not served (minting is POST-only)", async () => {
-    const { handler, issueSessionCookieHeader } = buildHandler();
-    const cookie = await issueSessionCookieHeader("user-1");
-    const response = await handler(new Request(`${ORIGIN}/jwt/token`, { headers: { cookie } }));
+    const { signIn } = buildHandler();
+    const alice = await signIn("alice@example.com");
+    const response = await alice.request("GET", "/jwt/token");
     assert.strictEqual(response.status, 404);
   });
 
   it("POST /jwt/token mints a token verifiable against /jwt/jwks", async () => {
-    const { handler, issueSessionCookieHeader, verifyToken } = buildHandler();
-    const cookie = await issueSessionCookieHeader("user-1");
+    const { signIn, verifyToken } = buildHandler();
+    const alice = await signIn("alice@example.com");
 
-    const minted = await handler(
-      new Request(`${ORIGIN}/jwt/token`, { method: "POST", headers: { cookie } }),
-    );
+    const minted = await alice.request("POST", "/jwt/token");
     assert.strictEqual(minted.status, 200);
     // PDR-003: response mirroring is opt-in now (`mirrorResponses`, default
     // "off"), so this endpoint's token arrives in the body only.
@@ -173,7 +173,7 @@ describe("AuthHttp + Jwt (real HTTP)", () => {
     assert.isString(body.token);
 
     const claims = await verifyToken(body.token);
-    assert.strictEqual(claims["sub"], "user-1");
+    assert.strictEqual(claims["sub"], alice.userId);
   });
 
   it("POST /jwt/introspect requires authentication", async () => {
@@ -189,28 +189,20 @@ describe("AuthHttp + Jwt (real HTTP)", () => {
   });
 
   it("POST /jwt/introspect reports active:true for a freshly minted token, active:false once its jti is revoked", async () => {
-    const { handler, issueSessionCookieHeader, revokeJti, verifyToken } = buildHandler();
-    const cookie = await issueSessionCookieHeader("user-1");
+    const { signIn, revokeJti, verifyToken } = buildHandler();
+    const alice = await signIn("alice@example.com");
 
-    const mintedResponse = await handler(
-      new Request(`${ORIGIN}/jwt/token`, { method: "POST", headers: { cookie } }),
-    );
+    const mintedResponse = await alice.request("POST", "/jwt/token");
     const { token } = (await mintedResponse.json()) as { token: string };
 
     const introspect = (): Promise<Response> =>
-      handler(
-        new Request(`${ORIGIN}/jwt/introspect`, {
-          method: "POST",
-          headers: { cookie, "content-type": "application/json" },
-          body: JSON.stringify({ token }),
-        }),
-      );
+      alice.request("POST", "/jwt/introspect", { json: { token } });
 
     const active = await introspect();
     assert.strictEqual(active.status, 200);
     const activeBody = (await active.json()) as { active: boolean; claims?: { sub: string } };
     assert.isTrue(activeBody.active);
-    assert.strictEqual(activeBody.claims?.sub, "user-1");
+    assert.strictEqual(activeBody.claims?.sub, alice.userId);
 
     const claims = await verifyToken(token);
     const jti = claims["jti"] as string;
@@ -228,21 +220,16 @@ describe("AuthHttp + Jwt (real HTTP)", () => {
 // `Sessions` is composed (it always is here — `Authentication` needs it).
 describe("POST /jwt/introspect session liveness (TIR-007)", () => {
   it("reports active:false once the minting session is revoked", async () => {
-    const { handler, issueSession, revokeSession } = buildHandler();
-    const minting = await issueSession("user-1");
-    const caller = await issueSession("user-1");
-    const mintedResponse = await handler(
-      new Request(`${ORIGIN}/jwt/token`, { method: "POST", headers: { cookie: minting.cookie } }),
-    );
+    const { signIn, issueSession, revokeSession } = buildHandler();
+    const { userId } = await signIn("user-1@example.com");
+    const minting = await issueSession(userId);
+    const caller = await issueSession(userId);
+    const mintedResponse = await minting.browser.request("POST", "/jwt/token");
     const { token } = (await mintedResponse.json()) as { token: string };
     const introspect = async (): Promise<boolean> => {
-      const response = await handler(
-        new Request(`${ORIGIN}/jwt/introspect`, {
-          method: "POST",
-          headers: { cookie: caller.cookie, "content-type": "application/json" },
-          body: JSON.stringify({ token }),
-        }),
-      );
+      const response = await caller.browser.request("POST", "/jwt/introspect", {
+        json: { token },
+      });
       return ((await response.json()) as { active: boolean }).active;
     };
 
@@ -273,15 +260,11 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
       }),
       { baseUrl: ORIGIN },
     );
-    const issueSessionToken = () =>
-      app.run(
-        Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          const issued = yield* sessions.issue({ userId: Users.UserId("user-1") });
-          return Redacted.value(issued.token);
-        }),
-      );
-    return { handler: app.handler, issueSessionToken };
+    return {
+      handler: app.handler,
+      signIn: (email: string) => app.signIn(email),
+      signInBearer: (email: string) => app.signIn(email, { delivery: "bearer" }),
+    };
   };
 
   const verifyMirrored = async (
@@ -308,25 +291,17 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
   // header is a log/proxy/APM capture surface, so nothing is mirrored unless
   // the deployment opts in.
   it("default config: GET /session carries no x-jwt-token header", async () => {
-    const { handler, issueSessionToken } = buildApp();
-    const token = await issueSessionToken();
-    const response = await handler(
-      new Request(`${ORIGIN}/session`, {
-        headers: { cookie: `__Host-session=${encodeURIComponent(token)}` },
-      }),
-    );
+    const { signIn } = buildApp();
+    const alice = await signIn("alice@example.com");
+    const response = await alice.request("GET", "/session");
     assert.strictEqual(response.status, 200);
     assert.isNull(response.headers.get("x-jwt-token"));
   });
 
   it('mirrorResponses: "always": GET /session (not a Jwt endpoint) carries a mirrored, verifiable x-jwt-token header', async () => {
-    const { handler, issueSessionToken } = buildApp("always");
-    const token = await issueSessionToken();
-    const response = await handler(
-      new Request(`${ORIGIN}/session`, {
-        headers: { cookie: `__Host-session=${encodeURIComponent(token)}` },
-      }),
-    );
+    const { handler, signIn } = buildApp("always");
+    const alice = await signIn("alice@example.com");
+    const response = await alice.request("GET", "/session");
     assert.strictEqual(response.status, 200);
     const mirrored = response.headers.get("x-jwt-token");
     assert.isString(mirrored);
@@ -334,30 +309,25 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
       throw new Error("expected x-jwt-token header");
     }
     const claims = await verifyMirrored(handler, mirrored);
-    assert.strictEqual(claims["sub"], "user-1");
+    assert.strictEqual(claims["sub"], alice.userId);
   });
 
   it('mirrorResponses: "bearer": a cookie-authenticated request gets no header, a bearer-authenticated one does', async () => {
-    const { handler, issueSessionToken } = buildApp("bearer");
-    const token = await issueSessionToken();
-    const viaCookie = await handler(
-      new Request(`${ORIGIN}/session`, {
-        headers: { cookie: `__Host-session=${encodeURIComponent(token)}` },
-      }),
-    );
+    const { handler, signIn, signInBearer } = buildApp("bearer");
+    const browser = await signIn("browser@example.com");
+    const viaCookie = await browser.request("GET", "/session");
     assert.strictEqual(viaCookie.status, 200);
     assert.isNull(viaCookie.headers.get("x-jwt-token"));
 
-    const viaBearer = await handler(
-      new Request(`${ORIGIN}/session`, { headers: { authorization: `Bearer ${token}` } }),
-    );
+    const native = await signInBearer("native@example.com");
+    const viaBearer = await native.request("GET", "/session");
     assert.strictEqual(viaBearer.status, 200);
     const mirrored = viaBearer.headers.get("x-jwt-token");
     assert.isString(mirrored);
     if (mirrored === null) {
       throw new Error("expected x-jwt-token header");
     }
-    assert.strictEqual((await verifyMirrored(handler, mirrored))["sub"], "user-1");
+    assert.strictEqual((await verifyMirrored(handler, mirrored))["sub"], native.userId);
   });
 
   // BO-006 (ADR D1 option C): the opt-in, short-lived JWT session-mirror
@@ -365,21 +335,21 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
   describe("session-mirror cookie (BO-006)", () => {
     const MIRROR = "__Host-session-jwt";
 
-    const sessionRequest = (token: string) =>
-      new Request(`${ORIGIN}/session`, {
-        headers: { cookie: `__Host-session=${encodeURIComponent(token)}` },
-      });
+    /** A signed-in browser's `GET /session`, and the agent (it keeps the mirror cookie it is answered). */
+    const sessionRequest = async (signIn: (email: string) => Promise<TestAuth.SignedInAgent>) => {
+      const alice = await signIn("alice@example.com");
+      return { alice, response: await alice.request("GET", "/session") };
+    };
 
     it("default config mints no mirror cookie", async () => {
-      const { handler, issueSessionToken } = buildApp();
-      const response = await handler(sessionRequest(await issueSessionToken()));
+      const { response } = await sessionRequest(buildApp().signIn);
       assert.strictEqual(response.status, 200);
       assert.notInclude(response.headers.getSetCookie().join("\n"), MIRROR);
     });
 
     it("sessionCookie: true sets an HttpOnly/Secure/SameSite=Strict __Host- cookie holding a verifiable JWT that expires with the cookie", async () => {
-      const { handler, issueSessionToken } = buildApp(undefined, true);
-      const response = await handler(sessionRequest(await issueSessionToken()));
+      const { handler, signIn } = buildApp(undefined, true);
+      const { alice, response } = await sessionRequest(signIn);
       assert.strictEqual(response.status, 200);
       const cookie = response.headers
         .getSetCookie()
@@ -393,16 +363,18 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
       assert.include(cookie, "Max-Age=300");
       const token = decodeURIComponent(cookie.slice(MIRROR.length + 1).split(";")[0] ?? "");
       const claims = await verifyMirrored(handler, token);
-      assert.strictEqual(claims["sub"], "user-1");
+      assert.strictEqual(claims["sub"], alice.userId);
       assert.strictEqual(Number(claims["exp"]) - Number(claims["iat"]), 300);
+      // A browser stores it: it is a conforming `__Host-` cookie.
+      assert.strictEqual(alice.cookies.get(MIRROR)?.httpOnly, true);
     });
 
     it("honours a custom name and ttl", async () => {
-      const { handler, issueSessionToken } = buildApp(undefined, {
+      const { signIn } = buildApp(undefined, {
         name: "__Host-edge",
         ttl: Duration.minutes(1),
       });
-      const response = await handler(sessionRequest(await issueSessionToken()));
+      const { response } = await sessionRequest(signIn);
       const cookie = response.headers
         .getSetCookie()
         .find((header) => header.startsWith("__Host-edge="));
@@ -411,11 +383,8 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
     });
 
     it("a bearer-authenticated request gets no mirror cookie", async () => {
-      const { handler, issueSessionToken } = buildApp(undefined, true);
-      const token = await issueSessionToken();
-      const response = await handler(
-        new Request(`${ORIGIN}/session`, { headers: { authorization: `Bearer ${token}` } }),
-      );
+      const native = await buildApp(undefined, true).signInBearer("native@example.com");
+      const response = await native.request("GET", "/session");
       assert.strictEqual(response.status, 200);
       assert.notInclude(response.headers.getSetCookie().join("\n"), MIRROR);
     });

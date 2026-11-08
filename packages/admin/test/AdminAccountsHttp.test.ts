@@ -1,13 +1,13 @@
 // BAM-005/BAM-009 (BEH-EA-225): the `admin.accounts` group over a real `HttpRouter` — real status
 // codes, a real session cookie, the CSRF double-submit: deny-by-default 403, the erasure cascade
 // behind DELETE, the 202 of a mailed email change, the 422 of a weak password.
-import { Accounts, Auth, Sessions, Users } from "@awthaq/core";
+import { Accounts, Auth, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, type UserAgent } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
+import * as Cookies from "effect/http/Cookies";
 import * as Admin from "../src/Admin.ts";
 import * as AdminAccounts from "../src/AdminAccounts.ts";
 
@@ -41,20 +41,32 @@ const buildHandler = (config: Partial<Admin.AdminConfigShape>) => {
       }),
     );
 
-  const cookieFor = (userId: string) =>
-    inApp(
+  /** A browser holding a fresh session of `userId` (the `Set-Cookie` the server would have answered). */
+  const signInAs = async (userId: string) => {
+    const setCookie = await inApp(
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
-        return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
+        const rendered = yield* SessionCookie.render(issued.session, issued.token);
+        return Cookies.serializeCookie(
+          Cookies.makeCookieUnsafe(rendered.name, rendered.value, rendered.options),
+        );
       }),
     );
+    const browser = await app.agent();
+    browser.cookies.receive(setCookie);
+    return browser;
+  };
 
-  /** The CSRF double-submit pair a browser would send comes with `TestAuth.app`'s `request`. */
-  const call = (method: "POST" | "DELETE", path: string, cookie: string, body?: unknown) =>
-    app.request(method, path, { cookie, ...(body === undefined ? {} : { json: body }) });
+  /** The browser sends its cookies and echoes its CSRF cookie itself. */
+  const call = (
+    method: "POST" | "DELETE",
+    path: string,
+    browser: UserAgent.UserAgent,
+    body?: unknown,
+  ) => browser.request(method, path, body === undefined ? {} : { json: body });
 
-  return { inApp, seedUser, cookieFor, call };
+  return { inApp, seedUser, signInAs, call };
 };
 
 describe("AdminAccounts (real HTTP)", () => {
@@ -63,12 +75,12 @@ describe("AdminAccounts (real HTTP)", () => {
       const app = buildHandler({});
       const adminId = yield* Effect.promise(() => app.seedUser("admin"));
       const targetId = yield* Effect.promise(() => app.seedUser("target"));
-      const cookie = yield* Effect.promise(() => app.cookieFor(adminId));
+      const admin = yield* Effect.promise(() => app.signInAs(adminId));
       const statuses = yield* Effect.promise(() =>
         Promise.all([
-          app.call("DELETE", `/admin/users/${targetId}`, cookie),
-          app.call("POST", `/admin/users/${targetId}/email`, cookie, { email: "new@example.com" }),
-          app.call("POST", `/admin/users/${targetId}/password`, cookie, {
+          app.call("DELETE", `/admin/users/${targetId}`, admin),
+          app.call("POST", `/admin/users/${targetId}/email`, admin, { email: "new@example.com" }),
+          app.call("POST", `/admin/users/${targetId}/password`, admin, {
             password: "a brand new strong password",
           }),
         ]).then((responses) => responses.map((response) => response.status)),
@@ -82,14 +94,14 @@ describe("AdminAccounts (real HTTP)", () => {
       const app = buildHandler({ canDeleteUsers: allow });
       const adminId = yield* Effect.promise(() => app.seedUser("admin"));
       const targetId = yield* Effect.promise(() => app.seedUser("target"));
-      const cookie = yield* Effect.promise(() => app.cookieFor(adminId));
+      const admin = yield* Effect.promise(() => app.signInAs(adminId));
 
       const self = yield* Effect.promise(() =>
-        app.call("DELETE", `/admin/users/${adminId}`, cookie),
+        app.call("DELETE", `/admin/users/${adminId}`, admin),
       );
       assert.strictEqual(self.status, 400);
       const response = yield* Effect.promise(() =>
-        app.call("DELETE", `/admin/users/${targetId}`, cookie),
+        app.call("DELETE", `/admin/users/${targetId}`, admin),
       );
       assert.strictEqual(response.status, 204);
       const gone = yield* Effect.promise(() =>
@@ -102,7 +114,7 @@ describe("AdminAccounts (real HTTP)", () => {
       );
       assert.isTrue(Option.isNone(gone));
       const again = yield* Effect.promise(() =>
-        app.call("DELETE", `/admin/users/${targetId}`, cookie),
+        app.call("DELETE", `/admin/users/${targetId}`, admin),
       );
       assert.strictEqual(again.status, 404);
     }),
@@ -115,10 +127,10 @@ describe("AdminAccounts (real HTTP)", () => {
         const app = buildHandler({ canManageCredentials: allow });
         const adminId = yield* Effect.promise(() => app.seedUser("admin"));
         const targetId = yield* Effect.promise(() => app.seedUser("target"));
-        const cookie = yield* Effect.promise(() => app.cookieFor(adminId));
+        const admin = yield* Effect.promise(() => app.signInAs(adminId));
 
         const email = yield* Effect.promise(() =>
-          app.call("POST", `/admin/users/${targetId}/email`, cookie, { email: "new@example.com" }),
+          app.call("POST", `/admin/users/${targetId}/email`, admin, { email: "new@example.com" }),
         );
         assert.strictEqual(email.status, 202);
         const sent = yield* Effect.promise(() =>
@@ -130,11 +142,11 @@ describe("AdminAccounts (real HTTP)", () => {
         );
 
         const weak = yield* Effect.promise(() =>
-          app.call("POST", `/admin/users/${targetId}/password`, cookie, { password: "short" }),
+          app.call("POST", `/admin/users/${targetId}/password`, admin, { password: "short" }),
         );
         assert.strictEqual(weak.status, 422);
         const changed = yield* Effect.promise(() =>
-          app.call("POST", `/admin/users/${targetId}/password`, cookie, {
+          app.call("POST", `/admin/users/${targetId}/password`, admin, {
             password: "a brand new strong password",
           }),
         );

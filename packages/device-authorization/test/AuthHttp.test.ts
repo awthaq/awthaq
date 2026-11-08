@@ -124,8 +124,7 @@ for (const options of suites) {
       assert.strictEqual(pending.status, 400);
       assert.strictEqual((await jsonOf(pending))["error"], "authorization_pending");
 
-      const verified = await app.request("POST", "/device/verify", {
-        cookie: user.cookie,
+      const verified = await user.browser.request("POST", "/device/verify", {
         json: { user_code: issued.user_code },
       });
       assert.strictEqual(verified.status, 200);
@@ -136,8 +135,7 @@ for (const options of suites) {
         name: "awthaq CLI",
       });
 
-      const approved = await app.request("POST", "/device/approve", {
-        cookie: user.cookie,
+      const approved = await user.browser.request("POST", "/device/approve", {
         json: { user_code: issued.user_code },
       });
       assert.strictEqual(approved.status, 200);
@@ -178,12 +176,10 @@ for (const options of suites) {
           },
         });
       assert.strictEqual((await jsonOf(await poll()))["error"], "authorization_pending");
-      await app.request("POST", "/device/verify", {
-        cookie: user.cookie,
+      await user.browser.request("POST", "/device/verify", {
         json: { user_code: issued.user_code },
       });
-      await app.request("POST", "/device/approve", {
-        cookie: user.cookie,
+      await user.browser.request("POST", "/device/approve", {
         json: { user_code: issued.user_code },
       });
       await new Promise((resolve) => setTimeout(resolve, 1100));
@@ -297,8 +293,7 @@ for (const options of suites) {
           await app.request("POST", "/device/code", { form: { client_id: CLI_CLIENT_ID } }),
         ),
       );
-      const early = await app.request("POST", "/device/approve", {
-        cookie: user.cookie,
+      const early = await user.browser.request("POST", "/device/approve", {
         json: { user_code: issued.user_code },
       });
       assert.strictEqual(early.status, 409);
@@ -328,12 +323,10 @@ for (const options of suites) {
           await app.request("POST", "/device/code", { form: { client_id: CLI_CLIENT_ID } }),
         ),
       );
-      await app.request("POST", "/device/verify", {
-        cookie: user.cookie,
+      await user.browser.request("POST", "/device/verify", {
         json: { user_code: issued.user_code },
       });
-      const response = await app.request("POST", "/device/approve", {
-        cookie: user.cookie,
+      const response = await user.browser.request("POST", "/device/approve", {
         json: { user_code: issued.user_code },
       });
       assert.strictEqual(response.status, 403);

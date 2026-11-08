@@ -3,42 +3,26 @@
 import { Api } from "@awthaq/api";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, type UserAgent } from "@awthaq/test";
 import * as Webhooks from "../src/Webhooks.ts";
 import { deliveryLayer } from "./support.ts";
 
-// `<iat>.<random>.<hmac(iat.random)>`, computed independently of `Csrf.ts` with `node:crypto`, over the secret the
-// composition's own derived `CsrfProtection` checks.
-const CSRF_VALUE: string = TestAuth.csrfToken(TestAuth.TestCsrfConfig.secret);
-
-const ORIGIN = "http://localhost:3000";
-
 const build = (config: Partial<Webhooks.WebhooksConfigShape>) => {
   const app = TestAuth.app(deliveryLayer({ config }));
-  const sessionCookie = (): Promise<string> =>
-    app.signIn("admin-1@example.com").then((signedIn) => signedIn.cookieHeader);
-  return { handler: app.handler, sessionCookie };
+  /** A browser signed in as the administrator: it keeps its cookies and echoes its CSRF cookie itself. */
+  const signIn = () => app.signIn("admin-1@example.com");
+  /** A fresh anonymous browser. */
+  const anonymous = () => app.agent();
+  return { signIn, anonymous };
 };
 
 const call = (
-  handler: (request: Request) => Promise<Response>,
+  browser: UserAgent.UserAgent,
   method: string,
   path: string,
-  options: { readonly cookie?: string; readonly body?: unknown } = {},
+  options: { readonly body?: unknown } = {},
 ): Promise<Response> =>
-  handler(
-    new Request(`${ORIGIN}${path}`, {
-      method,
-      headers: {
-        ...(options.body === undefined ? {} : { "content-type": "application/json" }),
-        cookie: [options.cookie, `${Api.CSRF_COOKIE_NAME}=${CSRF_VALUE}`]
-          .filter(Boolean)
-          .join("; "),
-        "x-csrf-token": CSRF_VALUE,
-      },
-      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-    }),
-  );
+  browser.request(method, path, options.body === undefined ? {} : { json: options.body });
 
 const json = async (response: Response): Promise<Record<string, unknown>> => {
   const value: unknown = await response.json();
@@ -52,9 +36,10 @@ const newEndpoint = { url: "https://hooks.example.com/awthaq", eventTags: ["auth
 describe("webhooks admin over HTTP", () => {
   it.effect("an unauthenticated request is 401 before the gate is ever asked", () =>
     Effect.gen(function* () {
-      const { handler } = build({ canManageWebhooks: () => Effect.succeed(true) });
+      const { anonymous } = build({ canManageWebhooks: () => Effect.succeed(true) });
+      const stranger = yield* Effect.promise(anonymous);
       const response = yield* Effect.promise(() =>
-        call(handler, "POST", "/admin/webhooks/endpoints", { body: newEndpoint }),
+        call(stranger, "POST", "/admin/webhooks/endpoints", { body: newEndpoint }),
       );
       assert.strictEqual(response.status, 401);
     }),
@@ -62,10 +47,10 @@ describe("webhooks admin over HTTP", () => {
 
   it.effect("an authenticated caller is 403 while the gate is unconfigured (deny by default)", () =>
     Effect.gen(function* () {
-      const { handler, sessionCookie } = build({});
-      const cookie = yield* Effect.promise(sessionCookie);
+      const { signIn } = build({});
+      const admin = yield* Effect.promise(signIn);
       const response = yield* Effect.promise(() =>
-        call(handler, "POST", "/admin/webhooks/endpoints", { cookie, body: newEndpoint }),
+        call(admin, "POST", "/admin/webhooks/endpoints", { body: newEndpoint }),
       );
       assert.strictEqual(response.status, 403);
       assert.strictEqual(
@@ -79,11 +64,11 @@ describe("webhooks admin over HTTP", () => {
     "create returns the secret once; list and get never do; the SSRF floor is a typed 422",
     () =>
       Effect.gen(function* () {
-        const { handler, sessionCookie } = build({ canManageWebhooks: () => Effect.succeed(true) });
-        const cookie = yield* Effect.promise(sessionCookie);
+        const { signIn } = build({ canManageWebhooks: () => Effect.succeed(true) });
+        const admin = yield* Effect.promise(signIn);
 
         const created = yield* Effect.promise(() =>
-          call(handler, "POST", "/admin/webhooks/endpoints", { cookie, body: newEndpoint }),
+          call(admin, "POST", "/admin/webhooks/endpoints", { body: newEndpoint }),
         );
         assert.strictEqual(created.status, 200);
         const body = yield* Effect.promise(() => json(created));
@@ -91,16 +76,14 @@ describe("webhooks admin over HTTP", () => {
         assert.match(secret, /^whsec_/);
         const id = String((body["endpoint"] as { id: string }).id);
 
-        const listed = yield* Effect.promise(() =>
-          call(handler, "GET", "/admin/webhooks/endpoints", { cookie }),
-        );
+        const listed = yield* Effect.promise(() => call(admin, "GET", "/admin/webhooks/endpoints"));
         const listedText = yield* Effect.promise(() => listed.text());
         assert.strictEqual(listed.status, 200);
         assert.include(listedText, id);
         assert.notInclude(listedText, secret);
 
         const rotated = yield* Effect.promise(() =>
-          call(handler, "POST", `/admin/webhooks/endpoints/${id}/rotate-secret`, { cookie }),
+          call(admin, "POST", `/admin/webhooks/endpoints/${id}/rotate-secret`),
         );
         assert.notStrictEqual(
           String((yield* Effect.promise(() => json(rotated)))["secret"]),
@@ -108,8 +91,7 @@ describe("webhooks admin over HTTP", () => {
         );
 
         const bad = yield* Effect.promise(() =>
-          call(handler, "POST", "/admin/webhooks/endpoints", {
-            cookie,
+          call(admin, "POST", "/admin/webhooks/endpoints", {
             body: { url: "https://169.254.169.254/latest", eventTags: ["*"] },
           }),
         );
@@ -120,19 +102,18 @@ describe("webhooks admin over HTTP", () => {
         );
 
         const empty = yield* Effect.promise(() =>
-          call(handler, "POST", "/admin/webhooks/endpoints", {
-            cookie,
+          call(admin, "POST", "/admin/webhooks/endpoints", {
             body: { url: "https://hooks.example.com/x", eventTags: [] },
           }),
         );
         assert.strictEqual(empty.status, 400);
 
         const removed = yield* Effect.promise(() =>
-          call(handler, "DELETE", `/admin/webhooks/endpoints/${id}`, { cookie }),
+          call(admin, "DELETE", `/admin/webhooks/endpoints/${id}`),
         );
         assert.strictEqual(removed.status, 204);
         const gone = yield* Effect.promise(() =>
-          call(handler, "GET", `/admin/webhooks/endpoints/${id}`, { cookie }),
+          call(admin, "GET", `/admin/webhooks/endpoints/${id}`),
         );
         assert.strictEqual(gone.status, 404);
       }),
@@ -143,44 +124,43 @@ describe("webhooks admin over HTTP", () => {
     "the test ping queues a delivery over HTTP, and an unknown endpoint is a typed 404",
     () =>
       Effect.gen(function* () {
-        const { handler, sessionCookie } = build({ canManageWebhooks: () => Effect.succeed(true) });
-        const cookie = yield* Effect.promise(sessionCookie);
+        const { signIn, anonymous } = build({ canManageWebhooks: () => Effect.succeed(true) });
+        const admin = yield* Effect.promise(signIn);
         const created = yield* Effect.promise(() =>
-          call(handler, "POST", "/admin/webhooks/endpoints", { cookie, body: newEndpoint }),
+          call(admin, "POST", "/admin/webhooks/endpoints", { body: newEndpoint }),
         );
         const registered = yield* Effect.promise(() => json(created));
         const id = String(Reflect.get(Object(registered["endpoint"]), "id"));
         assert.notStrictEqual(id, "undefined");
         const ping = yield* Effect.promise(() =>
-          call(handler, "POST", `/admin/webhooks/endpoints/${id}/test`, { cookie }),
+          call(admin, "POST", `/admin/webhooks/endpoints/${id}/test`),
         );
         assert.strictEqual(ping.status, 200);
         const delivery = yield* Effect.promise(() => json(ping));
         assert.strictEqual(delivery["eventTag"], "webhook.test");
         assert.strictEqual(delivery["status"], "pending");
         const missing = yield* Effect.promise(() =>
-          call(handler, "POST", "/admin/webhooks/endpoints/nope/test", { cookie }),
+          call(admin, "POST", "/admin/webhooks/endpoints/nope/test"),
         );
         assert.strictEqual(missing.status, 404);
-        const anonymous = yield* Effect.promise(() =>
-          call(handler, "POST", `/admin/webhooks/endpoints/${id}/test`),
+        const stranger = yield* Effect.promise(anonymous);
+        const unauthenticated = yield* Effect.promise(() =>
+          call(stranger, "POST", `/admin/webhooks/endpoints/${id}/test`),
         );
-        assert.strictEqual(anonymous.status, 401);
+        assert.strictEqual(unauthenticated.status, 401);
       }),
   );
 
   it.effect("a state-changing request without the CSRF token is refused before the gate", () =>
     Effect.gen(function* () {
-      const { handler, sessionCookie } = build({ canManageWebhooks: () => Effect.succeed(true) });
-      const cookie = yield* Effect.promise(sessionCookie);
+      const { signIn } = build({ canManageWebhooks: () => Effect.succeed(true) });
+      const admin = yield* Effect.promise(signIn);
+      // The browser's cookies go out, but the request carries no echo of the CSRF cookie.
       const response = yield* Effect.promise(() =>
-        handler(
-          new Request(`${ORIGIN}/admin/webhooks/endpoints`, {
-            method: "POST",
-            headers: { "content-type": "application/json", cookie },
-            body: JSON.stringify(newEndpoint),
-          }),
-        ),
+        admin.request("POST", "/admin/webhooks/endpoints", {
+          json: newEndpoint,
+          headers: { [Api.CSRF_HEADER_NAME]: "" },
+        }),
       );
       assert.strictEqual(response.status, 403);
     }),
