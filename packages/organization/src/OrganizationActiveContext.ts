@@ -8,6 +8,7 @@
 
 import type { Api } from "@awthaq/api";
 import { Errors, Users } from "@awthaq/core";
+import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -18,6 +19,11 @@ import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationErrors from "./OrganizationErrors.ts";
 import * as TeamRecords from "./TeamRecords.ts";
+
+/** A session's own team pointer names its organization through the team, wherever that team lives. */
+const teamOrganizationGrant = TenantScoped.crossTenant(
+  "organization active context: a session's own team pointer names its organization through the team",
+);
 
 export interface SessionRef {
   readonly sessionId: string;
@@ -30,7 +36,10 @@ export const sessionOf = (principal: Api.UserPrincipal): SessionRef => ({
 });
 
 export interface OrganizationActiveContextShape {
-  /** CWM-003: re-validated on read; a pointer the user no longer holds is cleared for real. */
+  /**
+   * CWM-003: re-validated on read; a pointer the user no longer holds is cleared for real. A suspended
+   * organization's pointers read as none, without clearing them (BEH-EA-237).
+   */
   readonly get: (
     session: SessionRef,
   ) => Effect.Effect<ActiveContextRecords.ActiveContextRecord, Errors.StoreUnavailable>;
@@ -42,7 +51,7 @@ export interface OrganizationActiveContextShape {
     ActiveContextRecords.ActiveContextRecord,
     OrganizationErrors.MembershipNotFound | Errors.StoreUnavailable
   >;
-  /** `None` unsets. The team membership is the witness. */
+  /** `None` unsets. The team membership is the witness; a team of a suspended organization reads as `TeamMembershipNotFound` (BEH-EA-237). */
   readonly setTeam: (
     session: SessionRef,
     teamId: Option.Option<string>,
@@ -79,6 +88,17 @@ export class OrganizationActiveContext extends Context.Service<
             Effect.map((found) => Option.isSome(found) && Option.isSome(found.value.suspendedAt)),
           );
 
+      /** A team pointer is checked through the team's own organization (it need not be the active one). */
+      const isTeamSuspended = (teamId: string) =>
+        teams.findTeamByIdAnyOrg(teamOrganizationGrant, teamId).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.succeed(false),
+              onSome: (team) => isSuspended(team.organizationId),
+            }),
+          ),
+        );
+
       const get: OrganizationActiveContextShape["get"] = Effect.fnUntraced(function* (session) {
         const existing = yield* activeContext.findBySessionId(session.sessionId);
         if (Option.isNone(existing)) {
@@ -92,6 +112,14 @@ export class OrganizationActiveContext extends Context.Service<
           };
         }
         const row = existing.value;
+        // BEH-EA-237: a suspended organization does not remain the active one. Its pointers read as
+        // none but the row is kept, so reinstating restores them (REQ-EA-856).
+        if (
+          Option.isSome(row.activeOrganizationId) &&
+          (yield* isSuspended(row.activeOrganizationId.value))
+        ) {
+          return { ...row, activeOrganizationId: Option.none(), activeTeamId: Option.none() };
+        }
         let stale = false;
         if (Option.isSome(row.activeOrganizationId)) {
           const membership = yield* members.findByUserAndOrg(
@@ -109,6 +137,8 @@ export class OrganizationActiveContext extends Context.Service<
           if (Option.isNone(onTeam)) {
             yield* activeContext.unsetTeam(session.sessionId, session.userId);
             stale = true;
+          } else if (yield* isTeamSuspended(row.activeTeamId.value)) {
+            return { ...row, activeTeamId: Option.none() };
           }
         }
         if (!stale) return row;
@@ -138,6 +168,10 @@ export class OrganizationActiveContext extends Context.Service<
           const membership = yield* teams.findTeamMembership(teamId.value, session.userId);
           if (Option.isNone(membership))
             return yield* new OrganizationErrors.TeamMembershipNotFound();
+          // BEH-EA-237: a team of a suspended organization answers like a team the user is not on.
+          if (yield* isTeamSuspended(teamId.value)) {
+            return yield* new OrganizationErrors.TeamMembershipNotFound();
+          }
           return yield* activeContext.setTeam(session.sessionId, membership.value);
         },
       );

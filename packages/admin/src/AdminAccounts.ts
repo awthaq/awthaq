@@ -266,7 +266,10 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
                 yield* sessions.revokeAll(userId, "admin");
               }),
             )
-            .pipe(Effect.catchTag("SqlError", Effect.die));
+            // ADR-EA-028: the transaction's own `SqlError` is an outage (503), never a defect.
+            .pipe(
+              Effect.catchTag("SqlError", Errors.storeUnavailable("AdminAccounts.setUserPassword")),
+            );
           // The credential changed: subscribers of `auth.password.changed` (a notification mail, a
           // SIEM) learn of it as for any change; the admin event names who did it.
           yield* events.publish({ _tag: "auth.password.changed", userId });

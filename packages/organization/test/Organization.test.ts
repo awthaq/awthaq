@@ -1385,8 +1385,21 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
         const records = yield* OrganizationRecords.OrganizationRecords;
         const owner = asCaller("owner-1");
         const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const pending = yield* organization.invite(owner, org.id, {
+          email: "pending@example.com",
+          role: ["member"],
+        });
         const now = yield* DateTime.now;
         yield* records.setSuspended(grant, org.id, Option.some(now));
+
+        // BEH-EA-237 (plan 30, A-F2/A-F3): the invitation paths that start from an invitation id
+        // check the organization too, and answer like an unknown invitation.
+        const cancel = yield* organization.cancelInvitation(owner, pending.id).pipe(Effect.flip);
+        assert.strictEqual(cancel._tag, "InvitationNotFound");
+        const readInvitation = yield* organization
+          .getInvitation(owner, pending.id)
+          .pipe(Effect.flip);
+        assert.strictEqual(readInvitation._tag, "InvitationNotFound");
 
         const read = yield* organization.get(owner, org.id).pipe(Effect.flip);
         assert.strictEqual(read._tag, "OrganizationNotFound");
@@ -1406,6 +1419,62 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
         yield* records.setSuspended(grant, org.id, Option.none());
         const restored = yield* organization.get(owner, org.id);
         assert.strictEqual(restored.id, org.id);
+        // Nothing was cancelled while suspended: the invitation is pending again, and readable.
+        assert.strictEqual(
+          (yield* organization.getInvitation(owner, pending.id)).status,
+          "pending",
+        );
+      }).pipe(Effect.provide(buildLayer())),
+  );
+
+  it.effect(
+    "EP-003: the invitee can neither read, accept nor reject an invitation of a suspended organization",
+    () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const records = yield* OrganizationRecords.OrganizationRecords;
+        const memberships = yield* MembershipRecords.MembershipRecords;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const invitee = yield* verifiedUser({ email: "invitee@example.com", name: "Invitee" });
+        const inviteeCaller = asCaller(invitee.id);
+        const invitation = yield* organization.invite(owner, org.id, {
+          email: "invitee@example.com",
+          role: ["member"],
+        });
+        const token = yield* mailedToken(invitation.id);
+        yield* records.setSuspended(grant, org.id, Option.some(yield* DateTime.now));
+
+        const byToken = yield* organization
+          .getInvitationByToken(inviteeCaller, token)
+          .pipe(Effect.flip);
+        assert.strictEqual(byToken._tag, "InvitationNotFound");
+        const byId = yield* organization
+          .getInvitation(inviteeCaller, invitation.id)
+          .pipe(Effect.flip);
+        assert.strictEqual(byId._tag, "InvitationNotFound");
+        const accepted = yield* organization
+          .acceptInvitation(inviteeCaller, invitation.id, token)
+          .pipe(Effect.flip);
+        assert.strictEqual(accepted._tag, "InvitationNotFound");
+        const rejected = yield* organization
+          .rejectInvitation(inviteeCaller, invitation.id, token)
+          .pipe(Effect.flip);
+        assert.strictEqual(rejected._tag, "InvitationNotFound");
+        assert.isTrue(Option.isNone(yield* memberships.findByUserAndOrg(invitee.id, org.id)));
+
+        // Reinstated, the same capability works again.
+        yield* records.setSuspended(grant, org.id, Option.none());
+        assert.strictEqual(
+          (yield* organization.getInvitationByToken(inviteeCaller, token)).status,
+          "pending",
+        );
+        const membership = yield* organization.acceptInvitation(
+          inviteeCaller,
+          invitation.id,
+          token,
+        );
+        assert.strictEqual(membership.organizationId, org.id);
       }).pipe(Effect.provide(buildLayer())),
   );
 });
