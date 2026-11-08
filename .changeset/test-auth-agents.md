@@ -1,0 +1,7 @@
+---
+"@awthaq/test": minor
+---
+
+`TestAuth.app(...).agent()` and `signIn(email)` return user agents (`@awthaq/web`'s `UserAgent`) that keep cookies, echo CSRF from a seeded `__Host-csrf` and follow rotations; `signIn` renders the minted session under the composition's own `SessionCookieConfig`, so a `SecureDomain` composition signs in under `__Secure-session; Domain=…` (it was handed `__Host-session` and answered 401). `signIn({ delivery: "bearer" })` holds the token instead. `request` is a fresh anonymous agent per call; a forged cookie goes in `extraCookies`. Under `testClock`, agents read the composition's clock, so a cookie's `Max-Age` lapses with `advance`. `signInAs` returns the rendered `setCookie`. `CookieAssertions` reads `Set-Cookie` with `@awthaq/web`'s parser (its own `parseSetCookie` is gone) and `assertHostPrefixedCookie` also takes a cookie an agent holds. `@awthaq/test` depends on `@awthaq/web` and re-exports `UserAgent`.
+
+Migration: `const { cookieHeader } = await app.signIn(e); app.request(m, p, { cookie: cookieHeader })` → `const alice = await app.signIn(e); alice.request(m, p)`; `app.agent()` is async (`await app.agent()`); a forged cookie → `extraCookies`; `signInAs(...).cookieHeader` → `setCookie` (hand it to `agent.cookies.receive`); `CookieAssertions.parseSetCookie` → `@awthaq/web`'s `parseSetCookie` (or `CookieAssertions.findSetCookie`). A `Set-Cookie` a browser would refuse now fails the request (`onRefused: "record"` for a test about refusals).

@@ -1310,6 +1310,9 @@ importers:
       '@awthaq/sql':
         specifier: workspace:*
         version: link:../sql
+      '@awthaq/web':
+        specifier: workspace:*
+        version: link:../web
     devDependencies:
       '@awthaq/password':
         specifier: workspace:*

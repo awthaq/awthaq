@@ -107,15 +107,17 @@ for (const records of TestAuth.recordModes) {
     );
     afterAll(() => app.dispose());
 
-    const post = (path: string, body: unknown, cookie?: string) =>
-      app.request("POST", path, { json: body, ...(cookie === undefined ? {} : { cookie }) });
-    const list = (cookie: string) => app.request("GET", "/notes", { cookie });
-    const signIn = async (email: string) => (await app.signIn(email)).cookieHeader;
+    // Each signed-in user is an agent: it keeps its session and CSRF cookies and echoes the token itself.
+    type Agent = TestAuth.SignedInAgent;
+    const post = (agent: Agent, path: string, body: unknown) =>
+      agent.request("POST", path, { json: body });
+    const list = (agent: Agent) => agent.request("GET", "/notes");
+    const signIn = (email: string) => app.signIn(email);
 
     it("create then list round-trips over real HTTP, scoped to the caller", async () => {
-      const cookie = await signIn("user-1@example.com");
-      assert.strictEqual((await post("/notes", { text: "remember the milk" }, cookie)).status, 200);
-      const listed = await list(cookie);
+      const user = await signIn("user-1@example.com");
+      assert.strictEqual((await post(user, "/notes", { text: "remember the milk" })).status, 200);
+      const listed = await list(user);
       assert.strictEqual(listed.status, 200);
       const notes = (await listed.json()) as ReadonlyArray<{ text: string }>;
       assert.deepStrictEqual(
@@ -127,16 +129,16 @@ for (const records of TestAuth.recordModes) {
     });
 
     it("a rate-limited rule answers 429 once the budget is spent, and only for that caller", async () => {
-      const cookie = await signIn("user-4@example.com");
+      const user = await signIn("user-4@example.com");
       // `createByUser` is 5 per minute per signed-in user.
       for (let i = 0; i < 5; i += 1) {
-        assert.strictEqual((await post("/notes", { text: `note ${i}` }, cookie)).status, 200);
+        assert.strictEqual((await post(user, "/notes", { text: `note ${i}` })).status, 200);
       }
-      const sixth = await post("/notes", { text: "one too many" }, cookie);
+      const sixth = await post(user, "/notes", { text: "one too many" });
       assert.strictEqual(sixth.status, 429);
       assert.strictEqual(((await sixth.json()) as { _tag: string })._tag, "RateLimited");
       const other = await signIn("user-5@example.com");
-      assert.strictEqual((await post("/notes", { text: "mine" }, other)).status, 200);
+      assert.strictEqual((await post(other, "/notes", { text: "mine" })).status, 200);
     });
 
     it("requires a session", async () => {
@@ -144,25 +146,23 @@ for (const records of TestAuth.recordModes) {
     });
 
     it("a domain refusal is a typed error with its own status", async () => {
-      const res = await post(
-        "/notes",
-        { text: "x".repeat(21) },
-        await signIn("user-6@example.com"),
-      );
+      const res = await post(await signIn("user-6@example.com"), "/notes", {
+        text: "x".repeat(21),
+      });
       assert.strictEqual(res.status, 422);
       assert.strictEqual(((await res.json()) as { _tag: string })._tag, "NoteTooLong");
     });
 
     it("a veto tap aborts the operation with the typed HookAborted, and nothing is stored", async () => {
-      const cookie = await signIn("user-3@example.com");
-      const res = await post("/notes", { text: "forbidden" }, cookie);
+      const user = await signIn("user-3@example.com");
+      const res = await post(user, "/notes", { text: "forbidden" });
       assert.strictEqual(res.status, 403);
       const body = (await res.json()) as { _tag: string; point: string; code: string };
       assert.deepStrictEqual(
         [body._tag, body.point, body.code],
         ["HookAborted", "notes.create.before", "TEXT_FORBIDDEN"],
       );
-      assert.deepStrictEqual(await (await list(cookie)).json(), []);
+      assert.deepStrictEqual(await (await list(user)).json(), []);
     });
   });
 }

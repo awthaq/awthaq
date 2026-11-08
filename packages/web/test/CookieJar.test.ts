@@ -30,7 +30,7 @@ import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
-import { applyResponseCookies } from "../src/CookieJar.ts";
+import { applyResponseCookies, parseSetCookie } from "../src/CookieJar.ts";
 import type { CookieJarLike, CookieSetOptions } from "../src/CookieJar.ts";
 
 type Recorded = readonly [name: string, value: string, options: CookieSetOptions | undefined];
@@ -173,6 +173,38 @@ interface AstroCookies {
     },
   ) => void;
 }
+
+describe("parseSetCookie — the one Set-Cookie parser (BEH-EA-344)", () => {
+  it("reads the name, the decoded and raw values and every attribute, Partitioned included", () => {
+    const parsed = parseSetCookie(
+      "__Host-session=a%20b=c; Path=/; Secure; HttpOnly; SameSite=None; Partitioned; Max-Age=60; Domain=example.com",
+    );
+    assert.strictEqual(parsed.name, "__Host-session");
+    assert.strictEqual(parsed.value, "a b=c");
+    assert.strictEqual(parsed.rawValue, "a%20b=c");
+    assert.deepStrictEqual(parsed.options, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "none",
+      partitioned: true,
+      maxAge: 60,
+      domain: "example.com",
+    });
+  });
+
+  it("a bare pair has no attributes, and a pair without `=` is a name with an empty value", () => {
+    assert.deepStrictEqual(parseSetCookie("a=b"), {
+      name: "a",
+      value: "b",
+      rawValue: "b",
+      options: {},
+    });
+    const bare = parseSetCookie("flag");
+    assert.strictEqual(bare.name, "flag");
+    assert.strictEqual(bare.rawValue, "");
+  });
+});
 
 describe("CookieJarLike — second-adapter fit (BO-010)", () => {
   it("a SvelteKit-shaped jar (path required) is accepted, and every cookie arrives with a path", () => {

@@ -14,6 +14,7 @@ import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
+import { parseSetCookie } from "@awthaq/web/cookies";
 import * as TestAuth from "../src/TestAuth.ts";
 
 const BillingApi = HttpApi.make("auth").add(
@@ -67,6 +68,9 @@ layer(TestLayer)("a plugin-declared user field, end to end (SAM-004)", (it) => {
       Effect.gen(function* () {
         const users = yield* Users.Users;
         const signedIn = yield* TestAuth.signInAs({ email: "ada@example.com" });
+        // The pair a browser sends back for the minted session (its `Set-Cookie`, read by the one parser).
+        const minted = parseSetCookie(signedIn.setCookie);
+        const sessionPair = `${minted.name}=${minted.rawValue}`;
         const billing = Users.typedFields(built.userFields);
         const profile = UserFields.client(built.userFields);
 
@@ -80,7 +84,7 @@ layer(TestLayer)("a plugin-declared user field, end to end (SAM-004)", (it) => {
             new Request("http://localhost/user", {
               method: "PATCH",
               headers: {
-                cookie: `${signedIn.cookieHeader}; ${Api.CSRF_COOKIE_NAME}=${CSRF_COOKIE}`,
+                cookie: `${sessionPair}; ${Api.CSRF_COOKIE_NAME}=${CSRF_COOKIE}`,
                 [Api.CSRF_HEADER_NAME]: CSRF_COOKIE,
                 "content-type": "application/json",
               },

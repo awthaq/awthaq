@@ -88,26 +88,17 @@ describe("TestAuth.layer over AuthHost (BEH-EA-342)", () => {
   it("TestAuth.layer({ tier }) selects the served groups as AuthHost does", async () => {
     const admin = TestAuth.app(TestAuth.layer(built, { tier: "admin" }));
     try {
-      const { cookieHeader } = await admin.signIn("tier@example.com");
+      const operator = await admin.signIn("tier@example.com");
       // `Pins` has no admin-tier group, so the admin listener serves nothing of it, nor core's groups.
-      assert.strictEqual(
-        (await admin.request("GET", "/pins", { cookie: cookieHeader })).status,
-        404,
-      );
-      assert.strictEqual(
-        (await admin.request("GET", "/session", { cookie: cookieHeader })).status,
-        404,
-      );
+      assert.strictEqual((await operator.request("GET", "/pins")).status, 404);
+      assert.strictEqual((await operator.request("GET", "/session")).status, 404);
     } finally {
       await admin.dispose();
     }
     const publicTier = TestAuth.app(TestAuth.layer(built, { tier: "public" }));
     try {
-      const { cookieHeader } = await publicTier.signIn("tier@example.com");
-      assert.strictEqual(
-        (await publicTier.request("GET", "/pins", { cookie: cookieHeader })).status,
-        200,
-      );
+      const user = await publicTier.signIn("tier@example.com");
+      assert.strictEqual((await user.request("GET", "/pins")).status, 200);
     } finally {
       await publicTier.dispose();
     }

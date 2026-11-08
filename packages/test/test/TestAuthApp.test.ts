@@ -9,6 +9,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as Scope from "effect/Scope";
 import * as TestAuth from "../src/TestAuth.ts";
 import { Pins } from "./support/Pins.ts";
@@ -18,9 +19,9 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
     const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])));
     try {
       const signedIn = await app.run(TestAuth.signInAs({ email: "shared@example.com" }));
-      const response = await app.handler(
-        new Request("http://localhost/pins", { headers: { cookie: signedIn.cookieHeader } }),
-      );
+      const browser = await app.agent();
+      assert.strictEqual(browser.cookies.receive(signedIn.setCookie)._tag, "Stored");
+      const response = await browser.request("GET", "/pins");
       assert.strictEqual(response.status, 200);
       // ...and the other way: a session the handler's world holds is visible to `run`.
       const verified = await app.run(
@@ -32,46 +33,42 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
     }
   });
 
-  it("`request` passes CSRF on POST, with the double-submit pair of the composition's own config", async () => {
+  it("an agent's unsafe request passes CSRF with the seeded cookie, computed independently of `Csrf.ts`", async () => {
     const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])));
     try {
-      const signedIn = await app.signIn("poster@example.com");
-      const posted = await app.request("POST", "/pins", {
-        cookie: signedIn.cookieHeader,
-        json: { label: "csrf-ok" },
-      });
+      const poster = await app.signIn("poster@example.com");
+      const csrf = poster.cookies.get(Api.CSRF_COOKIE_NAME);
+      assert.isDefined(csrf);
+      assert.isFalse(csrf?.httpOnly);
+      const posted = await poster.request("POST", "/pins", { json: { label: "csrf-ok" } });
       assert.strictEqual(posted.status, 200);
-      // The same call without the helper carries a cookie but no pair, and is refused.
-      const bare = await app.handler(
-        new Request("http://localhost/pins", {
-          method: "POST",
-          headers: { cookie: signedIn.cookieHeader, "content-type": "application/json" },
-          body: JSON.stringify({ label: "no-pair" }),
-        }),
-      );
+      assert.strictEqual(poster.sent[0]?.headers.get(Api.CSRF_HEADER_NAME), csrf?.value);
+      // The same call without the echo carries the cookies but no header, and is refused.
+      const bare = await poster.request("POST", "/pins", {
+        json: { label: "no-pair" },
+        headers: { [Api.CSRF_HEADER_NAME]: "" },
+      });
       assert.strictEqual(bare.status, 403);
     } finally {
       await app.dispose();
     }
   });
 
-  it("`signIn` returns a working cookie, with the `amr` the test asked for", async () => {
+  it("`signIn` returns an agent that is signed in, with the `amr` the test asked for", async () => {
     const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])));
     try {
-      const signedIn = await app.signIn("amr@example.com", { amr: ["pwd"] });
-      const session = await app.request("GET", "/session", { cookie: signedIn.cookieHeader });
+      const alice = await app.signIn("amr@example.com", { amr: ["pwd"] });
+      const session = await alice.request("GET", "/session");
       assert.strictEqual(session.status, 200);
       const body = await session.json();
       assert.deepStrictEqual(body.amr, ["pwd"]);
-      assert.isString(Api.SESSION_COOKIE_NAME);
+      assert.strictEqual(alice.cookies.get(Api.SESSION_COOKIE_NAME)?.httpOnly, true);
     } finally {
       await app.dispose();
     }
   });
 
-  // Plan 20 phase 0: `signIn` hands back the default `__Host-session` name whatever `SessionCookieConfig` the
-  // composition runs, so under `SecureDomain` (which reads `__Secure-session`) the session is ignored.
-  it.fails("`signIn` under `SecureDomain` authenticates `GET /session`", async () => {
+  it("`signIn` under `SecureDomain` holds `__Secure-session; Domain=…` and authenticates `GET /session`", async () => {
     const app = TestAuth.app(
       TestAuth.layer(Auth.make([Pins]), {
         services: SessionCookie.config({
@@ -81,9 +78,46 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
       { baseUrl: "https://app.example.com" },
     );
     try {
-      const signedIn = await app.signIn("secure-domain@example.com");
-      const session = await app.request("GET", "/session", { cookie: signedIn.cookieHeader });
+      const alice = await app.signIn("secure-domain@example.com");
+      const cookie = alice.cookies.get("__Secure-session");
+      assert.strictEqual(cookie?.domain, "example.com");
+      assert.isFalse(cookie?.hostOnly);
+      assert.isUndefined(alice.cookies.get(Api.SESSION_COOKIE_NAME));
+      const session = await alice.request("GET", "/session");
       assert.strictEqual(session.status, 200);
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it('`signIn({ delivery: "bearer" })` authenticates with Authorization and sends no cookie', async () => {
+    const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])));
+    try {
+      const native = await app.signIn("native@example.com", { delivery: "bearer" });
+      assert.strictEqual(native.bearer.current(), Redacted.value(native.token));
+      const session = await native.request("GET", "/session");
+      assert.strictEqual(session.status, 200);
+      assert.isFalse(native.sent[0]?.headers.has("cookie"));
+      assert.strictEqual(native.sent[0]?.headers.get(Api.TOKEN_DELIVERY_HEADER), "bearer");
+      assert.isTrue(native.sent[0]?.headers.get("authorization")?.startsWith("Bearer "));
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it("two agents of one app do not share cookies, and `request` is a fresh anonymous agent each call", async () => {
+    const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])));
+    try {
+      const alice = await app.signIn("alice@example.com");
+      const bob = await app.agent();
+      assert.strictEqual((await alice.request("GET", "/session")).status, 200);
+      assert.strictEqual((await bob.request("GET", "/session")).status, 401);
+      assert.strictEqual((await app.request("GET", "/session")).status, 401);
+      // A forged cookie travels for one request only.
+      const forged = await app.request("GET", "/session", {
+        extraCookies: { [Api.SESSION_COOKIE_NAME]: "forged" },
+      });
+      assert.strictEqual(forged.status, 401);
     } finally {
       await app.dispose();
     }
@@ -94,9 +128,9 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
     const app = TestAuth.app(layer);
     try {
       const signedIn = await app.runtime.runPromise(TestAuth.signInAs({ email: "rt@example.com" }));
-      const response = await app.handler(
-        new Request("http://localhost/pins", { headers: { cookie: signedIn.cookieHeader } }),
-      );
+      const browser = await app.agent();
+      browser.cookies.receive(signedIn.setCookie);
+      const response = await browser.request("GET", "/pins");
       assert.strictEqual(response.status, 200);
       // A layer built through the app's memo map is the instance `run` and the runtime see, not a second copy.
       const viaMemoMap = await Effect.runPromise(
@@ -117,8 +151,8 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
   it("`testClock` serves the composition over one TestClock that `advance` moves for the handler and for `run`", async () => {
     const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])), { testClock: true });
     try {
-      const signedIn = await app.signIn("clock@example.com");
-      const before = await app.request("GET", "/session", { cookie: signedIn.cookieHeader });
+      const alice = await app.signIn("clock@example.com");
+      const before = await alice.request("GET", "/session");
       assert.strictEqual(before.status, 200);
       const start = await app.run(Clock.currentTimeMillis);
       await app.advance(Duration.days(400));
@@ -126,13 +160,13 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
         await app.run(Clock.currentTimeMillis),
         start + Duration.toMillis(Duration.days(400)),
       );
-      // The session lived past its absolute expiry on the clock the handler reads, and a POST still passes CSRF.
-      const after = await app.request("GET", "/session", { cookie: signedIn.cookieHeader });
+      // The session lived past its absolute expiry on the clock the handler reads; the agent's store reads the
+      // same clock, so the cookie's Max-Age lapsed with it and nothing is sent. A fresh agent still passes CSRF.
+      assert.isUndefined(alice.cookies.get(Api.SESSION_COOKIE_NAME));
+      const after = await alice.request("GET", "/session");
       assert.strictEqual(after.status, 401);
-      const posted = await app.request("POST", "/pins", {
-        cookie: (await app.signIn("later@example.com")).cookieHeader,
-        json: { label: "after-advance" },
-      });
+      const later = await app.signIn("later@example.com");
+      const posted = await later.request("POST", "/pins", { json: { label: "after-advance" } });
       assert.strictEqual(posted.status, 200);
     } finally {
       await app.dispose();
@@ -157,10 +191,10 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
     const first = TestAuth.app(layer, { memoMap });
     const second = TestAuth.app(layer, { memoMap });
     try {
-      const signedIn = await first.signIn("shared-map@example.com");
-      const response = await second.handler(
-        new Request("http://localhost/pins", { headers: { cookie: signedIn.cookieHeader } }),
-      );
+      const signedIn = await first.run(TestAuth.signInAs({ email: "shared-map@example.com" }));
+      const browser = await second.agent();
+      browser.cookies.receive(signedIn.setCookie);
+      const response = await browser.request("GET", "/pins");
       assert.strictEqual(response.status, 200);
     } finally {
       await second.dispose();

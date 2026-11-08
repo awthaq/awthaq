@@ -76,12 +76,14 @@ import {
   Migrations,
   Persistence,
   type Retention,
+  SessionCookie,
   Sessions,
   Users,
 } from "@awthaq/core";
 import { ClientAddress, type Encryption, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { AuthHost, Credentials, Csrf } from "@awthaq/server";
 import { CoreMigrations } from "@awthaq/sql";
+import { parseCookieHeader, UserAgent } from "@awthaq/web";
 import * as RedactionGuard from "./RedactionGuard.ts";
 import * as TestEncryption from "./TestEncryption.ts";
 import * as TestSql from "./TestSql.ts";
@@ -101,6 +103,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
+import * as Cookies from "effect/http/Cookies";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -387,16 +390,33 @@ export function layer(
 export interface SignedInSession {
   readonly userId: Users.UserId;
   readonly token: Redacted.Redacted<string>;
-  /** Ready to drop straight into `new Request(url, { headers: { cookie } })`. */
+  /**
+   * The session's `Set-Cookie`, rendered under the composition's own `SessionCookieConfig` (name, `Domain`,
+   * `SameSite`, `Max-Age`): hand it to an agent with `agent.cookies.receive(setCookie)`.
+   */
+  readonly setCookie: string;
+  /**
+   * `name=token` under the composition's configured cookie name.
+   *
+   * @deprecated Hold an agent instead (`app.signIn(email)`); removed once every suite holds one.
+   */
   readonly cookieHeader: string;
 }
+
+/** Serialises a cookie Effect's `Cookies` accepts; a value it refuses is a defect of the fixture. */
+const serialize = (name: string, value: string, options: Cookies.Cookie["options"]) =>
+  Effect.fromResult(Cookies.makeCookie(name, value, options)).pipe(
+    Effect.map(Cookies.serializeCookie),
+    Effect.orDie,
+  );
 
 /**
  * BEH-EA-197: mints a real user and a real session directly against
  * `Users`/`Sessions` — no password, no HTTP round trip — so an
  * authorization test's setup cost is independent of whichever credential
  * plugin (if any) is installed, matching this behavior's own point: testing
- * *authorization*, not sign-up.
+ * *authorization*, not sign-up. The cookie is rendered under the ambient
+ * `SessionCookieConfig`, the one the composition's server reads.
  */
 export const signInAs = (input: {
   readonly email: string;
@@ -414,13 +434,15 @@ export const signInAs = (input: {
     if (input.onSignedUp !== undefined) {
       yield* input.onSignedUp(user.id);
     }
-    const { token } = yield* sessions
+    const { session, token } = yield* sessions
       .issue({ userId: user.id, ...(input.amr === undefined ? {} : { amr: input.amr }) })
       .pipe(Effect.orDie);
+    const rendered = yield* SessionCookie.render(session, token);
     return {
       userId: user.id,
       token,
-      cookieHeader: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
+      setCookie: yield* serialize(rendered.name, rendered.value, rendered.options),
+      cookieHeader: `${rendered.name}=${Redacted.value(token)}`,
     };
   });
 
@@ -441,16 +463,39 @@ export const csrfToken = (
   return `${signed}.${createHmac("sha256", key).update(signed).digest("hex")}`;
 };
 
-/** What a request through `TestAuth.app` may carry. */
-export interface RequestInit {
-  /** An existing `cookie` header value (a session cookie); the CSRF cookie is appended. */
+/** What a request through `TestAuth.app` may carry: an agent's `RequestInit`. */
+export type RequestInit = UserAgent.RequestInit & {
+  /**
+   * An existing `cookie` header value, sent after the agent's own cookies.
+   *
+   * @deprecated Hold an agent (`app.signIn`), or pass a forged cookie in `extraCookies`.
+   */
   readonly cookie?: string;
-  /** A JSON body (sets `content-type: application/json`). */
-  readonly json?: unknown;
-  /** A form body (sets `content-type: application/x-www-form-urlencoded`). */
-  readonly form?: Readonly<Record<string, string>>;
-  /** Extra headers; they win over the ones `request` sets. */
-  readonly headers?: Readonly<Record<string, string>>;
+};
+
+/** How an agent of a `TestAuth.app` behaves. */
+export interface AgentOptions {
+  /** `bearer`: a native client (no cookies; the delivery header and `Authorization`). Default `cookie`. */
+  readonly delivery?: "cookie" | "bearer";
+  /** `throw` (default): a `Set-Cookie` a browser would refuse fails the request. `record`: kept in `refused`. */
+  readonly onRefused?: "throw" | "record";
+  /** Requests to these URLs never complete. */
+  readonly hold?: (url: URL) => boolean;
+}
+
+/** What `signIn` takes beside the email. */
+export interface SignInOptions {
+  readonly name?: string;
+  readonly amr?: ReadonlyArray<Sessions.AuthMethod>;
+  readonly onSignedUp?: (userId: Users.UserId) => Effect.Effect<void>;
+}
+
+/** An agent already holding a session minted straight against `Users`/`Sessions`. */
+export interface SignedInAgent extends UserAgent.UserAgent {
+  readonly userId: Users.UserId;
+  readonly token: Redacted.Redacted<string>;
+  /** @deprecated The agent sends its own cookies; removed once every suite holds one. */
+  readonly cookieHeader: string;
 }
 
 /**
@@ -463,19 +508,21 @@ export interface App<A, E = never> {
   /** Runs an effect against the composition's own context (the instances the plugins use). */
   readonly run: <X, XE, XR extends A>(effect: Effect.Effect<X, XE, XR>) => Promise<X>;
   /**
-   * A request with the CSRF double-submit pair a browser client would send, minted from the composition's
-   * own `CsrfConfig` (read once through `run`).
+   * BEH-EA-333: a fresh browser (or native client) over this composition: its own cookie store, the
+   * composition's clock, and a `__Host-csrf` cookie already held (minted from the composition's own
+   * `CsrfConfig`, independently of `Csrf.ts`), so its first unsafe request echoes it like a page script.
    */
-  readonly request: (method: string, path: string, init?: RequestInit) => Promise<Response>;
-  /** Mints a user and a session straight against `Users`/`Sessions` (see `signInAs`). */
+  readonly agent: (options?: AgentOptions) => Promise<UserAgent.UserAgent>;
+  /**
+   * Mints a user and a session (as `signInAs`) and returns an agent holding it: the session cookie rendered
+   * under the composition's `SessionCookieConfig`, or the bearer token with `delivery: "bearer"`.
+   */
   readonly signIn: (
     email: string,
-    options?: {
-      readonly name?: string;
-      readonly amr?: ReadonlyArray<Sessions.AuthMethod>;
-      readonly onSignedUp?: (userId: Users.UserId) => Effect.Effect<void>;
-    },
-  ) => Promise<SignedInSession>;
+    options?: SignInOptions & AgentOptions,
+  ) => Promise<SignedInAgent>;
+  /** One request from a fresh anonymous agent (nothing leaks between unrelated requests). */
+  readonly request: (method: string, path: string, init?: RequestInit) => Promise<Response>;
   /**
    * The composition's context, built once on the real clock: for a World that runs effects *directly* on its own fiber
    * (under a step's `TestClock`) against the very instances `handler` serves from. A service that reads the clock when
@@ -494,9 +541,10 @@ export interface App<A, E = never> {
    */
   readonly runtime: ManagedRuntime.ManagedRuntime<A, E>;
   /**
-   * Moves the composition's clock forward: with `testClock: true` the handler, `run` and `runtime` all read one
-   * `TestClock`, so a session expires, a window resets, a token lapses when the test says so. Without the option
-   * there is no `TestClock` to move and the promise rejects.
+   * Moves the composition's clock forward: with `testClock: true` the handler, `run`, `runtime` and every agent's
+   * cookie store all read one `TestClock`, so a session expires, a window resets, a token lapses (and a cookie's
+   * `Max-Age` with it) when the test says so. Without the option there is no `TestClock` to move and the promise
+   * rejects.
    */
   readonly advance: (by: Duration.Input) => Promise<void>;
   /** Releases everything the composition built. */
@@ -507,18 +555,22 @@ export interface App<A, E = never> {
 export type AppNeeds = Csrf.CsrfConfig | Users.Users | Sessions.Sessions;
 
 /**
- * BEH-EA-T3: serves `appLayer` (normally `TestAuth.layer(Auth.make([...]), ...)`) and returns the handle a
- * wire-level suite uses. It replaces the hand-rolled `Layer.makeMemoMapUnsafe` + `HttpRouter.toWebHandler`
- * + `buildWithMemoMap` blocks and the per-suite CSRF token mint.
+ * BEH-EA-T3/BEH-EA-333: serves `appLayer` (normally `TestAuth.layer(Auth.make([...]), ...)`) and returns the
+ * handle a wire-level suite uses: agents that keep cookies, echo CSRF and follow rotations. It replaces the
+ * hand-rolled `Layer.makeMemoMapUnsafe` + `HttpRouter.toWebHandler` + `buildWithMemoMap` blocks, the per-suite
+ * CSRF token mint and the hand-threaded cookies.
  */
 export const app = <A, E>(
   composition: Layer.Layer<A | AppNeeds, E>,
   options: {
-    /** The origin `request` addresses (default `http://localhost`): a plugin that derives a URL from the request's host sees it. */
+    /**
+     * The origin agents address (default `http://localhost`, a secure context): a plugin that derives a URL from
+     * the request's host sees it, and an agent applies a browser's `Domain`/`Secure` rules against it.
+     */
     readonly baseUrl?: string;
     /**
-     * Serve the composition over one `TestClock` (time starts at the epoch): `advance` moves it for the handler and
-     * for `run` alike, and `request` stamps its CSRF pair with the clock's current reading.
+     * Serve the composition over one `TestClock` (time starts at the epoch): `advance` moves it for the handler,
+     * for `run` and for every agent's cookie store alike.
      */
     readonly testClock?: boolean;
     /** An existing memo map to build into, so several apps (or a hand-made router) share the instances they have in common. */
@@ -541,58 +593,108 @@ export const app = <A, E>(
   const run: App<A | AppNeeds, E>["run"] = (effect) =>
     built().then((services) => Effect.runPromiseWith(services)(effect));
   const runtime = ManagedRuntime.make(appLayer, { memoMap });
-  let token: Promise<string> | undefined;
-  const csrf = () => {
-    if (options.testClock === true) {
-      return run(
-        Effect.gen(function* () {
-          const config = yield* Csrf.CsrfConfig;
-          const now = yield* Clock.currentTimeMillis;
-          return csrfToken(config.secret, { issuedAt: Math.floor(now / 1000) });
-        }),
-      );
-    }
-    token ??= run(
-      Effect.map(Effect.service(Csrf.CsrfConfig), (config) => csrfToken(config.secret)),
-    );
-    return token;
+  const handler = (request: Request) => web.handler(request);
+
+  // The agents' clock: the composition's `TestClock` (re-read whenever an agent is made or the clock moves),
+  // or the wall clock.
+  let clockMs = 0;
+  const syncClock = async () => {
+    if (options.testClock === true) clockMs = await run(Clock.currentTimeMillis);
   };
+  const now = options.testClock === true ? () => clockMs : Date.now;
+
+  // The CSRF cookie every agent starts with, minted from the composition's own config.
+  let csrfConfig:
+    | Promise<{
+        readonly secret: Redacted.Redacted<string>;
+        readonly cookie: Cookies.Cookie["options"];
+      }>
+    | undefined;
+  const csrfCookie = async () => {
+    csrfConfig ??= run(
+      Effect.gen(function* () {
+        const config = yield* Csrf.CsrfConfig;
+        const cookieConfig = yield* SessionCookie.SessionCookieConfig;
+        return {
+          secret: config.secret,
+          cookie: {
+            path: "/",
+            secure: true,
+            httpOnly: false,
+            ...SessionCookie.csrfCookieOptions(cookieConfig),
+          },
+        };
+      }),
+    );
+    const { secret, cookie } = await csrfConfig;
+    const token = csrfToken(secret, { issuedAt: Math.floor(now() / 1000) });
+    return Effect.runSync(serialize(Api.CSRF_COOKIE_NAME, token, cookie));
+  };
+
+  const agent = async (agentOptions: AgentOptions = {}) => {
+    await syncClock();
+    const made = UserAgent.make({
+      handler,
+      origin: baseUrl,
+      now,
+      ...(agentOptions.delivery === undefined ? {} : { delivery: agentOptions.delivery }),
+      ...(agentOptions.onRefused === undefined ? {} : { onRefused: agentOptions.onRefused }),
+      ...(agentOptions.hold === undefined ? {} : { hold: agentOptions.hold }),
+    });
+    if (agentOptions.delivery !== "bearer") made.cookies.receive(await csrfCookie());
+    return made;
+  };
+
   return {
-    handler: (request) => web.handler(request),
+    handler,
     run,
-    request: async (method, path, init = {}) => {
-      const minted = await csrf();
-      const headers = new Headers({
-        cookie: [init.cookie, `${Api.CSRF_COOKIE_NAME}=${minted}`]
-          .filter((part) => part !== undefined && part !== "")
-          .join("; "),
-        [Api.CSRF_HEADER_NAME]: minted,
+    agent,
+    signIn: async (email, signInOptions = {}) => {
+      const { delivery, onRefused, hold, ...mint } = signInOptions;
+      const signedIn = await run(signInAs({ email, ...mint }));
+      const made = await agent({
+        ...(delivery === undefined ? {} : { delivery }),
+        ...(onRefused === undefined ? {} : { onRefused }),
+        ...(hold === undefined ? {} : { hold }),
       });
-      let body: string | undefined;
-      if (init.json !== undefined) {
-        headers.set("content-type", "application/json");
-        body = JSON.stringify(init.json);
-      } else if (init.form !== undefined) {
-        headers.set("content-type", "application/x-www-form-urlencoded");
-        body = new URLSearchParams(init.form).toString();
+      if (delivery === "bearer") {
+        made.bearer.set(Redacted.value(signedIn.token));
+      } else {
+        const received = made.cookies.receive(signedIn.setCookie);
+        if (received._tag !== "Stored") {
+          throw new Error(
+            `TestAuth.app: the agent did not store the minted session cookie (${received._tag === "Refused" ? received.refusal : received._tag}); is \`baseUrl\` an origin its \`SessionCookieConfig\` can set cookies on?`,
+          );
+        }
       }
-      for (const [name, value] of Object.entries(init.headers ?? {})) headers.set(name, value);
-      return web.handler(
-        new Request(`${baseUrl}${path}`, {
-          method,
-          headers,
-          ...(body === undefined ? {} : { body }),
-        }),
-      );
+      return {
+        ...made,
+        userId: signedIn.userId,
+        token: signedIn.token,
+        cookieHeader: signedIn.cookieHeader,
+      };
     },
-    signIn: (email, options = {}) => run(signInAs({ email, ...options })),
+    request: async (method, path, init = {}) => {
+      const { cookie, ...rest } = init;
+      const forged = Object.fromEntries(
+        parseCookieHeader(cookie).map((pair) => [pair.name, pair.value]),
+      );
+      const fresh = await agent();
+      return fresh.request(method, path, {
+        ...rest,
+        extraCookies: { ...forged, ...rest.extraCookies },
+      });
+    },
     context: built,
     memoMap,
     runtime,
-    advance: (by) =>
-      options.testClock === true
-        ? run(TestClock.adjust(by))
-        : Promise.reject(new Error("TestAuth.app: `advance` needs the `testClock: true` option")),
+    advance: async (by) => {
+      if (options.testClock !== true) {
+        throw new Error("TestAuth.app: `advance` needs the `testClock: true` option");
+      }
+      await run(TestClock.adjust(by));
+      await syncClock();
+    },
     dispose: async () => {
       await web.dispose();
       await runtime.dispose();
