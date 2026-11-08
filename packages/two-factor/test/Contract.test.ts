@@ -2,17 +2,25 @@
 // for `TwoFactor`; here, that migrations apply identically on two fresh databases. Its composition needs the two gates a host chooses (BEH-EA-261).
 import { SessionLifecycle } from "@awthaq/api";
 import * as TwoFactorApi from "../src/TwoFactorApi.ts";
-import { RecordsContract, TestAuth } from "@awthaq/test";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Layer from "effect/Layer";
 import * as SecondFactor from "../src/SecondFactor.ts";
 import * as TwoFactor from "../src/TwoFactor.ts";
+import { twoFactorRecoveryCodes } from "./contract/TwoFactorRecoveryCodes.ts";
+import { twoFactorSecrets } from "./contract/TwoFactorSecrets.ts";
 
 const framework = TestAuth.throwingFramework(describe, it);
 
 TestAuth.runPluginContractTests(framework, () => TwoFactor.TwoFactor, {
   options: [{}],
-  records: { suite: "two_factor_records_contract", suites: RecordsContract.pending("21") },
+  records: {
+    suite: "two_factor_records_contract",
+    suites: {
+      "awthaq/two-factor/records/TwoFactorSecrets": twoFactorSecrets,
+      "awthaq/two-factor/records/TwoFactorRecoveryCodes": twoFactorRecoveryCodes,
+    },
+  },
   build: {
     services: TwoFactor.sessionGate.pipe(
       Layer.merge(TwoFactor.credentialResetGate),
