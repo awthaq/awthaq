@@ -75,7 +75,10 @@ describe("ADR-EA-028: password sign-in during a store outage", () => {
       down.read = true;
       const failure = yield* password.signIn({ email, password: strongPassword }).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "StoreUnavailable");
-    }).pipe(Effect.provide(makeTestLayer({ coreOverride: accountsDownWhen(down) })));
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(makeTestLayer({ coreOverride: accountsDownWhen(down) })),
+    );
   });
 });
 
@@ -89,7 +92,10 @@ describe("ADR-EA-028: the authenticated credential endpoints during a store outa
         .changePassword({ userId, currentSessionId, currentPassword: strongPassword, newPassword })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "StoreUnavailable");
-    }).pipe(Effect.provide(makeTestLayer({ coreOverride: accountsDownWhen(down) })));
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(makeTestLayer({ coreOverride: accountsDownWhen(down) })),
+    );
   });
 
   it.effect("changePassword during a credential-write outage is StoreUnavailable", () => {
@@ -101,7 +107,10 @@ describe("ADR-EA-028: the authenticated credential endpoints during a store outa
         .changePassword({ userId, currentSessionId, currentPassword: strongPassword, newPassword })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "StoreUnavailable");
-    }).pipe(Effect.provide(makeTestLayer({ coreOverride: accountsDownWhen(down) })));
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(makeTestLayer({ coreOverride: accountsDownWhen(down) })),
+    );
   });
 
   it.effect("reauthenticate during a credential-read outage is StoreUnavailable", () => {
@@ -113,7 +122,10 @@ describe("ADR-EA-028: the authenticated credential endpoints during a store outa
         .reauthenticate({ userId, currentSessionId, currentPassword: strongPassword })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "StoreUnavailable");
-    }).pipe(Effect.provide(makeTestLayer({ coreOverride: accountsDownWhen(down) })));
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(makeTestLayer({ coreOverride: accountsDownWhen(down) })),
+    );
   });
 });
 
@@ -160,7 +172,7 @@ describe("ADR-EA-028: confirmReset during a store outage", () => {
         down.write = false;
         yield* password.confirmReset({ token, password: newPassword });
         yield* password.signIn({ email, password: newPassword });
-      }).pipe(Effect.provide(sqlLayer(down)));
+      }).pipe(TestAuth.withoutRequest, Effect.provide(sqlLayer(down)));
     },
   );
 });

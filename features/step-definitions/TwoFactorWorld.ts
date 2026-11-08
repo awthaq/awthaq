@@ -10,6 +10,7 @@
 // caller's clock, so a scenario moves time with `advance` and TOTPs are computed on the same clock
 // the services read. A scenario that wants a non-default composition states so in a Given
 // (`configureApp`) before its first call.
+import { Api } from "@awthaq/api";
 import {
   Auth,
   AuditLog,
@@ -264,17 +265,21 @@ const running = Effect.gen(function* () {
 });
 
 /** Runs a service-level effect against the composition; a typed failure is a defect (use `directExit` to observe one). */
-export const direct = <A, E>(effect: Effect.Effect<A, E, TwoFactorServices>) =>
+export const direct = <A, E>(
+  effect: Effect.Effect<A, E, TwoFactorServices | Api.AuthRequestContext>,
+) =>
   Effect.gen(function* () {
     const context = yield* running;
-    return yield* Effect.provide(effect, context).pipe(Effect.orDie);
+    return yield* Effect.provide(TestAuth.withoutRequest(effect), context).pipe(Effect.orDie);
   });
 
 /** Like `direct`, but the outcome — typed failure included — is the value. */
-export const directExit = <A, E>(effect: Effect.Effect<A, E, TwoFactorServices>) =>
+export const directExit = <A, E>(
+  effect: Effect.Effect<A, E, TwoFactorServices | Api.AuthRequestContext>,
+) =>
   Effect.gen(function* () {
     const context = yield* running;
-    return yield* Effect.exit(Effect.provide(effect, context));
+    return yield* Effect.exit(Effect.provide(TestAuth.withoutRequest(effect), context));
   });
 
 /** The typed failure of an outcome, or `undefined` when it succeeded or died. */

@@ -157,7 +157,7 @@ layer(PasswordLayer)(
         yield* users.verifyEmail(issued.session.userId);
         const again = yield* password.signIn({ email: "bundle@example.com", password: secret });
         assert.strictEqual(again.session.userId, issued.session.userId);
-      }),
+      }).pipe(TestAuth.withoutRequest),
     );
   },
 );

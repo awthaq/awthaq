@@ -1,5 +1,6 @@
 // password-policy-posture: PHS-004 (breach-check body + timeout), PHS-006
 // (screening on by default), FAMS-003 (verified-email gate knob).
+import { TestAuth } from "@awthaq/test";
 import { createHash } from "node:crypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -25,6 +26,7 @@ describe("PHS-004: the breach check's own failure modes follow onUnavailable", (
       const failure = yield* password.signUp({ email, password: strongPassword }).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "WeakPassword");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         makeTestLayer({
           httpClient: httpClientReturning(() => "<html><body>Bad gateway</body></html>"),
@@ -40,6 +42,7 @@ describe("PHS-004: the breach check's own failure modes follow onUnavailable", (
       const issued = yield* password.signUp({ email, password: strongPassword });
       assert.isDefined(issued.token);
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(makeTestLayer({ httpClient: httpClientReturning(() => "<html>oops</html>") })),
     ),
   );
@@ -50,6 +53,7 @@ describe("PHS-004: the breach check's own failure modes follow onUnavailable", (
       const failure = yield* password.signUp({ email, password: strongPassword }).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "WeakPassword");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         makeTestLayer({
           httpClient: httpClientReturning(() => ""),
@@ -75,7 +79,7 @@ describe("PHS-004: the breach check's own failure modes follow onUnavailable", (
       yield* TestClock.adjust(Duration.seconds(2));
       const issued = yield* Fiber.join(fiber);
       assert.isDefined(issued.token);
-    }).pipe(Effect.provide(makeTestLayer({ httpClient: NeverResponds }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer({ httpClient: NeverResponds }))),
   );
 
   it.effect("a never-responding breach check fails closed under reject", () =>
@@ -89,6 +93,7 @@ describe("PHS-004: the breach check's own failure modes follow onUnavailable", (
       const failure = yield* Fiber.join(fiber);
       assert.strictEqual(failure._tag, "WeakPassword");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         makeTestLayer({
           httpClient: NeverResponds,
@@ -114,7 +119,10 @@ describe("PHS-006: breach screening is on by default", () => {
       const password = yield* Password.Password;
       const failure = yield* password.signUp({ email, password: breached }).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "WeakPassword");
-    }).pipe(Effect.provide(makeTestLayer({ httpClient: BreachedHttpClient }))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(makeTestLayer({ httpClient: BreachedHttpClient })),
+    ),
   );
 
   it.effect("breachCheck: false opts out", () =>
@@ -123,6 +131,7 @@ describe("PHS-006: breach screening is on by default", () => {
       const issued = yield* password.signUp({ email, password: breached });
       assert.isDefined(issued.token);
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         makeTestLayer({ httpClient: BreachedHttpClient, config: { breachCheck: false } }),
       ),
@@ -140,6 +149,7 @@ describe("FAMS-003: requireVerifiedEmail", () => {
         const issued = yield* password.signIn({ email, password: strongPassword });
         assert.isDefined(issued.token);
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           makeTestLayer({
             httpClient: NoBreachHttpClient,
@@ -157,6 +167,9 @@ describe("FAMS-003: requireVerifiedEmail", () => {
         .signIn({ email, password: Redacted.make("totally wrong password") })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "InvalidCredentials");
-    }).pipe(Effect.provide(makeTestLayer({ config: { requireVerifiedEmail: false } }))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(makeTestLayer({ config: { requireVerifiedEmail: false } })),
+    ),
   );
 });

@@ -307,7 +307,7 @@ describe("runPluginContractTests — the redaction check (EOTS-002, BEH-EA-199)"
             yield* password
               .signIn({ email: "canary@example.com", password: Redacted.make("not-the-password") })
               .pipe(Effect.ignore);
-          }),
+          }).pipe(TestAuth.withoutRequest),
       },
     });
     await sink.settled();

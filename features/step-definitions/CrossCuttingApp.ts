@@ -10,6 +10,7 @@
 // configured: a tap or a subscriber must be in the graph before the first hook run (BEH-EA-024
 // freezes a point at its first read), so configuration after that is a defect in the scenario,
 // and fails loudly.
+import { Api } from "@awthaq/api";
 import {
   Auth,
   AuditLog,
@@ -136,8 +137,13 @@ export type AppServices =
 
 export interface Host {
   readonly configure: (change: (spec: AppSpec) => AppSpec) => Effect.Effect<void>;
-  /** Runs `effect` inside the built app, capturing whatever it logs. Builds the app on first use. */
-  readonly run: <A, E>(effect: Effect.Effect<A, E, AppServices>) => Effect.Effect<A, E>;
+  /**
+   * Runs `effect` inside the built app, capturing whatever it logs. Builds the app on first use. It answers no request
+   * (ADR-EA-047: `TestAuth.withoutRequest`) unless the effect provides one itself.
+   */
+  readonly run: <A, E>(
+    effect: Effect.Effect<A, E, AppServices | Api.AuthRequestContext>,
+  ) => Effect.Effect<A, E>;
   /** Sends one web `Request` through the composed router (the same seam `TestAuth.test.ts` uses). */
   readonly dispatch: (request: Request) => Effect.Effect<Response>;
   readonly logs: Effect.Effect<ReadonlyArray<LogRecord>>;
@@ -183,7 +189,7 @@ export const makeHost = Effect.gen(function* () {
 
   const run: Host["run"] = (effect) =>
     Effect.flatMap(context, (ctx) =>
-      effect.pipe(Effect.provide(ctx), Effect.provide(capture.layer)),
+      effect.pipe(TestAuth.withoutRequest, Effect.provide(ctx), Effect.provide(capture.layer)),
     );
 
   const dispatch: Host["dispatch"] = (request) =>

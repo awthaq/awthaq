@@ -2,6 +2,7 @@
 // `change-email` token to the NEW address and changes nothing; confirming it replaces the
 // address, marks it verified and tells the old address, all in one transaction with the
 // token's consumption.
+import { TestAuth } from "@awthaq/test";
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Mailer, RateLimiter } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
@@ -64,7 +65,7 @@ describe("BAM-009: request", () => {
         email,
       );
       assert.isTrue(Option.isNone(yield* users.findByEmail(newEmail)));
-    }).pipe(Effect.provide(makeTestLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 
   it.effect("the same address (in any case) is a no-op and sends nothing", () =>
@@ -73,7 +74,7 @@ describe("BAM-009: request", () => {
       const user = yield* signedUpUser();
       yield* requestChange(user.id, email.toUpperCase());
       assert.strictEqual(changeEmailMail(yield* mailer.sent).length, 0);
-    }).pipe(Effect.provide(makeTestLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 
   it.effect("a link builder puts the confirmation URL in the mail", () =>
@@ -84,6 +85,7 @@ describe("BAM-009: request", () => {
       const mail = changeEmailMail(yield* mailer.sent)[0];
       assert.strictEqual(mail?.data?.["url"], `https://app.example/confirm-email#${tokenOf(mail)}`);
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         makeTestLayer({
           config: {
@@ -131,7 +133,7 @@ describe("BAM-009: confirm", () => {
           [email],
         );
         assert.isUndefined(notice[0]?.data);
-      }).pipe(Effect.scoped, Effect.provide(makeTestLayer())),
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 
   // BEH-EA-053 (REQ-EA-686): an email change is a privilege change. It is confirmed by a token that
@@ -168,7 +170,7 @@ describe("BAM-009: confirm", () => {
         (event) => event._tag === "auth.session.revoked" && event.reason === "emailChanged",
       );
       assert.isAbove(revoked.length, 0);
-    }).pipe(Effect.scoped, Effect.provide(makeTestLayer())),
+    }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 
   it.effect("an address taken in the meantime is EmailAlreadyExists and the address stays", () =>
@@ -183,7 +185,7 @@ describe("BAM-009: confirm", () => {
       const failure = yield* password.confirmEmailChange({ token }).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "EmailAlreadyExists");
       assert.strictEqual(Option.getOrThrow(Users.emailOf(yield* users.findById(user.id))), email);
-    }).pipe(Effect.provide(makeTestLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 });
 
@@ -210,7 +212,7 @@ describe("BAM-009: typed mail failure and rate limits", () => {
       const user = yield* users.create({ identity: { _tag: "Email", email }, name: "Ada" });
       const failure = yield* requestChange(user.id, newEmail).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "EmailDeliveryFailed");
-    }).pipe(Effect.provide(makeTestLayer({ mailer: failingMailer }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer({ mailer: failingMailer }))),
   );
 
   it.effect("a phone-only account has no address to replace", () =>
@@ -219,7 +221,7 @@ describe("BAM-009: typed mail failure and rate limits", () => {
       const user = yield* users.create({ identity: { _tag: "Anonymous" }, name: "Guest" });
       const failure = yield* requestChange(user.id, newEmail).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "EmailChangeNotSupported");
-    }).pipe(Effect.provide(makeTestLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 
   const realLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory));
@@ -244,7 +246,7 @@ describe("BAM-009: typed mail failure and rate limits", () => {
       }
       const requesterLimited = yield* requestChange(user.id, "t99@example.org").pipe(Effect.flip);
       assert.strictEqual(requesterLimited._tag, "RateLimited");
-    }).pipe(Effect.provide(makeTestLayer({ limiter: realLimiter }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer({ limiter: realLimiter }))),
   );
 });
 
@@ -277,7 +279,7 @@ describe("BEH-EA-320: starting an email change needs a fresh session", () => {
         });
         yield* request;
         assert.strictEqual(changeEmailMail(yield* mailer.sent).length, 1);
-      }).pipe(Effect.provide(makeTestLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 
   it.effect("a session that has ended is refused the same way", () =>
@@ -294,7 +296,7 @@ describe("BEH-EA-320: starting an email change needs a fresh session", () => {
         })
         .pipe(Effect.flip);
       assert.strictEqual(refused._tag, "PasswordReauthRequired");
-    }).pipe(Effect.provide(makeTestLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 
   it.effect("reauthMaxAge: Duration.infinity turns the gate off", () =>
@@ -309,6 +311,9 @@ describe("BEH-EA-320: starting an email change needs a fresh session", () => {
         newEmail,
       });
       assert.strictEqual(changeEmailMail(yield* mailer.sent).length, 1);
-    }).pipe(Effect.provide(makeTestLayer({ config: { reauthMaxAge: Duration.infinity } }))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(makeTestLayer({ config: { reauthMaxAge: Duration.infinity } })),
+    ),
   );
 });

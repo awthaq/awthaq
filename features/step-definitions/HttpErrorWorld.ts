@@ -368,6 +368,6 @@ export const signUpVerified = Effect.fn("features.httpError.signUpVerified")(fun
       const users = yield* Users.Users;
       const issued = yield* service.signUp({ email, password: Redacted.make(password) });
       yield* users.verifyEmail(issued.session.userId);
-    }).pipe(Effect.orDie),
+    }).pipe(Effect.orDie, TestAuth.withoutRequest),
   );
 });

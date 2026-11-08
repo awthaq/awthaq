@@ -671,7 +671,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
             const signedUp = yield* passwords.signUp({ email, password });
             yield* users.verifyEmail(signedUp.session.userId);
             return signedUp;
-          }),
+          }).pipe(TestAuth.withoutRequest),
         ),
       );
       // The user's browser: it signs in over HTTP and keeps the session (and its CSRF cookie), then

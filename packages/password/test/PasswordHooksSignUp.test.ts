@@ -4,6 +4,7 @@
 // amend the input for whatever runs after it. A dedicated file so this
 // composition's tap stays out of `Password.test.ts`'s own untapped `signUp`
 // coverage (a hook registry is per composition, ELC-001).
+import { TestAuth } from "@awthaq/test";
 import { HookPoint, Hooks } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -51,6 +52,6 @@ describe("Password signUp hook (BEH-EA-090)", () => {
           password: strongPassword,
         });
         assert.isString(issued.session.userId);
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 });

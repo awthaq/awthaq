@@ -300,7 +300,7 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
         })
         .pipe(Effect.flip);
       return { sameUserStored: stored.id === issued.session.userId, failureTag: wrong._tag };
-    }).pipe(Effect.provide(passwordApp));
+    }).pipe(TestAuth.withoutRequest, Effect.provide(passwordApp));
     yield* outcomes.set("sameUserStored", result.sameUserStored);
     yield* outcomes.set("failureTag", result.failureTag);
   });
@@ -1006,7 +1006,7 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
             Effect.gen(function* () {
               const password = yield* Password.Password;
               yield* password.signUp({ email: "clean@example.com", password: strongPassword });
-            }),
+            }).pipe(TestAuth.withoutRequest),
         },
       });
       await sink.settled();

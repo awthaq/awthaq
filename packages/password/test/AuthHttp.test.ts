@@ -23,6 +23,8 @@ import { Mailer } from "@awthaq/ports";
 import { CookieAssertions, TestAuth, type UserAgent } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Ref from "effect/Ref";
@@ -145,32 +147,70 @@ describe("AuthHttp + Password (real HTTP)", () => {
     }),
   );
 
+  // ADR-EA-047 (plan 26 ticket 13): the wiring probe. The plugin reads no address and no header; the request context
+  // the group declares is what the session records and what the per-source rules key on.
   it.effect(
-    "CSD-003: sign-up records the request's User-Agent on the session (capped at 512)",
+    "ADR-EA-047: sign-up records the request's address and user agent (capped at 512) from the request context",
     () =>
       Effect.gen(function* () {
-        const app = TestAuth.app(AppLayer);
-        const signUp = (email: string, userAgent: string) =>
-          Effect.promise(() =>
-            post(
-              app,
-              "/password/sign-up",
-              { email, password: strongPassword },
-              { "user-agent": userAgent },
-            ),
-          );
-        const plain = yield* signUp("ua-plain@example.com", "TestBrowser/1.0");
-        assert.strictEqual(plain.status, 200);
-        const plainBody = Schema.decodeUnknownSync(SessionContract.SessionDto)(
-          yield* Effect.promise(() => plain.json()),
+        const app = TestAuth.app(
+          TestAuth.layer(built, {
+            services: Layer.mergeAll(NoBreachHttpClient, Mailer.layerMemory),
+            clientAddress: "198.51.100.4",
+          }),
         );
-        assert.strictEqual(plainBody.userAgent, "TestBrowser/1.0");
+        const recorded = (email: string, userAgent: string) =>
+          Effect.gen(function* () {
+            const browser = yield* Effect.promise(() => app.agent());
+            const response = yield* Effect.promise(() =>
+              post(
+                browser,
+                "/password/sign-up",
+                { email, password: strongPassword },
+                { "user-agent": userAgent },
+              ),
+            );
+            assert.strictEqual(response.status, 200);
+            const token = browser.cookies.get(Api.SESSION_COOKIE_NAME)?.value ?? "";
+            return yield* Effect.promise(() =>
+              app.run(
+                Effect.flatMap(Effect.service(Sessions.Sessions), (sessions) =>
+                  sessions.verify(Redacted.make(token)),
+                ),
+              ),
+            );
+          });
+        const plain = yield* recorded("ua-plain@example.com", "TestBrowser/1.0");
+        assert.deepStrictEqual(plain.session.ipAddress, Option.some("198.51.100.4"));
+        assert.deepStrictEqual(plain.session.userAgent, Option.some("TestBrowser/1.0"));
+        const long = yield* recorded("ua-long@example.com", "x".repeat(2000));
+        assert.strictEqual(Option.getOrUndefined(long.session.userAgent)?.length, 512);
+        yield* Effect.promise(() => app.dispose());
+      }),
+  );
 
-        const long = yield* signUp("ua-long@example.com", "x".repeat(2000));
-        const longBody = Schema.decodeUnknownSync(SessionContract.SessionDto)(
-          yield* Effect.promise(() => long.json()),
-        );
-        assert.strictEqual(longBody.userAgent?.length, 512);
+  it.effect(
+    "ADR-EA-047: a per-source rule counts per request address (resendVerificationByIp, 20 per window)",
+    () =>
+      Effect.gen(function* () {
+        const appAt = (clientAddress: string) =>
+          TestAuth.app(
+            TestAuth.layer(built, {
+              services: Layer.mergeAll(NoBreachHttpClient, Mailer.layerMemory),
+              rateLimiter: "enforcing",
+              clientAddress,
+            }),
+          );
+        const busy = appAt("203.0.113.50");
+        const other = appAt("203.0.113.51");
+        const resend = (app: typeof busy, i: number) =>
+          Effect.promise(() =>
+            post(app, "/resend-verification", { email: `resend-${i}@example.com` }),
+          ).pipe(Effect.map((response) => response.status));
+        for (let i = 0; i < 20; i++) assert.strictEqual(yield* resend(busy, i), 202);
+        assert.strictEqual(yield* resend(busy, 20), 429);
+        assert.strictEqual(yield* resend(other, 21), 202);
+        yield* Effect.promise(() => Promise.all([busy.dispose(), other.dispose()]));
       }),
   );
 

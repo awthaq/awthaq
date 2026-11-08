@@ -1,5 +1,6 @@
 // password-recovery-correctness: ARF-002/004/007/008 — the confirmReset and
 // requestReset edges that used to burn tokens, 500, or strand an account.
+import { TestAuth } from "@awthaq/test";
 import { Accounts, Users, Verification } from "@awthaq/core";
 import { Mailer, PasswordHasher } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
@@ -47,7 +48,7 @@ describe("ARF-002: policy before consume", () => {
           token,
           password: Redacted.make("a brand new strong password"),
         });
-      }).pipe(Effect.provide(makeTestLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 
   it.effect("a breach-check outage under onUnavailable: reject never consumes the token", () =>
@@ -75,6 +76,7 @@ describe("ARF-002: policy before consume", () => {
       const second = yield* password.confirmReset(attempt).pipe(Effect.flip);
       assert.strictEqual(second._tag, "WeakPassword");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         makeTestLayer({
           httpClient: UnavailableHttpClient,
@@ -108,7 +110,7 @@ describe("ARF-004: credential-less accounts", () => {
         assert.isDefined(notice);
         assert.strictEqual(notice?.to, "oauth@example.com");
         assert.isUndefined(notice?.data?.["token"]);
-      }).pipe(Effect.provide(makeTestLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 
   it.effect("confirmReset for a credential-less user fails TokenConsumed, not a defect", () =>
@@ -135,7 +137,7 @@ describe("ARF-004: credential-less accounts", () => {
         })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "TokenConsumed");
-    }).pipe(Effect.provide(makeTestLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 });
 
@@ -156,6 +158,6 @@ describe("ARF-008: a reset proves mailbox control", () => {
       assert.isTrue(Users.isEmailVerified(Option.getOrThrow(user)));
       const signedIn = yield* password.signIn({ email, password: newPassword });
       assert.isDefined(signedIn.token);
-    }).pipe(Effect.provide(makeTestLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 });

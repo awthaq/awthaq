@@ -1,6 +1,7 @@
 // EP-007 (ADR-EA-018 Decision 8, BEH-EA-236): per-tenant configuration in one composition. A
 // tenant's `Password.config(...)` provided in the calling fiber decides that request; with none,
 // the build-time configuration applies exactly as before.
+import { TestAuth } from "@awthaq/test";
 import { Tenant } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -47,7 +48,7 @@ describe("EP-007: per-tenant Password.config in one composition", () => {
         .signUp({ email: "a@lax.example", password: tenCharacters })
         .pipe(inTenant("lax"));
       assert.isDefined(lax.token);
-    }).pipe(Effect.provide(withTenants())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(withTenants())),
   );
 
   it.effect("with no tenant override the build-time configuration applies, exactly as before", () =>
@@ -56,7 +57,7 @@ describe("EP-007: per-tenant Password.config in one composition", () => {
       // The build-time minLength (10) accepts the ten-character password.
       const issued = yield* password.signUp({ email: "a@example.com", password: tenCharacters });
       assert.isDefined(issued.token);
-    }).pipe(Effect.provide(withTenants({ config: { minLength: 10 } }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(withTenants({ config: { minLength: 10 } }))),
   );
 
   it.effect(
@@ -68,7 +69,7 @@ describe("EP-007: per-tenant Password.config in one composition", () => {
           .signUp({ email: "a@example.com", password: tenCharacters })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "WeakPassword");
-      }).pipe(Effect.provide(withTenants())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(withTenants())),
   );
 
   it.effect("a tenant override beats the build-time configuration", () =>
@@ -78,7 +79,7 @@ describe("EP-007: per-tenant Password.config in one composition", () => {
         .signUp({ email: "a@strict.example", password: tenCharacters })
         .pipe(inTenant("strict"), Effect.flip);
       assert.strictEqual(failure._tag, "WeakPassword");
-    }).pipe(Effect.provide(withTenants({ config: { minLength: 10 } }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(withTenants({ config: { minLength: 10 } }))),
   );
 
   it.effect("a tenant's sign-in policy (requireVerifiedEmail) applies to its own sign-ins", () =>
@@ -96,6 +97,9 @@ describe("EP-007: per-tenant Password.config in one composition", () => {
         .signIn({ email: "u@example.com", password: strongEnough })
         .pipe(inTenant("lax"));
       assert.isDefined(signedIn.token);
-    }).pipe(Effect.provide(withTenants({ config: { signInTimingFloor: Duration.zero } }))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(withTenants({ config: { signInTimingFloor: Duration.zero } })),
+    ),
   );
 });

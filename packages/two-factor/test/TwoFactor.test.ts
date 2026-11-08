@@ -1,6 +1,7 @@
 // THS-001, AOMS-003, ARF-005, THS-004/005/007, BCR-002/006 (BEH-EA-259 to BEH-EA-266): the plugin
 // end to end at the domain level — the real `Password` plugin as the first factor, the real
 // `TwoFactor` plugin and its two gates, real (in-memory) stores, the real `Encryption` port.
+import { TestAuth } from "@awthaq/test";
 import { AuditLog, AuthEvents, Hooks, SignIn, Users } from "@awthaq/core";
 import { SealedColumn } from "@awthaq/sql";
 import { Password } from "@awthaq/password";
@@ -111,7 +112,7 @@ describe("TwoFactor: enrolment and the divert (BEH-EA-260/261/263)", () => {
           issuedBefore + 1,
         );
         assert.strictEqual((yield* audit.list({ eventTag: "auth.twoFactor.verified" })).length, 1);
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("an unconfirmed (pending) secret never diverts a sign-in", () =>
@@ -126,7 +127,7 @@ describe("TwoFactor: enrolment and the divert (BEH-EA-260/261/263)", () => {
       });
       const signedIn = yield* password.signIn({ email: user.email, password: pw });
       assert.strictEqual(signedIn.session.userId, user.userId);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -143,7 +144,7 @@ describe("TwoFactor: enrolment and the divert (BEH-EA-260/261/263)", () => {
         const stale = yield* twoFactor.enable(other.userId, other.sessionId).pipe(Effect.flip);
         if (stale._tag !== "TwoFactorReauthRequired") return assert.fail(stale._tag);
         assert.strictEqual(stale.maxAgeSeconds, 600);
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -165,7 +166,7 @@ describe("TwoFactor: enrolment and the divert (BEH-EA-260/261/263)", () => {
           amr: ["pwd", "otp", "mfa"],
         });
         assert.strictEqual(inherited._tag, "Continue");
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("bypassStrategies lets a named first factor through without a divert", () =>
@@ -174,7 +175,10 @@ describe("TwoFactor: enrolment and the divert (BEH-EA-260/261/263)", () => {
       const user = yield* enrolledUser("bypass@example.com");
       const signedIn = yield* password.signIn({ email: user.email, password: pw });
       assert.strictEqual(signedIn.session.userId, user.userId);
-    }).pipe(Effect.provide(buildLayer({ config: { bypassStrategies: ["password"] } }))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(buildLayer({ config: { bypassStrategies: ["password"] } })),
+    ),
   );
 });
 
@@ -189,7 +193,7 @@ describe("TwoFactor: secret at rest (THS-004, ADR-EA-020)", () => {
       if (Option.isNone(row)) return assert.fail("no secret row");
       const opened = yield* SealedColumn.orDie(row.value.secret.open);
       assert.strictEqual(Redacted.value(opened), user.secret);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 });
 
@@ -211,7 +215,7 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
         .verify({ challengeId: Redacted.make(second.challengeId), code: secret(code) })
         .pipe(Effect.flip);
       assert.strictEqual(replay._tag, "InvalidTwoFactorCode");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   // ADR-EA-039: the challenge, the code check and the session share one transaction.
@@ -239,7 +243,10 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
           code: secret(yield* codeFor(user.secret)),
         });
         assert.strictEqual(issued.session.userId, user.userId);
-      }).pipe(Effect.provide(buildLayer({ failSessionIssue: sessionOutage }))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer({ failSessionIssue: sessionOutage })),
+      ),
   );
 
   it.effect(
@@ -268,7 +275,7 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
           .pipe(Effect.flip);
         if (last._tag !== "InvalidTwoFactorCode") return assert.fail(last._tag);
         assert.isUndefined(last.challengeId);
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -292,7 +299,7 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
           (yield* audit.list({ eventTag: "auth.token.replay" })).length,
           before + 1,
         );
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("a challenge expires after ten minutes", () =>
@@ -308,7 +315,7 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
         })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "InvalidTwoFactorCode");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("a challenge for a factor disabled since is refused like a wrong code", () =>
@@ -322,7 +329,7 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
         .verify({ challengeId: Redacted.make(divert.challengeId), code: secret("123456") })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "InvalidTwoFactorCode");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   // ADR-EA-038: the divert's handoff rides the challenge, and `finalizeSignIn` is `SignIn.resume` + `issue`.
@@ -363,7 +370,10 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
         assert.deepStrictEqual(issued.session.amr, ["fed", "otp", "mfa"]);
         assert.deepStrictEqual(Option.getOrUndefined(issued.session.tenantId), "tenant-1");
         assert.deepStrictEqual(continued, [{ n: 7, sessionId: issued.session.id }]);
-      }).pipe(Effect.provide(continuation.layer.pipe(Layer.provideMerge(buildLayer()))));
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(continuation.layer.pipe(Layer.provideMerge(buildLayer()))),
+      );
     },
   );
 
@@ -404,7 +414,10 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
         code: secret(yield* codeFor(user.secret)),
       });
       assert.deepStrictEqual(continued, [3]);
-    }).pipe(Effect.provide(continuation.layer.pipe(Layer.provideMerge(buildLayer()))));
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(continuation.layer.pipe(Layer.provideMerge(buildLayer()))),
+    );
   });
 });
 
@@ -435,7 +448,7 @@ describe("TwoFactor: recovery codes (BEH-EA-264, BCR-002)", () => {
         (yield* audit.list({ eventTag: "auth.twoFactor.recoveryCodeUsed" })).length,
         1,
       );
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("regenerating replaces the whole set: no old code works, ten new ones do", () =>
@@ -465,7 +478,7 @@ describe("TwoFactor: recovery codes (BEH-EA-264, BCR-002)", () => {
         recoveryCode: secret(fresh[0] ?? ""),
       });
       assert.strictEqual(next.session.userId, user.userId);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("only hashes are stored: no recovery code appears in the table", () =>
@@ -481,7 +494,7 @@ describe("TwoFactor: recovery codes (BEH-EA-264, BCR-002)", () => {
           assert.notInclude(hash, plain.replaceAll("-", ""));
         }
       }
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 });
 
@@ -509,7 +522,7 @@ describe("TwoFactor: disabling (BEH-EA-263)", () => {
           .disable(user.userId, user.sessionId, secret("000000"))
           .pipe(Effect.flip);
         assert.strictEqual(again._tag, "TwoFactorNotEnabled");
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 });
 
@@ -554,7 +567,7 @@ describe("TwoFactor: the shared failure budget (BCR-006, ADR-EA-020)", () => {
           code: secret(yield* codeFor(user.secret)),
         });
         assert.strictEqual(issued.session.userId, user.userId);
-      }).pipe(Effect.provide(buildLayer({ limiter: realLimiter }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ limiter: realLimiter }))),
   );
 
   it.effect(
@@ -584,7 +597,7 @@ describe("TwoFactor: the shared failure budget (BCR-006, ADR-EA-020)", () => {
           })
           .pipe(Effect.flip);
         assert.strictEqual(refused._tag, "SecondFactorLocked");
-      }).pipe(Effect.provide(buildLayer({ limiter: realLimiter }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ limiter: realLimiter }))),
   );
 });
 
@@ -617,7 +630,7 @@ describe("TwoFactor: management is rate limited per account (plan 06)", () => {
         dimension: "principal",
       });
       assert.notInclude(JSON.stringify(event), user.userId);
-    }).pipe(Effect.provide(buildLayer({ limiter: realLimiter }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ limiter: realLimiter }))),
   );
 });
 
@@ -645,7 +658,7 @@ describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-259)", () => {
         // The credential was never rewritten: the old password still gets as far as the divert.
         const stillOld = yield* divertedSignIn(user.email);
         assert.strictEqual(stillOld.userId, user.userId);
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -673,7 +686,7 @@ describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-259)", () => {
           .pipe(Effect.flip);
         // The new password works — it reaches the second-factor divert.
         assert.strictEqual(signedIn._tag, "TwoFactorRequired");
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   // ADR-EA-037 / BEH-EA-266: the wrong code fails the reset, which rolls its transaction back. The
@@ -703,7 +716,7 @@ describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-259)", () => {
           );
           assert.strictEqual(seen.length, 1);
         }),
-      ).pipe(Effect.provide(buildDurableAuditLayer())),
+      ).pipe(TestAuth.withoutRequest, Effect.provide(buildDurableAuditLayer())),
   );
 
   it.effect("a recovery code carries a reset exactly once", () =>
@@ -723,7 +736,7 @@ describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-259)", () => {
         .pipe(Effect.flip);
       if (replay._tag !== "HookAborted") return assert.fail(replay._tag);
       assert.strictEqual(replay.code, "SECOND_FACTOR_INVALID");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("an unenrolled account resets exactly as before", () =>
@@ -734,6 +747,6 @@ describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-259)", () => {
       yield* password.confirmReset({ token, password: newPassword });
       const signedIn = yield* password.signIn({ email: user.email, password: newPassword });
       assert.strictEqual(signedIn.session.userId, user.userId);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 });
