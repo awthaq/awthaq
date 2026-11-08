@@ -5,7 +5,7 @@
 // database, so the example cannot drift from what its test proves (a sign-up, the mailed
 // verification token, a sign-in, all persisted through the real SQL store adapters).
 //
-// Password over SQL, end to end: a migration run, the sealed provider tokens of the accounts adapter, the durable
+// Password and Organization over SQL, end to end: a migration run, the sealed provider tokens of the accounts adapter, the durable
 // audit log, a SQL-backed rate limiter, one SQL transaction domain. The backend is chosen at
 // startup: `DATABASE_URL` set means Postgres, otherwise a SQLite file (`SQLITE_FILE`, default
 // `./awthaq.sqlite`; `:memory:` works too). That is the one-layer substitution a deployment makes
@@ -26,6 +26,7 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
+import { Organization } from "@awthaq/organization";
 import { Password } from "@awthaq/password";
 import {
   ClientAddress,
@@ -58,7 +59,7 @@ import * as Migrator from "effect/sql/Migrator";
 // 1. The plugin composition: `Auth.make` folds each plugin's HttpApi contract and Layer into one
 //    `api`/`layer` pair. Add more (`Organization`, `OAuth`, `Passkey`, ...) by listing them here
 //    and providing the ports and migrations each adds.
-const auth = Auth.make([Password.Password]);
+const auth = Auth.make([Password.Password, Organization.Organization]);
 
 // 2. The database, chosen by configuration. Both branches provide the same `SqlClient`, which is
 //    all the store adapters and the migrator ask for; the dialect is read from the client.
@@ -154,7 +155,12 @@ const makeAppLayer = (httpClient: Layer.Layer<HttpClient.HttpClient>) =>
   Layer.mergeAll(RoutesLive, DocsLive).pipe(
     Layer.provide(MiddlewareLive),
     Layer.provideMerge(ServicesLive),
+    // Organization's SQL record stores and hook points (its records seal the OAuth client secret).
+    Layer.provideMerge(
+      Layer.merge(Organization.Organization.records.sql, Organization.Organization.hookPoints),
+    ),
     Layer.provideMerge(CoreLive),
+    Layer.provideMerge(EncryptionLive),
     Layer.provideMerge(Hooks.HooksLive),
     Layer.provideMerge(
       Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerConsole, RateLimiterLive).pipe(
@@ -205,7 +211,9 @@ export const main = (port: number) =>
     Layer.merge(
       serverLayer(port),
       Layer.effectDiscard(
-        Effect.logInfo(`awthaq example (SQL-backed, Password) listening on :${port}`),
+        Effect.logInfo(
+          `awthaq example (SQL-backed, Password + Organization) listening on :${port}`,
+        ),
       ),
     ),
   );

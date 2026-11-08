@@ -4,6 +4,7 @@
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 import { CoreMigrations } from "@awthaq/sql";
@@ -117,6 +118,34 @@ describe("Migrations.group / Migrations.ledger", () => {
           columns.map((c) => c.name),
           ["id", "at", "note"],
         );
+      }).pipe(Effect.provide(SqlLive)),
+  );
+});
+
+// Plan 15 phase 0: the boot sequence a host (and `TestAuth`'s SQL base) runs today, core's `Migrator`
+// then `Migrations.run`, has no ledger-drift guard. A plugin inserted before one already applied gets an
+// id at or below the newest recorded one, and the migrator skips it without an error. Phase 1 rewrites
+// this case against `Migrations.apply` and flips it.
+describe("boot-time migration run", () => {
+  it.effect.fails(
+    "a boot-time run refuses a plugin inserted before an applied one (it is skipped today)",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const table = (name: string): Migrations.Migration => ({
+          name,
+          up: sql`CREATE TABLE IF NOT EXISTS ${sql(name)} (id TEXT)`,
+        });
+        yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
+        yield* Migrations.run([table("plugin_a"), table("plugin_c")]);
+        // The next deploy composes plugin_b between them: the boot sequence must not succeed.
+        const boot = yield* Effect.exit(
+          Effect.andThen(
+            Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
+            Migrations.run([table("plugin_a"), table("plugin_b"), table("plugin_c")]),
+          ),
+        );
+        assert.isTrue(Exit.isFailure(boot));
       }).pipe(Effect.provide(SqlLive)),
   );
 });

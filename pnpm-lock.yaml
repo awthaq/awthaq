@@ -214,6 +214,9 @@ importers:
       '@awthaq/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@awthaq/organization':
+        specifier: workspace:*
+        version: link:../../packages/organization
       '@awthaq/password':
         specifier: workspace:*
         version: link:../../packages/password

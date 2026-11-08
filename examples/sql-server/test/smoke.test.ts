@@ -48,13 +48,15 @@ const boot = (env: Record<string, string>) => {
     NoBreachHttpClient,
     CaptureMail,
   );
-  const call = (method: string, requestPath: string, body?: unknown) =>
+  const call = (method: string, requestPath: string, body?: unknown, session?: string) =>
     app.handler(
       new Request(`${ORIGIN}${requestPath}`, {
         method,
         headers: {
           "content-type": "application/json",
-          cookie: `${CSRF_COOKIE}=${csrfToken}`,
+          cookie: [session, `${CSRF_COOKIE}=${csrfToken}`]
+            .filter((part) => part !== undefined)
+            .join("; "),
           [CSRF_HEADER]: csrfToken,
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -85,6 +87,42 @@ describe("examples/sql-server (SEA-007)", () => {
       assert.isTrue(
         signedIn.headers.getSetCookie().some((cookie) => cookie.startsWith("__Host-session=")),
       );
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  // Plan 15 phase 0: Organization owns tables, but this composition runs only core's migrations, so the
+  // request answers 503 StoreUnavailable ("no such table: organization_membership"). Phase 4 flips it.
+  it.fails("a plugin that owns tables is served over SQL: a signed-in user creates an organization", async () => {
+    const app = boot({ SQLITE_FILE: ":memory:" });
+    try {
+      const email = "lin@example.com";
+      const credentials = { email, password: PASSWORD };
+      assert.strictEqual((await app.call("POST", "/password/sign-up", credentials)).status, 200);
+      const mail = app.printedMail.find(
+        (line) => line["to"] === email && line["template"] === "verify-email",
+      );
+      assert.strictEqual(
+        (await app.call("POST", "/verify-email", { token: mail?.["token"] })).status,
+        204,
+      );
+      const signedIn = await app.call("POST", "/password/sign-in", credentials);
+      assert.strictEqual(signedIn.status, 200);
+      const session = signedIn.headers
+        .getSetCookie()
+        .map((cookie) => cookie.split(";")[0] ?? "")
+        .find((cookie) => cookie.startsWith("__Host-session="));
+      assert.isString(session);
+      const created = await app.call(
+        "POST",
+        "/organization",
+        { name: "Acme", slug: "acme" },
+        session,
+      );
+      assert.strictEqual(created.status, 200);
+      const body: unknown = await created.json();
+      assert.deepInclude(body, { slug: "acme" });
     } finally {
       await app.dispose();
     }
