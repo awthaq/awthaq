@@ -20,7 +20,9 @@ import {
 } from "./shared/Harness.ts";
 import { Password } from "@awthaq/password";
 import { TestAuth } from "@awthaq/test";
-import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
+import { Api } from "@awthaq/api";
+import { parseCookieHeader } from "@awthaq/web/cookies";
+import { agentOver } from "./shared/Csrf.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -252,31 +254,40 @@ const appHandle = Effect.fn("features.password.appHandle")(function* () {
   return built;
 });
 
-const post = (
-  handler: (request: Request) => Promise<Response>,
+/** The `name=value` pair of the session cookie `agent` holds, as a browser sends it back; `undefined` when none. */
+const sessionPairOf = (agent: ReturnType<typeof agentOver>) => {
+  const held = agent.cookies.get(Api.SESSION_COOKIE_NAME);
+  return held === undefined ? undefined : `${held.name}=${held.value}`;
+};
+
+/**
+ * A JSON POST from a user agent already holding the double-submit CSRF cookie (`agentOver`), carrying `cookie`
+ * (a session pair) beside it. `sessionPair` is the session cookie the agent holds afterwards (what a sign-up set).
+ */
+export const requestWithAgent = Effect.fn("features.password.requestWithAgent")(function* (
   path: string,
   body: unknown,
   cookie?: string,
-): Promise<Response> =>
-  handler(
-    new Request(`http://localhost${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        cookie: withCsrfCookie(cookie),
-        "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
-      },
-      body: JSON.stringify(body),
+) {
+  const { handler } = yield* appHandle();
+  const agent = agentOver(handler);
+  const response = yield* Effect.promise(() =>
+    agent.request("POST", path, {
+      json: body,
+      extraCookies: Object.fromEntries(
+        parseCookieHeader(cookie).map((pair) => [pair.name, pair.value]),
+      ),
     }),
   );
+  return { response, sessionPair: sessionPairOf(agent) };
+});
 
 export const request = Effect.fn("features.password.request")(function* (
   path: string,
   body: unknown,
   cookie?: string,
 ) {
-  const { handler } = yield* appHandle();
-  return yield* Effect.promise(() => post(handler, path, body, cookie));
+  return (yield* requestWithAgent(path, body, cookie)).response;
 });
 
 export const setLastResponse = Effect.fn("features.password.setLastResponse")(function* (

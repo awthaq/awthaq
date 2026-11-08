@@ -3,21 +3,11 @@
 // the credential-resolver registry, with the api-key records either in memory or on a real migrated database
 // (`records: "sql"`, SQLite by default, Postgres under `AWTHAQ_POSTGRES_URL`).
 import { Api } from "@awthaq/api";
-import {
-  Accounts,
-  Auth,
-  Erasure,
-  Persistence,
-  SessionCookie,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
+import { Accounts, Auth, Erasure, Persistence, Sessions, Users, Verification } from "@awthaq/core";
 import { Jwt, JwtConfig } from "@awthaq/jwt";
 import { TestAuth } from "@awthaq/test";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Cookies from "effect/http/Cookies";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
@@ -109,10 +99,7 @@ export const makeApp = (options: HarnessOptions) => {
           name: label,
         });
         const issued = yield* sessions.issue({ userId: user.id });
-        const rendered = yield* SessionCookie.render(issued.session, issued.token);
-        return Cookies.serializeCookie(
-          Cookies.makeCookieUnsafe(rendered.name, rendered.value, rendered.options),
-        );
+        return yield* TestAuth.sessionSetCookie(issued);
       }),
     );
 

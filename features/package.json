@@ -33,6 +33,7 @@
     "@awthaq/sql": "workspace:*",
     "@awthaq/test": "workspace:*",
     "@awthaq/two-factor": "workspace:*",
+    "@awthaq/web": "workspace:*",
     "@awthaq/webhooks": "workspace:*",
     "@effect-cucumber/vitest": "^0.10.1",
     "@effect/platform-node": "catalog:",

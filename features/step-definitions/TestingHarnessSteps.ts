@@ -41,6 +41,7 @@ import {
   recordingFramework,
   requestAdminOnlyAs,
   runContractSuite,
+  sessionPairOf,
   whoamiApp,
   whoamiFor,
   World,
@@ -128,17 +129,17 @@ const elapseUnderTestClock = <E, R>(
   });
 
 /** BEH-EA-194: a session that is live now and (once `elapse` has passed) refused — observed over the HTTP router, cookie and all. */
-const sessionStillLive = (cookieHeader: string) =>
+const sessionStillLive = (cookie: string) =>
   // A fresh `Request` per observation: the router memoizes per request object, so replaying one
   // object would answer the second look from the first one's authentication.
   Effect.suspend(() =>
-    dispatch(new Request("http://localhost/whoami", { headers: { cookie: cookieHeader } })),
+    dispatch(new Request("http://localhost/whoami", { headers: { cookie } })),
   ).pipe(Effect.map((response) => response.status === 200));
 
 const sessionIdleElapse = (elapse: Duration.Input) =>
   Effect.gen(function* () {
     const signedIn = yield* TestAuth.signInAs({ email: "idle@example.com" });
-    return yield* elapseUnderTestClock(elapse, sessionStillLive(signedIn.cookieHeader));
+    return yield* elapseUnderTestClock(elapse, sessionStillLive(sessionPairOf(signedIn)));
   }).pipe(Effect.provide(whoamiApp));
 
 const verificationTtlElapse = Effect.gen(function* () {
@@ -395,10 +396,12 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
       const result = yield* Effect.gen(function* () {
         const signedIn = yield* TestAuth.signInAs({ email: "eight-days@example.com" });
         const realStart = Date.now();
-        const live = yield* sessionStillLive(signedIn.cookieHeader);
+        const live = yield* sessionStillLive(sessionPairOf(signedIn));
         yield* TestClock.adjust(Duration.days(8));
         const after = yield* dispatch(
-          new Request("http://localhost/session", { headers: { cookie: signedIn.cookieHeader } }),
+          new Request("http://localhost/session", {
+            headers: { cookie: sessionPairOf(signedIn) },
+          }),
         );
         const body = yield* Effect.promise(() => after.json());
         return {
@@ -610,7 +613,7 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
     const result = yield* Effect.gen(function* () {
       const signedIn = yield* TestAuth.signInAs({ email: "signed-in-as@example.com" });
       const allowed = yield* dispatch(
-        new Request("http://localhost/whoami", { headers: { cookie: signedIn.cookieHeader } }),
+        new Request("http://localhost/whoami", { headers: { cookie: sessionPairOf(signedIn) } }),
       );
       const blocked = yield* dispatch(new Request("http://localhost/whoami"));
       const body = yield* Effect.promise(() => allowed.json());

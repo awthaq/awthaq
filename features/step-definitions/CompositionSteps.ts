@@ -822,9 +822,8 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
     const outcome = yield* Effect.promise(async () => {
       const app = TestAuth.app(served);
       try {
-        const { cookieHeader } = await app.signIn("founder@example.com");
-        const response = await app.request("POST", "/organization", {
-          cookie: cookieHeader,
+        const founder = await app.signIn("founder@example.com");
+        const response = await founder.request("POST", "/organization", {
           json: { name: "Acme", slug: "acme" },
         });
         const body: unknown = await response.json();

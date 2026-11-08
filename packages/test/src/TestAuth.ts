@@ -83,7 +83,7 @@ import {
 import { ClientAddress, type Encryption, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { AuthHost, Credentials, Csrf } from "@awthaq/server";
 import { CoreMigrations } from "@awthaq/sql";
-import { parseCookieHeader, UserAgent } from "@awthaq/web";
+import { UserAgent } from "@awthaq/web";
 import * as RedactionGuard from "./RedactionGuard.ts";
 import * as TestEncryption from "./TestEncryption.ts";
 import * as TestSql from "./TestSql.ts";
@@ -395,12 +395,6 @@ export interface SignedInSession {
    * `SameSite`, `Max-Age`): hand it to an agent with `agent.cookies.receive(setCookie)`.
    */
   readonly setCookie: string;
-  /**
-   * `name=token` under the composition's configured cookie name.
-   *
-   * @deprecated Hold an agent instead (`app.signIn(email)`); removed once every suite holds one.
-   */
-  readonly cookieHeader: string;
 }
 
 /** Serialises a cookie Effect's `Cookies` accepts; a value it refuses is a defect of the fixture. */
@@ -409,6 +403,17 @@ const serialize = (name: string, value: string, options: Cookies.Cookie["options
     Effect.map(Cookies.serializeCookie),
     Effect.orDie,
   );
+
+/**
+ * The `Set-Cookie` the server would answer for `issued`, rendered under the ambient `SessionCookieConfig` (the
+ * composition's, inside `app.run`): for a session issued straight against `Sessions` (an existing user, a second
+ * session of one user), handed to an agent with `agent.cookies.receive(...)`.
+ */
+export const sessionSetCookie = (issued: Sessions.IssuedSession) =>
+  Effect.gen(function* () {
+    const rendered = yield* SessionCookie.render(issued.session, issued.token);
+    return yield* serialize(rendered.name, rendered.value, rendered.options);
+  });
 
 /**
  * BEH-EA-197: mints a real user and a real session directly against
@@ -434,16 +439,10 @@ export const signInAs = (input: {
     if (input.onSignedUp !== undefined) {
       yield* input.onSignedUp(user.id);
     }
-    const { session, token } = yield* sessions
+    const issued = yield* sessions
       .issue({ userId: user.id, ...(input.amr === undefined ? {} : { amr: input.amr }) })
       .pipe(Effect.orDie);
-    const rendered = yield* SessionCookie.render(session, token);
-    return {
-      userId: user.id,
-      token,
-      setCookie: yield* serialize(rendered.name, rendered.value, rendered.options),
-      cookieHeader: `${rendered.name}=${Redacted.value(token)}`,
-    };
+    return { userId: user.id, token: issued.token, setCookie: yield* sessionSetCookie(issued) };
   });
 
 /**
@@ -494,14 +493,7 @@ export const csrfSetCookie = (
   );
 
 /** What a request through `TestAuth.app` may carry: an agent's `RequestInit`. */
-export type RequestInit = UserAgent.RequestInit & {
-  /**
-   * An existing `cookie` header value, sent after the agent's own cookies.
-   *
-   * @deprecated Hold an agent (`app.signIn`), or pass a forged cookie in `extraCookies`.
-   */
-  readonly cookie?: string;
-};
+export type RequestInit = UserAgent.RequestInit;
 
 /** How an agent of a `TestAuth.app` behaves. */
 export interface AgentOptions {
@@ -524,8 +516,6 @@ export interface SignInOptions {
 export interface SignedInAgent extends UserAgent.UserAgent {
   readonly userId: Users.UserId;
   readonly token: Redacted.Redacted<string>;
-  /** @deprecated The agent sends its own cookies; removed once every suite holds one. */
-  readonly cookieHeader: string;
 }
 
 /**
@@ -692,20 +682,9 @@ export const app = <A, E>(
         ...made,
         userId: signedIn.userId,
         token: signedIn.token,
-        cookieHeader: signedIn.cookieHeader,
       };
     },
-    request: async (method, path, init = {}) => {
-      const { cookie, ...rest } = init;
-      const forged = Object.fromEntries(
-        parseCookieHeader(cookie).map((pair) => [pair.name, pair.value]),
-      );
-      const fresh = await agent();
-      return fresh.request(method, path, {
-        ...rest,
-        extraCookies: { ...forged, ...rest.extraCookies },
-      });
-    },
+    request: async (method, path, init = {}) => (await agent()).request(method, path, init),
     context: built,
     memoMap,
     runtime,

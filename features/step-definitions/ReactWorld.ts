@@ -3,8 +3,9 @@
 //
 // `@awthaq/react`'s atoms talk to `fetch` (`FetchHttpClient`) and read the CSRF cookie from
 // `document.cookie`. This World stands in for the browser: a delegating `fetch` that dispatches to
-// the composed application's web handler and keeps a cookie jar (`Set-Cookie` in, `Cookie` out), and
-// a `document.cookie` getter exposing the jar's script-readable cookies. The atoms, the CSRF client
+// the composed application's web handler through one `UserAgent` (`@awthaq/web`: its cookie store takes
+// `Set-Cookie` in and sends `Cookie` out by a browser's rules), and a `document.cookie` getter exposing
+// the store's script-readable (non-`HttpOnly`) cookies. The atoms, the CSRF client
 // middleware and the server are all the real ones.
 //
 // `FetchHttpClient` memoizes `globalThis.fetch` the first time it is read (packages/react's own
@@ -13,7 +14,7 @@
 import { Auth, Users } from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { AuthorizedSubject, SubjectApi } from "@awthaq/qadi";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, UserAgent } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -51,46 +52,38 @@ export interface SentRequest {
   readonly headers: Headers;
 }
 
-/** A browser session: a cookie jar and a log of every request the page made. */
+/** A browser session: a user agent (cookie store, request log) over the composed handler. */
 export interface Browser {
-  readonly handler: (request: Request) => Promise<Response>;
-  readonly jar: Map<string, string>;
-  readonly sent: Array<SentRequest>;
+  readonly agent: UserAgent.UserAgent;
+  /** Every request the page made, oldest first. */
+  readonly sent: ReadonlyArray<SentRequest>;
   /** Pathnames whose requests the "network" never answers — a fetch still in flight. */
   readonly hanging: Set<string>;
 }
 
 let currentBrowser: Browser | undefined;
 
-const cookieHeaderOf = (jar: ReadonlyMap<string, string>) =>
-  [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
+const makeBrowser = (handler: (request: Request) => Promise<Response>): Browser => {
+  const hanging = new Set<string>();
+  const agent = UserAgent.make({ handler, hold: (url) => hanging.has(url.pathname) });
+  return {
+    agent,
+    get sent() {
+      return agent.sent.map((entry) => ({
+        method: entry.method,
+        pathname: entry.url.pathname,
+        headers: entry.headers,
+      }));
+    },
+    hanging,
+  };
+};
 
-/** The `Set-Cookie` values of a response, one per cookie (not folded into one header). */
-const setCookiesOf = (response: Response): ReadonlyArray<string> => response.headers.getSetCookie();
-
-const browserFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+/** The page's `fetch`: the agent's network (its cookies out, every `Set-Cookie` back in). */
+const browserFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const browser = currentBrowser;
   if (browser === undefined) throw new Error("no browser installed for this Scenario");
-  const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
-  const method = init?.method ?? (input instanceof Request ? input.method : "GET");
-  const headers = new Headers(init?.headers);
-  if (browser.jar.size > 0) headers.set("cookie", cookieHeaderOf(browser.jar));
-  browser.sent.push({ method, pathname: url.pathname, headers });
-  if (browser.hanging.has(url.pathname)) return new Promise<Response>(() => undefined);
-  const response = await browser.handler(
-    new Request(url, { method, headers, ...(init?.body === undefined ? {} : { body: init.body }) }),
-  );
-  for (const raw of setCookiesOf(response)) {
-    const [pair = ""] = raw.split(";");
-    const separator = pair.indexOf("=");
-    if (separator > 0) {
-      const value = pair.slice(separator + 1);
-      // An expired cookie (`Max-Age=0` / empty) leaves the jar, as a browser would.
-      if (/max-age=0/i.test(raw) || value === "") browser.jar.delete(pair.slice(0, separator));
-      else browser.jar.set(pair.slice(0, separator), value);
-    }
-  }
-  return response;
+  return browser.agent.fetch(input, init);
 };
 
 let installed = false;
@@ -108,8 +101,7 @@ const installBrowserGlobals = () => {
     configurable: true,
     value: {
       get cookie() {
-        const visible = [...(currentBrowser?.jar ?? [])].filter(([name]) => name === "__Host-csrf");
-        return visible.map(([name, value]) => `${name}=${value}`).join("; ");
+        return currentBrowser?.agent.cookies.scriptVisible() ?? "";
       },
     },
   });
@@ -138,7 +130,7 @@ export const WorldLive = Layer.effect(
           ),
         ),
     );
-    const browser: Browser = { handler: app.handler, jar: new Map(), sent: [], hanging: new Set() };
+    const browser = makeBrowser(app.handler);
     currentBrowser = browser;
     return World.of({ outcomes: yield* makeOutcomes, browser, runtime: app.runtime });
   }),

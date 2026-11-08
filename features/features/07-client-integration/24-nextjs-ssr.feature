@@ -212,3 +212,13 @@ Feature: Next.js Server Rendering
       Given a policy whose attribute resolver can only run in the browser and was not evaluated server-side
       When the client hydrates decisions via "hydrateDecisions" and renders the gate for that policy
       Then the gate correctly stays "pending" until the client's own evaluation completes
+
+  # BEH-EA-344 — spec/behaviors/24-nextjs-ssr.md (architecture plan 20)
+  @BEH-EA-344
+  Rule: An in-process user agent keeps cookie state the way a browser does
+
+    @REQ-EA-1332
+    Scenario: A server action's client honours an expiring Set-Cookie within the action
+      Given a server action's in-process client over an application route that sets a cookie and one that expires it by "Expires"
+      When the action sets the cookie, expires it, and then makes a third call
+      Then the third call carries no such cookie

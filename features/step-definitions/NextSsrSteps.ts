@@ -4,7 +4,7 @@ import { getSession, hasSessionCookie, withNextCookies } from "@awthaq/next";
 import { Password } from "@awthaq/password";
 import { SubjectResolver } from "@awthaq/qadi";
 import { dehydrateDecisions, hydrateDecisions, makeQadiAtoms } from "@awthaq/react";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, UserAgent } from "@awthaq/test";
 import { defineSteps } from "@effect-cucumber/vitest";
 import {
   CurrentSubject,
@@ -27,7 +27,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import assert from "node:assert/strict";
-import { CSRF_COOKIE_NAME, CSRF_TEST_COOKIE_VALUE } from "./shared/Csrf.ts";
+import { agentOver, CSRF_COOKIE_NAME } from "./shared/Csrf.ts";
 import {
   headersWithCookie,
   makeSecureDomainApp,
@@ -60,10 +60,25 @@ const readSession = (cookieHeader: string) =>
     } satisfies Seen;
   });
 
+const never = () => Promise.reject(new Error("recorded, never dispatched"));
+
+/**
+ * The `Cookie` header a browser holding `setCookie` sends to this origin: recorded from a user agent that
+ * received it and never dispatches (`hold`), so the header is the agent's, not a hand-cut `name=value`.
+ */
+const browserCookieHeader = (setCookie: string) => {
+  const browser = UserAgent.make({ handler: never, hold: () => true });
+  browser.cookies.receive(setCookie);
+  void browser.fetch("/");
+  return browser.sent[0]?.headers.get("cookie") ?? "";
+};
+
+/** A minted session, and the incoming request's `Cookie` header of the browser holding it. */
 const signInAlice = (email: string) =>
   Effect.gen(function* () {
     const { runtime } = yield* World;
-    return yield* Effect.promise(() => runtime.runPromise(TestAuth.signInAs({ email })));
+    const signedIn = yield* Effect.promise(() => runtime.runPromise(TestAuth.signInAs({ email })));
+    return { ...signedIn, cookie: browserCookieHeader(signedIn.setCookie) };
   });
 
 const revokeEverything = (userId: Users.UserId) =>
@@ -147,7 +162,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (name: string) {
       const { outcomes } = yield* World;
       const signedIn = yield* signInAlice(`${name}@example.com`);
-      yield* outcomes.set("cookie", signedIn.cookieHeader);
+      yield* outcomes.set("cookie", signedIn.cookie);
       yield* outcomes.set("expectedUserId", signedIn.userId);
     },
   );
@@ -263,8 +278,8 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("a request carrying a session cookie", function* () {
     const { outcomes } = yield* World;
     const signedIn = yield* signInAlice("carrier@example.com");
-    yield* outcomes.set("cookie", signedIn.cookieHeader);
-    yield* outcomes.set("liveBefore", (yield* readSession(signedIn.cookieHeader)).found);
+    yield* outcomes.set("cookie", signedIn.cookie);
+    yield* outcomes.set("liveBefore", (yield* readSession(signedIn.cookie)).found);
     // The row goes away underneath the cookie, which is still sitting in the browser.
     yield* revokeEverything(signedIn.userId);
   });
@@ -580,7 +595,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { outcomes } = yield* World;
       const signedIn = yield* signInAlice("stale@example.com");
       yield* revokeEverything(signedIn.userId);
-      yield* outcomes.set("cookie", signedIn.cookieHeader);
+      yield* outcomes.set("cookie", signedIn.cookie);
     },
   );
 
@@ -605,8 +620,8 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { outcomes } = yield* World;
     const signedIn = yield* signInAlice("passed@example.com");
     yield* revokeEverything(signedIn.userId);
-    yield* outcomes.set("cookie", signedIn.cookieHeader);
-    const decision = proxyDecision({ headers: headersWithCookie(signedIn.cookieHeader) });
+    yield* outcomes.set("cookie", signedIn.cookie);
+    const decision = proxyDecision({ headers: headersWithCookie(signedIn.cookie) });
     yield* outcomes.set("passedProxy", decision.action === "next");
   });
 
@@ -648,7 +663,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
       // A privilege change: the password change issues a fresh, superseding session.
       const password = Redacted.make("correct horse battery staple");
       const email = "privilege@example.com";
-      const issued = yield* Effect.promise(() =>
+      yield* Effect.promise(() =>
         runtime.runPromise(
           Effect.gen(function* () {
             const passwords = yield* Password.Password;
@@ -659,18 +674,22 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
           }),
         ),
       );
-      return yield* send(
-        new Request("http://localhost/change-password", {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            cookie: `${SESSION_COOKIE}=${Redacted.value(issued.token)}; ${CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`,
-            "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
-          },
-          body: JSON.stringify({
+      // The user's browser: it signs in over HTTP and keeps the session (and its CSRF cookie), then
+      // changes the password; the raw response is what the action's bridge sees.
+      const { handler } = yield* World;
+      const browser = agentOver(handler);
+      const signedIn = yield* Effect.promise(() =>
+        browser.request("POST", "/password/sign-in", {
+          json: { email, password: Redacted.value(password) },
+        }),
+      );
+      assert.equal(signedIn.status, 200);
+      return yield* Effect.promise(() =>
+        browser.request("POST", "/change-password", {
+          json: {
             currentPassword: Redacted.value(password),
             newPassword: "a different and equally strong passphrase",
-          }),
+          },
         }),
       );
     });
@@ -743,7 +762,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("a server action {string}", function* (name: string) {
     const { outcomes } = yield* World;
     const signedIn = yield* signInAlice("actor@example.com");
-    yield* outcomes.set("cookie", signedIn.cookieHeader);
+    yield* outcomes.set("cookie", signedIn.cookie);
     yield* outcomes.set("action", name);
   });
 
@@ -769,9 +788,9 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (name: string, _action: string) {
       const { outcomes, roles } = yield* World;
       const signedIn = yield* signInAlice(`${name}@example.com`);
-      yield* outcomes.set("cookie", signedIn.cookieHeader);
+      yield* outcomes.set("cookie", signedIn.cookie);
       yield* Ref.set(roles, ["owner"]);
-      const rendered = yield* invokeAction(signedIn.cookieHeader);
+      const rendered = yield* invokeAction(signedIn.cookie);
       yield* outcomes.set("renderRoles", rendered === undefined ? [] : [...rendered.roles]);
     },
   );
@@ -819,9 +838,9 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("a subject resolved once during a page's initial server render", function* () {
     const { outcomes, roles } = yield* World;
     const signedIn = yield* signInAlice("renderer@example.com");
-    yield* outcomes.set("cookie", signedIn.cookieHeader);
+    yield* outcomes.set("cookie", signedIn.cookie);
     yield* Ref.set(roles, ["member"]);
-    const subject = yield* invokeAction(signedIn.cookieHeader);
+    const subject = yield* invokeAction(signedIn.cookie);
     yield* outcomes.set("renderSubject", subject);
   });
 
@@ -882,7 +901,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("a page's server-side data-loading {string} block", function* (_block: string) {
     const { outcomes, roles } = yield* World;
     const signedIn = yield* signInAlice("pager@example.com");
-    yield* outcomes.set("cookie", signedIn.cookieHeader);
+    yield* outcomes.set("cookie", signedIn.cookie);
     yield* Ref.set(roles, ["member"]);
   });
 
@@ -900,7 +919,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("the subject resolved once at the top of a page's data-loading Effect", function* () {
     const { outcomes, roles } = yield* World;
     const signedIn = yield* signInAlice("subject-once@example.com");
-    yield* outcomes.set("cookie", signedIn.cookieHeader);
+    yield* outcomes.set("cookie", signedIn.cookie);
     yield* Ref.set(roles, ["member"]);
   });
 
@@ -934,7 +953,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (_n: string) {
       const { outcomes, roles } = yield* World;
       const signedIn = yield* signInAlice("many@example.com");
-      yield* outcomes.set("cookie", signedIn.cookieHeader);
+      yield* outcomes.set("cookie", signedIn.cookie);
       yield* Ref.set(roles, ["member"]);
     },
   );

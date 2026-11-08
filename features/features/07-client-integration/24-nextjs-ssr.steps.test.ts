@@ -1,6 +1,7 @@
 import { describeFeature, loadFeature } from "@effect-cucumber/vitest";
 import { fileURLToPath } from "node:url";
 import { nextSsrSteps } from "../../step-definitions/NextSsrSteps.ts";
+import { userAgentNextSteps } from "../../step-definitions/UserAgentSteps.ts";
 import { WorldLive } from "../../step-definitions/NextSsrWorld.ts";
 import { qadiClientNextSteps } from "../../step-definitions/QadiClientSteps.ts";
 
@@ -11,4 +12,5 @@ const feature = await loadFeature(
 describeFeature(feature, WorldLive, ({ use }) => {
   use(nextSsrSteps);
   use(qadiClientNextSteps);
+  use(userAgentNextSteps);
 });

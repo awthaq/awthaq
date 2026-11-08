@@ -6,11 +6,10 @@
 // `HttpRouter.toWebHandler` — real HTTP requests/responses, real status
 // codes, a real session cookie — mirroring `@awthaq/passkey`'s own
 // `AuthHttp.test.ts`.
-import { Auth, SessionCookie, Sessions, Users } from "@awthaq/core";
+import { Auth, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Cookies from "effect/http/Cookies";
 import { CookieAssertions, TestAuth, type UserAgent } from "@awthaq/test";
 import * as Admin from "../src/Admin.ts";
 import * as AdminApi from "../src/AdminApi.ts";
@@ -47,10 +46,7 @@ const buildHandler = (
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
-        const rendered = yield* SessionCookie.render(issued.session, issued.token);
-        return Cookies.serializeCookie(
-          Cookies.makeCookieUnsafe(rendered.name, rendered.value, rendered.options),
-        );
+        return yield* TestAuth.sessionSetCookie(issued);
       }),
     );
 

@@ -22,12 +22,12 @@ import {
   overrideWebAuthnBehavior,
   request,
   RP_ID,
+  sessionCookieSetBy,
   setOutcome,
   signIn,
   storedCredentials,
   World,
 } from "./PasskeyWorld.ts";
-import { cookieFrom } from "./shared/Harness.ts";
 
 const registerCredential = Effect.fn("features.passkey.registerCredential")(function* (
   cookie: string,
@@ -411,7 +411,7 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     Effect.fn(function* () {
       const response = (yield* getOutcome("authenticateResponse")) as Response;
       if (response.status !== 200) throw new Error(`expected 200, got ${response.status}`);
-      cookieFrom(response);
+      sessionCookieSetBy(response);
     }),
   );
 
@@ -436,7 +436,7 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
     'the session is delivered through the shared "SessionDelivery" helper as the "__Host-session" cookie',
     Effect.fn(function* () {
       const response = (yield* getOutcome("authenticateResponse")) as Response;
-      const cookie = cookieFrom(response);
+      const cookie = sessionCookieSetBy(response);
       if (!cookie.startsWith("__Host-session=")) {
         throw new Error(`expected a __Host-session cookie, got ${cookie}`);
       }
@@ -450,7 +450,7 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
       const cookie = yield* signIn("auth-363@example.com");
       yield* registerCredential(cookie);
       const response = yield* authenticate();
-      yield* setOutcome("passkeySession", cookieFrom(response));
+      yield* setOutcome("passkeySession", sessionCookieSetBy(response));
     }),
   );
 
@@ -1376,7 +1376,7 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
         }
       } else {
         if (response.status !== 200) throw new Error(`expected 200, got ${response.status}`);
-        cookieFrom(response);
+        sessionCookieSetBy(response);
       }
     }),
   );

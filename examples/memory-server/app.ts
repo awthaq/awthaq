@@ -84,7 +84,7 @@ const GuardLive = RequirePermissionLive.pipe(
 // 2. The CSRF configuration is this app's own. The secret below is a fixed, checked-in placeholder fit only for this
 //    local demo: `CsrfConfig`'s own doc comment is explicit that a real deployment must never default it (it reads
 //    `Csrf.layerConfig` from the environment).
-export const demoCsrfSecret = "memory-server-example-dev-only-csrf-secret";
+const demoCsrfSecret = "memory-server-example-dev-only-csrf-secret";
 const DemoCsrfConfig = Layer.succeed(Csrf.CsrfConfig, {
   secret: Redacted.make(demoCsrfSecret),
   allowedOrigins: [],

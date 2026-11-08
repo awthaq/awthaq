@@ -26,8 +26,9 @@ import { Auth, Sessions, Users } from "@awthaq/core";
 import type { Mailer } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import type { Credentials } from "@awthaq/server";
-import { RedactionGuard, TestAuth } from "@awthaq/test";
-import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
+import { RedactionGuard, TestAuth, type UserAgent } from "@awthaq/test";
+import { parseCookieHeader, type StoredCookie } from "@awthaq/web/cookies";
+import { agentOver } from "./shared/Csrf.ts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -46,11 +47,9 @@ import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as SqlClient from "effect/sql/SqlClient";
 import { mailedToken } from "./MailedToken.ts";
 import {
-  cookieFrom,
   awaitMail,
   makeCapturingMailer,
   makeNamedRegistry,
-  setCookieFrom,
   STRONG_PASSWORD,
 } from "./shared/Harness.ts";
 
@@ -134,13 +133,21 @@ const buildAppLayer = (settings: Sessions.SessionConfig, gate: Gate) => {
   return { appLayer, sent };
 };
 
+/**
+ * A session's holder: the user agent (plan 20) that signed in and keeps the session cookie the way a browser
+ * does, following every rotation and expiry the server answers it with.
+ */
 export interface ActorState {
-  email: string;
-  /** The bare `name=value` pair, ready to send back as a request's own `cookie` header. */
-  cookie: string;
-  /** The full raw `Set-Cookie` response header this session's own cookie was issued under — carries the attributes (`Secure`, `HttpOnly`, `SameSite`, `Path`, any `Domain`) REQ-EA-154/155 inspect. */
-  setCookie: string;
+  readonly email: string;
+  readonly agent: UserAgent.UserAgent;
 }
+
+/** What a request is sent as: an actor (its agent and its cookies), a forged `Cookie` header, or nobody. */
+export type Sender = ActorState | string | undefined;
+
+/** The `__Host-session=<token>` pair the actor's agent holds right now (empty value once it holds none). */
+export const heldSessionPair = (actor: ActorState): string =>
+  `${Api.SESSION_COOKIE_NAME}=${actor.agent.cookies.get(Api.SESSION_COOKIE_NAME)?.value ?? ""}`;
 
 /** A persisted `sessions` row as SQLite returns it — read raw, so a step sees exactly what a disclosed table would. */
 export type SessionRow = Readonly<Record<string, unknown>>;
@@ -311,37 +318,42 @@ export const assertNoLeaks = Effect.fn("features.session.assertNoLeaks")(functio
   );
 });
 
-const get = (
+/**
+ * One request: an actor's goes through its own agent (its cookies, the CSRF echo, whatever the response sets);
+ * a forged `Cookie` header (a tampered or superseded token) or nobody goes through a fresh agent, the forged
+ * cookies beside its CSRF cookie and never stored.
+ */
+const send = (
   handler: (request: Request) => Promise<Response>,
+  method: string,
   path: string,
-  cookie?: string,
-): Promise<Response> =>
-  handler(
-    new Request(`http://localhost${path}`, {
-      method: "GET",
-      headers: { cookie: withCsrfCookie(cookie) },
-    }),
-  );
-
-const post = (
-  handler: (request: Request) => Promise<Response>,
-  path: string,
-  body: unknown,
-  cookie?: string,
+  sender: Sender,
+  body?: unknown,
   userAgent?: string,
-): Promise<Response> =>
-  handler(
-    new Request(`http://localhost${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        cookie: withCsrfCookie(cookie),
-        "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
-        ...(userAgent === undefined ? {} : { "user-agent": userAgent }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }),
-  );
+): Promise<Response> => {
+  const agent = typeof sender === "object" ? sender.agent : agentOver(handler);
+  const forged = typeof sender === "string" ? parseCookieHeader(sender) : [];
+  return agent.request(method, path, {
+    ...(body === undefined ? {} : { json: body }),
+    ...(userAgent === undefined ? {} : { headers: { "user-agent": userAgent } }),
+    extraCookies: Object.fromEntries(forged.map((pair) => [pair.name, pair.value])),
+  });
+};
+
+/** A cookie an agent holds, as the `Set-Cookie` that would make another agent hold it too. */
+const asSetCookie = (cookie: StoredCookie): string =>
+  [
+    `${cookie.name}=${cookie.value}`,
+    `Path=${cookie.path}`,
+    ...(cookie.hostOnly ? [] : [`Domain=${cookie.domain}`]),
+    ...(cookie.secure ? ["Secure"] : []),
+    ...(cookie.httpOnly ? ["HttpOnly"] : []),
+    `SameSite=${cookie.sameSite}`,
+    ...(cookie.partitioned ? ["Partitioned"] : []),
+    ...(cookie.expiresAt === undefined
+      ? []
+      : [`Max-Age=${Math.max(0, Math.floor((cookie.expiresAt - Date.now()) / 1000))}`]),
+  ].join("; ");
 
 let nextEmail = 0;
 
@@ -355,21 +367,19 @@ export const signUp = Effect.fn("features.session.signUp")(function* (name: stri
   const { handler, sentMail } = yield* appHandle();
   const { actors } = yield* World;
   const email = `${name}-${nextEmail++}@example.com`;
+  const actor: ActorState = { email, agent: agentOver(handler) };
   const response = yield* Effect.promise(() =>
-    post(
+    send(
       handler,
+      "POST",
       "/password/sign-up",
+      actor,
       { email, password: STRONG_PASSWORD },
-      undefined,
       `device-${name}`,
     ),
   );
   if (response.status !== 200) throw new Error(`sign-up failed for ${email}: ${response.status}`);
-  yield* actors.set(name, {
-    email,
-    cookie: cookieFrom(response),
-    setCookie: setCookieFrom(response),
-  });
+  yield* actors.set(name, actor);
 
   yield* awaitMail(
     sentMail,
@@ -380,7 +390,9 @@ export const signUp = Effect.fn("features.session.signUp")(function* (name: stri
   );
   if (verifyMail === undefined) throw new Error(`expected a verify-email mail for ${email}`);
   const token = mailedToken(verifyMail);
-  const verified = yield* Effect.promise(() => post(handler, "/verify-email", { token }));
+  const verified = yield* Effect.promise(() =>
+    send(handler, "POST", "/verify-email", undefined, { token }),
+  );
   if (verified.status !== 204) {
     throw new Error(`verify-email failed for ${email}: ${verified.status}`);
   }
@@ -409,46 +421,44 @@ export const signInAgain = Effect.fn("features.session.signInAgain")(function* (
   const { handler } = yield* appHandle();
   const { actors } = yield* World;
   const owner = yield* actors.get(existingName);
+  const signedIn: ActorState = { email: owner.email, agent: agentOver(handler) };
   const response = yield* Effect.promise(() =>
-    post(
+    send(
       handler,
+      "POST",
       "/password/sign-in",
+      signedIn,
       { email: owner.email, password: STRONG_PASSWORD },
-      undefined,
       `device-${newName}`,
     ),
   );
   if (response.status !== 200) {
     throw new Error(`sign-in failed for ${owner.email}: ${response.status}`);
   }
-  yield* actors.set(newName, {
-    email: owner.email,
-    cookie: cookieFrom(response),
-    setCookie: setCookieFrom(response),
-  });
+  yield* actors.set(newName, signedIn);
   return response;
 });
 
 export const getSession = Effect.fn("features.session.getSession")(function* (
   path: string,
-  cookie?: string,
+  sender?: Sender,
 ) {
   const { handler } = yield* appHandle();
-  return yield* Effect.promise(() => get(handler, path, cookie));
+  return yield* Effect.promise(() => send(handler, "GET", path, sender));
 });
 
 export const postSession = Effect.fn("features.session.postSession")(function* (
   path: string,
   body: unknown,
-  cookie?: string,
+  sender?: Sender,
 ) {
   const { handler } = yield* appHandle();
-  return yield* Effect.promise(() => post(handler, path, body, cookie));
+  return yield* Effect.promise(() => send(handler, "POST", path, sender, body));
 });
 
 /** The `id` half of a session's own token — resolved via the real `/session` endpoint, the same id shape `/session/revoke` expects. */
-export const sessionIdOf = Effect.fn("features.session.sessionIdOf")(function* (cookie: string) {
-  const response = yield* getSession("/session", cookie);
+export const sessionIdOf = Effect.fn("features.session.sessionIdOf")(function* (sender: Sender) {
+  const response = yield* getSession("/session", sender);
   const body = yield* Effect.promise(() => response.json());
   const decoded = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(
     body,
@@ -463,13 +473,13 @@ export const sessionIdOf = Effect.fn("features.session.sessionIdOf")(function* (
 export const startRequest = Effect.fn("features.session.startRequest")(function* (
   key: string,
   path: string,
-  cookie: string,
+  sender: Sender,
 ) {
   const { handler } = yield* appHandle();
   const { inflight } = yield* World;
   yield* inflight.set(
     key,
-    yield* Effect.forkDetach(Effect.promise(() => get(handler, path, cookie))),
+    yield* Effect.forkDetach(Effect.promise(() => send(handler, "GET", path, sender))),
   );
 });
 
@@ -497,29 +507,33 @@ export const releaseGate = Effect.fn("features.session.releaseGate")(function* (
 });
 
 /**
- * A request made *as* the named actor that also honours rotation: verify's throttled touch
- * rotates the session secret and delivers the new one on this response (PIL-005/BEH-EA-052),
- * so the actor's stored cookie is replaced when the response carries one.
+ * A request made *as* the named actor. Verify's throttled touch rotates the session secret and delivers the
+ * new one on this response (PIL-005/BEH-EA-052); the actor's agent follows it, as every request does.
  */
 export const requestAsActor = Effect.fn("features.session.requestAsActor")(function* (
   name: string,
   path: string,
 ) {
   const { actors } = yield* World;
-  const actor = yield* actors.get(name);
-  const response = yield* getSession(path, actor.cookie);
-  const raw = response.headers.get("set-cookie");
-  if (response.status === 200 && raw !== null && raw.startsWith("__Host-session=")) {
-    yield* actors.set(name, { ...actor, cookie: cookieFrom(response), setCookie: raw });
-  }
-  return response;
+  return yield* getSession(path, yield* actors.get(name));
 });
 
-/** Registers `newName` as another name for the same already-set-up actor's session — e.g. "alice" is also her own "current" session "s1" in REQ-EA-151's own Given. */
+/**
+ * Registers `newName` as a name for the session the already-set-up actor holds right now — e.g. "alice" is
+ * also her own "current" session "s1" in REQ-EA-151's own Given. The name gets its own agent holding a copy
+ * of that cookie, so the session it names stays the one it was when named: after the actor's session is
+ * superseded (a password change), presenting the named session presents the superseded credential.
+ */
 export const aliasActor = Effect.fn("features.session.aliasActor")(function* (
   newName: string,
   existingName: string,
 ) {
+  const { handler } = yield* appHandle();
   const { actors } = yield* World;
-  yield* actors.set(newName, yield* actors.get(existingName));
+  const existing = yield* actors.get(existingName);
+  const agent = agentOver(handler);
+  for (const cookie of existing.agent.cookies.all()) {
+    if (cookie.name !== Api.CSRF_COOKIE_NAME) agent.cookies.receive(asSetCookie(cookie));
+  }
+  yield* actors.set(newName, { email: existing.email, agent });
 });

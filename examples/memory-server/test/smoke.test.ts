@@ -19,7 +19,7 @@ import * as Option from "effect/Option";
 import * as References from "effect/References";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import { demoCsrfSecret, makeAppLayer } from "../app.ts";
+import { makeAppLayer } from "../app.ts";
 
 const ORIGIN = "http://localhost:3001";
 const PASSWORD = "Zx9-quartz-Lantern-7431-orbit";
@@ -48,42 +48,25 @@ const CaptureMail = Logger.layer([
 const app = TestAuth.app(makeAppLayer(NoBreachHttpClient).pipe(Layer.provideMerge(CaptureMail)), {
   baseUrl: ORIGIN,
 });
-const handler = app.handler;
 const withServices = app.run;
 
-// The double-submit pair CSRF protection requires on a mutation, minted against the example's own secret.
-const csrfToken = TestAuth.csrfToken(demoCsrfSecret);
+// Each visitor is a user agent over the composition: it keeps its own cookies (the CSRF cookie the harness
+// seeds from the example's own config, the session a sign-up or sign-in sets) and echoes the CSRF token.
+type Visitor = TestAuth.SignedInAgent | Awaited<ReturnType<typeof app.agent>>;
 
-const call = (method: string, path: string, options?: { cookie?: string; body?: unknown }) =>
-  handler(
-    new Request(`${ORIGIN}${path}`, {
-      method,
-      headers: {
-        "content-type": "application/json",
-        cookie: [options?.cookie, `${Api.CSRF_COOKIE_NAME}=${csrfToken}`]
-          .filter((part) => part !== undefined)
-          .join("; "),
-        [Api.CSRF_HEADER_NAME]: csrfToken,
-      },
-      ...(options?.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-    }),
-  );
+const signUp = (visitor: Visitor, email: string) =>
+  visitor.request("POST", "/password/sign-up", { json: { email, password: PASSWORD } });
 
-const signUp = (email: string) =>
-  call("POST", "/password/sign-up", { body: { email, password: PASSWORD } });
+const signIn = (visitor: Visitor, email: string, password: string) =>
+  visitor.request("POST", "/password/sign-in", { json: { email, password } });
 
-const signIn = (email: string, password: string) =>
-  call("POST", "/password/sign-in", { body: { email, password } });
-
-/** The bare `name=value` of the session cookie a response set. */
-const sessionCookie = (response: Response): string => {
-  const header = response.headers.getSetCookie().find((c) => c.startsWith("__Host-session="));
-  return header?.split(";")[0] ?? "";
-};
+/** Whether the visitor now holds a session cookie. */
+const holdsSession = (visitor: Visitor) =>
+  visitor.cookies.get(Api.SESSION_COOKIE_NAME) !== undefined;
 
 describe("examples/memory-server (TS-007)", () => {
   it("the BeforeSignUp allow-list refuses a disallowed domain with HookAborted and creates nothing", async () => {
-    const refused = await signUp("intruder@evil.test");
+    const refused = await signUp(await app.agent(), "intruder@evil.test");
     assert.strictEqual(refused.status, 403);
     const body = (await refused.json()) as { readonly _tag: string; readonly code?: string };
     assert.strictEqual(body._tag, "HookAborted");
@@ -95,31 +78,32 @@ describe("examples/memory-server (TS-007)", () => {
   });
 
   it("an allowed domain signs up and gets a session cookie", async () => {
-    const accepted = await signUp("ada@example.com");
+    const ada = await app.agent();
+    const accepted = await signUp(ada, "ada@example.com");
     assert.strictEqual(accepted.status, 200);
-    assert.notStrictEqual(sessionCookie(accepted), "");
+    assert.isTrue(holdsSession(ada));
   });
 
   it("Path B RequirePermission: 403 without roles:read (anonymous and signed in), 200 once the role is held", async () => {
-    assert.strictEqual((await call("GET", "/roles/catalog")).status, 403);
+    assert.strictEqual((await app.request("GET", "/roles/catalog")).status, 403);
 
-    const signedUp = await signUp("grace@example.com");
+    const grace = await app.agent();
+    const signedUp = await signUp(grace, "grace@example.com");
     assert.strictEqual(signedUp.status, 200);
-    const cookie = sessionCookie(signedUp);
-    assert.strictEqual((await call("GET", "/roles/catalog", { cookie })).status, 403);
+    assert.strictEqual((await grace.request("GET", "/roles/catalog")).status, 403);
 
     // Bootstrap an admin the way the README says: `Roles.assign` is the trusted primitive.
     await withServices(
       Effect.gen(function* () {
         const users = yield* Users.Users;
         const roles = yield* Roles.Roles;
-        const grace = yield* users.findByEmail("grace@example.com");
-        if (Option.isNone(grace)) return yield* Effect.die("the signed-up user is missing");
-        yield* roles.assign(grace.value.id, "platform:admin");
+        const user = yield* users.findByEmail("grace@example.com");
+        if (Option.isNone(user)) return yield* Effect.die("the signed-up user is missing");
+        yield* roles.assign(user.value.id, "platform:admin");
       }),
     );
 
-    const allowed = await call("GET", "/roles/catalog", { cookie });
+    const allowed = await grace.request("GET", "/roles/catalog");
     assert.strictEqual(allowed.status, 200);
     const catalog = (await allowed.json()) as ReadonlyArray<{ readonly name: string }>;
     assert.deepStrictEqual(
@@ -130,9 +114,10 @@ describe("examples/memory-server (TS-007)", () => {
 
   it("the README walkthrough: sign-up, read the token from the console mail, verify, then sign in", async () => {
     const email = "walkthrough@example.com";
-    assert.strictEqual((await signUp(email)).status, 200);
+    assert.strictEqual((await signUp(await app.agent(), email)).status, 200);
 
-    const blocked = await signIn(email, PASSWORD);
+    const reader = await app.agent();
+    const blocked = await signIn(reader, email, PASSWORD);
     assert.strictEqual(blocked.status, 403);
     assert.strictEqual(
       ((await blocked.json()) as { readonly _tag: string })._tag,
@@ -144,21 +129,22 @@ describe("examples/memory-server (TS-007)", () => {
     );
     assert.isString(mail?.["token"]);
     assert.strictEqual(
-      (await call("POST", "/verify-email", { body: { token: mail?.["token"] } })).status,
+      (await reader.request("POST", "/verify-email", { json: { token: mail?.["token"] } })).status,
       204,
     );
 
-    const signedIn = await signIn(email, PASSWORD);
+    const signedIn = await signIn(reader, email, PASSWORD);
     assert.strictEqual(signedIn.status, 200);
-    assert.notStrictEqual(sessionCookie(signedIn), "");
+    assert.isTrue(holdsSession(reader));
   });
 
   it("the sign-in budget is enforced: the sixth wrong password in a row is a 429, not a 401", async () => {
     const email = "brute@example.com";
-    assert.strictEqual((await signUp(email)).status, 200);
+    assert.strictEqual((await signUp(await app.agent(), email)).status, 200);
+    const attacker = await app.agent();
     const statuses: Array<number> = [];
     for (let attempt = 0; attempt < 6; attempt++) {
-      statuses.push((await signIn(email, "definitely-not-the-password")).status);
+      statuses.push((await signIn(attacker, email, "definitely-not-the-password")).status);
     }
     assert.notStrictEqual(statuses[4], 429);
     assert.strictEqual(statuses[5], 429);

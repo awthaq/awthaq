@@ -329,6 +329,9 @@ importers:
       '@awthaq/two-factor':
         specifier: workspace:*
         version: link:../packages/two-factor
+      '@awthaq/web':
+        specifier: workspace:*
+        version: link:../packages/web
       '@awthaq/webhooks':
         specifier: workspace:*
         version: link:../packages/webhooks

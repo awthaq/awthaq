@@ -1,13 +1,12 @@
 // BAM-005/BAM-009 (BEH-EA-225): the `admin.accounts` group over a real `HttpRouter` — real status
 // codes, a real session cookie, the CSRF double-submit: deny-by-default 403, the erasure cascade
 // behind DELETE, the 202 of a mailed email change, the 422 of a weak password.
-import { Accounts, Auth, SessionCookie, Sessions, Users } from "@awthaq/core";
+import { Accounts, Auth, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { TestAuth, type UserAgent } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Cookies from "effect/http/Cookies";
 import * as Admin from "../src/Admin.ts";
 import * as AdminAccounts from "../src/AdminAccounts.ts";
 
@@ -47,10 +46,7 @@ const buildHandler = (config: Partial<Admin.AdminConfigShape>) => {
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
-        const rendered = yield* SessionCookie.render(issued.session, issued.token);
-        return Cookies.serializeCookie(
-          Cookies.makeCookieUnsafe(rendered.name, rendered.value, rendered.options),
-        );
+        return yield* TestAuth.sessionSetCookie(issued);
       }),
     );
     const browser = await app.agent();

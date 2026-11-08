@@ -12,6 +12,7 @@ import { ApiKey, ApiKeyClientRecords, ApiKeyRecords } from "@awthaq/api-key";
 import { Auth, AuthPlugin, Users } from "@awthaq/core";
 import { Jwt, JwtConfig, KeyRing, RevocationStore, SigningKeyRecords } from "@awthaq/jwt";
 import { Password } from "@awthaq/password";
+import { findCookieValue } from "@awthaq/web/cookies";
 import { TestAuth } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -28,7 +29,7 @@ import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
-import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
+import { agentOver } from "./shared/Csrf.ts";
 import { resolveCredential } from "./shared/ResolveCredential.ts";
 
 // ---- the World's own plugins ------------------------------------------------------------
@@ -220,10 +221,7 @@ export const imperativeMe = async (
   runtime: RuntimeApp["runtime"],
   cookieHeader: string,
 ): Promise<Response> => {
-  const token = cookieHeader
-    .split("; ")
-    .map((pair) => pair.split("="))
-    .find(([name]) => name === Api.SESSION_COOKIE_NAME)?.[1];
+  const token = findCookieValue(cookieHeader, Api.SESSION_COOKIE_NAME);
   if (token === undefined) return new Response(null, { status: 401 });
   const principal = await runtime.runPromise(
     resolveCredential("cookie", token).pipe(Effect.option),
@@ -345,26 +343,15 @@ export const answerOf = Effect.fn("features.httpError.answerOf")(function* (resp
   } satisfies Answer;
 });
 
-/** An unsafe request as a browser client would send it: with the double-submit pair. */
+/**
+ * An unsafe request as a browser page would send it: a fresh agent (`shared/Csrf.ts`'s `agentOver`) already
+ * holding a `__Host-csrf`, which it sends and echoes as the double-submit pair.
+ */
 export const postJson = (
   handler: (request: Request) => Promise<Response>,
   path: string,
   body: unknown,
-  cookie?: string,
-) =>
-  Effect.promise(() =>
-    handler(
-      new Request(`http://localhost${path}`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          cookie: withCsrfCookie(cookie),
-          "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
-        },
-        body: JSON.stringify(body),
-      }),
-    ),
-  );
+) => Effect.promise(() => agentOver(handler).request("POST", path, { json: body }));
 
 export const get = (handler: (request: Request) => Promise<Response>, path: string) =>
   Effect.promise(() => handler(new Request(`http://localhost${path}`)));

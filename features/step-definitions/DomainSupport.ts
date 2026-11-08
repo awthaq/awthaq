@@ -5,10 +5,12 @@ import type { Mailer } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
-import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
+import { Api } from "@awthaq/api";
+import { parseCookieHeader } from "@awthaq/web/cookies";
+import { agentOver } from "./shared/Csrf.ts";
 import { direct, type HeldToken, type Person, World } from "./DomainWorld.ts";
 import { mailedToken } from "./MailedToken.ts";
-import { cookieFrom, STRONG_PASSWORD } from "./shared/Harness.ts";
+import { STRONG_PASSWORD } from "./shared/Harness.ts";
 
 const ORIGIN = "http://localhost";
 
@@ -18,28 +20,45 @@ export interface RequestOptions {
   readonly headers?: Record<string, string>;
 }
 
+/**
+ * One request through the real router from a user agent that already holds the double-submit CSRF cookie
+ * (`agentOver`), carrying `options.cookie` (a person's session pair) beside it. The agent is returned too,
+ * so a sign-up or sign-in reads the session cookie it now holds instead of parsing `Set-Cookie`.
+ */
+const requestWithAgent = Effect.fn("features.domain.requestWithAgent")(function* (
+  method: string,
+  path: string,
+  options: RequestOptions = {},
+) {
+  const { handler } = yield* World;
+  const agent = agentOver(handler, { origin: ORIGIN });
+  const response = yield* Effect.promise(() =>
+    agent.request(method, path, {
+      ...(options.body === undefined ? {} : { json: options.body }),
+      ...(options.headers === undefined ? {} : { headers: options.headers }),
+      extraCookies: Object.fromEntries(
+        parseCookieHeader(options.cookie).map((pair) => [pair.name, pair.value]),
+      ),
+    }),
+  );
+  return { agent, response };
+});
+
 /** One request through the real router, as a browser that already holds the double-submit CSRF cookie would send it. */
 export const request = Effect.fn("features.domain.request")(function* (
   method: string,
   path: string,
   options: RequestOptions = {},
 ) {
-  const { handler } = yield* World;
-  return yield* Effect.promise(() =>
-    handler(
-      new Request(`${ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(options.body === undefined ? {} : { "content-type": "application/json" }),
-          ...options.headers,
-          cookie: withCsrfCookie(options.cookie),
-          "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
-        },
-        ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-      }),
-    ),
-  );
+  return (yield* requestWithAgent(method, path, options)).response;
 });
+
+/** The `name=value` pair of the session cookie `agent` holds (what a browser sends back), or a defect when it holds none. */
+const sessionPairOf = (agent: ReturnType<typeof agentOver>) => {
+  const held = agent.cookies.get(Api.SESSION_COOKIE_NAME);
+  if (held === undefined) throw new Error("expected the response to set a session cookie");
+  return `${held.name}=${held.value}`;
+};
 
 /** How many `template` mails `email` has received so far — the baseline for `awaitMail`'s `after`. */
 export const mailCount = Effect.fn("features.domain.mailCount")(function* (
@@ -169,7 +188,7 @@ export const newPerson = (email: string): Person => ({
 /** Signs `name` up over the wire (the app answers 200 with a session), leaving the address unverified. */
 export const signUp = Effect.fn("features.domain.signUp")(function* (name: string) {
   const person = yield* getPerson(name);
-  const response = yield* request("POST", "/password/sign-up", {
+  const { agent, response } = yield* requestWithAgent("POST", "/password/sign-up", {
     body: { email: person.email, password: person.password },
   });
   if (response.status !== 200) {
@@ -185,7 +204,7 @@ export const signUp = Effect.fn("features.domain.signUp")(function* (name: strin
   yield* people.set(name, {
     ...person,
     userId: Option.map(found, (user) => user.id),
-    cookie: Option.some(cookieFrom(response)),
+    cookie: Option.some(sessionPairOf(agent)),
   });
   return response;
 });
@@ -207,16 +226,20 @@ export const signUpVerified = Effect.fn("features.domain.signUpVerified")(functi
   yield* verifyEmailOf(name);
 });
 
-/** A signed-in user's session cookie, from a fresh sign-in over the wire. */
-export const signIn = Effect.fn("features.domain.signIn")(function* (name: string) {
+/** A signed-in user's session cookie, from a fresh sign-in over the wire (from a device named by `headers`, if given). */
+export const signIn = Effect.fn("features.domain.signIn")(function* (
+  name: string,
+  headers?: Record<string, string>,
+) {
   const person = yield* getPerson(name);
-  const response = yield* request("POST", "/password/sign-in", {
+  const { agent, response } = yield* requestWithAgent("POST", "/password/sign-in", {
     body: { email: person.email, password: person.password },
+    ...(headers === undefined ? {} : { headers }),
   });
   if (response.status !== 200) {
     return yield* Effect.die(new Error(`sign-in failed for ${person.email}: ${response.status}`));
   }
-  return cookieFrom(response);
+  return sessionPairOf(agent);
 });
 
 export const bodyText = (response: Response) => Effect.promise(() => response.clone().text());

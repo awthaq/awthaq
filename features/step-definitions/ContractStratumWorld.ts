@@ -15,10 +15,10 @@
 //    `session` group is the thing under test (BEH-EA-031).
 // Sessions are minted directly against the same running services (shared `MemoMap`).
 import { Api } from "@awthaq/api";
-import { Auth, Persistence, Sessions, Users } from "@awthaq/core";
+import { Auth, Persistence, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { Authentication, Credentials, AuthHttp } from "@awthaq/server";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, type UserAgent } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -33,9 +33,10 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
-import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
+import { agentOver } from "./shared/Csrf.ts";
 import { PasswordFixture } from "./PluginFixtures.ts";
 import * as HttpServer from "effect/http/HttpServer";
+import * as Cookies from "effect/http/Cookies";
 
 /** BEH-EA-028: the same two schemes declared in the opposite order — only the record differs, the handlers are `Authentication`'s own. */
 export class ReorderedAuthentication extends HttpApiMiddleware.Service<
@@ -182,7 +183,8 @@ export type AppKind = "auth-probe" | "password" | "core-only";
 
 export interface Actor {
   readonly userId: string;
-  readonly cookie: string;
+  /** The session's `Set-Cookie`, rendered under the composition's cookie config. */
+  readonly setCookie: string;
   readonly token: string;
   readonly sessionId: string;
 }
@@ -239,33 +241,39 @@ export const coreOnlyApp = Effect.gen(function* () {
   return yield* lazily((yield* World).coreOnly, buildCoreOnlyApp);
 });
 
-const ORIGIN = "http://localhost";
+/** A fresh browser over `handler` holding `actor`'s session (and the CSRF cookie every agent starts with). */
+export const browserOf = (handler: (request: Request) => Promise<Response>, actor: Actor) => {
+  const agent = agentOver(handler);
+  const received = agent.cookies.receive(actor.setCookie);
+  if (received._tag !== "Stored")
+    throw new Error(`the browser did not store ${actor.userId}'s session`);
+  return agent;
+};
 
+/**
+ * One request from `as` (a browser holding a session) or a fresh anonymous browser over `handler`; the
+ * agent keeps its cookies and echoes CSRF on an unsafe method. `bearer` presents a token as well.
+ */
 export const send = (
   handler: (request: Request) => Promise<Response>,
   method: string,
   path: string,
   options?: {
     readonly body?: unknown;
-    readonly cookie?: string;
+    readonly as?: UserAgent.UserAgent;
     readonly bearer?: string;
     readonly headers?: Record<string, string>;
   },
 ) =>
   Effect.promise(async () => {
-    const response = await handler(
-      new Request(`${ORIGIN}${path}`, {
-        method,
-        headers: {
-          ...(options?.body === undefined ? {} : { "content-type": "application/json" }),
-          ...(options?.bearer === undefined ? {} : { authorization: `Bearer ${options.bearer}` }),
-          ...options?.headers,
-          cookie: withCsrfCookie(options?.cookie),
-          "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
-        },
-        ...(options?.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-      }),
-    );
+    const agent = options?.as ?? agentOver(handler);
+    const response = await agent.request(method, path, {
+      ...(options?.body === undefined ? {} : { json: options.body }),
+      headers: {
+        ...(options?.bearer === undefined ? {} : { authorization: `Bearer ${options.bearer}` }),
+        ...options?.headers,
+      },
+    });
     return { status: response.status, body: await response.text(), headers: response.headers };
   });
 
@@ -278,11 +286,13 @@ const sessionFor = (name: string) =>
       name,
     });
     const issued = yield* sessions.issue({ userId: user.id });
-    const token = Redacted.value(issued.token);
+    const rendered = yield* SessionCookie.render(issued.session, issued.token);
     return {
       userId: user.id,
-      cookie: `${Api.SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
-      token,
+      setCookie: Cookies.serializeCookie(
+        Cookies.makeCookieUnsafe(rendered.name, rendered.value, rendered.options),
+      ),
+      token: Redacted.value(issued.token),
       sessionId: issued.session.id,
     };
   });

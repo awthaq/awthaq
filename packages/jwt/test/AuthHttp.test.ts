@@ -5,7 +5,7 @@
 // middleware/session at all — it is public by definition; `token` does,
 // and a signed-in agent (`TestAuth.app(...).signIn`) holds the session
 // cookie that authenticates it.
-import { Auth, SessionCookie, Sessions, type Users } from "@awthaq/core";
+import { Auth, Sessions, type Users } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -13,7 +13,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import * as Cookies from "effect/http/Cookies";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtCodec from "../src/JwtCodec.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
@@ -55,11 +54,7 @@ const buildHandler = () => {
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         const issued = yield* sessions.issue({ userId });
-        // The `Set-Cookie` the server would answer, rendered under the composition's cookie config.
-        const rendered = yield* SessionCookie.render(issued.session, issued.token);
-        const setCookie = Cookies.serializeCookie(
-          Cookies.makeCookieUnsafe(rendered.name, rendered.value, rendered.options),
-        );
+        const setCookie = yield* TestAuth.sessionSetCookie(issued);
         return { setCookie, sessionId: issued.session.id };
       }),
     ).then(async ({ setCookie, sessionId }) => {

@@ -27,26 +27,25 @@ import {
 import { World } from "./TestingHarnessWorld.ts";
 import { isNumber, isString, isStringArray } from "./shared/Outcomes.ts";
 
-const adminRequest = (handler: (request: Request) => Promise<Response>, cookie?: string) =>
-  handler(
-    new Request("http://localhost/operator/whoami", {
-      headers: cookie === undefined ? {} : { cookie },
-    }),
-  );
+/** `GET /operator/whoami` from `browser` (a signed-in agent), or anonymously through the raw handler. */
+const adminRequest = (
+  handler: (request: Request) => Promise<Response>,
+  browser?: TestAuth.SignedInAgent,
+) =>
+  browser === undefined
+    ? handler(new Request("http://localhost/operator/whoami"))
+    : browser.request("GET", "/operator/whoami");
 
 /** Posts one entry and lists the ledger back, as a signed-in caller would. */
 const roundTrip = (
-  app: Pick<ReturnType<typeof TestAuth.app>, "signIn" | "request">,
+  app: Pick<ReturnType<typeof TestAuth.app>, "signIn">,
   email: string,
   entry: string,
 ) =>
   Effect.promise(async () => {
-    const signedIn = await app.signIn(email);
-    const added = await app.request("POST", "/ledger", {
-      cookie: signedIn.cookieHeader,
-      json: { entry },
-    });
-    const listed = await app.request("GET", "/ledger", { cookie: signedIn.cookieHeader });
+    const caller = await app.signIn(email);
+    const added = await caller.request("POST", "/ledger", { json: { entry } });
+    const listed = await caller.request("GET", "/ledger");
     return { added: added.status, listed: await listed.json() };
   });
 
@@ -104,9 +103,7 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
       const app = TestAuth.app(TestAuth.layer(operatorBuilt));
       const anonymous = yield* Effect.promise(() => adminRequest(app.handler));
       const signedIn = yield* Effect.promise(() => app.signIn("admin@example.com"));
-      const authenticated = yield* Effect.promise(() =>
-        adminRequest(app.handler, signedIn.cookieHeader),
-      );
+      const authenticated = yield* Effect.promise(() => adminRequest(app.handler, signedIn));
       yield* Effect.promise(() => app.dispose());
       yield* outcomes.set("anonymousStatus", anonymous.status);
       yield* outcomes.set("authenticatedStatus", authenticated.status);
@@ -201,11 +198,8 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
       const { outcomes } = yield* World;
       const app = TestAuth.app(TestAuth.layer(ledgerBuilt));
       const signedIn = yield* Effect.promise(() => app.signIn("shared@example.com"));
-      const response = yield* Effect.promise(() =>
-        app.handler(
-          new Request("http://localhost/ledger", { headers: { cookie: signedIn.cookieHeader } }),
-        ),
-      );
+      // The agent holds the session minted through `run`; its request goes through the app's handler.
+      const response = yield* Effect.promise(() => signedIn.request("GET", "/ledger"));
       yield* Effect.promise(() => app.dispose());
       yield* outcomes.set("handlerStatus", response.status);
     },
