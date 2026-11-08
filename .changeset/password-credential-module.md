@@ -7,4 +7,4 @@
 
 `@awthaq/test`: `StoreContract.accounts` gains the case "insertIfAbsent that loses a race inside an enclosing transaction leaves it usable"; its cases now require `SqlTransaction` (the `Ref` runner provides `SqlTransaction.layerNoop`).
 
-Migration: none in the API. `Password.config`, `Password.PasswordConfig` and `Password.PasswordConfigShape` are unchanged; they now live in `PasswordConfig.ts` and are re-exported. A host whose layer type is emitted names the exposed `PasswordCredential.PasswordCredential` like any other exposed service.
+Migration: none in the API. `Password.config`, `Password.PasswordConfig` and `Password.PasswordConfigShape` are unchanged; they now live in `PasswordConfig.ts` and are re-exported. A host whose layer type is emitted in a declaration file must name the exposed service, or TypeScript reports TS2883: add `export type PasswordServices = PasswordCredential.PasswordCredential` beside the layer, as the examples do.

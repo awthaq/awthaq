@@ -75,6 +75,10 @@ Every failure is a typed error carrying its code as `[Runtime.errorExitCode]`; `
 | 8    | authentication required or expired                                          |
 | 9    | environment or capability unavailable (no config module, no database, no Roles plugin, server unreachable, no application Layer, device flow) |
 
+## Seeding an administrator
+
+`seed admin` creates or promotes one account to the administrative role through the application's own services (it needs the Roles plugin, exit 9 otherwise). A password comes from `AWTHAQ_SEED_ADMIN_PASSWORD` or `--prompt-password`, never argv. It must pass the application's `Password` policy (`Password.config`: minimum length, breach screening) before anything is written, or the command exits 2 with the policy's hints; it is set through the Password plugin's `PasswordCredential`, replacing an existing password, and publishes `auth.password.changed`. An application without the Password plugin can seed an account but not a password (exit 9).
+
 ## Migrations
 
 Core's tables (`effect_sql_migrations`, ids 1–20) and the plugins' (`awthaq_plugin_migrations`, positions in the linker's order) are **two ledgers and two id spaces** ([BEH-EA-038](../../spec/behaviors/05-persistence-stratum.md)); `status` and `apply` read and advance both. `status` is read-only (it never creates a ledger) and fails with exit 7 on drift: an applied id or name the linker does not know, or a pending id that sorts before an applied one, which `Migrator` would silently skip. `apply` prints the ordered pending plan first, refuses on drift, and needs `--yes`.
