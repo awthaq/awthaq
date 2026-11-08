@@ -15,7 +15,9 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Output from "../src/Output.ts";
 import * as Seed from "../src/Seed.ts";
 import { configOf, passwordAndRoles } from "./support/TestApp.ts";
-import { migrate, sqlApp, sqlAppWithoutRoles } from "./support/SqlApp.ts";
+import { migrate, sqlApp, sqlAppWithoutPassword, sqlAppWithoutRoles } from "./support/SqlApp.ts";
+import { TestAuth } from "@awthaq/test";
+import { createHash } from "node:crypto";
 
 const Sql = SqliteClient.layer({ filename: ":memory:" });
 
@@ -161,6 +163,12 @@ describe("seed admin", () => {
           const app = sqlApp(sql);
           const short = yield* seed(input({ password: Option.some(Redacted.make("short")) }), app);
           assert.strictEqual(exitCode(short), 2);
+          // BEH-EA-120: the hint is the application's Password policy's, and nothing was written.
+          const refusal = Exit.findErrorOption(short);
+          assert.isTrue(Option.isSome(refusal));
+          if (Option.isSome(refusal)) assert.include(String(refusal.value), "12");
+          const none = yield* sql<{ readonly n: number }>`SELECT count(*) AS n FROM users`;
+          assert.strictEqual(none[0]?.n, 0);
           const ok = yield* seed(
             input({ password: Option.some(Redacted.make("a-long-enough-password")) }),
             app,
@@ -176,6 +184,75 @@ describe("seed admin", () => {
             hasher.verify(Redacted.make("a-long-enough-password"), PasswordHasher.PhcHash(hash)),
           ).pipe(Effect.provide(app));
           assert.isTrue(verified);
+        }),
+      ),
+  );
+
+  it.effect("seed admin with a password over an account that already has one replaces it", () =>
+    withApp((sql) =>
+      Effect.gen(function* () {
+        const app = sqlApp(sql);
+        const first = Redacted.make("the first seeded password");
+        const second = Redacted.make("the second seeded password");
+        assert.isTrue(Exit.isSuccess(yield* seed(input({ password: Option.some(first) }), app)));
+        const again = yield* seed(input({ password: Option.some(second), force: true }), app);
+        assert.isTrue(Exit.isSuccess(again));
+        const rows = yield* sql<{
+          readonly passwordHash: string | null;
+        }>`SELECT passwordHash FROM accounts WHERE providerId = 'password'`;
+        assert.strictEqual(rows.length, 1);
+        const verified = yield* PasswordHasher.PasswordHasher.use((hasher) =>
+          hasher.verify(second, PasswordHasher.PhcHash(rows[0]?.passwordHash ?? "")),
+        ).pipe(Effect.provide(app));
+        assert.isTrue(verified, "the operator's second password was dropped");
+        // As AdminAccounts does: subscribers of the change learn of it.
+        assert.include(yield* auditTags(app), "auth.password.changed");
+      }),
+    ),
+  );
+
+  it.effect(
+    "BEH-EA-120: a breached seeded password is a usage error (exit 2), and nothing is written",
+    () =>
+      withApp((sql) =>
+        Effect.gen(function* () {
+          const breached = Redacted.make("a breached but long enough password");
+          const hex = createHash("sha1")
+            .update(Redacted.value(breached))
+            .digest("hex")
+            .toUpperCase();
+          const corpus = TestAuth.httpClient.returning((url) =>
+            url.endsWith(hex.slice(0, 5)) ? `${hex.slice(5)}:5` : `${"F".repeat(35)}:1`,
+          );
+          const exit = yield* seed(
+            input({ password: Option.some(breached) }),
+            sqlApp(sql, { httpClient: corpus }),
+          );
+          assert.strictEqual(exitCode(exit), 2);
+          const error = Exit.findErrorOption(exit);
+          if (Option.isSome(error)) assert.include(String(error.value), "known breaches");
+          const users = yield* sql<{ readonly n: number }>`SELECT count(*) AS n FROM users`;
+          assert.strictEqual(users[0]?.n, 0);
+        }),
+      ),
+  );
+
+  it.effect(
+    "a password with no Password plugin in the application is ApplicationUnavailable (exit 9), writing nothing",
+    () =>
+      withApp((sql) =>
+        Effect.gen(function* () {
+          const exit = yield* seed(
+            input({ password: Option.some(Redacted.make("a-long-enough-password")) }),
+            sqlAppWithoutPassword(sql),
+          );
+          assert.strictEqual(exitCode(exit), 9);
+          const error = Exit.findErrorOption(exit);
+          if (Option.isSome(error)) assert.include(String(error.value), "Password");
+          const users = yield* sql<{ readonly n: number }>`SELECT count(*) AS n FROM users`;
+          assert.strictEqual(users[0]?.n, 0);
+          // Without a password the account is still seeded.
+          assert.isTrue(Exit.isSuccess(yield* seed(input(), sqlAppWithoutPassword(sql))));
         }),
       ),
   );

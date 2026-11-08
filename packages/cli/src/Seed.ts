@@ -3,9 +3,10 @@
 // spec/behaviors/26-cli.md BEH-EA-206 (BE-003 sub-ticket E, RRM-011, ECS-006, SMS-008).
 //
 // `seed admin` provisions the first privileged account through the *same* domain services an
-// application uses at runtime — `Users`, `Roles`, `Accounts`, `AuthEvents` — never by writing rows
-// (BEH-EA-206), so the account it produces obeys the invariants the rest of the system holds
-// (uniqueness, hashing, role-catalog validity). It builds the application's own Layer on a
+// application uses at runtime — `Users`, `Roles`, `AuthEvents`, and the Password plugin's exposed
+// `PasswordCredential` — never by writing rows (BEH-EA-206), so the account it produces obeys the
+// invariants the rest of the system holds (uniqueness, role-catalog validity, and the one password
+// policy, ADR-EA-048). It builds the application's own Layer on a
 // short-lived runtime (BEH-EA-208 class 2: constructs services, serves nothing).
 //
 // - No `Roles` plugin, no admin concept: `RolesNotInstalled` (exit 9).
@@ -15,7 +16,10 @@
 //   `AuthEvents`, which `AuditLog` persists inline (BEH-EA-100): a CLI run has no session to
 //   attribute the grant to, so the event is the record.
 // - The password, when there is one, comes from the environment or a prompt, never from argv
-//   (a process listing shows argv). An email the operator vouches for is marked verified through
+//   (a process listing shows argv). It must pass the application's `Password.config` policy
+//   (minimum length, breach screening) before anything is written; it replaces an existing
+//   password credential, and publishes `auth.password.changed`. An application without the
+//   Password plugin can seed an account, but not a password (`ApplicationUnavailable`, exit 9). An email the operator vouches for is marked verified through
 //   the sanctioned `Users.verifyEmail` transition, so a seeded administrator can sign in with the
 //   password the operator just set (the verified-email gate is on by default).
 //
@@ -23,13 +27,13 @@
 // idempotent on a re-run (an existing user is promoted, an already-held role is a no-op), so a
 // failure midway is repaired by running it again.
 
-import { Accounts, AuthEvents, Users } from "@awthaq/core";
-import { PasswordHasher } from "@awthaq/ports";
+import { AuthEvents, Users } from "@awthaq/core";
+import { PasswordCredential } from "@awthaq/password";
 import { Roles } from "@awthaq/roles";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
+import type * as Redacted from "effect/Redacted";
 import { requireService, withApplication } from "./Application.ts";
 import { ConfirmationRequired, RolesNotInstalled, UsageError } from "./CliErrors.ts";
 import type { CliConfig } from "./Config.ts";
@@ -37,9 +41,6 @@ import * as Output from "./Output.ts";
 
 /** The default administrative role name (`@awthaq/roles` catalogs conventionally define it). */
 export const DEFAULT_ADMIN_ROLE = "admin";
-
-/** A seeded password is a credential of the most privileged account: no shorter than the plugin's own default minimum. */
-export const MIN_PASSWORD_LENGTH = 12;
 
 export interface SeedInput {
   readonly email: string;
@@ -61,14 +62,29 @@ export interface SeedResult {
 export const seedAdmin = (config: CliConfig, input: SeedInput) =>
   withApplication(config, (context) =>
     Effect.gen(function* () {
-      if (
-        Option.isSome(input.password) &&
-        Redacted.value(input.password.value).length < MIN_PASSWORD_LENGTH
-      ) {
-        return yield* new UsageError({
-          message: `the seeded password must be at least ${MIN_PASSWORD_LENGTH} characters`,
-        });
-      }
+      // First, before anything is written: the one policy, from the application's Password plugin.
+      const password = yield* Option.match(input.password, {
+        onNone: () => Effect.succeedNone,
+        onSome: (candidate) =>
+          Effect.gen(function* () {
+            const credential = yield* requireService(
+              context,
+              PasswordCredential.PasswordCredential,
+              "PasswordCredential (the Password plugin)",
+              "seed admin --password",
+            );
+            const accepted = yield* credential.accept(candidate).pipe(
+              Effect.catchTag(
+                "WeakPassword",
+                (weak) =>
+                  new UsageError({
+                    message: `the seeded password is refused: ${weak.hints.join("; ")}`,
+                  }),
+              ),
+            );
+            return Option.some({ credential, accepted });
+          }),
+      });
       const roles = Context.getOption(context, Roles.Roles);
       if (roles._tag === "None") {
         return yield* new RolesNotInstalled({
@@ -114,36 +130,11 @@ export const seedAdmin = (config: CliConfig, input: SeedInput) =>
             );
       yield* users.verifyEmail(user.id).pipe(Effect.orDie);
 
-      if (Option.isSome(input.password)) {
-        const accounts = yield* requireService(
-          context,
-          Accounts.Accounts,
-          "Accounts",
-          "seed admin",
-        );
-        const hasher = yield* requireService(
-          context,
-          PasswordHasher.PasswordHasher,
-          "PasswordHasher",
-          "seed admin",
-        );
-        const linked = yield* accounts.findByProviderSubject(
-          Accounts.PASSWORD_PROVIDER_ID,
-          user.id,
-        );
-        if (Option.isNone(linked)) {
-          const hash = yield* hasher.hash(input.password.value);
-          yield* accounts
-            .link({
-              userId: user.id,
-              providerId: Accounts.PASSWORD_PROVIDER_ID,
-              subject: user.id,
-              credentialHash: Redacted.make(hash),
-            })
-            // A concurrent seed linked one first; an outage (ADR-EA-028) flows on to the
-            // `StoreUnavailable` mapping below.
-            .pipe(Effect.catchTag("AccountAlreadyLinked", () => Effect.void));
-        }
+      if (Option.isSome(password)) {
+        // BEH-EA-206 (plan 27 Q3): the operator's password replaces an existing one, as an
+        // administrator's set does; an outage flows on to the `StoreUnavailable` mapping below.
+        yield* password.value.credential.set(user.id, password.value.accepted);
+        yield* events.publish({ _tag: "auth.password.changed", userId: user.id });
       }
 
       yield* roles.value.assign(user.id, input.role).pipe(

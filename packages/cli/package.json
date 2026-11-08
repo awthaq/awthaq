@@ -34,6 +34,7 @@
     "@awthaq/device-authorization": "workspace:*",
     "@awthaq/migrate-better-auth": "workspace:*",
     "@awthaq/migrate-firebase": "workspace:*",
+    "@awthaq/password": "workspace:*",
     "@awthaq/ports": "workspace:*",
     "@awthaq/roles": "workspace:*",
     "@awthaq/server": "workspace:*",
@@ -43,7 +44,6 @@
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@awthaq/password": "workspace:*",
     "@awthaq/sql": "workspace:*",
     "@awthaq/test": "workspace:*",
     "@effect/vitest": "catalog:",
