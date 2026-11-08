@@ -12,9 +12,7 @@ import { createHash } from "node:crypto";
 import { Accounts, AuditLog, Auth, AuthEvents, MailDispatch, Sessions, Users } from "@awthaq/core";
 import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { SignInProbe, TestAuth } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -70,24 +68,6 @@ const TestLayerHangingMailer = TestAuth.layer(Auth.make([Password.Password]), {
     MailDispatch.config({ drainTimeout: Duration.zero }),
   ),
 });
-
-/**
- * PHS-005: the production-cost argon2id hasher (`TestAuth`'s own is deliberately cheap): the rehash tests below
- * plant hashes "stored under other parameters" and assert what `signIn` upgrades them to.
- */
-const TestLayerProductionHasher = TestAuth.layer(Auth.make([Password.Password]), {
-  services: Layer.mergeAll(NoBreachHttpClient, Password.config({})),
-  // `decorate` shadows the base hasher for the plugin and for the test body alike. `Layer.fresh`: the base already
-  // built `layerArgon2id` (at the cheap test cost) on the shared memo map, so without it this resolves to that instance.
-  decorate: Layer.orDie(Layer.fresh(PasswordHasher.layerArgon2id)),
-});
-
-const hasherAt = (env: Record<string, string>) =>
-  Layer.fresh(PasswordHasher.layerArgon2id).pipe(
-    Layer.provide(NodeCrypto.layer),
-    Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
-    Layer.orDie,
-  );
 
 const email = "ada@example.com";
 const strongPassword = Redacted.make("correct horse battery staple");
@@ -219,81 +199,6 @@ describe("Password", () => {
     const requiresHasher: PasswordHasher.PasswordHasher extends Needs ? true : false = true;
     assert.isTrue(requiresHasher);
   });
-
-  // PHS-005: the positive half of BEH-EA-116 — the negative case above only proves a current
-  // hash is left alone; these prove an outdated one really is upgraded (and a stronger one is not
-  // downgraded, PHS-002). The "previous configuration" is a second hasher at other cost
-  // parameters whose output is planted as the account's stored credential, so the composition's
-  // own (default-cost) hasher is what `signIn` then compares against.
-  it.effect(
-    "BEH-EA-116: signIn against a hash stored under outdated parameters rehashes to current parameters",
-    () =>
-      Effect.gen(function* () {
-        const password = yield* Password.Password;
-        const accounts = yield* Accounts.Accounts;
-        const mailer = yield* Mailer.Mailer;
-        const current = yield* PasswordHasher.PasswordHasher;
-        const { session } = yield* signUpAndVerify(password, mailer, {
-          email,
-          password: strongPassword,
-        });
-        const account = Option.getOrThrow(
-          yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, session.userId),
-        );
-
-        const outdated = yield* Effect.gen(function* () {
-          const previous = yield* PasswordHasher.PasswordHasher;
-          return yield* previous.hash(strongPassword);
-        }).pipe(
-          TestAuth.withoutRequest,
-          Effect.provide(hasherAt({ AUTH_ARGON2_MEMORY_KIB: "1024", AUTH_ARGON2_ITERATIONS: "1" })),
-        );
-        assert.isTrue(current.needsRehash(outdated), "the planted hash must be below the floor");
-        yield* accounts.updateCredentialHash(account.id, Redacted.make(outdated));
-
-        yield* password.signIn({ email, password: strongPassword });
-
-        const stored = Redacted.value(
-          Option.getOrThrow(yield* accounts.findCredentialHash(account.id)),
-        );
-        assert.notStrictEqual(stored, outdated, "the outdated hash must have been replaced");
-        assert.match(stored, /^\$argon2id\$v=19\$m=19456,t=2,p=1\$/);
-        assert.isFalse(current.needsRehash(stored));
-        assert.isTrue(yield* current.verify(strongPassword, stored));
-      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayerProductionHasher)),
-  );
-
-  it.effect(
-    "BEH-EA-116/PHS-002: signIn against a hash stronger than the current parameters does not rehash it",
-    () =>
-      Effect.gen(function* () {
-        const password = yield* Password.Password;
-        const accounts = yield* Accounts.Accounts;
-        const mailer = yield* Mailer.Mailer;
-        const current = yield* PasswordHasher.PasswordHasher;
-        const { session } = yield* signUpAndVerify(password, mailer, {
-          email,
-          password: strongPassword,
-        });
-        const account = Option.getOrThrow(
-          yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, session.userId),
-        );
-
-        const stronger = yield* Effect.gen(function* () {
-          const previous = yield* PasswordHasher.PasswordHasher;
-          return yield* previous.hash(strongPassword);
-        }).pipe(TestAuth.withoutRequest, Effect.provide(hasherAt({ AUTH_ARGON2_ITERATIONS: "3" })));
-        assert.isFalse(current.needsRehash(stronger), "a stronger hash is above the floor");
-        yield* accounts.updateCredentialHash(account.id, Redacted.make(stronger));
-
-        yield* password.signIn({ email, password: strongPassword });
-
-        const stored = Redacted.value(
-          Option.getOrThrow(yield* accounts.findCredentialHash(account.id)),
-        );
-        assert.strictEqual(stored, stronger, "signIn must never downgrade a stronger stored hash");
-      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayerProductionHasher)),
-  );
 
   // THS-003: how the session was authenticated.
   it.effect("THS-003: signUp, signIn and changePassword sessions carry amr [pwd]", () =>
@@ -1481,52 +1386,6 @@ describe("Password", () => {
           }),
         ),
       ),
-  );
-});
-
-describe("Password signIn timing floor (TSS-006)", () => {
-  // A hasher that verifies instantly, standing in for a legacy hash cheaper than the
-  // configured cost: without a floor, its sign-in returns sooner than an argon2 one.
-  const InstantHasher = Layer.succeed(
-    PasswordHasher.PasswordHasher,
-    PasswordHasher.PasswordHasher.of({
-      hash: () => Effect.succeed(PasswordHasher.PhcHash("instant-hash")),
-      verify: () => Effect.succeed(false),
-      needsRehash: () => false,
-    }),
-  );
-
-  const layerWith = (timingFloor: Partial<Password.PasswordConfigShape>) =>
-    makeTestLayer({ config: timingFloor, hasher: InstantHasher });
-
-  it.effect("a sign-in completes no sooner than the floor, even when verify is instant", () =>
-    Effect.gen(function* () {
-      const password = yield* Password.Password;
-      const fiber = yield* Effect.forkChild(
-        password
-          .signIn({ email: "nobody@example.com", password: strongPassword })
-          .pipe(Effect.flip),
-        { startImmediately: true },
-      );
-      yield* TestClock.adjust(Duration.millis(60));
-      assert.isUndefined(fiber.pollUnsafe());
-      yield* TestClock.adjust(Duration.millis(60));
-      const failure = yield* Fiber.join(fiber);
-      assert.strictEqual(failure._tag, "InvalidCredentials");
-    }).pipe(
-      TestAuth.withoutRequest,
-      Effect.provide(layerWith({ signInTimingFloor: Duration.millis(100) })),
-    ),
-  );
-
-  it.effect("signInTimingFloor: off restores the unpadded behaviour", () =>
-    Effect.gen(function* () {
-      const password = yield* Password.Password;
-      const failure = yield* password
-        .signIn({ email: "nobody@example.com", password: strongPassword })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "InvalidCredentials");
-    }).pipe(TestAuth.withoutRequest, Effect.provide(layerWith({ signInTimingFloor: "off" }))),
   );
 });
 

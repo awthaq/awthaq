@@ -47,6 +47,7 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as PasswordApi from "./PasswordApi.ts";
 import { PasswordConfig, type PasswordConfigShape } from "./PasswordConfig.ts";
+import * as PasswordCredential from "./PasswordCredential.ts";
 
 export { PasswordConfig, config } from "./PasswordConfig.ts";
 export type { PasswordConfigShape } from "./PasswordConfig.ts";
@@ -673,8 +674,15 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       RateLimiter.RateLimiter,
       SqlTransaction.SqlTransaction,
     ],
+    // ADR-EA-040 (plan 27): the password credential, built once beneath `make`, for this plugin
+    // and the trusted dependents that list `Password` in `dependsOn`.
+    exposes: {
+      services: [PasswordCredential.PasswordCredential],
+      layer: PasswordCredential.PasswordCredential.layer,
+    },
     handlers: Layer.mergeAll(PasswordHandlers, PasswordAccountHandlers),
     make: Effect.gen(function* () {
+      const credential = yield* PasswordCredential.PasswordCredential;
       const users = yield* Users.Users;
       const accounts = yield* Accounts.Accounts;
       const sessions = yield* Sessions.Sessions;
@@ -951,38 +959,9 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // many distinct emails before the per-account check below ever
         // sees them.
         yield* limits.spend(["signInByIp", "signIn"], input);
-        // TSS-006: the whole credential check is held to the timing floor in force.
-        const { userOpt, accountOpt, hashOpt, verified } = yield* withTimingFloor(
-          Effect.gen(function* () {
-            const userOpt = yield* users.findByEmail(input.email);
-            const accountOpt = yield* Option.match(userOpt, {
-              onNone: () => Effect.succeed(Option.none<Accounts.AccountRecord>()),
-              onSome: (user) =>
-                accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, user.id),
-            });
-            const hashOpt = yield* Option.match(accountOpt, {
-              onNone: () =>
-                Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
-              onSome: (account) =>
-                accounts
-                  .findCredentialHash(account.id)
-                  .pipe(Effect.catchTag("AccountNotFound", Effect.die)),
-            });
-            // BEH-EA-114: this call happens on every attempt, real or not —
-            // see `dummyHash`'s own comment.
-            const verified = yield* verifyPassword(
-              input.password,
-              Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
-            );
-            return { userOpt, accountOpt, hashOpt, verified };
-          }),
-        );
-        if (
-          Option.isNone(userOpt) ||
-          Option.isNone(accountOpt) ||
-          Option.isNone(hashOpt) ||
-          !verified
-        ) {
+        // BEH-EA-114/TSS-006: the lookup and the verify, one answer for every refusal, held to the floor.
+        const verdict = yield* credential.verify(users.findByEmail(input.email), input.password);
+        if (verdict._tag === "Refused") {
           // ALF-003: the one forensic signal a brute-force/credential-
           // stuffing campaign otherwise leaves nowhere — see
           // `UserSignInFailedEvent`'s own doc comment for why this
@@ -991,9 +970,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           yield* publishSignInFailed("invalidCredentials", input);
           return yield* Effect.fail(new Api.InvalidCredentials());
         }
-        const user = userOpt.value;
-        const account = accountOpt.value;
-        const hash = hashOpt.value;
+        const user = verdict.claimant;
         // EOTS-001: the credential is proven, so the span may name the user (an id, never the email).
         yield* Effect.annotateCurrentSpan("user.id", user.id);
 
@@ -1005,12 +982,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           return yield* Effect.fail(new PasswordApi.EmailNotVerified());
         }
 
-        if (config.rehashOnLogin && hasher.needsRehash(Redacted.value(hash))) {
-          const rehashed = yield* hasher.hash(input.password);
-          yield* accounts
-            .updateCredentialHash(account.id, Redacted.make(rehashed))
-            .pipe(Effect.catchTag("AccountNotFound", Effect.die));
-        }
+        // BEH-EA-116: after the verified-email gate, on the proof `verify` minted.
+        yield* credential.rehashIfStale(verdict.proof);
 
         // ADR-EA-038: the credential is proven, so core's sign-in takes over: the suspension gate
         // (published as `signInFailed{suspended}`), the `BeforeSignIn` veto (NAM-002), the MFA
