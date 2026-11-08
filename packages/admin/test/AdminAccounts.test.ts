@@ -16,7 +16,7 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { Mailer, PasswordHasher } from "@awthaq/ports";
+import { Mailer, PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -25,6 +25,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
+import { SqlError, UnknownError } from "effect/sql/SqlError";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Admin from "../src/Admin.ts";
@@ -64,10 +65,15 @@ const buildLayer = (
     readonly mailer?: Layer.Layer<Mailer.Mailer>;
     readonly veto?: boolean;
     readonly resetVeto?: boolean;
+    readonly transaction?: Layer.Layer<SqlTransaction.SqlTransaction>;
   } = {},
 ) =>
   TestAuth.layer(Auth.make([Admin.Admin, AdminAccounts.AdminAccounts]), {
-    services: Layer.mergeAll(Admin.config(config), options.mailer ?? Layer.empty),
+    services: Layer.mergeAll(
+      Admin.config(config),
+      options.mailer ?? Layer.empty,
+      options.transaction ?? Layer.empty,
+    ),
     taps: Layer.mergeAll(
       options.veto ? legalHold : Layer.empty,
       options.resetVeto ? secondFactorGate : Layer.empty,
@@ -402,6 +408,36 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "AdminSelfActionRefused");
     }).pipe(Effect.provide(buildLayer(manageAll))),
+  );
+
+  it.effect(
+    "ADR-EA-028: a transaction that fails with a SqlError is StoreUnavailable, never a defect",
+    () =>
+      Effect.gen(function* () {
+        const { adminId, targetId } = yield* seed;
+        const admin = yield* AdminAccounts.AdminAccounts;
+        const failure = yield* admin
+          .setUserPassword(asCaller(adminId), targetId, { password: newPassword })
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "StoreUnavailable");
+        if (failure._tag === "StoreUnavailable") {
+          assert.strictEqual(failure.operation, "AdminAccounts.setUserPassword");
+        }
+      }).pipe(
+        Effect.provide(
+          buildLayer(manageAll, {
+            transaction: Layer.succeed(
+              SqlTransaction.SqlTransaction,
+              SqlTransaction.SqlTransaction.of({
+                withTransaction: () =>
+                  Effect.fail(
+                    new SqlError({ reason: new UnknownError({ cause: "down", message: "down" }) }),
+                  ),
+              }),
+            ),
+          }),
+        ),
+      ),
   );
 });
 

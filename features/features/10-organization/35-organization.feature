@@ -185,6 +185,19 @@ Feature: Organization
       Then the response is 404
       And the response is byte-identical to the one for an organization that does not exist
 
+    @REQ-EA-1335
+    Scenario: With dynamic access control disabled a non-member still gets the same 404 for a role endpoint as for an unknown organization
+      Given a signed-in user "alice"
+      And a signed-in user "bob"
+      And "alice" has created the organization "acme"
+      And "bob" has created the organization "beta"
+      When "bob" sends GET "/organization/[org:acme]/roles" with body '-'
+      Then the response is 404
+      And the response is byte-identical to the one for an organization that does not exist
+      When "bob" sends POST "/organization/[org:acme]/roles" with body '{"role":"pwn","permission":{"organization":["delete"]}}'
+      Then the response is 404
+      And the response is byte-identical to the one for an organization that does not exist
+
     @REQ-EA-721
     Scenario: An outsider cannot make another organization her active organization
       Given a signed-in user "alice"

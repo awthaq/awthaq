@@ -193,6 +193,43 @@ describe("AuthHttp + Organization (real HTTP)", () => {
     }
   });
 
+  // BEH-EA-284 (plan 30, A-F1): with dynamic access control disabled (the default) the role endpoints
+  // used to run the feature gate before the membership gate, so an outsider got 403
+  // DynamicAccessControlDisabled for an existing organization and 404 for an unknown one.
+  it("a non-member gets the same 404 from role endpoints whether or not dynamic access control is enabled", async () => {
+    const { signInAs } = buildHandler();
+    const owner = await signInAs("owner-1");
+    const stranger = await signInAs("outsider-1");
+    const created = await request(owner, "POST", "/organization", { name: "Acme", slug: "acme" });
+    const record = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
+    const probes: ReadonlyArray<{ method: string; path: (id: string) => string; body?: unknown }> =
+      [
+        { method: "GET", path: (id) => `/organization/${id}/roles` },
+        {
+          method: "POST",
+          path: (id) => `/organization/${id}/roles`,
+          body: { role: "pwn", permission: { organization: ["delete"] } },
+        },
+        { method: "GET", path: (id) => `/organization/${id}/roles/some-role` },
+        {
+          method: "PATCH",
+          path: (id) => `/organization/${id}/roles/some-role`,
+          body: { permission: { organization: ["delete"] } },
+        },
+        { method: "DELETE", path: (id) => `/organization/${id}/roles/some-role` },
+      ];
+    for (const probe of probes) {
+      const existing = await request(stranger, probe.method, probe.path(record.id), probe.body);
+      const missing = await request(stranger, probe.method, probe.path("no-such-org"), probe.body);
+      assert.strictEqual(existing.status, 404, `${probe.method} ${probe.path(record.id)}`);
+      assert.strictEqual(missing.status, 404);
+      assert.strictEqual(await existing.text(), await missing.text());
+    }
+    // A member still learns that the feature is off.
+    const own = await request(owner, "GET", `/organization/${record.id}/roles`);
+    assert.strictEqual(own.status, 403);
+  });
+
   it("a member without the statement still gets 403, not 404", async () => {
     const { signInAs, withServices } = buildHandler();
     const owner = await signInAs("owner-1");
