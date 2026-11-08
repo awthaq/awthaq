@@ -6,12 +6,14 @@
 //
 // BE-001 (.issues/high): `layerSql` is migrated via `Jwt.Jwt`'s own real
 // `migrations` (`Migrations.run`, `@awthaq/core`) rather than a hand-rolled
-// inline `CREATE TABLE` — the same conversion `RevocationStore.test.ts`
-// already made, and `Jwt.ts`'s own `jwtMigrations` doc comment names this
-// file as the pre-existing gap it closed "in passing." Running the full
-// `Jwt.Jwt.migrations` (not just the `jwt_signing_key` migration this suite
-// needs) also creates `jwt_token_revocation`, unused here but harmless —
-// the same shape `RevocationStore.test.ts` already accepts in reverse.
+// inline `CREATE TABLE`.
+//
+// Plan 25 ticket 20: the store's own contract (every `SigningKeyRecords`
+// operation, the single-current and `kid` races, the indexes) is
+// `test/contract/SigningKeyRecords.ts`, run from `Contract.test.ts`; what stays
+// here is the ring on top of it. Not over `RecordsContract.recordsBase`: its mode
+// union does not promise `SqlClient` to the type checker, and the ring needs
+// `SqlTransaction.layerSql` over the very client the store uses.
 //
 // JJS-004/KRS-006/KRS-008/BAM-010: the multi-instance rotation, convergence,
 // emergency-retirement and key-import suites run against both stores. Several
@@ -171,42 +173,6 @@ const suite = (
       }).pipe(Effect.provide(Base)),
     );
 
-    it.effect("a second current key is rejected with CurrentKeyConflict", () =>
-      Effect.gen(function* () {
-        const key = yield* KeyRing.current;
-        const records = yield* SigningKeyRecords.SigningKeyRecords;
-        const conflict = yield* records
-          .create({
-            kid: "second-current",
-            alg: "EdDSA",
-            publicKeyJwk: { kty: "OKP" },
-            privateKeyJwk: Option.none(),
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(conflict._tag, "CurrentKeyConflict");
-        assert.strictEqual((yield* records.findCurrent()).pipe(Option.getOrThrow).kid, key.kid);
-      }).pipe(Effect.provide(TestLayer)),
-    );
-
-    it.effect(
-      "markRotated on an already-rotated kid leaves retiresAt unchanged and reports false",
-      () =>
-        Effect.gen(function* () {
-          const original = yield* KeyRing.current;
-          const records = yield* SigningKeyRecords.SigningKeyRecords;
-          const now = yield* DateTime.now;
-          const soon = DateTime.addDuration(now, Duration.days(1));
-          const later = DateTime.addDuration(now, Duration.days(30));
-          assert.isTrue(yield* records.markRotated(original.kid, now, soon));
-          assert.isFalse(yield* records.markRotated(original.kid, now, later));
-          const [row] = (yield* records.listVerifiable(now)).filter((r) => r.kid === original.kid);
-          assert.strictEqual(
-            DateTime.toEpochMillis(Option.getOrThrow(row?.retiresAt ?? Option.none())),
-            DateTime.toEpochMillis(soon),
-          );
-        }).pipe(Effect.provide(TestLayer)),
-    );
-
     // ---- KRS-006: convergence on rotations made elsewhere ---------------------
 
     it.effect(
@@ -322,6 +288,117 @@ const suite = (
         }).pipe(Effect.flip);
         assert.strictEqual(withPrivate._tag, "InvalidKeyImport");
       }).pipe(Effect.provide(TestLayer)),
+    );
+
+    // ---- plan 24 R6 / Q3: a kid names one key forever ---------------------------
+
+    it.effect(
+      "registering the same remote key again is a no-op: it stays the one current key and nothing is rotated",
+      () =>
+        Effect.gen(function* () {
+          const local = yield* KeyRing.current;
+          const { publicKeyJwk } = yield* JwtCodec.generateKeyJwks("EdDSA");
+          const first = yield* KeyRing.registerRemoteKey({
+            kid: "remote-1",
+            alg: "EdDSA",
+            publicKeyJwk,
+          });
+          yield* TestClock.adjust(Duration.hours(1));
+          const again = yield* KeyRing.registerRemoteKey({
+            kid: "remote-1",
+            alg: "EdDSA",
+            publicKeyJwk,
+          });
+          assert.strictEqual(
+            DateTime.toEpochMillis(again.createdAt),
+            DateTime.toEpochMillis(first.createdAt),
+          );
+          assert.deepStrictEqual(
+            (yield* currentRows).map((row) => row.kid),
+            ["remote-1"],
+          );
+          const records = yield* SigningKeyRecords.SigningKeyRecords;
+          const localRow = Option.getOrThrow(yield* records.findByKid(local.kid));
+          assert.isTrue(Option.isSome(localRow.rotatedAt));
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.effect(
+      "a different key under a stored kid fails KidTaken from registerRemoteKey and importKey, rotating and writing nothing",
+      () =>
+        Effect.gen(function* () {
+          const local = yield* KeyRing.current;
+          const remote = yield* JwtCodec.generateKeyJwks("EdDSA");
+          const other = yield* JwtCodec.generateKeyJwks("EdDSA");
+          const records = yield* SigningKeyRecords.SigningKeyRecords;
+          // The local current key's kid, under a remote public key.
+          const overCurrent = yield* KeyRing.registerRemoteKey({
+            kid: local.kid,
+            alg: "EdDSA",
+            publicKeyJwk: remote.publicKeyJwk,
+          }).pipe(Effect.flip);
+          assert.strictEqual(overCurrent._tag, "SigningKeyRecords/KidTaken");
+          const importedOverCurrent = yield* KeyRing.importKey({
+            kid: local.kid,
+            alg: "EdDSA",
+            publicKeyJwk: remote.publicKeyJwk,
+          }).pipe(Effect.flip);
+          assert.strictEqual(importedOverCurrent._tag, "SigningKeyRecords/KidTaken");
+          assert.deepStrictEqual(
+            (yield* currentRows).map((row) => row.kid),
+            [local.kid],
+          );
+          assert.isTrue(
+            Option.isSome(Option.getOrThrow(yield* records.findByKid(local.kid)).privateKeyJwk),
+          );
+          // An imported key's kid, under another public key: refused, the current key not rotated.
+          yield* KeyRing.importKey({
+            kid: "foreign",
+            alg: "EdDSA",
+            publicKeyJwk: remote.publicKeyJwk,
+          });
+          const overImported = yield* KeyRing.registerRemoteKey({
+            kid: "foreign",
+            alg: "EdDSA",
+            publicKeyJwk: other.publicKeyJwk,
+          }).pipe(Effect.flip);
+          assert.strictEqual(overImported._tag, "SigningKeyRecords/KidTaken");
+          assert.deepStrictEqual(
+            (yield* currentRows).map((row) => row.kid),
+            [local.kid],
+          );
+          // The same foreign key imported again is a no-op.
+          const reimported = yield* KeyRing.importKey({
+            kid: "foreign",
+            alg: "EdDSA",
+            publicKeyJwk: remote.publicKeyJwk,
+          });
+          assert.strictEqual(reimported.kid, "foreign");
+        }).pipe(Effect.provide(TestLayer)),
+    );
+
+    it.effect(
+      "8 concurrent registrations of one remote key leave it the one current key, the local key rotated once",
+      () =>
+        Effect.gen(function* () {
+          const local = yield* KeyRing.current;
+          const { publicKeyJwk } = yield* JwtCodec.generateKeyJwks("EdDSA");
+          const records = yield* SigningKeyRecords.SigningKeyRecords;
+          const outcomes = yield* Effect.all(
+            Array.from({ length: 8 }, () =>
+              KeyRing.registerRemoteKey({ kid: "remote-1", alg: "EdDSA", publicKeyJwk }),
+            ),
+            { concurrency: "unbounded" },
+          );
+          assert.isTrue(outcomes.every((record) => record.kid === "remote-1"));
+          assert.deepStrictEqual(
+            (yield* currentRows).map((row) => row.kid),
+            ["remote-1"],
+          );
+          assert.isTrue(
+            Option.isSome(Option.getOrThrow(yield* records.findByKid(local.kid)).rotatedAt),
+          );
+        }).pipe(Effect.provide(TestLayer)),
     );
 
     it.effect("registerRemoteKey makes the remote key the single current key", () =>
@@ -490,21 +567,6 @@ describe("layerSql single current key (JJS-004)", () => {
   const Base = SqlRecords.pipe(
     Layer.provideMerge(TestConfig),
     Layer.provideMerge(NodeCrypto.layer),
-  );
-
-  it.effect("the migrations create the single-current unique index", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const rows = yield* sql.onDialectOrElse({
-        pg: () => sql<{ readonly sql: string | null }>`
-          SELECT indexdef AS sql FROM pg_indexes
-          WHERE schemaname = current_schema() AND indexname = 'jwt_signing_key_single_current'`,
-        orElse: () => sql<{ readonly sql: string | null }>`
-          SELECT sql FROM sqlite_master WHERE name = 'jwt_signing_key_single_current'`,
-      });
-      assert.strictEqual(rows.length, 1);
-      assert.include(rows[0]?.sql ?? "", "UNIQUE");
-    }).pipe(Effect.provide(Base)),
   );
 
   it.effect("a failing mint after markRotated rolls back and the previous key stays current", () =>

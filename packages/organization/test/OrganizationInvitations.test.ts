@@ -4,15 +4,19 @@
 // and read.
 import { Auth, AuditLog, HookPoint, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
-import { TestAuth } from "@awthaq/test";
+import { Rendezvous, TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as InvitationRecords from "../src/InvitationRecords.ts";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationActor from "../src/OrganizationActor.ts";
@@ -22,6 +26,7 @@ import * as OrganizationHooks from "../src/OrganizationHooks.ts";
 import * as OrganizationInvitations from "../src/OrganizationInvitations.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
 import { TestSql } from "@awthaq/test";
+import { grant } from "./support.ts";
 
 const teamsOn = {
   enabled: true,
@@ -633,3 +638,117 @@ describe("OrganizationInvitations over SQL", () => {
     }).pipe(Effect.provide(SqlSystemLive)),
   );
 });
+
+// Plan 25 ticket 12 (BEH-EA-286, BEH-EA-287): invitation transitions are a compare-and-set from `pending`, and the
+// per-inviter quota is decided with the insert. On memory, SQLite and (under `pnpm test:pg`) Postgres.
+for (const mode of TestAuth.recordModes) {
+  describe(`OrganizationInvitations under concurrency (${mode} records)`, () => {
+    const raceLayer = (
+      config: Partial<Organization.OrganizationConfigShape>,
+      taps: Layer.Layer<
+        never,
+        never,
+        Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
+      >,
+    ) => {
+      const options = {
+        services: Layer.mergeAll(
+          Organization.config({ teams: teamsOn, ...config }),
+          Mailer.layerMemory,
+        ),
+        taps,
+      };
+      return mode === "sql"
+        ? TestAuth.layer(built, {
+            ...options,
+            records: "sql",
+            suite: "organization_invitations_race",
+          })
+        : TestAuth.layer(built, options);
+    };
+
+    // A cancel that has passed its pending check waits at its veto while the acceptance completes.
+    const acceptDone = Deferred.makeUnsafe<void>();
+    it.effect(
+      "a cancel that loses to an acceptance is InvitationNotPending and leaves it accepted",
+      () =>
+        Effect.gen(function* () {
+          const { org, invitations, invite } = yield* arrange;
+          const members = yield* MembershipRecords.MembershipRecords;
+          const invitee = yield* verifiedUser("invitee@example.com");
+          const invitation = yield* invite("invitee@example.com");
+          const cancelling = yield* Effect.forkChild(
+            Effect.exit(invitations.cancel(application, { invitationId: invitation.id })),
+          );
+          yield* invitations.accept({
+            invitationId: invitation.id,
+            token: yield* mailedToken(invitation.id),
+            userId: invitee.id,
+          });
+          yield* Deferred.succeed(acceptDone, undefined);
+          const cancelled = yield* Fiber.join(cancelling);
+          assert.isTrue(Exit.isFailure(cancelled));
+          assert.strictEqual(
+            Option.match(Exit.findErrorOption(cancelled), {
+              onNone: () => "defect",
+              onSome: (e) => e._tag,
+            }),
+            "InvitationNotPending",
+          );
+          assert.strictEqual(
+            Option.getOrThrow(yield* invitations.find(invitation.id)).status,
+            "accepted",
+          );
+          assert.isTrue(Option.isSome(yield* members.findByUserAndOrg(invitee.id, org.id)));
+        }).pipe(
+          Effect.provide(
+            raceLayer(
+              {},
+              OrganizationHooks.BeforeCancelInvitation.tap((input) =>
+                Effect.as(Deferred.await(acceptDone), input),
+              ),
+            ),
+          ),
+        ),
+    );
+
+    it.effect("8 invitations racing at invitationLimit - 1 store exactly one", () =>
+      Effect.gen(function* () {
+        const { org, invite } = yield* arrange;
+        const records = yield* InvitationRecords.InvitationRecords;
+        // One pending invitation, arranged through the store so it does not meet the barrier.
+        yield* records.create({
+          email: "first@example.com",
+          inviterId: owner,
+          organizationId: org.id,
+          role: ["member"],
+          expiresAt: DateTime.makeUnsafe(Date.now() + 86_400_000),
+          tokenHash: "arranged",
+        });
+        const outcomes = yield* Effect.all(
+          Array.from({ length: 8 }, (_, n) =>
+            Effect.map(Effect.exit(invite(`racer-${n}@example.com`)), (exit) =>
+              Exit.isSuccess(exit)
+                ? "ok"
+                : Option.match(Exit.findErrorOption(exit), {
+                    onNone: () => "defect",
+                    onSome: (e) => e._tag,
+                  }),
+            ),
+          ),
+          { concurrency: "unbounded" },
+        );
+        assert.strictEqual(outcomes.filter((tag) => tag === "ok").length, 1);
+        assert.isTrue(outcomes.every((tag) => tag === "ok" || tag === "InvitationLimitReached"));
+        assert.strictEqual(yield* records.countPendingByInviter(grant, owner), 2);
+      }).pipe(
+        Effect.provide(
+          raceLayer(
+            { invitationLimit: 2 },
+            OrganizationHooks.BeforeCreateInvitation.tap(Rendezvous.held(8)),
+          ),
+        ),
+      ),
+    );
+  });
+}

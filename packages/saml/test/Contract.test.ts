@@ -6,10 +6,17 @@ import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Saml from "../src/Saml.ts";
 import * as Sso from "../src/Sso.ts";
+import { samlRecords } from "./contract/SamlRecords.ts";
 
 const framework = TestAuth.throwingFramework(describe, it);
 
-TestAuth.runPluginContractTests(framework, () => Saml.Saml, { options: [{}] });
+TestAuth.runPluginContractTests(framework, () => Saml.Saml, {
+  options: [{}],
+  records: {
+    suite: "saml_records_contract",
+    suites: { "awthaq/saml/records/SamlRecords": samlRecords },
+  },
+});
 TestAuth.runPluginContractTests(framework, () => Sso.Sso, { options: [{}] });
 
 // ADR-EA-045 (BEH-EA-343): the session lifecycle this plugin declares, pinned where its contract lives.

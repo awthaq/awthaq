@@ -31,7 +31,6 @@ import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -331,19 +330,31 @@ export const layerMemory = Layer.effect(
     const random = yield* SecureRandom.SecureRandom;
     const chain = yield* AuditChain.AuditChain;
 
-    /** Reads the tail and appends as one step, so two writers cannot chain off the same predecessor. */
+    /**
+     * ALF-005 (plan 25 F7): one critical section. Every write of a row together with its ledger link, and
+     * `verifyChain`'s read of both, holds the one permit, uninterruptibly: no reader sees a row without its
+     * link, two writers never chain off the same predecessor, and an interrupted writer leaves both or neither.
+     */
+    const exclusively = <A, E>(effect: Effect.Effect<A, E>) =>
+      Effect.uninterruptible(appendLock.withPermit(effect));
+
+    /** Appends one link after the tail. Only called inside `exclusively`. */
     const append = (kind: LedgerEntry["kind"], episodeId: string, payload: string) =>
-      appendLock.withPermit(
-        Effect.gen(function* () {
-          const entries = yield* Ref.get(ledger);
-          const prevHash = entries.at(-1)?.rowHash ?? AuditChain.GENESIS_HASH;
-          const rowHash = yield* chain.link(prevHash, payload);
-          yield* Ref.set(ledger, [
-            ...entries,
-            { seq: entries.length + 1, kind, episodeId, prevHash, payload, rowHash },
-          ]);
-        }),
-      );
+      Effect.gen(function* () {
+        const entries = yield* Ref.get(ledger);
+        const prevHash = entries.at(-1)?.rowHash ?? AuditChain.GENESIS_HASH;
+        const rowHash = yield* chain.link(prevHash, payload);
+        yield* Ref.set(ledger, [
+          ...entries,
+          { seq: entries.length + 1, kind, episodeId, prevHash, payload, rowHash },
+        ]);
+      });
+
+    const appendEnded = (record: ImpersonationRecord) =>
+      Option.match(endedPayload(record), {
+        onNone: () => Effect.void,
+        onSome: (payload) => append("ended", record.id, payload),
+      });
 
     const create: ImpersonationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
       const id = yield* random.uuidV7();
@@ -363,8 +374,12 @@ export const layerMemory = Layer.effect(
         endedBy: Option.none(),
         tenantId,
       };
-      yield* Ref.update(state, (s) => HashMap.set(s, id, record));
-      yield* append("started", record.id, startedPayload(record));
+      yield* exclusively(
+        Effect.andThen(
+          Ref.update(state, (s) => HashMap.set(s, id, record)),
+          append("started", record.id, startedPayload(record)),
+        ),
+      );
       return record;
     });
 
@@ -385,71 +400,49 @@ export const layerMemory = Layer.effect(
       Effect.gen(function* () {
         const now = yield* DateTime.now;
         const seen = yield* TenantScoped.visibility(grant);
-        const outcome = yield* Ref.modify(
-          state,
-          (
-            s,
-          ): readonly [
-            Result.Result<ImpersonationRecord, ImpersonationRecordNotFound>,
-            RecordsState,
-          ] => {
-            const existing = Array.from(HashMap.values(s)).find(
+        return yield* exclusively(
+          Effect.gen(function* () {
+            const existing = Array.from(HashMap.values(yield* Ref.get(state))).find(
               (row) =>
                 row.sessionId === sessionId &&
                 TenantScoped.matches(Option.getOrNull(row.tenantId), seen),
             );
             if (existing === undefined || Option.isSome(existing.endedAt)) {
-              return [Result.fail(notFound(sessionId)), s] as const;
+              return yield* Effect.fail(notFound(sessionId));
             }
-            const updated: ImpersonationRecord = {
+            const ended: ImpersonationRecord = {
               ...existing,
               endedAt: Option.some(now),
               endedBy: Option.some(endedBy),
             };
-            return [Result.succeed(updated), HashMap.set(s, existing.id, updated)] as const;
-          },
+            yield* Ref.update(state, (s) => HashMap.set(s, existing.id, ended));
+            yield* appendEnded(ended);
+            return ended;
+          }),
         );
-        const ended = yield* Effect.fromResult(outcome);
-        yield* Option.match(endedPayload(ended), {
-          onNone: () => Effect.void,
-          onSome: (payload) => append("ended", ended.id, payload),
-        });
-        return ended;
       });
 
     const closeExpired: ImpersonationRecordsShape["closeExpired"] = (_grant, now) =>
-      Effect.gen(function* () {
-        const closed = closeOrder(yield* closeExpiredInState(now));
-        for (const episode of closed) {
-          yield* Option.match(endedPayload(episode), {
-            onNone: () => Effect.void,
-            onSome: (payload) => append("ended", episode.id, payload),
-          });
-        }
-        return closed;
-      });
-
-    const closeExpiredInState = (now: DateTime.Utc) =>
-      Ref.modify(state, (s) => {
-        const closed: Array<ImpersonationRecord> = [];
-        let next = s;
-        for (const row of HashMap.values(s)) {
-          if (
-            Option.isNone(row.endedAt) &&
-            Option.isSome(row.expiresAt) &&
-            DateTime.toEpochMillis(row.expiresAt.value) <= DateTime.toEpochMillis(now)
-          ) {
-            const updated: ImpersonationRecord = {
-              ...row,
-              endedAt: row.expiresAt,
-              endedBy: Option.some("expired"),
-            };
-            closed.push(updated);
-            next = HashMap.set(next, row.id, updated);
-          }
-        }
-        return [closed, next] as const;
-      });
+      exclusively(
+        Effect.gen(function* () {
+          const s = yield* Ref.get(state);
+          const closed = closeOrder(
+            Array.from(HashMap.values(s)).flatMap((row) =>
+              Option.isNone(row.endedAt) &&
+              Option.isSome(row.expiresAt) &&
+              DateTime.toEpochMillis(row.expiresAt.value) <= DateTime.toEpochMillis(now)
+                ? [{ ...row, endedAt: row.expiresAt, endedBy: Option.some<EndedBy>("expired") }]
+                : [],
+            ),
+          );
+          yield* Ref.set(
+            state,
+            closed.reduce((next, row) => HashMap.set(next, row.id, row), s),
+          );
+          for (const episode of closed) yield* appendEnded(episode);
+          return closed;
+        }),
+      );
 
     const list: ImpersonationRecordsShape["list"] = (input, grant) =>
       Effect.gen(function* () {
@@ -468,8 +461,12 @@ export const layerMemory = Layer.effect(
 
     const verifyChain: ImpersonationRecordsShape["verifyChain"] = (_grant) =>
       Effect.gen(function* () {
-        const entries = yield* Ref.get(ledger);
-        const rows = Array.from(HashMap.values(yield* Ref.get(state)));
+        const { entries, rows } = yield* exclusively(
+          Effect.all({
+            entries: Ref.get(ledger),
+            rows: Effect.map(Ref.get(state), (s) => Array.from(HashMap.values(s))),
+          }),
+        );
         return yield* verifyLedger(chain, entries, rows);
       });
 
@@ -778,12 +775,19 @@ export const layerSql = Layer.effect(
       );
     };
 
+    // Plan 25 F7: both reads under the chain lock, in one transaction, so a writer committing between them
+    // cannot show a row without its link (or a link without its row).
     const verifyChain: ImpersonationRecordsShape["verifyChain"] = (grant) =>
-      Effect.gen(function* () {
-        const entries = yield* ledgerAll(undefined);
-        const rows = (yield* rowsAll(undefined)).map(toRecord);
-        return yield* verifyLedger(chain, entries, rows);
-      }).pipe(liftFor(grant), unavailable("verifyChain"));
+      inTransaction(
+        Effect.all({
+          entries: ledgerAll(undefined),
+          rows: Effect.map(rowsAll(undefined), (rows) => rows.map(toRecord)),
+        }),
+      ).pipe(
+        Effect.flatMap(({ entries, rows }) => verifyLedger(chain, entries, rows)),
+        liftFor(grant),
+        unavailable("verifyChain"),
+      );
 
     return { create, findBySessionId, endEpisode, closeExpired, list, verifyChain };
   }),

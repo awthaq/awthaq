@@ -2,10 +2,11 @@
 // The feature gate, the reserved names (RZS-005), the `Bound` (RRM-001), the quota, the veto and the
 // observe point are proved here; `Organization.test.ts` keeps who may manage roles.
 import { Auth, HookPoint, Users } from "@awthaq/core";
-import { TestAuth } from "@awthaq/test";
+import { Rendezvous, TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationActor from "../src/OrganizationActor.ts";
 import * as OrganizationAuthority from "../src/OrganizationAuthority.ts";
@@ -220,3 +221,45 @@ describe("OrganizationRoles", () => {
     );
   });
 });
+
+// Plan 25 ticket 13: `maximumRolesPerOrganization` is decided by `OrgRoleRecords.create`'s `within`, with the
+// insert. Eight creations held at the veto until all have passed the early check: one is stored. On memory,
+// SQLite and (under `pnpm test:pg`) Postgres.
+for (const mode of TestAuth.recordModes) {
+  describe(`OrganizationRoles maximumRolesPerOrganization under concurrency (${mode} records)`, () => {
+    const options = {
+      services: Organization.config({
+        dynamicAccessControl: { enabled: true, maximumRolesPerOrganization: 1 },
+      }),
+      taps: OrganizationHooks.BeforeCreateRole.tap(Rendezvous.held(8)),
+    };
+    const raceLayer = () =>
+      mode === "sql"
+        ? TestAuth.layer(built, { ...options, records: "sql", suite: "organization_roles_race" })
+        : TestAuth.layer(built, options);
+
+    it.effect("8 creations racing at the limit - 1 store exactly one", () =>
+      Effect.gen(function* () {
+        const { org, roles } = yield* arrange;
+        const outcomes = yield* Effect.all(
+          Array.from({ length: 8 }, (_, n) =>
+            Effect.map(
+              Effect.result(
+                roles.create(application, {
+                  organizationId: org.id,
+                  role: `custom-${n}`,
+                  permission: {},
+                  bound: unbounded,
+                }),
+              ),
+              (result) => (Result.isFailure(result) ? result.failure._tag : "ok"),
+            ),
+          ),
+          { concurrency: "unbounded" },
+        );
+        assert.strictEqual(outcomes.filter((tag) => tag === "ok").length, 1);
+        assert.isTrue(outcomes.every((tag) => tag === "ok" || tag === "RoleLimitReached"));
+      }).pipe(Effect.provide(raceLayer())),
+    );
+  });
+}

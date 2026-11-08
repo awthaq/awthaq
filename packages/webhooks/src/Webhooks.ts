@@ -602,6 +602,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
       const createEndpoint: WebhooksShape["createEndpoint"] = Effect.fnUntraced(
         function* (caller, input) {
           const settings = yield* authorize(caller, "createEndpoint");
+          // A pre-check, so a full tenant is told before the DNS lookup; `createEndpoint`'s `within` decides (plan 25).
           const current = yield* records.listEndpoints;
           if (current.length >= settings.maxEndpoints) {
             return yield* Effect.fail(
@@ -615,18 +616,27 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           const secret = yield* WebhookSignature.generateSecret.pipe(
             Effect.provideService(SecureRandom.SecureRandom, random),
           );
-          const record = yield* records.createEndpoint({
-            id,
-            url: input.url,
-            description: input.description?.trim(),
-            eventTags: input.eventTags,
-            secret,
-            createdBy: caller.ref.id,
-            headers:
-              input.headers === undefined || Object.keys(input.headers).length === 0
-                ? undefined
-                : customHeaders(input.headers),
-          });
+          const record = yield* records
+            .createEndpoint(
+              {
+                id,
+                url: input.url,
+                description: input.description?.trim(),
+                eventTags: input.eventTags,
+                secret,
+                createdBy: caller.ref.id,
+                headers:
+                  input.headers === undefined || Object.keys(input.headers).length === 0
+                    ? undefined
+                    : customHeaders(input.headers),
+              },
+              { within: settings.maxEndpoints },
+            )
+            .pipe(
+              Effect.catchTag("WebhookRecords/LimitReached", ({ limit }) =>
+                Effect.fail(new WebhooksApi.WebhookEndpointLimitReached({ limit })),
+              ),
+            );
           yield* Effect.logInfo("awthaq/webhooks: endpoint created", { endpointId: id });
           yield* events.publish({
             _tag: "auth.webhooks.endpointCreated",
@@ -833,13 +843,10 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             adminUserId: adminId(caller),
             endpointId,
           });
+          // An endpoint deleted concurrently takes its deliveries with it (plan 25 F9): that is a plain not-found.
           const queued = yield* records.findDelivery(deliveryId);
-          if (Option.isNone(queued)) {
-            return yield* Defects.invariantViolation(
-              "RowVanished",
-              "awthaq: the test delivery vanished right after it was queued",
-            );
-          }
+          if (Option.isNone(queued))
+            return yield* Effect.fail(new WebhooksApi.WebhookEndpointNotFound());
           return toDeliveryDto(queued.value);
         },
       );

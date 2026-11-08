@@ -4,10 +4,19 @@ import { TestAuth } from "@awthaq/test";
 import { describe, it } from "@effect/vitest";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
+import { revocationStore } from "./contract/RevocationStore.ts";
+import { signingKeyRecords } from "./contract/SigningKeyRecords.ts";
 
 const framework = TestAuth.throwingFramework(describe, it);
 
 TestAuth.runPluginContractTests(framework, () => Jwt.Jwt, {
   options: [{}],
+  records: {
+    suite: "jwt_records_contract",
+    suites: {
+      "awthaq/jwt/records/SigningKeyRecords": signingKeyRecords,
+      "awthaq/jwt/records/RevocationStore": revocationStore,
+    },
+  },
   build: { services: JwtConfig.config({ issuer: "https://issuer.test" }) },
 });

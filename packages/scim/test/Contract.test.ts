@@ -4,10 +4,15 @@ import { TestAuth } from "@awthaq/test";
 import { describe, it } from "@effect/vitest";
 import * as Layer from "effect/Layer";
 import * as Scim from "../src/Scim.ts";
+import { scimRecords } from "./contract/ScimRecords.ts";
 
 const framework = TestAuth.throwingFramework(describe, it);
 
 TestAuth.runPluginContractTests(framework, () => Scim.Scim, {
   options: [{}],
+  records: {
+    suite: "scim_records_contract",
+    suites: { "awthaq/scim/records/ScimRecords": scimRecords },
+  },
   build: { services: Layer.empty },
 });

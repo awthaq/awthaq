@@ -4,10 +4,15 @@ import { TestAuth } from "@awthaq/test";
 import { HostResolver } from "@awthaq/ports";
 import { describe, it } from "@effect/vitest";
 import * as Webhooks from "../src/Webhooks.ts";
+import { webhookRecords } from "./contract/WebhookRecords.ts";
 
 const framework = TestAuth.throwingFramework(describe, it);
 
 TestAuth.runPluginContractTests(framework, () => Webhooks.Webhooks, {
   options: [{}],
+  records: {
+    suite: "webhooks_records_contract",
+    suites: { "awthaq/webhooks/records/WebhookRecords": webhookRecords },
+  },
   build: { services: HostResolver.layerStatic({}) },
 });

@@ -440,8 +440,8 @@ export const PasskeyHandlers = Layer.mergeAll(
 
 /**
  * BAM-002 (.issues/high): first migrations this plugin declares — ported
- * verbatim from `PasskeyCredentials.test.ts`'s/`ChallengeStore.test.ts`'s
- * own inline `CREATE TABLE` (each table's canonical, already-working
+ * verbatim from the inline `CREATE TABLE` the credential and challenge store
+ * tests then carried (each table's canonical, already-working
  * shape), dialect-branched via `sql.onDialectOrElse` like `@awthaq/sql`'s
  * own `CoreMigrations.ts`. `backedUp` mirrors `users.emailVerified`'s own
  * `BOOLEAN`(pg)/`INTEGER`(sqlite) split — `PasskeyCredentials.ts`'s own

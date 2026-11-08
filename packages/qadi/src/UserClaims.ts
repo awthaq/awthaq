@@ -23,7 +23,7 @@
 // Firebase import mapping: `role`-shaped claims -> `Roles.assign`; every other custom claim ->
 // `UserClaims.merge`/`set`. See `packages/qadi/README.md`.
 
-import { SqlTransaction } from "@awthaq/ports";
+import { SqlStore } from "@awthaq/sql";
 import {
   AuthEvents,
   AuthPlugin,
@@ -229,8 +229,14 @@ export const layerSql = Layer.effect(
         Errors.orStoreUnavailable("UserClaims.read"),
       );
 
+    // Plan 24 C7 (plan 25 ticket 24): the read and the write under the user's lock. A transaction alone
+    // is not enough on Postgres: under READ COMMITTED two merges each read the same document and the
+    // second upsert drops the first one's key (and both publish `claimsUpdated` for a change one lost).
     const modify: UserClaimsRecordsShape["modify"] = (userId, change) =>
-      SqlTransaction.transactional(sql)(
+      SqlStore.atomically(
+        sql,
+        `qadi_claims:user:${userId}`,
+      )(
         Effect.gen(function* () {
           const before = yield* read(userId);
           const after = change(before);

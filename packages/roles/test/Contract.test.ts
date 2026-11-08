@@ -5,11 +5,16 @@ import { describe, it } from "@effect/vitest";
 import * as Layer from "effect/Layer";
 import * as Roles from "../src/Roles.ts";
 import * as RolesAdmin from "../src/RolesAdmin.ts";
+import { roleAssignments } from "./contract/RoleAssignments.ts";
 
 const framework = TestAuth.throwingFramework(describe, it);
 
 TestAuth.runPluginContractTests(framework, () => Roles.Roles, {
   options: [{}],
+  records: {
+    suite: "roles_records_contract",
+    suites: { "awthaq/roles/records/RoleAssignments": roleAssignments },
+  },
   build: { services: Layer.empty },
 });
 TestAuth.runPluginContractTests(framework, () => RolesAdmin.RolesAdmin, { options: [{}] });

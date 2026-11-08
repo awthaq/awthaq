@@ -258,117 +258,85 @@ export const layerSql = Layer.effect(
         sql`SELECT * FROM organization_active_context WHERE "sessionId" = ${sessionId}`,
     });
 
-    const insert = SqlSchema.findOne({
-      Request: Schema.Struct({
-        sessionId: Schema.String,
-        userId: Schema.String,
-        activeOrganizationId: Schema.NullOr(Schema.String),
-        activeTeamId: Schema.NullOr(Schema.String),
-        updatedAt: wire.dateTime,
-      }),
+    const Upsert = Schema.Struct({
+      sessionId: Schema.String,
+      userId: Schema.String,
+      activeOrganizationId: Schema.NullOr(Schema.String),
+      activeTeamId: Schema.NullOr(Schema.String),
+      updatedAt: wire.dateTime,
+    });
+
+    // Plan 24 C5 (plan 25): one upsert per write. A first write for a new session cannot race another into a
+    // primary-key violation, and nothing is read back with `getOrThrow`.
+    const upsertOrganization = SqlSchema.findOne({
+      Request: Upsert,
       Result: ActiveContextRow,
       execute: (r) => sql`
           INSERT INTO organization_active_context ("sessionId", "userId", "activeOrganizationId", "activeTeamId", "updatedAt")
           VALUES (${r.sessionId}, ${r.userId}, ${r.activeOrganizationId}, ${r.activeTeamId}, ${r.updatedAt})
+          ON CONFLICT ("sessionId") DO UPDATE SET "activeOrganizationId" = excluded."activeOrganizationId",
+            "userId" = excluded."userId", "updatedAt" = excluded."updatedAt"
           RETURNING *
         `,
     });
 
-    const updateOrganizationQuery = SqlSchema.findOneOption({
-      Request: Schema.Struct({
-        sessionId: Schema.String,
-        userId: Schema.String,
-        activeOrganizationId: Schema.NullOr(Schema.String),
-        updatedAt: wire.dateTime,
-      }),
+    const upsertTeam = SqlSchema.findOne({
+      Request: Upsert,
       Result: ActiveContextRow,
       execute: (r) => sql`
-          UPDATE organization_active_context
-          SET "activeOrganizationId" = ${r.activeOrganizationId}, "userId" = ${r.userId}, "updatedAt" = ${r.updatedAt}
-          WHERE "sessionId" = ${r.sessionId}
-          RETURNING *
-        `,
-    });
-
-    const updateTeamQuery = SqlSchema.findOneOption({
-      Request: Schema.Struct({
-        sessionId: Schema.String,
-        userId: Schema.String,
-        activeTeamId: Schema.NullOr(Schema.String),
-        updatedAt: wire.dateTime,
-      }),
-      Result: ActiveContextRow,
-      execute: (r) => sql`
-          UPDATE organization_active_context
-          SET "activeTeamId" = ${r.activeTeamId}, "userId" = ${r.userId}, "updatedAt" = ${r.updatedAt}
-          WHERE "sessionId" = ${r.sessionId}
+          INSERT INTO organization_active_context ("sessionId", "userId", "activeOrganizationId", "activeTeamId", "updatedAt")
+          VALUES (${r.sessionId}, ${r.userId}, ${r.activeOrganizationId}, ${r.activeTeamId}, ${r.updatedAt})
+          ON CONFLICT ("sessionId") DO UPDATE SET "activeTeamId" = excluded."activeTeamId",
+            "userId" = excluded."userId", "updatedAt" = excluded."updatedAt"
           RETURNING *
         `,
     });
 
     const writeOrganization = Effect.fnUntraced(function* (
+      operation: string,
       sessionId: string,
       userId: string,
       activeOrganizationId: string | null,
     ) {
       const now = yield* DateTime.now;
-      const existing = yield* findBySessionIdQuery(sessionId).pipe(
-        unavailable("writeOrganization"),
-      );
-      if (Option.isNone(existing)) {
-        const row = yield* insert({
-          sessionId,
-          userId,
-          activeOrganizationId,
-          activeTeamId: null,
-          updatedAt: now,
-        }).pipe(unavailable("writeOrganization"));
-        return toRecord(row);
-      }
-      const row = yield* updateOrganizationQuery({
+      const row = yield* upsertOrganization({
         sessionId,
         userId,
         activeOrganizationId,
+        activeTeamId: null,
         updatedAt: now,
-      }).pipe(unavailable("writeOrganization"), Effect.map(Option.getOrThrow));
+      }).pipe(unavailable(operation));
       return toRecord(row);
     });
 
     const writeTeam = Effect.fnUntraced(function* (
+      operation: string,
       sessionId: string,
       userId: string,
       activeTeamId: string | null,
     ) {
       const now = yield* DateTime.now;
-      const existing = yield* findBySessionIdQuery(sessionId).pipe(unavailable("writeTeam"));
-      if (Option.isNone(existing)) {
-        const row = yield* insert({
-          sessionId,
-          userId,
-          activeOrganizationId: null,
-          activeTeamId,
-          updatedAt: now,
-        }).pipe(unavailable("writeTeam"));
-        return toRecord(row);
-      }
-      const row = yield* updateTeamQuery({ sessionId, userId, activeTeamId, updatedAt: now }).pipe(
-        unavailable("writeTeam"),
-        Effect.map(Option.getOrThrow),
-      );
+      const row = yield* upsertTeam({
+        sessionId,
+        userId,
+        activeOrganizationId: null,
+        activeTeamId,
+        updatedAt: now,
+      }).pipe(unavailable(operation));
       return toRecord(row);
     });
 
     const setOrganization: ActiveContextRecordsShape["setOrganization"] = (sessionId, membership) =>
-      writeOrganization(sessionId, membership.userId, membership.organizationId);
+      writeOrganization("setOrganization", sessionId, membership.userId, membership.organizationId);
 
     const unsetOrganization: ActiveContextRecordsShape["unsetOrganization"] = (sessionId, userId) =>
-      writeOrganization(sessionId, userId, null);
+      writeOrganization("unsetOrganization", sessionId, userId, null);
 
     const setTeam: ActiveContextRecordsShape["setTeam"] = (sessionId, membership) =>
-      writeTeam(sessionId, membership.userId, membership.teamId);
+      writeTeam("setTeam", sessionId, membership.userId, membership.teamId);
 
     const unsetTeam: ActiveContextRecordsShape["unsetTeam"] = (sessionId, userId) =>
-      writeTeam(sessionId, userId, null);
+      writeTeam("unsetTeam", sessionId, userId, null);
 
     const findBySessionId: ActiveContextRecordsShape["findBySessionId"] = (sessionId) =>
       findBySessionIdQuery(sessionId).pipe(

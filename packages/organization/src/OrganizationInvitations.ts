@@ -255,19 +255,27 @@ export class OrganizationInvitations extends Context.Service<
           ),
         );
 
-      /** Cancels a pending invitation and says so (D8): every cancellation is an event. */
+      /**
+       * Cancels a pending invitation and says so (D8): every cancellation is an event. Answers whether this call
+       * cancelled it: `false` when a concurrent accept, reject, cancel or expiry won (plan 25, BEH-EA-286), and
+       * then nothing is published. A vanished invitation is the same "nothing left to cancel".
+       */
       const cancelAndAnnounce = (actor: OrganizationActor.Actor, record: Invitation) =>
-        invitations.updateStatus(record.organizationId, record.id, "canceled").pipe(
-          Effect.catchTag("InvitationRecordNotFound", Effect.die),
-          Effect.andThen(
-            events.publish({
-              _tag: "auth.organization.invitationCanceled",
-              actorUserId: OrganizationActor.userIdOf(actor),
-              invitationId: record.id,
-              organizationId: record.organizationId,
-            }),
-          ),
-        );
+        invitations
+          .transition(record.organizationId, record.id, { from: "pending", to: "canceled" })
+          .pipe(
+            Effect.catchTag("InvitationRecordNotFound", () => Effect.succeed(false)),
+            Effect.tap((cancelled) =>
+              cancelled
+                ? events.publish({
+                    _tag: "auth.organization.invitationCanceled",
+                    actorUserId: OrganizationActor.userIdOf(actor),
+                    invitationId: record.id,
+                    organizationId: record.organizationId,
+                  })
+                : Effect.void,
+            ),
+          );
 
       // ---- reads ----------------------------------------------------------------------
 
@@ -320,11 +328,13 @@ export class OrganizationInvitations extends Context.Service<
           const orgConfig = yield* configNow;
           const organizationRecord = yield* directory.requireActive(organizationId);
 
+          // An early check, so the refusal comes before the veto; `create`'s `pendingWithin` is the authority.
           const pendingCount = yield* invitations.countPendingByInviter(
             inviterQuotaGrant,
             inviterId,
           );
-          if (pendingCount >= (yield* limitsOf(orgConfig, organizationId)).invitationLimit) {
+          const { invitationLimit } = yield* limitsOf(orgConfig, organizationId);
+          if (pendingCount >= invitationLimit) {
             return yield* new OrganizationErrors.InvitationLimitReached();
           }
 
@@ -431,15 +441,24 @@ export class OrganizationInvitations extends Context.Service<
           }
 
           const minted = yield* mintToken;
-          const record = yield* invitations.create({
-            email: vetoed.email,
-            inviterId,
-            organizationId,
-            teamId: input.teamId,
-            role: vetoed.role,
-            expiresAt,
-            tokenHash: minted.tokenHash,
-          });
+          const record = yield* invitations
+            .create(
+              {
+                email: vetoed.email,
+                inviterId,
+                organizationId,
+                teamId: input.teamId,
+                role: vetoed.role,
+                expiresAt,
+                tokenHash: minted.tokenHash,
+              },
+              { pendingWithin: { limit: invitationLimit, grant: inviterQuotaGrant } },
+            )
+            .pipe(
+              Effect.catchTag("InvitationRecords/LimitReached", () =>
+                Effect.fail(new OrganizationErrors.InvitationLimitReached()),
+              ),
+            );
           // The record exists from here on, so its creation is published before the mail attempt: a
           // delivery failure leaves a pending invitation, not a phantom one.
           yield* events.publish({
@@ -474,16 +493,18 @@ export class OrganizationInvitations extends Context.Service<
 
         const now = yield* DateTime.now;
         if (DateTime.isGreaterThan(now, record.expiresAt)) {
-          yield* invitations
-            .updateStatus(record.organizationId, invitationId, "expired")
-            .pipe(Effect.catchTag("InvitationRecordNotFound", Effect.die));
-          // D8: an invitation that lapsed is announced.
-          yield* events.publish({
-            _tag: "auth.organization.invitationExpired",
-            actorUserId: OrganizationActor.userIdOf(actor),
-            invitationId,
-            organizationId: record.organizationId,
-          });
+          const expired = yield* invitations
+            .transition(record.organizationId, invitationId, { from: "pending", to: "expired" })
+            .pipe(Effect.catchTag("InvitationRecordNotFound", () => Effect.succeed(false)));
+          // D8: an invitation that lapsed is announced, once (a concurrent expiry already said so).
+          if (expired) {
+            yield* events.publish({
+              _tag: "auth.organization.invitationExpired",
+              actorUserId: OrganizationActor.userIdOf(actor),
+              invitationId,
+              organizationId: record.organizationId,
+            });
+          }
           return yield* new OrganizationErrors.InvitationExpired();
         }
 
@@ -504,6 +525,7 @@ export class OrganizationInvitations extends Context.Service<
         }
 
         const limits = yield* limitsOf(orgConfig, record.organizationId);
+        // An early check (before the team's and the transaction): `create`'s `within` is the authority.
         const count = yield* members.countByOrganization(record.organizationId);
         if (count >= limits.membershipLimit) {
           return yield* new OrganizationErrors.MembershipLimitReached();
@@ -533,29 +555,51 @@ export class OrganizationInvitations extends Context.Service<
           .withTransaction(
             Effect.gen(function* () {
               const created = yield* members
-                .create({
-                  userId,
-                  organizationId: record.organizationId,
-                  role: record.role,
-                })
+                .create(
+                  {
+                    userId,
+                    organizationId: record.organizationId,
+                    role: record.role,
+                  },
+                  { within: limits.membershipLimit },
+                )
                 .pipe(
-                  Effect.catchTag("MembershipRecordAlreadyExists", () =>
-                    Effect.fail(new OrganizationErrors.AlreadyMember()),
-                  ),
+                  Effect.catchTags({
+                    MembershipRecordAlreadyExists: () =>
+                      Effect.fail(new OrganizationErrors.AlreadyMember()),
+                    "MembershipRecords/LimitReached": () =>
+                      Effect.fail(new OrganizationErrors.MembershipLimitReached()),
+                    // No `ownedWithin` was asked for.
+                    "MembershipRecords/OwnedLimitReached": Effect.die,
+                  }),
                 );
               return yield* Effect.gen(function* () {
-                yield* invitations
-                  .updateStatus(record.organizationId, invitationId, "accepted")
-                  .pipe(Effect.catchTag("InvitationRecordNotFound", Effect.die));
+                // Plan 25 (BEH-EA-286): a lost transition (a concurrent cancel, reject or accept won)
+                // fails the unit, so the membership rolls back with it.
+                const accepted = yield* invitations
+                  .transition(record.organizationId, invitationId, {
+                    from: "pending",
+                    to: "accepted",
+                  })
+                  .pipe(Effect.catchTag("InvitationRecordNotFound", () => Effect.succeed(false)));
+                if (!accepted) return yield* new OrganizationErrors.InvitationNotPending();
                 // OHS-003: the team half of accepting stays idempotent: a user who is already on
                 // the team is not double-counted.
                 const joined = Option.isSome(record.teamId)
-                  ? yield* teams.addTeamMember({ teamId: record.teamId.value, userId }).pipe(
-                      Effect.as(true),
-                      Effect.catchTag("TeamMembershipRecordAlreadyExists", () =>
-                        Effect.succeed(false),
-                      ),
-                    )
+                  ? yield* teams
+                      .addTeamMember(
+                        { teamId: record.teamId.value, userId },
+                        { within: limits.maximumMembersPerTeam },
+                      )
+                      .pipe(
+                        Effect.as(true),
+                        Effect.catchTags({
+                          TeamMembershipRecordAlreadyExists: () => Effect.succeed(false),
+                          // Plan 25: the team filled up since the early check; the unit rolls back.
+                          "TeamRecords/MemberLimitReached": () =>
+                            Effect.fail(new OrganizationErrors.TeamMemberLimitReached()),
+                        }),
+                      )
                   : false;
                 return { membership: created, joinedTeam: joined };
               }).pipe(
@@ -636,9 +680,11 @@ export class OrganizationInvitations extends Context.Service<
         if (!ownsEmail(user, record.email)) {
           return yield* new OrganizationErrors.InvitationEmailMismatch();
         }
-        yield* invitations
-          .updateStatus(record.organizationId, invitationId, "rejected")
-          .pipe(Effect.catchTag("InvitationRecordNotFound", Effect.die));
+        const rejected = yield* invitations
+          .transition(record.organizationId, invitationId, { from: "pending", to: "rejected" })
+          .pipe(Effect.catchTag("InvitationRecordNotFound", () => Effect.succeed(false)));
+        // Plan 25: a concurrent accept, cancel or expiry won.
+        if (!rejected) return yield* new OrganizationErrors.InvitationNotPending();
         yield* events.publish({
           _tag: "auth.organization.invitationRejected",
           actorUserId: OrganizationActor.userIdOf(actor),
@@ -659,7 +705,10 @@ export class OrganizationInvitations extends Context.Service<
           yield* HookPoint.aborted(OrganizationHooks.BeforeCancelInvitation)(
             beforeCancel.run({ actor, invitationId }),
           );
-          yield* cancelAndAnnounce(actor, record);
+          // Plan 25: a concurrent accept, reject or expiry won.
+          if (!(yield* cancelAndAnnounce(actor, record))) {
+            return yield* new OrganizationErrors.InvitationNotPending();
+          }
           yield* afterCancel.run({ actor, invitationId });
         },
       );

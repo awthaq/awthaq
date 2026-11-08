@@ -15,15 +15,16 @@
 //   verifications of one code cannot both succeed (RFC 6238 §5.2, THS-005).
 // - `two_factor_recovery_code`: one row per code, hashed (`codeHash` is a PHC string from the
 //   `PasswordHasher` port), `usedAt` NULL until spent. `replaceAll` swaps the whole set in one
-//   transaction and `markUsed` is a single compare-and-set, so regenerating never leaves a window
-//   with no valid set and a code cannot be spent twice (BCR-002).
+//   transaction under the user's `SqlStore.atomically` lock and `markUsed` is a single
+//   compare-and-set, so regenerating never leaves a window with no valid set, concurrent
+//   regenerations leave one set, and a code cannot be spent twice (BCR-002).
 //
 // No foreign keys (the schema has none — every table keyed by a user id has an erasure
 // contribution instead), so `deleteAllByUser` is what account erasure calls.
 
 import { Migrations, Users } from "@awthaq/core";
-import { Defects, type Encryption, PasswordHasher, SqlTransaction } from "@awthaq/ports";
-import { Models as SqlModels, SealedColumn, StoreFailure } from "@awthaq/sql";
+import { Defects, type Encryption, PasswordHasher } from "@awthaq/ports";
+import { Models as SqlModels, SealedColumn, SqlStore, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
@@ -491,6 +492,8 @@ export const layerRecoveryCodesSql: Layer.Layer<
     const CodeRow = makeCodeRow(wire);
     const unavailable = (operation: string) =>
       StoreFailure.orStoreUnavailable(`TwoFactorRecoveryCodes.${operation}`);
+    /** The `SqlStore.atomically` key every write of a user's whole set takes. */
+    const userLock = (userId: UserId) => `two_factor_recovery_code:user:${userId}`;
 
     const insertQuery = SqlSchema.void({
       Request: Schema.Struct({
@@ -548,8 +551,13 @@ export const layerRecoveryCodesSql: Layer.Layer<
             codeHash,
           });
         }
-        // BCR-002: delete-then-insert as one transaction, so a failure part-way keeps the old set.
-        yield* SqlTransaction.transactional(sql)(
+        // BCR-002: delete-then-insert as one transaction, so a failure part-way keeps the old set, under the
+        // user's lock: on Postgres a concurrent regeneration's DELETE cannot see this one's fresh rows, so
+        // without it two regenerations would leave both sets valid.
+        yield* SqlStore.atomically(
+          sql,
+          userLock(userId),
+        )(
           Effect.gen(function* () {
             yield* sql`DELETE FROM two_factor_recovery_code WHERE "userId" = ${userId}`;
             for (const row of rows) {
@@ -586,8 +594,12 @@ export const layerRecoveryCodesSql: Layer.Layer<
         unavailable("countUnused"),
       );
 
+    // Under the same lock as `replaceAll`, so an erasure and a regeneration are ordered, never interleaved.
     const deleteAllByUser: TwoFactorRecoveryCodesShape["deleteAllByUser"] = (userId) =>
-      sql`DELETE FROM two_factor_recovery_code WHERE "userId" = ${userId}`.pipe(
+      SqlStore.atomically(
+        sql,
+        userLock(userId),
+      )(sql`DELETE FROM two_factor_recovery_code WHERE "userId" = ${userId}`).pipe(
         unavailable("deleteAllByUser"),
         Effect.asVoid,
       );

@@ -6,6 +6,7 @@ import { Api } from "@awthaq/api";
 import { Accounts, Auth, Erasure, Persistence, Sessions, Users, Verification } from "@awthaq/core";
 import { Jwt, JwtConfig } from "@awthaq/jwt";
 import { TestAuth } from "@awthaq/test";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -57,6 +58,8 @@ export interface HarnessOptions {
   readonly rateLimiter?: "permissive" | "enforcing";
   /** ADR-EA-047: the address every request resolves to. */
   readonly clientAddress?: string;
+  /** A `SecureRandom` wrapped for the plugin (a domain race test holds a call where it mints). */
+  readonly random?: Layer.Layer<SecureRandom.SecureRandom, never, SecureRandom.SecureRandom>;
 }
 
 export const buildLayer = (options: HarnessOptions) => {
@@ -67,6 +70,7 @@ export const buildLayer = (options: HarnessOptions) => {
       ProbeHandlers,
       ApiKey.config(options.config ?? {}),
       JwtConfig.config({ issuer: "https://issuer.test", audience: "https://api.test" }),
+      options.random ?? Layer.empty,
     ),
   };
   return options.store === "sql"

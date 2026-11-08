@@ -65,6 +65,13 @@ export class PasskeyCredentialAlreadyExists extends Data.TaggedError(
   readonly message: string;
 }> {}
 
+/** What `recordUsage` decided: the assertion's counter advanced the stored one, or it did not (CB-004). */
+export type UsageVerdict = "advanced" | "regressed";
+
+/** BEH-EA-131: a counter advances when it is above the stored one, or when both are 0 (no counter at all). */
+const advances = (stored: number, presented: number) =>
+  presented > stored || (presented === 0 && stored === 0);
+
 export interface PasskeyCredentialsShape {
   readonly create: (input: {
     readonly id: string;
@@ -88,16 +95,17 @@ export interface PasskeyCredentialsShape {
     userId: UserId,
   ) => Effect.Effect<ReadonlyArray<PasskeyCredentialRecord>, StoreFailure.StoreUnavailable>;
   /**
-   * BEH-EA-131: updates the counter/backup-state/last-used timestamp after a
-   * successful authentication. The stored counter only ever moves forward
-   * (CB-004): a regressed assertion counter never lowers it, so a clone
-   * replaying old values keeps tripping the anomaly check.
+   * BEH-EA-131/CB-004 (plan 25 F8): the counter verdict, decided at the write. `"advanced"` when
+   * `counter` is above the stored one, or both are 0 (an authenticator that never counts): the counter,
+   * backup state and last-used time are stored in that same step. `"regressed"` otherwise, and nothing
+   * is written, so the stored counter never moves backwards and of any number of concurrent assertions
+   * carrying one counter exactly one advances. `NotFound` when the credential is gone.
    */
   readonly recordUsage: (
     id: string,
     counter: number,
     backedUp: boolean,
-  ) => Effect.Effect<void, PasskeyCredentialNotFound | StoreFailure.StoreUnavailable>;
+  ) => Effect.Effect<UsageVerdict, PasskeyCredentialNotFound | StoreFailure.StoreUnavailable>;
   /** Enumeration-safe by construction: fails identically for an unknown id and for one belonging to another user. */
   readonly rename: (
     id: string,
@@ -172,25 +180,35 @@ export const layerMemory: Layer.Layer<PasskeyCredentials> = Layer.effect(
     const notFound = (): PasskeyCredentialNotFound =>
       new PasskeyCredentialNotFound({ message: "awthaq: no such passkey credential" });
 
-    const recordUsage: PasskeyCredentialsShape["recordUsage"] = (id, counter, backedUp) =>
-      Effect.gen(function* () {
+    const recordUsage: PasskeyCredentialsShape["recordUsage"] = Effect.fnUntraced(
+      function* (id, counter, backedUp) {
         const now = yield* DateTime.now;
+        // Plan 25 F8: compare and set in one step; a concurrent equal counter sees this one's write.
         const outcome = yield* Ref.modify(
           state,
-          (s): readonly [Result.Result<void, PasskeyCredentialNotFound>, CredentialsState] => {
+          (
+            s,
+          ): readonly [
+            Result.Result<UsageVerdict, PasskeyCredentialNotFound>,
+            CredentialsState,
+          ] => {
             const existing = HashMap.get(s, id);
-            if (Option.isNone(existing)) return [Result.fail(notFound()), s] as const;
+            if (Option.isNone(existing)) return [Result.fail(notFound()), s];
+            if (!advances(existing.value.counter, counter)) {
+              return [Result.succeed("regressed"), s];
+            }
             const updated: PasskeyCredentialRecord = {
               ...existing.value,
-              counter: Math.max(existing.value.counter, counter),
+              counter,
               backedUp,
               lastUsedAt: now,
             };
-            return [Result.succeed(undefined), HashMap.set(s, id, updated)] as const;
+            return [Result.succeed("advanced"), HashMap.set(s, id, updated)];
           },
         );
         return yield* Effect.fromResult(outcome);
-      });
+      },
+    );
 
     const flagCounterAnomaly: PasskeyCredentialsShape["flagCounterAnomaly"] = (id) =>
       Effect.gen(function* () {
@@ -363,21 +381,31 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
       execute: (userId) => sql`SELECT * FROM passkey_credential WHERE "userId" = ${userId}`,
     });
 
-    const recordUsageQuery = SqlSchema.findOneOption({
+    /**
+     * Plan 25 F8: the verdict is the statement's own condition, so two concurrent assertions with one
+     * counter cannot both advance it. `counter = 0 AND counter = $n` is `$n = 0` with the parameter
+     * compared against the column (on Postgres a bare `$n = 0` would type it int4 and refuse a uint32).
+     */
+    const advanceQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         id: Schema.String,
         counter: wire.int64,
         backedUp: wire.boolean,
         lastUsedAt: wire.dateTime,
       }),
-      Result: PasskeyCredentialRow,
+      Result: Schema.Struct({ id: Schema.String }),
       execute: (r) => sql`
         UPDATE passkey_credential
-        SET counter = CASE WHEN ${r.counter} > counter THEN ${r.counter} ELSE counter END,
-            "backedUp" = ${r.backedUp}, "lastUsedAt" = ${r.lastUsedAt}
-        WHERE id = ${r.id}
-        RETURNING *
+        SET counter = ${r.counter}, "backedUp" = ${r.backedUp}, "lastUsedAt" = ${r.lastUsedAt}
+        WHERE id = ${r.id} AND (counter < ${r.counter} OR (counter = 0 AND counter = ${r.counter}))
+        RETURNING id
       `,
+    });
+
+    const existsQuery = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (id) => sql`SELECT id FROM passkey_credential WHERE id = ${id}`,
     });
 
     const flagCounterAnomalyQuery = SqlSchema.findOneOption({
@@ -448,14 +476,19 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
         unavailable("listByUser"),
       );
 
-    const recordUsage: PasskeyCredentialsShape["recordUsage"] = (id, counter, backedUp) =>
-      Effect.gen(function* () {
+    const recordUsage: PasskeyCredentialsShape["recordUsage"] = Effect.fnUntraced(
+      function* (id, counter, backedUp) {
         const now = yield* DateTime.now;
-        const updated = yield* recordUsageQuery({ id, counter, backedUp, lastUsedAt: now }).pipe(
+        const advanced = yield* advanceQuery({ id, counter, backedUp, lastUsedAt: now }).pipe(
           unavailable("recordUsage"),
         );
-        if (Option.isNone(updated)) return yield* Effect.fail(notFound());
-      });
+        if (Option.isSome(advanced)) return "advanced";
+        // No row moved: the counter did not advance, or the credential is gone.
+        const present = yield* existsQuery(id).pipe(unavailable("recordUsage"));
+        if (Option.isNone(present)) return yield* Effect.fail(notFound());
+        return "regressed";
+      },
+    );
 
     const flagCounterAnomaly: PasskeyCredentialsShape["flagCounterAnomaly"] = (id) =>
       Effect.gen(function* () {

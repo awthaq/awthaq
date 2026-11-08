@@ -3,8 +3,9 @@
 // the delivery log and manual redrive, and the per-administrator rate limit.
 import { Api } from "@awthaq/api";
 import { AuthEvents, Auth, AuthPlugin, Erasure, DataExport, RateLimits, Users } from "@awthaq/core";
-import { RateLimiter } from "@awthaq/ports";
+import { HostResolver, RateLimiter } from "@awthaq/ports";
 import { SealedColumn } from "@awthaq/sql";
+import { Rendezvous } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -21,6 +22,19 @@ import * as Webhooks from "../src/Webhooks.ts";
 import { CoreLive, deliveryLayer, EncryptionLive, relay, seedEndpoint } from "./support.ts";
 
 const allow = () => Effect.succeed(true);
+
+/** A public resolver whose lookups meet `parties` callers before any of them goes on (`Rendezvous.held`). */
+const heldResolver = (parties: number) =>
+  Layer.effect(
+    HostResolver.HostResolver,
+    Effect.gen(function* () {
+      const inner = yield* HostResolver.HostResolver;
+      const hold = Rendezvous.held(parties);
+      return HostResolver.HostResolver.of({
+        resolve: (hostname) => Effect.flatMap(inner.resolve(hostname), hold),
+      });
+    }),
+  ).pipe(Layer.provide(HostResolver.layerStatic({ "hooks.example.com": ["93.184.216.34"] })));
 const DateNowUtc = (millis: number) => DateTime.makeUnsafe(millis);
 const nowUtc = DateTime.now;
 
@@ -189,6 +203,41 @@ describe("registering an endpoint", () => {
       const over = yield* create().pipe(Effect.flip);
       assert.strictEqual(over._tag, "WebhookEndpointLimitReached");
     }).pipe(Effect.provide(buildLayer({ canManageWebhooks: allow, maxEndpoints: 2 }))),
+  );
+
+  // BEH-EA-281 (plan 25): the pre-check runs before the DNS lookup, but the store's `within` decides. Every caller is
+  // held at the lookup until all 8 have passed the pre-check, so each saw room for one more.
+  it.effect(
+    "8 registrations at maxEndpoints - 1 store one, the rest are WebhookEndpointLimitReached",
+    () =>
+      Effect.gen(function* () {
+        yield* seedEndpoint({ id: "first" });
+        yield* seedEndpoint({ id: "second" });
+        const outcomes = yield* Effect.all(
+          Array.from({ length: 8 }, () =>
+            create().pipe(
+              Effect.map(() => "ok"),
+              Effect.catchTag("WebhookEndpointLimitReached", (refused) =>
+                Effect.succeed(refused._tag),
+              ),
+            ),
+          ),
+          { concurrency: "unbounded" },
+        );
+        assert.deepStrictEqual([...outcomes].sort(), [
+          ...Array.from({ length: 7 }, () => "WebhookEndpointLimitReached"),
+          "ok",
+        ]);
+        const records = yield* WebhookRecords.WebhookRecords;
+        assert.strictEqual((yield* records.listEndpoints).length, 3);
+      }).pipe(
+        Effect.provide(
+          deliveryLayer({
+            config: { canManageWebhooks: allow, maxEndpoints: 3 },
+            resolver: heldResolver(8),
+          }),
+        ),
+      ),
   );
 });
 

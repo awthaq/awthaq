@@ -3,18 +3,15 @@
 //
 // One random WebAuthn user handle per user, minted once, sent as `user.id` in
 // every registration ceremony, stored on every credential, and checked
-// against the `userHandle` a discoverable credential's assertion carries.
+// against the `userHandle` a discoverable credential's assertion carries. The store's own cases
+// (`getOrCreate` under concurrency, `deleteByUser`) are its RecordsContract suite, `contract/PasskeyUserHandles.ts`.
 import { TestAuth } from "@awthaq/test";
-import { Migrations, Sessions, Users } from "@awthaq/core";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Passkey from "../src/Passkey.ts";
-import * as PasskeyUserHandles from "../src/PasskeyUserHandles.ts";
 import { mockWebAuthn, registrationPayload } from "./passkeyTestFixtures.ts";
 import { buildLayer } from "./passkeyTestLayers.ts";
-import { TestSql } from "@awthaq/test";
 
 const newUserSession = (email: string) =>
   Effect.gen(function* () {
@@ -111,62 +108,3 @@ describe("BPAS-006/TC-004: the signals surface", () => {
     }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 });
-
-const MemoryLayer = PasskeyUserHandles.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
-
-const SqlLive = TestSql.layer("passkey_PasskeyUserHandle");
-const Migrated = Layer.effectDiscard(Migrations.run(Passkey.Passkey.migrations)).pipe(
-  Layer.provide(SqlLive),
-);
-const SqlLayer = PasskeyUserHandles.layerSql.pipe(
-  Layer.provide(NodeCrypto.layer),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
-);
-
-const suite = (
-  name: string,
-  layer: Layer.Layer<PasskeyUserHandles.PasskeyUserHandles, unknown, never>,
-): void => {
-  describe(name, () => {
-    const alice = Users.UserId("alice");
-    const bob = Users.UserId("bob");
-
-    it.effect("getOrCreate mints once and answers the same handle ever after", () =>
-      Effect.gen(function* () {
-        const handles = yield* PasskeyUserHandles.PasskeyUserHandles;
-        const first = yield* handles.getOrCreate(alice);
-        assert.match(first, /^[A-Za-z0-9_-]{43}$/);
-        assert.strictEqual(yield* handles.getOrCreate(alice), first);
-        assert.notStrictEqual(yield* handles.getOrCreate(bob), first);
-      }).pipe(TestAuth.withoutRequest, Effect.provide(layer)),
-    );
-
-    it.effect("concurrent first calls for one user all agree on a single handle", () =>
-      Effect.gen(function* () {
-        const handles = yield* PasskeyUserHandles.PasskeyUserHandles;
-        const user = Users.UserId("racer");
-        const results = yield* Effect.all(
-          Array.from({ length: 8 }, () => handles.getOrCreate(user)),
-          { concurrency: "unbounded" },
-        );
-        assert.strictEqual(new Set(results).size, 1);
-        assert.strictEqual(yield* handles.getOrCreate(user), results[0]);
-      }).pipe(TestAuth.withoutRequest, Effect.provide(layer)),
-    );
-
-    it.effect("deleteByUser forgets the handle (a later one is fresh) and is idempotent", () =>
-      Effect.gen(function* () {
-        const handles = yield* PasskeyUserHandles.PasskeyUserHandles;
-        const user = Users.UserId("erased");
-        const before = yield* handles.getOrCreate(user);
-        yield* handles.deleteByUser(user);
-        yield* handles.deleteByUser(user);
-        assert.notStrictEqual(yield* handles.getOrCreate(user), before);
-      }).pipe(TestAuth.withoutRequest, Effect.provide(layer)),
-    );
-  });
-};
-
-suite("PasskeyUserHandles (layerMemory)", MemoryLayer);
-suite("PasskeyUserHandles (layerSql)", SqlLayer);

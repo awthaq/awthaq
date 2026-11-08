@@ -4,10 +4,10 @@
 // table, mirroring `MembershipRecords.ts`'s own shape. `role` is stored as
 // an array (same JSON-serialized-`TEXT` convention under `layerSql`);
 // `status` is a plain closed string union, never derived at read time — a
-// caller (`Organization.ts`) transitions it explicitly via `updateStatus`.
+// caller (`Organization.ts`) transitions it explicitly via `transition` (a compare-and-set from `pending`).
 
 import { Users } from "@awthaq/core";
-import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
+import { Models as SqlModels, SqlStore, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
@@ -47,16 +47,39 @@ export class InvitationRecordNotFound extends Data.TaggedError("InvitationRecord
   readonly id: string;
 }> {}
 
+/** `create`'s `pendingWithin`: the inviter already has that many pending invitations (`invitationLimit`). */
+export class InvitationRecordLimitReached extends Data.TaggedError(
+  "InvitationRecords/LimitReached",
+)<{
+  readonly inviterId: string;
+  readonly limit: number;
+}> {}
+
 export interface InvitationRecordsShape {
-  readonly create: (input: {
-    readonly email: string;
-    readonly inviterId: Users.UserId;
-    readonly organizationId: string;
-    readonly teamId?: string | undefined;
-    readonly role: ReadonlyArray<string>;
-    readonly expiresAt: DateTime.Utc;
-    readonly tokenHash: string;
-  }) => Effect.Effect<InvitationRecord, StoreFailure.StoreUnavailable>;
+  /**
+   * Atomic (plan 25, BEH-EA-287): with `pendingWithin`, refuses with `InvitationRecordLimitReached` when the
+   * inviter already has `limit` pending invitations, counted across organizations (the witness); the count and the
+   * insert are one step (SQL: under the inviter's lock).
+   */
+  readonly create: (
+    input: {
+      readonly email: string;
+      readonly inviterId: Users.UserId;
+      readonly organizationId: string;
+      readonly teamId?: string | undefined;
+      readonly role: ReadonlyArray<string>;
+      readonly expiresAt: DateTime.Utc;
+      readonly tokenHash: string;
+    },
+    options?: {
+      readonly pendingWithin?:
+        | { readonly limit: number; readonly grant: TenantScoped.CrossTenant }
+        | undefined;
+    },
+  ) => Effect.Effect<
+    InvitationRecord,
+    InvitationRecordLimitReached | StoreFailure.StoreUnavailable
+  >;
   readonly findById: (
     grant: TenantScoped.CrossTenant,
 
@@ -97,11 +120,16 @@ export interface InvitationRecordsShape {
 
     inviterId: Users.UserId,
   ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
-  readonly updateStatus: (
+  /**
+   * Atomic (plan 25, BEH-EA-286): a compare-and-set from `pending` to `to`. Answers `true` when this call made the
+   * transition, `false` when the invitation is no longer pending (a concurrent accept, reject, cancel or expiry
+   * won), and `InvitationRecordNotFound` when there is no such invitation in the organization.
+   */
+  readonly transition: (
     organizationId: string,
     id: string,
-    status: InvitationStatus,
-  ) => Effect.Effect<InvitationRecord, InvitationRecordNotFound | StoreFailure.StoreUnavailable>;
+    change: { readonly from: "pending"; readonly to: Exclude<InvitationStatus, "pending"> },
+  ) => Effect.Effect<boolean, InvitationRecordNotFound | StoreFailure.StoreUnavailable>;
   /**
    * Retention (plan 10 item 6): deletes every invitation, whatever its status, whose `expiresAt` is
    * before `before` (an expired pending one is dead, a terminal one is history); returns how many.
@@ -144,7 +172,8 @@ export const layerMemory = Layer.effect(
     const state = yield* Ref.make<State>(HashMap.empty());
     const random = yield* SecureRandom.SecureRandom;
 
-    const create: InvitationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
+    const create: InvitationRecordsShape["create"] = Effect.fnUntraced(function* (input, options) {
+      const pendingWithin = options?.pendingWithin;
       const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const record: InvitationRecord = {
@@ -159,7 +188,23 @@ export const layerMemory = Layer.effect(
         expiresAt: input.expiresAt,
         tokenHash: Option.some(input.tokenHash),
       };
-      yield* Ref.update(state, (s) => HashMap.set(s, id, record));
+      // Plan 25: the inviter's pending count and the insert in one `Ref.modify`.
+      const stored = yield* Ref.modify(state, (s): readonly [boolean, State] =>
+        pendingWithin !== undefined &&
+        Array.from(HashMap.values(s)).filter(
+          (row) => row.inviterId === input.inviterId && row.status === "pending",
+        ).length >= pendingWithin.limit
+          ? [false, s]
+          : [true, HashMap.set(s, id, record)],
+      );
+      if (!stored && pendingWithin !== undefined) {
+        return yield* Effect.fail(
+          new InvitationRecordLimitReached({
+            inviterId: input.inviterId,
+            limit: pendingWithin.limit,
+          }),
+        );
+      }
       return record;
     });
 
@@ -243,17 +288,16 @@ export const layerMemory = Layer.effect(
         ),
       );
 
-    const updateStatus: InvitationRecordsShape["updateStatus"] = (organizationId, id, status) =>
-      Ref.modify(
-        state,
-        (s): readonly [Result.Result<InvitationRecord, InvitationRecordNotFound>, State] => {
-          const existing = HashMap.get(s, id);
-          if (Option.isNone(existing) || existing.value.organizationId !== organizationId)
-            return [Result.fail(notFound(id)), s] as const;
-          const updated: InvitationRecord = { ...existing.value, status };
-          return [Result.succeed(updated), HashMap.set(s, id, updated)] as const;
-        },
-      ).pipe(Effect.flatMap(Effect.fromResult));
+    const transition: InvitationRecordsShape["transition"] = (organizationId, id, change) =>
+      Ref.modify(state, (s): readonly [Result.Result<boolean, InvitationRecordNotFound>, State] => {
+        const existing = HashMap.get(s, id);
+        if (Option.isNone(existing) || existing.value.organizationId !== organizationId) {
+          return [Result.fail(notFound(id)), s];
+        }
+        if (existing.value.status !== change.from) return [Result.succeed(false), s];
+        const updated: InvitationRecord = { ...existing.value, status: change.to };
+        return [Result.succeed(true), HashMap.set(s, id, updated)];
+      }).pipe(Effect.flatMap(Effect.fromResult));
 
     const removeAllForOrganization: InvitationRecordsShape["removeAllForOrganization"] = (
       organizationId,
@@ -297,7 +341,7 @@ export const layerMemory = Layer.effect(
       listByEmail,
       listByInviter,
       countPendingByInviter,
-      updateStatus,
+      transition,
       purgeExpired,
       removeAllForOrganization,
       removeAllForUser,
@@ -439,24 +483,33 @@ export const layerSql = Layer.effect(
         sql`DELETE FROM organization_invitation WHERE "expiresAt" < ${before} RETURNING id`,
     });
 
-    const updateStatusQuery = SqlSchema.findOneOption({
+    // Plan 25 (BEH-EA-286): one conditional statement; the row lock makes the compare-and-set race-free.
+    const transitionQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         organizationId: Schema.String,
         id: Schema.String,
-        status: Schema.String,
+        from: Schema.String,
+        to: Schema.String,
       }),
-      Result: InvitationRow,
+      Result: Schema.Struct({ id: Schema.String }),
       execute: (r) => sql`
-          UPDATE organization_invitation SET status = ${r.status}
-          WHERE id = ${r.id} AND "organizationId" = ${r.organizationId}
-          RETURNING *
+          UPDATE organization_invitation SET status = ${r.to}
+          WHERE id = ${r.id} AND "organizationId" = ${r.organizationId} AND status = ${r.from}
+          RETURNING id
         `,
     });
+    const existsQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({ organizationId: Schema.String, id: Schema.String }),
+      Result: Schema.Struct({ id: Schema.String }),
+      execute: (r) =>
+        sql`SELECT id FROM organization_invitation WHERE id = ${r.id} AND "organizationId" = ${r.organizationId}`,
+    });
 
-    const create: InvitationRecordsShape["create"] = Effect.fnUntraced(function* (input) {
+    const create: InvitationRecordsShape["create"] = Effect.fnUntraced(function* (input, options) {
+      const pendingWithin = options?.pendingWithin;
       const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
-      const row = yield* insert({
+      const write = insert({
         id,
         email: input.email.toLowerCase(),
         inviterId: input.inviterId,
@@ -467,7 +520,31 @@ export const layerSql = Layer.effect(
         createdAt: now,
         expiresAt: input.expiresAt,
         tokenHash: input.tokenHash,
-      }).pipe(unavailable("create"));
+      });
+      // Plan 25: the inviter's pending count under the inviter's lock, in the transaction that inserts.
+      const guarded =
+        pendingWithin === undefined
+          ? write
+          : SqlStore.atomically(
+              sql,
+              `organization_invitation:inviter:${input.inviterId}`,
+            )(
+              Effect.gen(function* () {
+                const pending = yield* countPendingByInviterQuery(input.inviterId).pipe(
+                  TenantScoped.liftOn(sql, pendingWithin.grant),
+                );
+                if (pending.count >= pendingWithin.limit) {
+                  return yield* Effect.fail(
+                    new InvitationRecordLimitReached({
+                      inviterId: input.inviterId,
+                      limit: pendingWithin.limit,
+                    }),
+                  );
+                }
+                return yield* write;
+              }),
+            );
+      const row = yield* guarded.pipe(unavailable("create"));
       return toRecord(row);
     });
 
@@ -534,13 +611,15 @@ export const layerSql = Layer.effect(
         unavailable("countPendingByInviter"),
       );
 
-    const updateStatus: InvitationRecordsShape["updateStatus"] = Effect.fnUntraced(
-      function* (organizationId, id, status) {
-        const row = yield* updateStatusQuery({ organizationId, id, status }).pipe(
-          unavailable("updateStatus"),
+    const transition: InvitationRecordsShape["transition"] = Effect.fnUntraced(
+      function* (organizationId, id, change) {
+        const moved = yield* transitionQuery({ organizationId, id, ...change }).pipe(
+          unavailable("transition"),
         );
-        if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
-        return toRecord(row.value);
+        if (Option.isSome(moved)) return true;
+        const exists = yield* existsQuery({ organizationId, id }).pipe(unavailable("transition"));
+        if (Option.isNone(exists)) return yield* Effect.fail(notFound(id));
+        return false;
       },
     );
 
@@ -575,7 +654,7 @@ export const layerSql = Layer.effect(
       listByEmail,
       listByInviter,
       countPendingByInviter,
-      updateStatus,
+      transition,
       purgeExpired,
       removeAllForOrganization,
       removeAllForUser,

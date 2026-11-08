@@ -8,11 +8,16 @@ import * as Layer from "effect/Layer";
 import * as Admin from "../src/Admin.ts";
 import * as AdminAccounts from "../src/AdminAccounts.ts";
 import * as AdminTenants from "../src/AdminTenants.ts";
+import { impersonationRecords } from "./contract/ImpersonationRecords.ts";
 
 const framework = TestAuth.throwingFramework(describe, it);
 
 TestAuth.runPluginContractTests(framework, () => Admin.Admin, {
   options: [{}],
+  records: {
+    suite: "admin_records_contract",
+    suites: { "awthaq/admin/records/ImpersonationRecords": impersonationRecords },
+  },
   build: { services: Layer.empty },
 });
 TestAuth.runPluginContractTests(framework, () => AdminAccounts.AdminAccounts, {

@@ -8,6 +8,11 @@
 //      call in their own package before this check existed.)
 //   2. `@awthaq/test` is dev-only: no `packages/*/src` file outside `packages/test` imports it, and no
 //      `packages/*/package.json` or `examples/*/package.json` lists it under `dependencies`.
+//   3. Plan 25 (BEH-EA-336, ADR-EA-041 decision 9): a `Contract.test.ts` that passes `records:` (the
+//      record-store contract) is listed in `scripts/test-pg.sh`'s suites, so its cases also run on
+//      Postgres, where the race cases are the point.
+//   4. Plan 25 ticket 25: `RecordsContract.pending` is gone (every store has its suite); a test file that
+//      still names it is reported here, before the compiler's less direct error.
 //
 // Runs from `pnpm check`. Exit code 1 on any problem.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -35,6 +40,16 @@ const CLASS = /export class (\w+) extends AuthPlugin\.Service</g;
 const problems = [];
 let classCount = 0;
 
+const testPg = path.join(rootDir, "scripts", "test-pg.sh");
+const pgSuites = new Set(
+  existsSync(testPg)
+    ? read(testPg)
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.endsWith(".test.ts"))
+    : [],
+);
+
 for (const owner of owners) {
   const classes = [];
   for (const file of walk(path.join(rootDir, owner, "src")).filter(isSource)) {
@@ -59,6 +74,26 @@ for (const owner of owners) {
   for (const name of classes) {
     if (!covered.has(name)) {
       problems.push(`${owner}: plugin class ${name} is not run by test/Contract.test.ts`);
+    }
+  }
+  const listed = path.posix.join(owner.split(path.sep).join("/"), "test", "Contract.test.ts");
+  if (/\brecords:/.test(code) && !pgSuites.has(listed)) {
+    problems.push(
+      `${listed} passes records: (the record-store contract) but is not listed in scripts/test-pg.sh`,
+    );
+  }
+}
+
+// Rule 4: no test names the removed `RecordsContract.pending` stand-in.
+for (const owner of new Set([
+  ...owners,
+  ...readdirSync(path.join(rootDir, "examples")).map((name) => path.join("examples", name)),
+])) {
+  for (const file of walk(path.join(rootDir, owner, "test")).filter(isSource)) {
+    if (/RecordsContract\.pending\s*\(/.test(read(file))) {
+      problems.push(
+        `${path.relative(rootDir, file)}: uses RecordsContract.pending, removed by plan 25 ticket 25; pass the store's suites`,
+      );
     }
   }
 }

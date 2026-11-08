@@ -1045,6 +1045,9 @@ importers:
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../sql
     devDependencies:
       '@awthaq/test':
         specifier: workspace:*

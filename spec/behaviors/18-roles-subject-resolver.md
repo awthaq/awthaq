@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-18 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-12 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-142's false citation of "file 06's admin plugin" — file 06 is Users and Accounts, not an Admin plugin; no Admin plugin behaviors exist yet (CCR-EA-002) <br> 1.2 (2026-09-29): Status banner corrected to implemented-with-deviations (RRM-009); BEH-EA-138's enforcement point restated as layer-build, not `Auth.make` (RRM-012); BEH-EA-139 gained catalog validation, `UnknownRole`, drift observability and role-change audit events (RRM-003/004/005/010) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-142's false citation of "file 06's admin plugin" — file 06 is Users and Accounts, not an Admin plugin; no Admin plugin behaviors exist yet (CCR-EA-002) <br> 1.2 (2026-09-29): Status banner corrected to implemented-with-deviations (RRM-009); BEH-EA-138's enforcement point restated as layer-build, not `Auth.make` (RRM-012); BEH-EA-139 gained catalog validation, `UnknownRole`, drift observability and role-change audit events (RRM-003/004/005/010) <br> 1.3 (2026-11-08): BEH-EA-140: the key whose scopes are mapped is decided live at the store: a rotation stores its successor only while the predecessor is live, and one revocation announces it (architecture plan 25 ticket 17) |
 ---
 
 > **Status: implemented with deviations.** `@awthaq/roles` ships BEH-EA-137–139, 142 and 143 (`Roles.layer` / `Roles.layerSql`, the `SubjectResolver` slot override, catalog validation, role-change audit events). Deviations: BEH-EA-138's exclusivity is enforced when layers are built via the opt-in `Slots.SlotsRegistry`, not by `Auth.make`'s type checker (see that behavior); BEH-EA-140/141 (API-key/service scopes become permissions) are implemented in `@awthaq/qadi`'s default resolver (`ApiKeyPrincipal`/`ServicePrincipal` carry `scopes`, populated by `@awthaq/api-key`), which `Roles` delegates to for every non-`User` principal; BEH-EA-144's session-view exposure follows `@awthaq/qadi`'s standalone `GET /subject`.
@@ -96,6 +96,8 @@ REQUIREMENT: For an `ApiKeyPrincipal`, `SubjectResolver` MUST map the key's
 **Implemented (OCM-002).** `ApiKeyPrincipal.scopes` is set by `@awthaq/api-key` from the key's own grants. `@awthaq/qadi`'s default resolver maps each scope shaped like a qadi permission key (`resource:action`, the action may contain further `:`, e.g. `scim:users:write`) onto `AuthSubject.permissions`; a scope not shaped like one names no permission and is ignored, so a policy checking it simply denies. The mapping lives in that default resolver and not in a `SubjectResolver` override because `Roles` and `Organization` already contest the exclusive slot (ADR-EA-012) and both delegate every non-`User` principal to it; an API key never needs a third contender.
 
 `usage-qadi.md` §1's table states this mapping as one of the four principal-to-subject rows. Scopes and roles are deliberately different mechanisms feeding the same `permissions` set: a service credential is provisioned with an explicit, minimal scope list at creation (`usage-examples-v4.md` §20), never inherited through a role hierarchy meant for interactive users.
+
+A key's scopes reach a subject only while the key is live, and liveness is decided where the key is stored (architecture plan 25 ticket 17, [MOD-EA-007](../models/07-api-keys.md)). `ApiKeyRecords.rotate` stores the successor and caps the predecessor's expiry in one step, and only while the predecessor is neither revoked nor expired; a revoke that lands after `ApiKey.rotate` read the key live wins, and the rotation answers `ApiKeyNotFound` with no successor stored, so a revoked key never leaves a live successor carrying its scopes. `ApiKeyRecords.revoke` answers whether this call revoked the key, so of any number of concurrent revocations exactly one publishes `auth.apiKey.revoked`; a repeat is a silent no-op. Both stores have a `RecordsContract` suite (`packages/api-key/test/contract/`), and a reused key or client id is a defect on memory and SQL alike.
 
 _Previous: [BEH-EA-139](18-roles-subject-resolver.md#beh-ea-139-roles-flatten-through-the-dag-once-per-resolution) | Next: [BEH-EA-141](18-roles-subject-resolver.md#beh-ea-141-service-principals-carry-their-own-scopes)_
 

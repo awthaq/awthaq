@@ -4,10 +4,15 @@ import { TestAuth } from "@awthaq/test";
 import { describe, it } from "@effect/vitest";
 import * as Layer from "effect/Layer";
 import * as UserClaims from "../src/UserClaims.ts";
+import { userClaims } from "./contract/UserClaims.ts";
 
 const framework = TestAuth.throwingFramework(describe, it);
 
 TestAuth.runPluginContractTests(framework, () => UserClaims.UserClaims, {
   options: [{}],
+  records: {
+    suite: "qadi_records_contract",
+    suites: { "awthaq/qadi/records/UserClaims": userClaims },
+  },
   build: { services: Layer.empty },
 });

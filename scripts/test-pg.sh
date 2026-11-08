@@ -6,12 +6,16 @@
 #   pnpm run test:pg                                       # starts a container, runs, removes it
 #   AWTHAQ_POSTGRES_URL=postgres://... pnpm run test:pg    # use an existing server
 #
-# Two kinds of suite run:
+# Three kinds of suite run:
 #   * `*.postgres.test.ts` in @awthaq/sql (skipped without AWTHAQ_POSTGRES_URL);
-#   * every plugin record-store suite (admin, jwt, organization, passkey, roles,
-#     qadi claims, migrate-better-auth), which builds its database through
-#     `packages/test/src/TestSql.ts`: the same tests, on Postgres instead
-#     of `:memory:` SQLite, each suite in its own schema.
+#   * every plugin's record-store contract (plan 25, ADR-EA-041 decision 9): the
+#     `Contract.test.ts` of each package whose bundle provides a store runs its
+#     `RecordsContract` suites, race cases included, on a Postgres schema per
+#     build (`pnpm check:contract-tests` fails when one is missing here);
+#   * the suites that build a database through `packages/test/src/TestSql.ts`:
+#     core's stores, the domain race tests (`Rendezvous.held`) and the files
+#     that keep sealed-column or migration cases, on Postgres instead of
+#     `:memory:` SQLite, each in its own schema.
 #
 # The suites `DROP TABLE`/`DROP SCHEMA` — point the URL at a scratch database.
 set -euo pipefail
@@ -26,9 +30,12 @@ suites=(
   packages/sql/test/SealedColumn.test.ts
   packages/sql/test/SqlDdl.test.ts
   packages/sql/test/UnitOfWork.test.ts
+  packages/sql/test/SqlStore.test.ts
+  packages/sql/test/StoreFailure.test.ts
   packages/test/test/CoreSealedColumns.test.ts
   packages/test/test/StoreContract.sql.test.ts
   packages/test/test/StoreContract.sealed.test.ts
+  packages/test/test/RecordsContract.test.ts
   packages/admin/test/Contract.test.ts
   packages/api-key/test/Contract.test.ts
   packages/device-authorization/test/Contract.test.ts
@@ -46,9 +53,7 @@ suites=(
   packages/test/test/TestAuthHost.test.ts
   packages/test/test/TestSqlSchema.test.ts
   examples/plugin-template/test/Template.test.ts
-  packages/admin/test/ImpersonationRecords.test.ts
   packages/api-key/test/ApiKey.test.ts
-  packages/api-key/test/StoreOutage.test.ts
   packages/core/test/AuthEventsUnitOfWork.test.ts
   packages/core/test/Migrations.test.ts
   packages/core/test/FederatedIdentitySql.test.ts
@@ -59,28 +64,20 @@ suites=(
   packages/core/test/Verification.test.ts
   packages/device-authorization/test/DeviceAuthorization.test.ts
   packages/device-authorization/test/AuthHttp.test.ts
-  packages/device-authorization/test/StoreOutage.test.ts
   packages/jwt/test/KeyRing.test.ts
-  packages/jwt/test/RevocationStore.test.ts
   packages/migrate-better-auth/test/LegacySessionBridgeLive.test.ts
-  packages/organization/test/ActiveContextRecords.test.ts
   packages/organization/test/ConnectionRecords.test.ts
-  packages/organization/test/DomainClaims.test.ts
-  packages/organization/test/InvitationRecords.test.ts
-  packages/organization/test/MembershipRecords.test.ts
   packages/organization/test/OrganizationMembers.test.ts
-  packages/organization/test/OrgRoleRecords.test.ts
-  packages/organization/test/OrganizationRecords.test.ts
+  packages/organization/test/OrganizationDirectory.test.ts
+  packages/organization/test/OrganizationInvitations.test.ts
+  packages/organization/test/OrganizationRoles.test.ts
+  packages/organization/test/OrganizationTeams.test.ts
   packages/organization/test/OrganizationSql.test.ts
   packages/organization/test/TeamRecords.test.ts
   packages/organization/test/TenantMiddleware.test.ts
-  packages/passkey/test/ChallengeStore.test.ts
   packages/passkey/test/PasskeyCeremony.test.ts
-  packages/passkey/test/PasskeyCredentials.test.ts
-  packages/passkey/test/PasskeyUserHandle.test.ts
   packages/password/test/PasswordStoreOutage.test.ts
   packages/qadi/test/UserClaims.test.ts
-  packages/scim/test/ScimRecords.test.ts
   packages/two-factor/test/TwoFactorStore.test.ts
   packages/roles/test/RolesSql.test.ts
   packages/saml/test/SamlDomainClaimMigration.test.ts

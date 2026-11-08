@@ -366,6 +366,8 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
           yield* gate(organizationId);
           if (parentId !== undefined) yield* requireTeam(organizationId, parentId);
           const teamLimits = yield* limits(organizationId);
+          // Early checks, so a refusal comes before the veto. The authorities are `createTeam`'s and
+          // `addTeamMember`'s `within` below (plan 25): two concurrent creations can both pass this count.
           const count = yield* teams.countTeamsByOrganization(organizationId);
           if (count >= teamLimits.maximumTeams) {
             return yield* new OrganizationErrors.TeamLimitReached();
@@ -383,11 +385,16 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
             .withTransaction(
               Effect.gen(function* () {
                 const created = yield* teams
-                  .createTeam({ organizationId, name: vetoed.name, parentId: vetoed.parentId })
+                  .createTeam(
+                    { organizationId, name: vetoed.name, parentId: vetoed.parentId },
+                    { within: teamLimits.maximumTeams },
+                  )
                   .pipe(
-                    Effect.catchTag("TeamRecordNotFound", () =>
-                      Effect.fail(new OrganizationErrors.TeamNotFound()),
-                    ),
+                    Effect.catchTags({
+                      TeamRecordNotFound: () => Effect.fail(new OrganizationErrors.TeamNotFound()),
+                      "TeamRecords/LimitReached": () =>
+                        Effect.fail(new OrganizationErrors.TeamLimitReached()),
+                    }),
                   );
                 return yield* Effect.gen(function* () {
                   for (const userId of initial) {
@@ -402,11 +409,17 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
                       }),
                     );
                     yield* teams
-                      .addTeamMember({ teamId: created.id, userId, role: DEFAULT_TEAM_ROLE })
+                      .addTeamMember(
+                        { teamId: created.id, userId, role: DEFAULT_TEAM_ROLE },
+                        { within: teamLimits.maximumMembersPerTeam },
+                      )
                       .pipe(
-                        Effect.catchTag("TeamMembershipRecordAlreadyExists", () =>
-                          vanished("a fresh team's roster"),
-                        ),
+                        Effect.catchTags({
+                          TeamMembershipRecordAlreadyExists: () =>
+                            vanished("a fresh team's roster"),
+                          "TeamRecords/MemberLimitReached": () =>
+                            Effect.fail(new OrganizationErrors.TeamMemberLimitReached()),
+                        }),
                       );
                   }
                   const fresh =
@@ -521,8 +534,11 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
           const { organizationId, teamId } = input;
           yield* gate(organizationId);
           yield* requireTeam(organizationId, teamId);
+          const keepOne = !(yield* configNow).teams.allowRemovingAllTeams;
+          // An early check, so the refusal comes before the veto. The authority is `removeTeam`'s `keepOne`
+          // (plan 25): two concurrent removals of the last two teams can both pass this count.
           const count = yield* teams.countTeamsByOrganization(organizationId);
-          if (count <= 1 && !(yield* configNow).teams.allowRemovingAllTeams) {
+          if (count <= 1 && keepOne) {
             return yield* new OrganizationErrors.LastTeamCannotBeRemoved();
           }
           // OHS-001: refuse before the veto hook runs; the records layer re-checks atomically.
@@ -534,11 +550,14 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
           yield* sqlTransaction
             .withTransaction(
               Effect.gen(function* () {
-                yield* teams.removeTeam(organizationId, teamId).pipe(
+                yield* teams.removeTeam(organizationId, teamId, { keepOne }).pipe(
                   Effect.catchTags({
-                    TeamRecordNotFound: () => vanished("team"),
+                    // A concurrent removal of the same team won: the sequential answer (F9).
+                    TeamRecordNotFound: () => Effect.fail(new OrganizationErrors.TeamNotFound()),
                     "TeamRecords/HasChildren": () =>
                       Effect.fail(new OrganizationErrors.TeamHasChildren()),
+                    "TeamRecords/LastTeam": () =>
+                      Effect.fail(new OrganizationErrors.LastTeamCannotBeRemoved()),
                   }),
                 );
                 // CWM-003/OHS-007: no session may keep the deleted team active.
@@ -567,7 +586,9 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
           const team = yield* requireTeam(organizationId, teamId);
           yield* requireTeamRoles(bound, role);
           yield* requireOrganizationMember(organizationId, userId);
-          if (team.memberCount >= (yield* limits(organizationId)).maximumMembersPerTeam) {
+          const { maximumMembersPerTeam } = yield* limits(organizationId);
+          // An early check (before the veto); `addTeamMember`'s `within` is the authority (plan 25).
+          if (team.memberCount >= maximumMembersPerTeam) {
             return yield* new OrganizationErrors.TeamMemberLimitReached();
           }
           yield* HookPoint.aborted(OrganizationHooks.BeforeAddTeamMember)(
@@ -577,11 +598,14 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
           const onTeam = yield* teams.findTeamMembership(teamId, userId);
           if (Option.isSome(onTeam)) return yield* new OrganizationErrors.AlreadyTeamMember();
           const record = yield* teams
-            .addTeamMember({ teamId, userId, role })
+            .addTeamMember({ teamId, userId, role }, { within: maximumMembersPerTeam })
             .pipe(
-              Effect.catchTag("TeamMembershipRecordAlreadyExists", () =>
-                Effect.fail(new OrganizationErrors.AlreadyTeamMember()),
-              ),
+              Effect.catchTags({
+                TeamMembershipRecordAlreadyExists: () =>
+                  Effect.fail(new OrganizationErrors.AlreadyTeamMember()),
+                "TeamRecords/MemberLimitReached": () =>
+                  Effect.fail(new OrganizationErrors.TeamMemberLimitReached()),
+              }),
             );
           yield* events.publish({
             _tag: "auth.organization.teamMemberAdded",
@@ -670,12 +694,14 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
             if (Option.isSome(yield* teams.findTeamMembership(teamId, userId)))
               toRemove.push(userId);
           }
+          const { maximumMembersPerTeam } = yield* limits(organizationId);
           if (toAdd.length > 0) {
             yield* requireTeamRoles(bound, role);
             for (const userId of toAdd) yield* requireOrganizationMember(organizationId, userId);
-            // TML against the FINAL count, so a roster swap at the limit is not refused.
+            // TML against the FINAL count, so a roster swap at the limit is not refused. An early check: the
+            // removals run first below and each add's `within` decides (plan 25).
             const finalCount = team.memberCount + toAdd.length - toRemove.length;
-            if (finalCount > (yield* limits(organizationId)).maximumMembersPerTeam) {
+            if (finalCount > maximumMembersPerTeam) {
               return yield* new OrganizationErrors.TeamMemberLimitReached();
             }
           }
@@ -704,11 +730,13 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
                 }
                 for (const userId of toAdd) {
                   yield* teams
-                    .addTeamMember({ teamId, userId, role })
+                    .addTeamMember({ teamId, userId, role }, { within: maximumMembersPerTeam })
                     .pipe(
-                      Effect.catchTag("TeamMembershipRecordAlreadyExists", () =>
-                        vanished("team roster"),
-                      ),
+                      Effect.catchTags({
+                        TeamMembershipRecordAlreadyExists: () => vanished("team roster"),
+                        "TeamRecords/MemberLimitReached": () =>
+                          Effect.fail(new OrganizationErrors.TeamMemberLimitReached()),
+                      }),
                     );
                 }
               }),

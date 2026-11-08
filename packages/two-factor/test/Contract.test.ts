@@ -7,11 +7,20 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Layer from "effect/Layer";
 import * as SecondFactor from "../src/SecondFactor.ts";
 import * as TwoFactor from "../src/TwoFactor.ts";
+import { twoFactorRecoveryCodes } from "./contract/TwoFactorRecoveryCodes.ts";
+import { twoFactorSecrets } from "./contract/TwoFactorSecrets.ts";
 
 const framework = TestAuth.throwingFramework(describe, it);
 
 TestAuth.runPluginContractTests(framework, () => TwoFactor.TwoFactor, {
   options: [{}],
+  records: {
+    suite: "two_factor_records_contract",
+    suites: {
+      "awthaq/two-factor/records/TwoFactorSecrets": twoFactorSecrets,
+      "awthaq/two-factor/records/TwoFactorRecoveryCodes": twoFactorRecoveryCodes,
+    },
+  },
   build: {
     services: TwoFactor.sessionGate.pipe(
       Layer.merge(TwoFactor.credentialResetGate),

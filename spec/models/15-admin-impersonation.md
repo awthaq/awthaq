@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-15 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Status flipped to Shipped-Unpublished; the pre-implementation text replaced with pointers to BEH-EA-209..224 and the tests (IDS-009, AOMS-011, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Status flipped to Shipped-Unpublished; the pre-implementation text replaced with pointers to BEH-EA-209..224 and the tests (IDS-009, AOMS-011, CCR-EA-006) <br> 1.2 (2026-11-08): the test list names `contract/ImpersonationRecords.ts`, which replaces `ImpersonationRecords.test.ts` (architecture plan 25 ticket 15) |
 ---
 
 ## What it is
@@ -121,6 +121,6 @@ What the first draft of this model left undecided is decided and built: the admi
 
 ## Verification
 
-`packages/admin/test/*` (`Admin.test.ts`, `AuthHttp.test.ts`, `ImpersonationRecords.test.ts`, `AdminUsers.test.ts`, `AdminTenants.test.ts`, `AdminConfig.test.ts`, `AdminTier.test.ts`), `packages/core/test/Sessions.test.ts` (BEH-EA-209/210, the `actingAs` session mechanism) and the wired `27-admin-impersonation.feature` scenarios (`features/`).
+`packages/admin/test/*` (`Admin.test.ts`, `AuthHttp.test.ts`, `contract/ImpersonationRecords.ts`, `AdminUsers.test.ts`, `AdminTenants.test.ts`, `AdminConfig.test.ts`, `AdminTier.test.ts`), `packages/core/test/Sessions.test.ts` (BEH-EA-209/210, the `actingAs` session mechanism) and the wired `27-admin-impersonation.feature` scenarios (`features/`).
 
 _Related: [00 — Adoption Matrix](00-adoption-matrix.md), [invariants.md](../invariants.md#inv-ea-014-an-impersonation-session-carries-a-hard-expiry-with-no-sliding-refresh) (INV-EA-014)_

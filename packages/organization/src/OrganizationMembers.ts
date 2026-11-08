@@ -212,8 +212,11 @@ export class OrganizationMembers extends Context.Service<
         const { organizationId, userId, role, bound } = input;
         yield* requireActive(organizationId);
         const orgConfig = yield* configNow;
+        const { membershipLimit } = yield* limitsOf(orgConfig, organizationId);
+        // An early check, so the refusal comes before the veto (BEH-EA-287). The authority is `create`'s
+        // `within` below: two concurrent adds can both pass this count.
         const count = yield* members.countByOrganization(organizationId);
-        if (count >= (yield* limitsOf(orgConfig, organizationId)).membershipLimit) {
+        if (count >= membershipLimit) {
           return yield* new OrganizationErrors.MembershipLimitReached();
         }
         const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeAddMember)(
@@ -227,11 +230,16 @@ export class OrganizationMembers extends Context.Service<
         const existing = yield* members.findByUserAndOrg(userId, organizationId);
         if (Option.isSome(existing)) return yield* new OrganizationErrors.AlreadyMember();
         const membership = yield* members
-          .create({ userId, organizationId, role: vetoed.role })
+          .create({ userId, organizationId, role: vetoed.role }, { within: membershipLimit })
           .pipe(
-            Effect.catchTag("MembershipRecordAlreadyExists", () =>
-              Effect.fail(new OrganizationErrors.AlreadyMember()),
-            ),
+            Effect.catchTags({
+              MembershipRecordAlreadyExists: () =>
+                Effect.fail(new OrganizationErrors.AlreadyMember()),
+              "MembershipRecords/LimitReached": () =>
+                Effect.fail(new OrganizationErrors.MembershipLimitReached()),
+              // No `ownedWithin` was asked for.
+              "MembershipRecords/OwnedLimitReached": Effect.die,
+            }),
           );
         yield* events.publish({
           _tag: "auth.organization.memberAdded",

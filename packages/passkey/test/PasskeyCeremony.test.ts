@@ -7,7 +7,7 @@
 // port is mocked (BEH-EA-195), with a spy on what the ceremony asks of it.
 import { AuditLog, AuthEvents, Errors, Migrations, Persistence, Users } from "@awthaq/core";
 import type { WebAuthn } from "@awthaq/ports";
-import { TestSql } from "@awthaq/test";
+import { Rendezvous, TestSql } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -925,6 +925,93 @@ describe("Assertions", () => {
         Effect.provide(ceremonyLayer(mockWebAuthn({ authenticationVerified: { newCounter: 0 } }))),
       ),
     );
+
+    // Plan 25 F8: both ceremonies read the stored 5 before either writes (a meeting point at the read), so a
+    // verdict taken from that read would accept both silently. Decided at the write, the second is a regression.
+    describe("F8: two concurrent assertions with the same counter", () => {
+      /** The ceremony's credential lookup meets `parties` callers before any of them goes on. */
+      const readsMeet = (records: (typeof legs)[number][1]) =>
+        Layer.effect(
+          PasskeyCredentials.PasskeyCredentials,
+          Effect.gen(function* () {
+            const real = yield* PasskeyCredentials.PasskeyCredentials;
+            const meeting = yield* Rendezvous.make(2);
+            return PasskeyCredentials.PasskeyCredentials.of({
+              ...real,
+              findById: (id) => Effect.tap(real.findById(id), () => meeting.arrive),
+            });
+          }),
+        ).pipe(
+          Layer.provideMerge(
+            ceremonyLayer(mockWebAuthn({ authenticationVerified: { newCounter: 6 } }), records),
+          ),
+        );
+
+      /** One credential at counter 5, two sign-in ceremonies for it, presented at once. */
+      const racePair = (policy: PasskeyCeremony.CeremonyPolicy) =>
+        Effect.gen(function* () {
+          const first = yield* arrange("signIn", { counter: 5 });
+          const ceremony = PasskeyCeremony.Ceremony.SignIn({ ceremonyId: `${first.userId}-twin` });
+          const twin = {
+            ...first,
+            ceremony,
+            challenge: Redacted.value(yield* first.ceremonies.begin(ceremony)),
+          };
+          const reasons = yield* Effect.all([reasonOf(first, policy), reasonOf(twin, policy)], {
+            concurrency: "unbounded",
+          });
+          return { reasons, stored: yield* storedCredential(first.credentialId) };
+        });
+
+      for (const [leg, records] of legs) {
+        it.effect(`${leg}: flag: both verified, the second flagged once, the counter at 6`, () =>
+          Effect.gen(function* () {
+            const { reasons, stored } = yield* racePair(policyOf());
+            assert.deepStrictEqual(reasons, ["verified", "verified"]);
+            assert.strictEqual(stored.counterAnomalyCount, 1);
+            assert.strictEqual(stored.counter, 6);
+          }).pipe(Effect.provide(readsMeet(records))),
+        );
+
+        it.effect(`${leg}: reject: exactly one verified, the other refused "counterAnomaly"`, () =>
+          Effect.gen(function* () {
+            const { reasons, stored } = yield* racePair(
+              policyOf({ counterAnomalyPolicy: "reject" }),
+            );
+            assert.deepStrictEqual([...reasons].sort(), ["counterAnomaly", "verified"]);
+            assert.strictEqual(stored.counterAnomalyCount, 1);
+            assert.strictEqual(stored.counter, 6);
+          }).pipe(Effect.provide(readsMeet(records))),
+        );
+      }
+    });
+
+    it.effect("a credential deleted mid-ceremony is an unknown credential, not a defect", () => {
+      const layer = Layer.effect(
+        PasskeyCredentials.PasskeyCredentials,
+        Effect.gen(function* () {
+          const real = yield* PasskeyCredentials.PasskeyCredentials;
+          return PasskeyCredentials.PasskeyCredentials.of({
+            ...real,
+            // The owner removes the passkey between the ceremony's lookup and its usage write.
+            findById: (id) =>
+              Effect.tap(real.findById(id), (found) =>
+                Option.isSome(found)
+                  ? real.delete(id, found.value.userId).pipe(Effect.orDie)
+                  : Effect.void,
+              ),
+          });
+        }),
+      ).pipe(
+        Layer.provideMerge(
+          ceremonyLayer(mockWebAuthn({ authenticationVerified: { newCounter: 6 } })),
+        ),
+      );
+      return Effect.gen(function* () {
+        const arranged = yield* arrange("signIn", { counter: 5 });
+        assert.strictEqual(yield* reasonOf(arranged, policyOf()), "unknownCredential");
+      }).pipe(Effect.provide(layer));
+    });
 
     it.effect("reject: a non-regressing assertion is verified", () =>
       Effect.gen(function* () {

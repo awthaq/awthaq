@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-01 |
-> | Revision | 1.4 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): BEH-EA-005: `tables` is a record of tenancy declarations keyed by the plugin's own prefix; `Class.tables` lists its keys (plan 05) <br> 1.3 (2026-10-14): BEH-EA-334: a plugin declares its record stores as matched memory and SQL bundles (architecture plan 08) <br> 1.4 (2026-11-08): BEH-EA-334: a host selects the records bundles through `AuthHost`'s `persistence`, never by name (ADR-EA-044, architecture plan 15) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): BEH-EA-005: `tables` is a record of tenancy declarations keyed by the plugin's own prefix; `Class.tables` lists its keys (plan 05) <br> 1.3 (2026-10-14): BEH-EA-334: a plugin declares its record stores as matched memory and SQL bundles (architecture plan 08) <br> 1.4 (2026-11-08): BEH-EA-334: a host selects the records bundles through `AuthHost`'s `persistence`, never by name (ADR-EA-044, architecture plan 15) <br> 1.5 (2026-11-08): BEH-EA-334: a plugin declaring `records` gives `runPluginContractTests` one `RecordsContract` suite per store (architecture plan 25) |
 
 ---
 
@@ -195,3 +195,6 @@ The key segment is the mechanism `PortKeysOf` already uses for `/ports/` (BEH-EA
 *As shipped (ADR-EA-044):* a host selects the bundles through `AuthHost`'s `persistence`, never by name.
 
 _Previous: [BEH-EA-008](01-plugin-contract.md#beh-ea-008-dependson-declares-both-ordering-and-a-typed-requirement-in-one-static-array) | Next: [BEH-EA-009](02-plugin-composition-validate.md#beh-ea-009-authmake-computes-three-outputs-from-one-plugin-tuple)_
+
+**Plan 25 (ADR-EA-041 decision 9):** the bundle is also what the record-store contract runs: a plugin whose `records` bundle provides a store passes `runPluginContractTests` one `RecordsContract` suite per store, keyed by its `/records/` key, and a missing key is a compile error ([BEH-EA-336](25-testing-harness.md#beh-ea-336-every-shipped-plugin-runs-the-contract-suite-which-checks-its-records)).
+

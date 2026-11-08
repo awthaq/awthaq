@@ -3,11 +3,17 @@
 import { AuditLog, Erasure, SecretHash, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as ApiKey from "../src/ApiKey.ts";
 import * as ApiKeyRecords from "../src/ApiKeyRecords.ts";
@@ -19,19 +25,59 @@ import {
   type HarnessServices,
 } from "./harness.ts";
 
+/**
+ * Plan 25 F6: a `SecureRandom` whose `randomBytes` (what `mint` draws the secret from, after `rotate`'s liveness
+ * read and before it stores anything) holds the first call made while armed until released.
+ */
+const mintGate = () => {
+  const armed = Ref.makeUnsafe(false);
+  const reached = Deferred.makeUnsafe<void>();
+  const release = Deferred.makeUnsafe<void>();
+  const pass = Effect.flatMap(Ref.getAndSet(armed, false), (hold) =>
+    hold
+      ? Effect.andThen(Deferred.succeed(reached, undefined), Deferred.await(release))
+      : Effect.void,
+  );
+  const layer = Layer.effect(
+    SecureRandom.SecureRandom,
+    Effect.gen(function* () {
+      const inner = yield* SecureRandom.SecureRandom;
+      return SecureRandom.SecureRandom.of({
+        ...inner,
+        randomBytes: (size) => Effect.andThen(pass, inner.randomBytes(size)),
+      });
+    }),
+  );
+  return {
+    layer,
+    arm: Ref.set(armed, true),
+    reached: Deferred.await(reached),
+    release: Deferred.succeed(release, undefined),
+  };
+};
+
 // Re-seeded as real users by every test's `provide`, so these are `let`, not constants.
 let owner = Users.UserId("owner-1");
 let someoneElse = Users.UserId("owner-2");
 
 const suite = (store: HarnessOptions["store"]) => {
   const provide =
-    (config: Partial<ApiKey.ApiKeyConfigShape> = {}) =>
+    (config: Partial<ApiKey.ApiKeyConfigShape> = {}, random?: HarnessOptions["random"]) =>
     <A, E>(effect: Effect.Effect<A, E, HarnessServices>) =>
       Effect.gen(function* () {
         owner = yield* seedUser("owner-1@example.com");
         someoneElse = yield* seedUser("owner-2@example.com");
         return yield* effect;
-      }).pipe(Effect.provide(buildLayer({ store, suite: "api_key_domain", config })));
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            store,
+            suite: "api_key_domain",
+            config,
+            ...(random === undefined ? {} : { random }),
+          }),
+        ),
+      );
 
   describe(`ApiKey domain (${store} records)`, () => {
     it.effect(
@@ -116,6 +162,29 @@ const suite = (store: HarnessOptions["store"]) => {
         assert.isTrue(Option.isNone(yield* apiKey.resolve(created.key)));
         const listed = yield* apiKey.list(owner);
         assert.isTrue(Option.isSome(listed[0]?.revokedAt ?? Option.none()));
+      }).pipe(provide()),
+    );
+
+    it.effect("8 concurrent revokes publish one auth.apiKey.revoked (plan 25 F10)", () =>
+      Effect.gen(function* () {
+        const apiKey = yield* ApiKey.ApiKey;
+        const audit = yield* AuditLog.AuditLog;
+        const created = yield* apiKey.create(owner, { name: "k", scopes: [] });
+        const outcomes = yield* Effect.all(
+          Array.from({ length: 8 }, () => Effect.exit(apiKey.revoke(owner, created.view.id))),
+          { concurrency: "unbounded" },
+        );
+        // Every caller is answered as the sequential path answers (revoke is idempotent); one announces it.
+        assert.isTrue(outcomes.every(Exit.isSuccess));
+        const revoked = (yield* audit.list()).filter(
+          (row) => row.eventTag === "auth.apiKey.revoked",
+        );
+        assert.strictEqual(revoked.length, 1);
+        yield* apiKey.revoke(owner, created.view.id);
+        assert.strictEqual(
+          (yield* audit.list()).filter((row) => row.eventTag === "auth.apiKey.revoked").length,
+          1,
+        );
       }).pipe(provide()),
     );
 
@@ -215,6 +284,39 @@ const suite = (store: HarnessOptions["store"]) => {
           const dead = yield* Effect.flip(apiKey.rotate(owner, created.view.id));
           assert.strictEqual(dead._tag, "ApiKeyNotFound");
         }).pipe(provide({ maxRotationGrace: Duration.days(7) })),
+      );
+
+      const gate = mintGate();
+      it.effect(
+        "a revoke landing after rotate's liveness read wins: ApiKeyNotFound, no successor (plan 25 F6)",
+        () =>
+          Effect.gen(function* () {
+            const apiKey = yield* ApiKey.ApiKey;
+            const audit = yield* AuditLog.AuditLog;
+            const created = yield* apiKey.create(owner, { name: "k", scopes: [] });
+            yield* gate.arm;
+            const rotation = yield* Effect.forkChild(
+              Effect.exit(apiKey.rotate(owner, created.view.id)),
+            );
+            // `rotate` has read the key live and is minting its successor; the revoke lands now.
+            yield* gate.reached;
+            yield* apiKey.revoke(owner, created.view.id);
+            yield* gate.release;
+            const exit = yield* Fiber.join(rotation);
+            assert.isTrue(Exit.isFailure(exit));
+            if (Exit.isFailure(exit)) {
+              assert.deepStrictEqual(
+                Option.map(Exit.findErrorOption(exit), (error) => error._tag),
+                Option.some("ApiKeyNotFound"),
+              );
+            }
+            assert.deepStrictEqual(
+              (yield* apiKey.list(owner)).map((view) => view.id),
+              [created.view.id],
+            );
+            const tags = (yield* audit.list()).map((row) => row.eventTag);
+            assert.notInclude(tags, "auth.apiKey.rotated");
+          }).pipe(provide({}, gate.layer)),
       );
 
       it.effect("rotating never lengthens a key that was already about to expire", () =>
