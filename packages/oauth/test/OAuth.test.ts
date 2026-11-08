@@ -202,7 +202,7 @@ describe("OAuth", () => {
         const url = new URL(location);
         assert.strictEqual(url.searchParams.get("code_challenge_method"), "S256");
         assert.isString(url.searchParams.get("code_challenge"));
-      }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ providers: [acme()] }))),
     );
 
     it.effect("REQ-EA-330: quirks.skipPkce omits the challenge only for that provider", () =>
@@ -214,7 +214,10 @@ describe("OAuth", () => {
         });
         const url = new URL(location);
         assert.isNull(url.searchParams.get("code_challenge"));
-      }).pipe(Effect.provide(buildLayer({ providers: [acme({ quirks: { skipPkce: true } })] }))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer({ providers: [acme({ quirks: { skipPkce: true } })] })),
+      ),
     );
 
     it.effect("REQ-EA-354: redirect_uri is always derived from the configured base URL", () =>
@@ -226,40 +229,7 @@ describe("OAuth", () => {
         });
         const url = new URL(location);
         assert.strictEqual(url.searchParams.get("redirect_uri"), `${baseUrl}/oauth/acme/callback`);
-      }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
-    );
-  });
-
-  describe("CSD-003: the callback's request context lands on the minted session", () => {
-    it.effect("records the client ip and user agent the handler passed", () =>
-      Effect.gen(function* () {
-        const oauth = yield* OAuth.OAuth;
-        const { state } = yield* oauth.authorize("acme", {
-          callbackURL: undefined,
-          link: undefined,
-        });
-        const outcome = yield* oauth.callback("acme", {
-          code: "auth-code",
-          state,
-          iss: undefined,
-          cookieState: state,
-          ip: "203.0.113.9",
-          userAgent: "OAuthTest/1.0",
-        });
-        assert.isDefined(outcome.session);
-        assert.deepStrictEqual(outcome.session?.session.ipAddress, Option.some("203.0.113.9"));
-        assert.deepStrictEqual(outcome.session?.session.userAgent, Option.some("OAuthTest/1.0"));
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [acme()],
-            httpRoutes: {
-              "/token": { access_token: "at-1" },
-              "/userinfo": { id: "acme-user-1", email: "ada@example.com" },
-            },
-          }),
-        ),
-      ),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ providers: [acme()] }))),
     );
   });
 
@@ -283,6 +253,7 @@ describe("OAuth", () => {
           .pipe(Effect.flip);
         assert.strictEqual(replay._tag, "OAuthCallbackFailed");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [acme()],
@@ -323,6 +294,7 @@ describe("OAuth", () => {
           });
           assert.isDefined(retried.session);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -363,6 +335,7 @@ describe("OAuth", () => {
           const consumed = yield* verification.consume(identifier, value);
           assert.strictEqual(consumed.identifier, identifier);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -421,6 +394,7 @@ describe("OAuth", () => {
             ]);
           }
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [okta()],
@@ -447,6 +421,7 @@ describe("OAuth", () => {
           });
           assert.isDefined(outcome.session);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -460,37 +435,36 @@ describe("OAuth", () => {
     );
   });
 
-  describe("CSD-003: the issued session records the callback request's context", () => {
-    it.effect("callback passes ip and userAgent through to Sessions.issue", () =>
-      Effect.gen(function* () {
-        const oauth = yield* OAuth.OAuth;
-        const { state } = yield* oauth.authorize("acme", {
-          callbackURL: undefined,
-          link: undefined,
-        });
-        const outcome = yield* oauth.callback("acme", {
-          code: "auth-code",
-          state,
-          iss: undefined,
-          cookieState: state,
-          ip: "203.0.113.20",
-          userAgent: "OAuthBrowser/1.0",
-        });
-        assert.isDefined(outcome.session);
-        assert.deepStrictEqual(outcome.session?.session.amr, ["fed"]);
-        assert.deepStrictEqual(outcome.session?.session.ipAddress, Option.some("203.0.113.20"));
-        assert.deepStrictEqual(outcome.session?.session.userAgent, Option.some("OAuthBrowser/1.0"));
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            providers: [acme()],
-            httpRoutes: {
-              "/token": { access_token: "at-1" },
-              "/userinfo": { id: "csd003-user", email: "csd003@example.com" },
-            },
-          }),
+  describe("THS-003: the issued session records a federated sign-in", () => {
+    it.effect(
+      "callback mints a session whose amr is fed (its request facts are core's, ADR-EA-047)",
+      () =>
+        Effect.gen(function* () {
+          const oauth = yield* OAuth.OAuth;
+          const { state } = yield* oauth.authorize("acme", {
+            callbackURL: undefined,
+            link: undefined,
+          });
+          const outcome = yield* oauth.callback("acme", {
+            code: "auth-code",
+            state,
+            iss: undefined,
+            cookieState: state,
+          });
+          assert.isDefined(outcome.session);
+          assert.deepStrictEqual(outcome.session?.session.amr, ["fed"]);
+        }).pipe(
+          TestAuth.withoutRequest,
+          Effect.provide(
+            buildLayer({
+              providers: [acme()],
+              httpRoutes: {
+                "/token": { access_token: "at-1" },
+                "/userinfo": { id: "csd003-user", email: "csd003@example.com" },
+              },
+            }),
+          ),
         ),
-      ),
     );
   });
 
@@ -525,6 +499,7 @@ describe("OAuth", () => {
           const linked = yield* accounts.findByProviderSubject("acme", "dave-sub");
           assert.isTrue(Option.isSome(linked));
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -558,6 +533,7 @@ describe("OAuth", () => {
             .pipe(Effect.flip);
           assert.strictEqual(failure._tag, "AccountExists");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [
@@ -613,6 +589,7 @@ describe("OAuth", () => {
           const linked = yield* accounts.findByProviderSubject("acme", "link-target-sub");
           assert.strictEqual(Option.getOrThrow(linked).userId, alice.id);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -658,6 +635,7 @@ describe("OAuth", () => {
         assert.strictEqual(b.session?.session.userId, userId);
         assert.strictEqual((yield* accounts.listByUser(userId!)).length, 1);
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [acme()],
@@ -702,7 +680,10 @@ describe("OAuth", () => {
           assert.strictEqual((yield* accounts.listByUser(alice.id)).length, 0);
           const stored = yield* accounts.findProviderTokens(bobsAccount.id);
           assert.strictEqual(Redacted.value(Option.getOrThrow(stored).accessToken), "at-bob");
-        }).pipe(Effect.provide(buildLayer({ providers: [acme()], httpRoutes: sharedRoutes }))),
+        }).pipe(
+          TestAuth.withoutRequest,
+          Effect.provide(buildLayer({ providers: [acme()], httpRoutes: sharedRoutes })),
+        ),
     );
 
     it.effect(
@@ -720,6 +701,7 @@ describe("OAuth", () => {
           const failure = yield* callbackFor(oauth).pipe(Effect.flip);
           assert.strictEqual(failure._tag, "AccountExists");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -777,6 +759,7 @@ describe("OAuth", () => {
           const restored = yield* yield* callbackAsAcme;
           assert.strictEqual(restored.session?.session.userId, created.id);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -810,6 +793,7 @@ describe("OAuth", () => {
           if (failure._tag === "AccountExists")
             assert.deepStrictEqual(failure.providers, ["passkey"]);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -834,6 +818,7 @@ describe("OAuth", () => {
         assert.strictEqual(failure._tag, "AccountExists");
         if (failure._tag === "AccountExists") assert.deepStrictEqual(failure.providers, []);
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [acme()],
@@ -886,6 +871,7 @@ describe("OAuth", () => {
           assert.strictEqual(outcome.session?.session.userId, imported.id);
           assert.strictEqual((yield* accounts.listByUser(imported.id)).length, 1);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [okta()],
@@ -913,7 +899,7 @@ describe("OAuth", () => {
           // The secret never appears in the authorize URL at all (it belongs
           // only to the later token-exchange request, never a GET redirect).
           assert.notInclude(location, "acme-secret");
-        }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ providers: [acme()] }))),
     );
   });
 
@@ -929,6 +915,7 @@ describe("OAuth", () => {
           });
           assert.include(location, "https://okta.example.com/authorize");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [okta()],
@@ -943,6 +930,7 @@ describe("OAuth", () => {
       () =>
         Effect.gen(function* () {
           const exit = yield* Effect.void.pipe(
+            TestAuth.withoutRequest,
             Effect.provide(
               buildLayer({
                 providers: [okta()],
@@ -971,6 +959,7 @@ describe("OAuth", () => {
         });
         assert.strictEqual(new URL(location).searchParams.get("client_id"), "plain-client-id");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [
@@ -1012,6 +1001,7 @@ describe("OAuth", () => {
       options: Parameters<typeof buildLayer>[0],
     ): Effect.Effect<string | undefined> =>
       Effect.void.pipe(
+        TestAuth.withoutRequest,
         Effect.provide(buildLayer(options)),
         Effect.exit,
         Effect.map((exit) => (exit._tag === "Failure" ? Cause.pretty(exit.cause) : undefined)),
@@ -1142,6 +1132,7 @@ describe("OAuth", () => {
           const failure = yield* afterAdvancing(hang, Duration.seconds(3), acmeCallback);
           assert.strictEqual(failure._tag, "ProviderUnavailable");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -1161,6 +1152,7 @@ describe("OAuth", () => {
           const failure = yield* afterAdvancing(hang, Duration.seconds(3), acmeCallback);
           assert.strictEqual(failure._tag, "ProviderUnavailable");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -1182,6 +1174,7 @@ describe("OAuth", () => {
             hang,
             Duration.seconds(3),
             Effect.void.pipe(
+              TestAuth.withoutRequest,
               Effect.provide(
                 buildLayer({
                   providers: [okta()],
@@ -1206,6 +1199,7 @@ describe("OAuth", () => {
           const failure = yield* acmeCallback;
           assert.strictEqual(failure._tag, "ProviderUnavailable");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -1222,6 +1216,7 @@ describe("OAuth", () => {
           const failure = yield* acmeCallback;
           assert.strictEqual(failure._tag, "OAuthCallbackFailed");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -1239,6 +1234,7 @@ describe("OAuth", () => {
         const failure = yield* acmeCallback;
         assert.strictEqual(failure._tag, "OAuthCallbackFailed");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [acme()],
@@ -1258,6 +1254,7 @@ describe("OAuth", () => {
         assert.strictEqual(failure._tag, "ProviderUnavailable");
         assert.strictEqual(tokenCalls, 1);
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [acme()],
@@ -1292,6 +1289,7 @@ describe("OAuth", () => {
           assert.isDefined(outcome.session);
           assert.strictEqual(userinfoCalls, 2);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -1323,6 +1321,7 @@ describe("OAuth", () => {
           assert.include(location, "https://okta.example.com/authorize");
           assert.strictEqual(discoveryCalls, 2);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [okta()],
@@ -1358,6 +1357,7 @@ describe("OAuth", () => {
           });
           assert.include(location, "https://okta.example.com/authorize");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme(), okta({ discovery: { mode: "lazy" } })],
@@ -1386,6 +1386,7 @@ describe("OAuth", () => {
             .pipe(Effect.flip);
           assert.strictEqual(second._tag, "ProviderUnavailable");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [okta({ discovery: { mode: "lazy" } })],
@@ -1423,7 +1424,7 @@ describe("OAuth", () => {
         return Effect.gen(function* () {
           yield* OAuthTokenAccess.OAuthTokenAccess;
           assert.strictEqual(discoveryCalls, 1);
-        }).pipe(Effect.provide(both));
+        }).pipe(TestAuth.withoutRequest, Effect.provide(both));
       },
     );
   });
@@ -1437,7 +1438,7 @@ describe("OAuth", () => {
           .filter((rule) => rule.group === "oauth")
           .map((rule) => rule.endpoint);
         assert.sameMembers([...endpoints], ["authorize", "callback"]);
-      }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ providers: [acme()] }))),
     );
   });
 
@@ -1447,10 +1448,10 @@ describe("OAuth", () => {
       () =>
         Effect.gen(function* () {
           const oauth = yield* OAuth.OAuth;
-          const input = { callbackURL: undefined, link: undefined, ip: "203.0.113.5" };
+          const input = { callbackURL: undefined, link: undefined };
           // Built value: the default 30 a minute. Two calls pass.
-          yield* oauth.authorize("acme", input);
-          yield* oauth.authorize("acme", input);
+          yield* oauth.authorize("acme", input).pipe(TestAuth.withRequest({ ip: "203.0.113.5" }));
+          yield* oauth.authorize("acme", input).pipe(TestAuth.withRequest({ ip: "203.0.113.5" }));
           // A tenant's configuration allows one: its second call is refused.
           const tenant = Context.get(
             yield* Layer.build(
@@ -1462,13 +1463,13 @@ describe("OAuth", () => {
             ),
             OAuth.OAuthConfig,
           );
-          const tenantInput = { ...input, ip: "203.0.113.6" };
+          const fromTenant = TestAuth.withRequest({ ip: "203.0.113.6" });
           yield* oauth
-            .authorize("acme", tenantInput)
-            .pipe(Effect.provideService(OAuth.OAuthConfig, tenant));
+            .authorize("acme", input)
+            .pipe(fromTenant, Effect.provideService(OAuth.OAuthConfig, tenant));
           const refused = yield* oauth
-            .authorize("acme", tenantInput)
-            .pipe(Effect.provideService(OAuth.OAuthConfig, tenant), Effect.flip);
+            .authorize("acme", input)
+            .pipe(fromTenant, Effect.provideService(OAuth.OAuthConfig, tenant), Effect.flip);
           assert.strictEqual(refused._tag, "RateLimited");
         }).pipe(
           Effect.scoped,
@@ -1495,7 +1496,7 @@ describe("OAuth", () => {
             `${rule.group}.${rule.name}`,
           ]),
         );
-      }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ providers: [acme()] }))),
     );
   });
 
@@ -1508,6 +1509,7 @@ describe("OAuth", () => {
           logs.push({ level: entry.logLevel, message: JSON.stringify(entry.message) });
         });
         const exit = yield* Effect.void.pipe(
+          TestAuth.withoutRequest,
           Effect.provide(Layer.provide(buildLayer(options), Logger.layer([capture]))),
           Effect.exit,
         );
@@ -1586,6 +1588,7 @@ describe("OAuth", () => {
           "https://app.example.com/oauth/acme/callback",
         );
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(buildLayer({ providers: [acme()], baseUrl: "https://app.example.com/" })),
       ),
     );
@@ -1624,6 +1627,7 @@ describe("OAuth", () => {
       discovery: Record<string, unknown>,
     ) =>
       Effect.void.pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({ providers, httpRoutes: { ".well-known/openid-configuration": discovery } }),
         ),
@@ -1660,7 +1664,10 @@ describe("OAuth", () => {
           assert.strictEqual(seen[0]?.form.get("client_id"), "okta-client-id");
           // Token requests ask for JSON (GitHub answers form-encoded otherwise).
           assert.strictEqual(seen[0]?.accept, "application/json");
-        }).pipe(Effect.provide(layerAdvertising(["client_secret_basic"], seen)));
+        }).pipe(
+          TestAuth.withoutRequest,
+          Effect.provide(layerAdvertising(["client_secret_basic"], seen)),
+        );
       },
     );
 
@@ -1672,7 +1679,10 @@ describe("OAuth", () => {
           yield* exchange;
           assert.isUndefined(seen[0]?.authorization);
           assert.strictEqual(seen[0]?.form.get("client_secret"), "okta-secret");
-        }).pipe(Effect.provide(layerAdvertising(["client_secret_post"], seen)));
+        }).pipe(
+          TestAuth.withoutRequest,
+          Effect.provide(layerAdvertising(["client_secret_post"], seen)),
+        );
       },
     );
 
@@ -1683,7 +1693,7 @@ describe("OAuth", () => {
         return Effect.gen(function* () {
           yield* exchange;
           assert.strictEqual(seen[0]?.authorization, `Basic ${btoa("okta-client-id:okta-secret")}`);
-        }).pipe(Effect.provide(layerAdvertising(undefined, seen)));
+        }).pipe(TestAuth.withoutRequest, Effect.provide(layerAdvertising(undefined, seen)));
       },
     );
 
@@ -1696,6 +1706,7 @@ describe("OAuth", () => {
           assert.isUndefined(seen[0]?.authorization);
           assert.strictEqual(seen[0]?.form.get("client_secret"), "okta-secret");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [
@@ -1729,6 +1740,7 @@ describe("OAuth", () => {
           yield* exchange;
           assert.strictEqual(seen[0]?.authorization, `Basic ${btoa("my+app%3Aid:s%3Dcr%26t")}`);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [
@@ -1792,6 +1804,7 @@ describe("OAuth", () => {
         assert.strictEqual(seen[0]?.form.get("client_id"), "okta-client-id");
         assert.isFalse(seen[0]?.form.has("client_secret"));
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [
@@ -1829,6 +1842,7 @@ describe("OAuth", () => {
         });
         assert.strictEqual(outcome.callbackURL, "https://trusted.example.com/dashboard");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [acme()],
@@ -1858,6 +1872,7 @@ describe("OAuth", () => {
         assert.notStrictEqual(outcome.callbackURL, "https://attacker.example.com/phish");
         assert.strictEqual(outcome.callbackURL, "/");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [acme()],
@@ -1885,6 +1900,7 @@ describe("OAuth", () => {
         });
         assert.strictEqual(outcome.callbackURL, "/settings");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [acme()],
@@ -1917,6 +1933,7 @@ describe("OAuth", () => {
         assert.notInclude(outcome.callbackURL, "evil.example.com");
         assert.strictEqual(outcome.callbackURL, "/");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [acme()],
@@ -1947,6 +1964,7 @@ describe("OAuth", () => {
           assert.notInclude(outcome.callbackURL, "evil.example.com");
           assert.strictEqual(outcome.callbackURL, "/");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -1974,6 +1992,7 @@ describe("OAuth", () => {
         });
         assert.strictEqual(outcome.callbackURL, "/");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [acme()],
@@ -2032,7 +2051,10 @@ describe("OAuth", () => {
           cookieState: state,
         });
         assert.isDefined(outcome.session);
-      }).pipe(Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() }))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() })),
+      ),
     );
 
     // OIT-001 (OIDC Core 5.3.2): the userinfo `sub` MUST equal the verified
@@ -2074,6 +2096,7 @@ describe("OAuth", () => {
           assert.isTrue(Option.isNone(yield* accounts.findByProviderSubject("okta", "victim-sub")));
           assert.isTrue(Option.isNone(yield* accounts.findByProviderSubject("okta", "real-sub")));
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [oktaWithUserinfo()],
@@ -2110,6 +2133,7 @@ describe("OAuth", () => {
           // contradicting `true` must not turn on auto-link.
           assert.strictEqual(failure._tag, "AccountExists");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [oktaWithUserinfo()],
@@ -2146,6 +2170,7 @@ describe("OAuth", () => {
         const user = yield* users.findByEmail("enrich@example.com");
         assert.strictEqual(Option.getOrThrow(user).name, "Enriched Name");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [oktaWithUserinfo()],
@@ -2180,6 +2205,7 @@ describe("OAuth", () => {
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "OAuthCallbackFailed");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [okta()],
@@ -2212,6 +2238,7 @@ describe("OAuth", () => {
             .pipe(Effect.flip);
           assert.strictEqual(failure._tag, "OAuthCallbackFailed");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [okta()],
@@ -2259,6 +2286,7 @@ describe("OAuth", () => {
             .pipe(Effect.flip);
           assert.strictEqual(failure._tag, "OAuthCallbackFailed");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [okta()],
@@ -2304,6 +2332,7 @@ describe("OAuth", () => {
         });
         assert.isDefined(outcome.session);
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [okta({ idTokenSigningAlgs: ["ES256"] })],
@@ -2334,6 +2363,7 @@ describe("OAuth", () => {
             .pipe(Effect.flip);
           assert.strictEqual(failure._tag, "OAuthCallbackFailed");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [okta({ idTokenSigningAlgs: ["ES256"] })],
@@ -2369,6 +2399,7 @@ describe("OAuth", () => {
           });
           assert.isDefined(outcome.session);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [okta()],
@@ -2412,6 +2443,7 @@ describe("OAuth", () => {
           // One cold load shared by every caller, plus at most one forced refetch for the miss.
           assert.isAtMost(jwksCalls, 2);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [okta()],
@@ -2497,7 +2529,10 @@ describe("OAuth", () => {
 
           const second = yield* roundTrip();
           assert.isDefined(second.session);
-        }).pipe(Effect.provide(buildLayer({ providers: [okta()], httpRoutes })));
+        }).pipe(
+          TestAuth.withoutRequest,
+          Effect.provide(buildLayer({ providers: [okta()], httpRoutes })),
+        );
       },
     );
 
@@ -2514,6 +2549,7 @@ describe("OAuth", () => {
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "OAuthCallbackFailed");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [okta()],
@@ -2546,6 +2582,7 @@ describe("OAuth", () => {
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "OAuthCallbackFailed");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [acme()],
@@ -2573,7 +2610,10 @@ describe("OAuth", () => {
           .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "OAuthCallbackFailed");
-      }).pipe(Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() }))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() })),
+      ),
     );
 
     it.effect("an expired id_token is rejected", () =>
@@ -2596,7 +2636,10 @@ describe("OAuth", () => {
           .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "OAuthCallbackFailed");
-      }).pipe(Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() }))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() })),
+      ),
     );
 
     it.effect("an id_token with a mismatched nonce is rejected", () =>
@@ -2617,7 +2660,10 @@ describe("OAuth", () => {
           .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "OAuthCallbackFailed");
-      }).pipe(Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() }))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() })),
+      ),
     );
 
     it.effect("BAM-008: an oidc sign-up persists the id_token alongside the access token", () =>
@@ -2644,7 +2690,10 @@ describe("OAuth", () => {
           Redacted.value(Option.getOrThrow(tokens.idToken)),
           signJwt(currentClaims),
         );
-      }).pipe(Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() }))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer({ providers: [okta()], httpRoutes: idTokenRoutes() })),
+      ),
     );
 
     it.effect(
@@ -2668,6 +2717,7 @@ describe("OAuth", () => {
           const failure = yield* Fiber.join(fiber);
           assert.strictEqual(failure._tag, "ProviderUnavailable");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [okta()],
@@ -2700,6 +2750,7 @@ describe("OAuth", () => {
           assert.isDefined(outcome.session);
           assert.strictEqual(jwksCalls, 2);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [okta()],
@@ -2729,6 +2780,7 @@ describe("OAuth", () => {
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "ProviderUnavailable");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [okta()],
@@ -2779,7 +2831,7 @@ describe("OAuth", () => {
         yield* TestClock.adjust(Duration.seconds(3600 + 61));
         const stale = yield* attempt((location) => claimsAtZero(location, { exp: 3600 }));
         assert.strictEqual(stale._tag, "Failure");
-      }).pipe(Effect.provide(oktaLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(oktaLayer())),
     );
 
     it.effect(
@@ -2795,6 +2847,7 @@ describe("OAuth", () => {
           yield* attempt((location) => claimsAtZero(location, { sub: "ttl-3" }));
           assert.strictEqual(jwksCalls, 2);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [okta()],
@@ -2817,7 +2870,7 @@ describe("OAuth", () => {
           claimsAtZero(location, { aud: ["okta-client-id"] }),
         );
         assert.strictEqual(result._tag, "Success");
-      }).pipe(Effect.provide(oktaLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(oktaLayer())),
     );
 
     it.effect("OIT-003: a multi-value aud with azp naming this client is accepted", () =>
@@ -2826,7 +2879,7 @@ describe("OAuth", () => {
           claimsAtZero(location, { aud: ["okta-client-id", "other-api"], azp: "okta-client-id" }),
         );
         assert.strictEqual(result._tag, "Success");
-      }).pipe(Effect.provide(oktaLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(oktaLayer())),
     );
 
     it.effect("OIT-003: a multi-value aud without azp is rejected", () =>
@@ -2835,7 +2888,7 @@ describe("OAuth", () => {
           claimsAtZero(location, { aud: ["okta-client-id", "other-api"] }),
         );
         assert.strictEqual(result._tag, "Failure");
-      }).pipe(Effect.provide(oktaLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(oktaLayer())),
     );
 
     it.effect("OIT-003: an azp naming another client is rejected even when aud matches", () =>
@@ -2844,7 +2897,7 @@ describe("OAuth", () => {
           claimsAtZero(location, { azp: "someone-elses-client" }),
         );
         assert.strictEqual(result._tag, "Failure");
-      }).pipe(Effect.provide(oktaLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(oktaLayer())),
     );
 
     it.effect(
@@ -2861,7 +2914,7 @@ describe("OAuth", () => {
               ._tag,
             "Failure",
           );
-        }).pipe(Effect.provide(oktaLayer())),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(oktaLayer())),
     );
 
     it.effect("OIT-004: an id_token expired by less than the skew is accepted", () =>
@@ -2869,14 +2922,14 @@ describe("OAuth", () => {
         // exp 30s in the past at clock 0, inside the default 60s leeway.
         const result = yield* attempt((location) => claimsAtZero(location, { exp: -30 }));
         assert.strictEqual(result._tag, "Success");
-      }).pipe(Effect.provide(oktaLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(oktaLayer())),
     );
 
     it.effect("OIT-004: the skew is configurable (zero skew rejects a token 30s past exp)", () =>
       Effect.gen(function* () {
         const result = yield* attempt((location) => claimsAtZero(location, { exp: -30 }));
         assert.strictEqual(result._tag, "Failure");
-      }).pipe(Effect.provide(oktaLayer({ clockSkew: Duration.zero }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(oktaLayer({ clockSkew: Duration.zero }))),
     );
 
     it.effect("OIT-004: an id_token with iat in the future beyond the skew is rejected", () =>
@@ -2890,7 +2943,7 @@ describe("OAuth", () => {
           (yield* attempt((location) => claimsAtZero(location, { iat: 30 })))._tag,
           "Success",
         );
-      }).pipe(Effect.provide(oktaLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(oktaLayer())),
     );
 
     it.effect(
@@ -2909,7 +2962,7 @@ describe("OAuth", () => {
             (yield* attempt((location) => claimsAtZero(location, { iat: "yesterday" })))._tag,
             "Failure",
           );
-        }).pipe(Effect.provide(oktaLayer())),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(oktaLayer())),
     );
 
     it.effect(
@@ -2931,7 +2984,10 @@ describe("OAuth", () => {
             (yield* attempt((location) => claimsAtZero(location)))._tag,
             "Failure",
           );
-        }).pipe(Effect.provide(oktaLayer({ maxIdTokenAge: Duration.minutes(10) }))),
+        }).pipe(
+          TestAuth.withoutRequest,
+          Effect.provide(oktaLayer({ maxIdTokenAge: Duration.minutes(10) })),
+        ),
     );
 
     it.effect("OIT-006: an id_token without a nonce claim is rejected", () =>
@@ -2941,7 +2997,7 @@ describe("OAuth", () => {
           return rest;
         });
         assert.strictEqual(result._tag, "Failure");
-      }).pipe(Effect.provide(oktaLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(oktaLayer())),
     );
 
     it.effect("OIT-006: an oidc flow whose persisted payload lacks a nonce fails closed", () =>
@@ -2963,7 +3019,7 @@ describe("OAuth", () => {
           .callback("okta", { code: "c1", state, iss: undefined, cookieState: state })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "OAuthCallbackFailed");
-      }).pipe(Effect.provide(oktaLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(oktaLayer())),
     );
 
     it.effect("an id_token without a sub claim is rejected", () =>
@@ -2973,7 +3029,7 @@ describe("OAuth", () => {
           return rest;
         });
         assert.strictEqual(result._tag, "Failure");
-      }).pipe(Effect.provide(oktaLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(oktaLayer())),
     );
 
     it.effect(
@@ -2989,7 +3045,10 @@ describe("OAuth", () => {
           // The wire error carries no reason at all.
           assert.strictEqual(JSON.stringify(result.failure), '{"_tag":"OAuthCallbackFailed"}');
           assert.isTrue(logs.some((line) => line.includes("oauth callback failed: nonce")));
-        }).pipe(Effect.provide(Layer.merge(oktaLayer(), Logger.layer([capture]))));
+        }).pipe(
+          TestAuth.withoutRequest,
+          Effect.provide(Layer.merge(oktaLayer(), Logger.layer([capture]))),
+        );
       },
     );
 
@@ -3041,7 +3100,7 @@ describe("OAuth", () => {
             return `${unsigned}.${mac}`;
           });
           assert.strictEqual(failure._tag, "OAuthCallbackFailed");
-        }).pipe(Effect.provide(forgedLayer)),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(forgedLayer)),
     );
 
     it.effect("OIT-009: an alg:none id_token is rejected", () =>
@@ -3050,7 +3109,7 @@ describe("OAuth", () => {
           forgedToken({ alg: "none", typ: "JWT" }, claims, ""),
         );
         assert.strictEqual(failure._tag, "OAuthCallbackFailed");
-      }).pipe(Effect.provide(forgedLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(forgedLayer)),
     );
 
     it.effect("a userinfo body that yields no subject never becomes an account (no-subject)", () =>
@@ -3065,6 +3124,7 @@ describe("OAuth", () => {
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "OAuthCallbackFailed");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [acme()],
@@ -3100,6 +3160,7 @@ describe("OAuth", () => {
         assert.strictEqual(Option.getOrThrow(tokens.scope), "read write");
         assert.strictEqual(Option.getOrThrow(tokens.tokenType), "Bearer");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [acme()],
@@ -3136,6 +3197,7 @@ describe("OAuth", () => {
           const tokens = Option.getOrThrow(yield* accounts.findProviderTokens(account.id));
           assert.isTrue(Option.isSome(tokens.accessTokenExpiresAt));
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -3170,6 +3232,7 @@ describe("OAuth", () => {
           assert.isTrue(Option.isNone(tokens.scope));
           assert.isTrue(Option.isNone(tokens.tokenType));
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -3232,6 +3295,7 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
       const linked = yield* accounts.findByProviderSubject(connectionId, "acme-user-1", "");
       assert.isTrue(Option.isSome(linked));
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         buildLayer({ providers: [], httpRoutes: userinfoRoutes, connections: resolver }),
       ),
@@ -3250,7 +3314,10 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
       });
       assert.strictEqual(new URL(location).searchParams.get("client_id"), "acme-client-id");
       assert.deepStrictEqual(calls, []);
-    }).pipe(Effect.provide(buildLayer({ providers: [acme()], connections: resolver })));
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(buildLayer({ providers: [acme()], connections: resolver })),
+    );
   });
 
   it.effect("an id that is neither static nor a known connection is ProviderNotFound", () => {
@@ -3261,7 +3328,10 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
         .authorize("org:org-1:missing", { callbackURL: undefined, link: undefined })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "ProviderNotFound");
-    }).pipe(Effect.provide(buildLayer({ providers: [], connections: resolver })));
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(buildLayer({ providers: [], connections: resolver })),
+    );
   });
 
   it.effect(
@@ -3273,7 +3343,7 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
           .authorize(connectionId, { callbackURL: undefined, link: undefined })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "ProviderNotFound");
-      }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ providers: [acme()] }))),
   );
 
   it.effect(
@@ -3293,6 +3363,7 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
         yield* authorize();
         assert.strictEqual(discoveries, 2);
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [],
@@ -3327,6 +3398,7 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
         });
         assert.isString(up.location);
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [],
@@ -3356,6 +3428,7 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "ProviderUnavailable");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer({
             providers: [],
@@ -3403,6 +3476,7 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
             [["acme", ["fed"]]],
           );
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             SignInProbe.layer.pipe(
               Layer.provideMerge(buildLayer({ providers: [acme()], httpRoutes: acmeRoutes })),
@@ -3418,6 +3492,7 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
           const failure = yield* callbackOnce.pipe(Effect.flip);
           assert.strictEqual(failure._tag, "OAuthCallbackFailed");
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             buildLayer({
               providers: [acme()],
@@ -3454,7 +3529,6 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
               state,
               iss: undefined,
               cookieState: "not-the-state",
-              ip: "203.0.113.4",
             })
             .pipe(Effect.flip);
           assert.strictEqual(failure._tag, "OAuthCallbackFailed");
@@ -3463,9 +3537,8 @@ describe("EP-004: per-organization connections (BEH-EA-235)", () => {
             _tag: "auth.user.signInFailed",
             strategy: "acme",
             reason: "callbackRejected",
-            clientIp: "203.0.113.4",
           });
-        }).pipe(Effect.provide(buildLayer({ providers: [acme()] }))),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ providers: [acme()] }))),
     );
   });
 });

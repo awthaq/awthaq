@@ -10,13 +10,15 @@
 // real bug (`Schema.Union` collapsing per-member `httpApiStatus`) that its
 // domain-level tests could not — this file exists for the same reason,
 // against `OAuthApi.ts`'s own array-form `error` declarations.
-import { Auth, SessionCookie } from "@awthaq/core";
+import { Api } from "@awthaq/api";
+import { Auth, SessionCookie, Sessions } from "@awthaq/core";
 import { CookieAssertions, TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as OAuth from "../src/OAuth.ts";
 import * as OAuthProvider from "../src/OAuthProvider.ts";
@@ -50,6 +52,8 @@ const buildAppLayer = (options: {
   /** A real, enforcing limiter instead of the permissive one every other test uses. */
   readonly enforcing?: boolean;
   readonly config?: OAuth.OAuthConfigInput;
+  /** ADR-EA-047: the address every request resolves to. */
+  readonly clientAddress?: string;
 }) =>
   TestAuth.layer(Auth.make([OAuth.OAuth]), {
     services: Layer.mergeAll(
@@ -64,6 +68,7 @@ const buildAppLayer = (options: {
       }),
     ),
     rateLimiter: options.enforcing === true ? "enforcing" : "permissive",
+    ...(options.clientAddress === undefined ? {} : { clientAddress: options.clientAddress }),
     openapiPath: "/openapi.json",
   });
 
@@ -119,6 +124,55 @@ const runCallback = (
   });
 
 describe("AuthHttp + OAuth (real HTTP)", () => {
+  // ADR-EA-047 (plan 26 ticket 15): the wiring probe. OAuth reads no address and no header; the callback's session
+  // records the request context's facts, and the per-source rule counts per request address.
+  it.effect(
+    "ADR-EA-047: the callback session records the request's address and user agent; authorize counts per address",
+    () =>
+      Effect.gen(function* () {
+        const layerAt = (clientAddress: string) =>
+          buildAppLayer({
+            enforcing: true,
+            clientAddress,
+            config: {
+              baseUrl,
+              rateLimits: { authorize: { limit: 2, window: Duration.minutes(1) } },
+            },
+          });
+        const flow = yield* startFlow(layerAt("198.51.100.15"));
+        const landed = yield* Effect.promise(() =>
+          flow.browser.request("GET", `/oauth/acme/callback?code=auth-code&state=${flow.state}`, {
+            site: "cross-site",
+            navigation: true,
+            headers: { "user-agent": "OAuthProbe/1" },
+          }),
+        );
+        // A landing: the redirect, or the same-site interstitial (PV-016) that carries the cookie.
+        assert.oneOf(landed.status, [200, 302]);
+        const token = flow.browser.cookies.get(Api.SESSION_COOKIE_NAME)?.value ?? "";
+        const verified = yield* Effect.promise(() =>
+          flow.app.run(
+            Effect.flatMap(Effect.service(Sessions.Sessions), (sessions) =>
+              sessions.verify(Redacted.make(token)),
+            ),
+          ),
+        );
+        assert.deepStrictEqual(verified.session.ipAddress, Option.some("198.51.100.15"));
+        assert.deepStrictEqual(verified.session.userAgent, Option.some("OAuthProbe/1"));
+        // `authorize` tuned to 2 per minute: the flow spent one, the next is admitted, the third refused; another
+        // address is not.
+        const authorize = (app: typeof flow.app) =>
+          Effect.promise(() => app.request("GET", "/oauth/acme/authorize")).pipe(
+            Effect.map((response) => response.status),
+          );
+        assert.strictEqual(yield* authorize(flow.app), 302);
+        assert.strictEqual(yield* authorize(flow.app), 429);
+        const other = TestAuth.app(layerAt("198.51.100.16"));
+        assert.strictEqual(yield* authorize(other), 302);
+        yield* Effect.promise(() => Promise.all([flow.app.dispose(), other.dispose()]));
+      }),
+  );
+
   it.effect(
     "BEH-EA-121/128: authorize answers a 302 with a Location and sets the correlation cookie",
     () =>
