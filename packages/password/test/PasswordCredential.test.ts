@@ -3,6 +3,7 @@
 // and the rehash of a proven credential are tested here once; the endpoints that use them keep
 // one wiring test each (`Password.test.ts`, `PasswordStoreOutage.test.ts`).
 import { Accounts, Auth, Errors, Users } from "@awthaq/core";
+import { createHash } from "node:crypto";
 import { PasswordHasher } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -12,13 +13,20 @@ import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as Password from "../src/Password.ts";
 import * as PasswordCredential from "../src/PasswordCredential.ts";
-import { makeTestLayer, NoBreachHttpClient } from "./harness.ts";
+import {
+  httpClientReturning,
+  makeTestLayer,
+  NoBreachHttpClient,
+  UnavailableHttpClient,
+} from "./harness.ts";
 
 const DUMMY = "h:awthaq/password/dummy";
 
@@ -419,6 +427,163 @@ describe("PasswordCredential.rehashIfStale (BEH-EA-116)", () => {
         Option.isNone(
           yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, user.id),
         ),
+      );
+    }).pipe(Effect.provide(layerWith(hasher)));
+  });
+});
+
+// ---- accept: the one policy (BEH-EA-119/120, PHS-004, PHS-006, CSD-001) -------------------------
+
+const breached = Redacted.make("pwned-password-123");
+const breachedHex = createHash("sha1").update(Redacted.value(breached)).digest("hex").toUpperCase();
+
+/** A range listing that names `breached`'s suffix under its prefix, recording every URL requested. */
+const breachCorpus = () => {
+  const requested: Array<string> = [];
+  const layer = httpClientReturning((url) => {
+    requested.push(url);
+    return url.endsWith(breachedHex.slice(0, 5))
+      ? `${breachedHex.slice(5)}:5`
+      : `${"F".repeat(35)}:1`;
+  });
+  return { layer, requested };
+};
+
+/** CSD-001: a resolved non-2xx response, which `HttpClient` does not fail on its own. */
+const respondingStatus = (status: number) =>
+  Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) =>
+      Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status }))),
+    ),
+  );
+
+const NeverResponds = Layer.succeed(
+  HttpClient.HttpClient,
+  HttpClient.make(() => Effect.never),
+);
+
+/** Runs `accept` under `httpClient` and `config`, answering its hints (empty when accepted). */
+const hintsFor = (
+  candidate: Redacted.Redacted<string>,
+  httpClient: Layer.Layer<HttpClient.HttpClient>,
+  config: Partial<Password.PasswordConfigShape>,
+) =>
+  Effect.gen(function* () {
+    const credential = yield* PasswordCredential.PasswordCredential;
+    return yield* credential.accept(candidate).pipe(
+      Effect.as<ReadonlyArray<string>>([]),
+      Effect.catchTag("WeakPassword", (weak) => Effect.succeed(weak.hints)),
+    );
+  }).pipe(Effect.provide(makeTestLayer({ httpClient, config })));
+
+describe("PasswordCredential.accept: the one policy (BEH-EA-119/120)", () => {
+  it.effect("P1: shorter than the minLength in force is WeakPassword with the length hint", () =>
+    Effect.gen(function* () {
+      const hints = yield* hintsFor(Redacted.make("fifteen chars!!"), NoBreachHttpClient, {
+        minLength: 16,
+        breachCheck: false,
+      });
+      assert.deepStrictEqual(hints, ["must be at least 16 characters"]);
+    }),
+  );
+
+  it.effect("P2: a breached password is refused; only a 5-character SHA-1 prefix leaves", () => {
+    const corpus = breachCorpus();
+    return Effect.gen(function* () {
+      const hints = yield* hintsFor(breached, corpus.layer, { breachCheck: true });
+      assert.deepStrictEqual(hints, ["appears in known breaches"]);
+      assert.deepStrictEqual(corpus.requested, [
+        `https://api.pwnedpasswords.com/range/${breachedHex.slice(0, 5)}`,
+      ]);
+    });
+  });
+
+  // P3-P8: every way the breach check can be unavailable follows `onUnavailable`: "allow" accepts,
+  // "reject" refuses as if breached (PHS-004, CSD-001).
+  const unavailable: ReadonlyArray<readonly [string, Layer.Layer<HttpClient.HttpClient>]> = [
+    ["a transport failure", UnavailableHttpClient],
+    ["a 429", respondingStatus(429)],
+    ["a 503", respondingStatus(503)],
+    ["a 200 HTML body", httpClientReturning(() => "<html><body>Bad gateway</body></html>")],
+    ["an empty 200 body", httpClientReturning(() => "")],
+  ];
+  for (const [failure, httpClient] of unavailable) {
+    it.effect(`P3-P8: ${failure} from the breach check fails open by default`, () =>
+      Effect.gen(function* () {
+        assert.deepStrictEqual(yield* hintsFor(secret, httpClient, { breachCheck: true }), []);
+      }),
+    );
+    it.effect(`P3-P8: ${failure} from the breach check fails closed under reject`, () =>
+      Effect.gen(function* () {
+        const hints = yield* hintsFor(secret, httpClient, {
+          breachCheck: { onUnavailable: "reject" },
+        });
+        assert.deepStrictEqual(hints, ["appears in known breaches"]);
+      }),
+    );
+  }
+
+  it.effect("P9: a never-responding breach check fails open after breachCheckTimeout", () =>
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(
+        hintsFor(secret, NeverResponds, { breachCheckTimeout: Duration.seconds(3) }),
+        { startImmediately: true },
+      );
+      yield* TestClock.adjust(Duration.seconds(2));
+      assert.isUndefined(fiber.pollUnsafe(), "gave up before the timeout");
+      yield* TestClock.adjust(Duration.seconds(1));
+      assert.deepStrictEqual(yield* Fiber.join(fiber), []);
+    }),
+  );
+
+  it.effect("P9: a never-responding breach check fails closed under reject", () =>
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(
+        hintsFor(secret, NeverResponds, {
+          breachCheck: { onUnavailable: "reject" },
+          breachCheckTimeout: Duration.seconds(3),
+        }),
+        { startImmediately: true },
+      );
+      yield* TestClock.adjust(Duration.seconds(3));
+      assert.deepStrictEqual(yield* Fiber.join(fiber), ["appears in known breaches"]);
+    }),
+  );
+
+  it.effect("P10: breachCheck: false makes no request", () => {
+    const corpus = breachCorpus();
+    return Effect.gen(function* () {
+      assert.deepStrictEqual(yield* hintsFor(breached, corpus.layer, { breachCheck: false }), []);
+      assert.deepStrictEqual(corpus.requested, []);
+    });
+  });
+
+  it.effect("P11: the default configuration screens (PHS-006)", () => {
+    const corpus = breachCorpus();
+    return Effect.gen(function* () {
+      assert.deepStrictEqual(yield* hintsFor(breached, corpus.layer, {}), [
+        "appears in known breaches",
+      ]);
+    });
+  });
+});
+
+describe("PasswordCredential.linkFor", () => {
+  it.effect("W6: hashes now and builds the password LinkInput for the user it is given", () => {
+    const hasher = recordingHasher();
+    return Effect.gen(function* () {
+      const credential = yield* PasswordCredential.PasswordCredential;
+      const link = yield* credential.linkFor(yield* credential.accept(secret));
+      assert.deepStrictEqual(hasher.hashed, ["awthaq/password/dummy", Redacted.value(secret)]);
+      const user = yield* userWith(undefined);
+      const input = link(user);
+      assert.strictEqual(input.providerId, Accounts.PASSWORD_PROVIDER_ID);
+      assert.strictEqual(input.subject, user.id);
+      assert.isUndefined(input.issuer);
+      assert.strictEqual(
+        input.credentialHash === undefined ? undefined : Redacted.value(input.credentialHash),
+        `h:${Redacted.value(secret)}`,
       );
     }).pipe(Effect.provide(layerWith(hasher)));
   });

@@ -70,6 +70,15 @@ export const cannotForgeAProof = (credential: PasswordCredential.PasswordCredent
     },
   );
 
+// No write without the policy: an `Accepted` cannot be built from a literal, and `linkFor` refuses a
+// raw candidate.
+export const cannotForgeAnAcceptance = (credential: PasswordCredential.PasswordCredentialShape) =>
+  // @ts-expect-error - a plain `{ candidate }` is not an `Accepted`; only `accept` mints one
+  credential.linkFor({ candidate: Redacted.make("x") });
+export const cannotLinkARawCandidate = (credential: PasswordCredential.PasswordCredentialShape) =>
+  // @ts-expect-error - a raw `Redacted` is not an `Accepted`
+  credential.linkFor(Redacted.make("x"));
+
 // `verify` takes any claimant effect whose value carries the user id: a `Users.findByEmail`
 // lookup (`U = UserRecord`, `E = StoreUnavailable`) and a known id alike, with no annotation.
 export const verifiesALookup = (

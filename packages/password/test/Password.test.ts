@@ -8,7 +8,6 @@
 // `Verification`, and a fake `HttpClient` only for the HIBP breach-check
 // transport (the same category of swap `TestClock` is for time — not a
 // business-logic mock).
-import { createHash } from "node:crypto";
 import { Accounts, AuditLog, Auth, AuthEvents, MailDispatch, Sessions, Users } from "@awthaq/core";
 import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { SignInProbe, TestAuth } from "@awthaq/test";
@@ -26,28 +25,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Password from "../src/Password.ts";
-import {
-  httpClientReturning,
-  makeTestLayer,
-  NoBreachHttpClient,
-  tokenOf,
-  UnavailableHttpClient,
-} from "./harness.ts";
-
-const sha1Hex = (plain: string): string =>
-  createHash("sha1").update(plain).digest("hex").toUpperCase();
-
-// CSD-001: a resolved-but-non-2xx response (HIBP's own aggressive
-// throttling makes 429 the most common failure mode at scale) — distinct
-// from `UnavailableHttpClient`'s transport-level failure, since Effect's
-// `HttpClient` resolves normally for any status.
-const httpClientReturningStatus = (status: number): Layer.Layer<HttpClient.HttpClient> =>
-  Layer.succeed(
-    HttpClient.HttpClient,
-    HttpClient.make((request) =>
-      Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status }))),
-    ),
-  );
+import { makeTestLayer, NoBreachHttpClient, tokenOf } from "./harness.ts";
 
 /** The composition every test shares: `Auth.make([Password])` through `TestAuth.layer` (`harness.ts`). */
 const TestLayer = makeTestLayer();
@@ -746,100 +724,6 @@ describe("Password", () => {
   );
 
   it.effect(
-    "BEH-EA-119: a breached password is rejected with WeakPassword when breachCheck is on",
-    () => {
-      const breached = Redacted.make("pwned-password-123");
-      const hex = sha1Hex(Redacted.value(breached));
-      const prefix = hex.slice(0, 5);
-      const suffix = hex.slice(5);
-      // The real HIBP response format: one `SUFFIX:count` line per matching
-      // entry sharing this SHA-1 prefix.
-      const BreachedHttpClient = httpClientReturning((url) =>
-        url.endsWith(prefix) ? `${suffix}:5` : "",
-      );
-
-      return Effect.gen(function* () {
-        const password = yield* Password.Password;
-        const failure = yield* password.signUp({ email, password: breached }).pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "WeakPassword");
-      }).pipe(
-        TestAuth.withoutRequest,
-        Effect.provide(
-          makeTestLayer({ httpClient: BreachedHttpClient, config: { breachCheck: true } }),
-        ),
-      );
-    },
-  );
-
-  it.effect("BEH-EA-119: an unreachable breach check fails open by default", () =>
-    Effect.gen(function* () {
-      const password = yield* Password.Password;
-      const issued = yield* password.signUp({ email, password: strongPassword });
-      assert.isDefined(issued.token);
-    }).pipe(
-      TestAuth.withoutRequest,
-      Effect.provide(
-        makeTestLayer({ httpClient: UnavailableHttpClient, config: { breachCheck: true } }),
-      ),
-    ),
-  );
-
-  it.effect("BEH-EA-119: an unreachable breach check fails closed when configured", () =>
-    Effect.gen(function* () {
-      const password = yield* Password.Password;
-      const failure = yield* password.signUp({ email, password: strongPassword }).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "WeakPassword");
-    }).pipe(
-      TestAuth.withoutRequest,
-      Effect.provide(
-        makeTestLayer({
-          httpClient: UnavailableHttpClient,
-          config: { breachCheck: { onUnavailable: "reject" } },
-        }),
-      ),
-    ),
-  );
-
-  // CSD-001: a resolved-but-non-2xx response (HIBP throttling, most common
-  // at deployment scale) used to read as an ordinary body — its error text
-  // would simply fail the suffix match and report "not breached" even
-  // under `onUnavailable: "reject"`. These mirror the two
-  // `UnavailableHttpClient` tests above exactly, substituting a 429/503
-  // response for a transport failure, to prove HTTP-level failures now
-  // route through the same `onUnavailable` branch as transport failures.
-  it.effect("CSD-001: a 429 from the breach check fails open by default", () =>
-    Effect.gen(function* () {
-      const password = yield* Password.Password;
-      const issued = yield* password.signUp({ email, password: strongPassword });
-      assert.isDefined(issued.token);
-    }).pipe(
-      TestAuth.withoutRequest,
-      Effect.provide(
-        makeTestLayer({
-          httpClient: httpClientReturningStatus(429),
-          config: { breachCheck: true },
-        }),
-      ),
-    ),
-  );
-
-  it.effect("CSD-001: a 503 from the breach check fails closed when configured", () =>
-    Effect.gen(function* () {
-      const password = yield* Password.Password;
-      const failure = yield* password.signUp({ email, password: strongPassword }).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "WeakPassword");
-    }).pipe(
-      TestAuth.withoutRequest,
-      Effect.provide(
-        makeTestLayer({
-          httpClient: httpClientReturningStatus(503),
-          config: { breachCheck: { onUnavailable: "reject" } },
-        }),
-      ),
-    ),
-  );
-
-  it.effect(
     "shipping-gaps/11: changePassword rotates the hash and rejects a wrong current password",
     () =>
       Effect.gen(function* () {
@@ -1386,6 +1270,42 @@ describe("Password", () => {
           }),
         ),
       ),
+  );
+});
+
+// FAMS-003: the verified-email gate is a knob, and it never runs before the credentials are checked.
+describe("FAMS-003: requireVerifiedEmail", () => {
+  it.effect(
+    "with requireVerifiedEmail: false an unverified user with correct credentials signs in",
+    () =>
+      Effect.gen(function* () {
+        const password = yield* Password.Password;
+        yield* password.signUp({ email, password: strongPassword });
+        const issued = yield* password.signIn({ email, password: strongPassword });
+        assert.isDefined(issued.token);
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(
+          makeTestLayer({
+            httpClient: NoBreachHttpClient,
+            config: { requireVerifiedEmail: false },
+          }),
+        ),
+      ),
+  );
+
+  it.effect("the credentials are still checked first when the gate is off", () =>
+    Effect.gen(function* () {
+      const password = yield* Password.Password;
+      yield* password.signUp({ email, password: strongPassword });
+      const failure = yield* password
+        .signIn({ email, password: Redacted.make("totally wrong password") })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "InvalidCredentials");
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(makeTestLayer({ config: { requireVerifiedEmail: false } })),
+    ),
   );
 });
 

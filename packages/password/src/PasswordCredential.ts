@@ -9,17 +9,31 @@
 // modes and its per-tenant choice, the account key convention, and races mapped to answers
 // instead of defects.
 
-import { Accounts, Errors, Observability, Tenant, type Users } from "@awthaq/core";
-import { PasswordHasher } from "@awthaq/ports";
+import { Accounts, Errors, Observability, type SignUp, Tenant, type Users } from "@awthaq/core";
+import { Hmac, PasswordHasher } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
+import * as Digest from "effect/crypto/Digest";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as PasswordApi from "./PasswordApi.ts";
 import { PasswordConfig, type PasswordConfigShape } from "./PasswordConfig.ts";
+
+/**
+ * A candidate the one policy accepted (BEH-EA-119/120). Only `accept` mints one, and every write
+ * takes nothing else, so no password credential is written without the policy.
+ */
+export type Accepted = {
+  readonly candidate: Redacted.Redacted<string>;
+} & Brand.Brand<"awthaq/password/Accepted">;
+const accepted = Brand.nominal<Accepted>();
 
 /**
  * What a successful `verify` proved: the account, the hash it matched and the candidate. Only
@@ -54,6 +68,20 @@ export interface PasswordCredentialShape {
    * left alone.
    */
   readonly rehashIfStale: (proven: Proof) => Effect.Effect<void, Errors.StoreUnavailable>;
+  /**
+   * BEH-EA-119/120: the one policy (minimum length, breach screening) in force for the calling
+   * fiber. Its breach check is a network call, so it never runs inside a unit of work (BEH-EA-117).
+   */
+  readonly accept: (
+    candidate: Redacted.Redacted<string>,
+  ) => Effect.Effect<Accepted, PasswordApi.WeakPassword>;
+  /**
+   * The sign-up unit's credential: hashes now, before the unit (TMS-005: equal work in both
+   * enumeration branches), and answers the link the unit makes for the new user.
+   */
+  readonly linkFor: (
+    password: Accepted,
+  ) => Effect.Effect<(user: Users.UserRecord) => SignUp.LinkInput>;
 }
 
 interface Stored {
@@ -63,9 +91,92 @@ interface Stored {
 
 const refused: Verdict<never> = { _tag: "Refused" };
 
+/** PHS-004: internal only — routed to `onUnavailable` by `isBreached`, never surfaced. */
+class MalformedBreachResponse extends Data.TaggedError("MalformedBreachResponse")<{}> {}
+
+/** One HIBP range line: the 35-hex-character SHA-1 suffix and its breach count. */
+const HIBP_LINE = /^[0-9A-F]{35}:\d+$/i;
+
+/**
+ * BEH-EA-119: the k-anonymity HIBP check — only a 5-character SHA-1 prefix
+ * ever leaves the process, per the API's own design; a real network/parse
+ * failure resolves to `onUnavailable === "reject"`, never re-raised as a
+ * distinguishable error (fail-open is a `false` here, fail-closed is `true`
+ * — "assume breached" is what actually blocks sign-up).
+ */
+const isBreached = (
+  httpClient: HttpClient.HttpClient,
+  digest: Digest.Digest["Service"],
+  password: Redacted.Redacted<string>,
+  onUnavailable: "allow" | "reject",
+  timeout: Duration.Duration,
+): Effect.Effect<boolean> =>
+  Effect.gen(function* () {
+    const sha1 = yield* digest.digest(
+      Digest.sha1,
+      new TextEncoder().encode(Redacted.value(password)),
+    );
+    const hex = Hmac.toHex(sha1).toUpperCase();
+    const prefix = hex.slice(0, 5);
+    const suffix = hex.slice(5);
+    // CSD-001: `HttpClient` resolves for any status — a 429/503 from HIBP
+    // (its own aggressive throttling is the most common failure mode at
+    // scale) would otherwise read as an ordinary body, fail the suffix
+    // match, and silently report "not breached" even under
+    // `onUnavailable: "reject"`. `filterStatusOk` turns any non-2xx into a
+    // failure, routed to `onUnavailable` by the same catch-all below a
+    // transport error already used.
+    const response = yield* httpClient
+      .get(`https://api.pwnedpasswords.com/range/${prefix}`)
+      .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk));
+    const body = yield* response.text;
+    // PHS-004: a 200 that is not a range listing (an HTML error page from a
+    // proxy, a truncated body) is no evidence of anything — treat it as
+    // unavailable rather than as "not breached". Every real prefix has
+    // hundreds of entries, so an empty body is malformed too.
+    const lines = body
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "");
+    if (lines.length === 0 || !lines.every((line) => HIBP_LINE.test(line))) {
+      return yield* new MalformedBreachResponse();
+    }
+    return lines.some((line) => line.split(":")[0]?.toUpperCase() === suffix);
+  }).pipe(
+    // PHS-004: a black-holed egress follows `onUnavailable` too, not a hang.
+    Effect.timeout(timeout),
+    Effect.catch(() => Effect.succeed(onUnavailable === "reject")),
+  );
+
+/** BEH-EA-119/120: what is wrong with `password` under `config`; empty when nothing is. */
+const policyHints = (
+  httpClient: HttpClient.HttpClient,
+  digest: Digest.Digest["Service"],
+  password: Redacted.Redacted<string>,
+  config: PasswordConfigShape,
+): Effect.Effect<ReadonlyArray<string>> =>
+  Effect.gen(function* () {
+    const hints: Array<string> = [];
+    if (Redacted.value(password).length < config.minLength) {
+      hints.push(`must be at least ${config.minLength} characters`);
+    }
+    if (config.breachCheck !== false) {
+      const onUnavailable =
+        config.breachCheck === true ? "allow" : config.breachCheck.onUnavailable;
+      if (
+        yield* isBreached(httpClient, digest, password, onUnavailable, config.breachCheckTimeout)
+      ) {
+        hints.push("appears in known breaches");
+      }
+    }
+    return hints;
+  });
+
 const make = Effect.gen(function* () {
   const accounts = yield* Accounts.Accounts;
   const hasher = yield* PasswordHasher.PasswordHasher;
+  const httpClient = yield* HttpClient.HttpClient;
+  const digest = yield* Digest.Digest;
   // EP-007: the floor and `rehashOnLogin` are decided per operation, so a tenant's
   // `Password.config(...)` in the calling fiber applies; the built value is boot-scoped only for
   // the calibration below.
@@ -168,7 +279,20 @@ const make = Effect.gen(function* () {
     },
   );
 
-  return { verify, rehashIfStale };
+  const accept: PasswordCredentialShape["accept"] = Effect.fnUntraced(function* (candidate) {
+    const hints = yield* policyHints(httpClient, digest, candidate, yield* configNow);
+    if (hints.length > 0) return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
+    return accepted({ candidate });
+  });
+
+  const linkFor: PasswordCredentialShape["linkFor"] = (password) =>
+    Effect.map(hasher.hash(password.candidate), (hash) => (user: Users.UserRecord) => ({
+      providerId: Accounts.PASSWORD_PROVIDER_ID,
+      subject: user.id,
+      credentialHash: Redacted.make(hash),
+    }));
+
+  return { verify, rehashIfStale, accept, linkFor };
 });
 
 /** The password credential module, exposed by `Password.layer` (ADR-EA-040) under the plugin's namespace. */
