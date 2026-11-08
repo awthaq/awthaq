@@ -28,6 +28,7 @@ suites=(
   packages/sql/test/UnitOfWork.test.ts
   packages/test/test/CoreSealedColumns.test.ts
   packages/test/test/StoreContract.sql.test.ts
+  packages/test/test/StoreContract.sealed.test.ts
   packages/admin/test/Contract.test.ts
   packages/api-key/test/Contract.test.ts
   packages/device-authorization/test/Contract.test.ts

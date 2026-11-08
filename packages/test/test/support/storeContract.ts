@@ -1,5 +1,6 @@
-// Plan 02: the three places `StoreContract` runs. Every port's cases are one list, run on the `Ref`
-// adapter, on SQLite (`:memory:`, or a Postgres schema under `pnpm test:pg`) and on a WAL file.
+// Plan 02: the places `StoreContract` runs. Every port's cases are one list, run on the `Ref`
+// adapter, on SQLite (`:memory:`, or a Postgres schema under `pnpm test:pg`), on a WAL file and on
+// libSQL; plan 28 adds the sealed bundle (`encryptPii`) for the ports it changes.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -69,14 +70,17 @@ const addUserFieldColumns = Effect.gen(function* () {
 });
 
 /** Every store of the seam, over one client with the core schema applied. */
-const sqlStores = <E>(client: Layer.Layer<SqlClient.SqlClient, E>) => {
+const sqlStores = <E>(
+  client: Layer.Layer<SqlClient.SqlClient, E>,
+  options: CoreStoresSql.Options = {},
+) => {
   const migrated = Layer.effectDiscard(
     Effect.gen(function* () {
       yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
       yield* addUserFieldColumns;
     }),
   ).pipe(Layer.provide(client));
-  return CoreStoresSql.layer().pipe(
+  return CoreStoresSql.layer(options).pipe(
     Layer.provide(EncryptionLive),
     Layer.provideMerge(client),
     Layer.provideMerge(migrated),
@@ -173,5 +177,25 @@ export const runOnSql = <E>(label: string, client: Layer.Layer<SqlClient.SqlClie
     adapter: `RelayCursorStore (${label})`,
     layer: sqlStores(client),
     cases: StoreContract.relayCursor,
+  });
+};
+
+/**
+ * Runs the contract of the ports whose SQL adapter has a sealing option (the only ones `encryptPii`
+ * changes) on the sealed bundle over `client`.
+ */
+export const runSealedOnSql = <E>(
+  label: string,
+  client: Layer.Layer<SqlClient.SqlClient, E>,
+): void => {
+  StoreContract.run(framework, {
+    adapter: `UserStore (${label}, encryptPii)`,
+    layer: sqlStores(client, { encryptPii: true }),
+    cases: StoreContract.users,
+  });
+  StoreContract.run(framework, {
+    adapter: `SessionStore (${label}, encryptPii)`,
+    layer: sqlStores(client, { encryptPii: true }),
+    cases: StoreContract.sessions,
   });
 };

@@ -369,6 +369,28 @@ const suite = (name: string, layer: Layer.Layer<SamlRecords.SamlRecords, unknown
 suite("SamlRecords (layerMemory)", MemoryLayer);
 suite("SamlRecords (layerSql)", SqlLayer);
 
+// Plan 28: only a unique violation (`StoreFailure.isUniqueViolation`) is "domain taken". Any other constraint the
+// domain insert fails (here a trigger, which SQLite reports as a `ConstraintError`) is a store failure.
+describe("SamlRecords (layerSql) constraint classification", () => {
+  it.effect(
+    "a domain insert refused by a constraint that is not unique is not SamlDomainTaken",
+    () =>
+      Effect.gen(function* () {
+        const records = yield* SamlRecords.SamlRecords;
+        yield* TestSql.injectFailure({
+          name: "saml_domain_refused",
+          table: "saml_connection_domain",
+          event: "INSERT",
+        });
+        const refused = yield* records
+          .create(input("c1", "org-1", ["acme.example"]))
+          .pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "StoreUnavailable");
+        assert.isTrue(Option.isNone(yield* records.findById(grant, "c1")));
+      }).pipe(Effect.provide(SqlLayer)),
+  );
+});
+
 // Plan 05: the tenant-isolation conformance suite for the four tables `SamlRecords` owns. `saml_connection` is
 // Keyed by `organizationId` and the other three are Derived through it. One records interface serves all four, so each
 // case classifies every method: the ones that belong to another table are `derived` and probed in that table's case.

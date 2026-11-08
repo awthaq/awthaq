@@ -562,8 +562,11 @@ export const layerSql: Layer.Layer<
         yield* sql`DELETE FROM organization_oauth_connection_domain WHERE "connectionId" = ${connectionId} AND "organizationId" = ${organizationId}`;
         for (const domain of domains) {
           yield* sql`INSERT INTO organization_oauth_connection_domain (domain, "connectionId", "organizationId") VALUES (${domain}, ${connectionId}, ${organizationId})`.pipe(
-            Effect.mapError((error) =>
-              error.reason._tag === "UniqueViolation" ? domainTaken(domain) : error,
+            // A plain predicate, not the refinement itself: the refinement would narrow every
+            // `SqlError` out of the error channel, though only a unique violation becomes the domain error.
+            Effect.catchIf(
+              (error) => StoreFailure.isUniqueViolation(error),
+              () => Effect.fail(domainTaken(domain)),
             ),
           );
         }
