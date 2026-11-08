@@ -265,11 +265,18 @@ export const run = <P extends AuthPlugin.Any>(
       Layer.empty,
       ...[...host, plugin].map((installed) => installed.records?.[mode] ?? Layer.empty),
     );
+  // Every SQL build gets its own Postgres schema: a framework may run the registered cases concurrently
+  // (the runner's own recording framework does), and two builds sharing a schema race on its DROP/CREATE.
+  let builds = 0;
   /** Every store of the composition over a fresh base; the base stays in the output for the cases. */
   const bundle = (mode: "memory" | "sql", key: string): Layer.Layer<never, unknown, unknown> =>
     records(mode).pipe(
       Layer.provideMerge(
-        recordsBase(mode, migrations, `${config.suite}_${key.split("/").pop() ?? key}`),
+        recordsBase(
+          mode,
+          migrations,
+          `${config.suite}_${key.split("/").pop() ?? key}_${mode === "sql" ? builds++ : 0}`,
+        ),
       ),
     );
   /** The keys of the stores the plugin's own bundle provides, read off a built memory bundle. */
