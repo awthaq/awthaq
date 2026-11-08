@@ -5,7 +5,7 @@
 // is a real divert), and the contract served behind the derived CSRF and authentication middleware, so a test can go
 // through the wire (`makeApp`) or call the service directly (`buildLayer`), over the very same rows.
 import { Api } from "@awthaq/api";
-import { Auth, Sessions, Users } from "@awthaq/core";
+import { Auth, type Sessions } from "@awthaq/core";
 import type { Hooks } from "@awthaq/core";
 import { SecondFactor, TwoFactor } from "@awthaq/two-factor";
 import { TestAuth } from "@awthaq/test";
@@ -68,23 +68,23 @@ export const makeApp = (options: HarnessOptions, taps?: Taps) => {
   const withContext = <A, E>(effect: Effect.Effect<A, E, HarnessServices>): Promise<A> =>
     app.run(effect);
 
-  /** A real session for a fresh user with `amr`, as `{ userId, cookie, bearer }`, against the same running `Sessions`. */
-  const signedInUser = (email: string, amr: ReadonlyArray<Sessions.AuthMethod> = ["pwd"]) =>
-    withContext(
-      Effect.gen(function* () {
-        const users = yield* Users.Users;
-        const sessions = yield* Sessions.Sessions;
-        const user = yield* users.create({ identity: { _tag: "Email", email }, name: email });
-        const issued = yield* sessions.issue({ userId: user.id, amr });
-        const token = Redacted.value(issued.token);
-        return {
-          userId: user.id,
-          sessionId: issued.session.id,
-          cookie: `${Api.SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
-          bearer: token,
-        };
-      }).pipe(Effect.orDie),
-    );
+  /**
+   * A real session for a fresh user with `amr`, against the same running `Sessions`: `browser` is an agent
+   * holding it (its cookies and CSRF echo), `bearer` its raw token, `cookie` the `Cookie` pair a browser
+   * sends (read from the agent's store), for a test that hand-builds a forged request.
+   */
+  const signedInUser = async (email: string, amr: ReadonlyArray<Sessions.AuthMethod> = ["pwd"]) => {
+    const browser = await app.signIn(email, { amr });
+    const held = browser.cookies.get(Api.SESSION_COOKIE_NAME);
+    if (held === undefined)
+      throw new Error("expected the signed-in agent to hold a session cookie");
+    return {
+      userId: browser.userId,
+      browser,
+      cookie: `${held.name}=${held.value}`,
+      bearer: Redacted.value(browser.token),
+    };
+  };
 
   return { handler: app.handler, withContext, signedInUser, request: app.request, layer };
 };

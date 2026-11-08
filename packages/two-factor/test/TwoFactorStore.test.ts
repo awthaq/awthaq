@@ -337,3 +337,10 @@ TestAuth.runSealedColumnTests<
   write: writeSecret,
   read: readSecret,
 });
+
+// Plan 17: the plugin declares its sealed column, so `auth.sealedColumns` (the `also` of a rotation sweep) lists it.
+describe("TwoFactorStore sealed column declaration", () => {
+  it("the plugin declares the TOTP secret", () => {
+    assert.deepStrictEqual(TwoFactor.TwoFactor.sealedColumns, [TwoFactorStore.secretColumn]);
+  });
+});

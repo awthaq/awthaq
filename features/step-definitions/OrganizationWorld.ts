@@ -5,7 +5,7 @@
 // cross-tenant Rule asserts exactly what an attacker holding a valid session would see.
 // The World is rebuilt per scenario, so the tenants a scenario names are the only tenants
 // that exist.
-import { Auth, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Auth, AuthEvents, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Admin } from "@awthaq/admin";
 import type { Mailer } from "@awthaq/ports";
 import {
@@ -33,13 +33,12 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
 import { makeCapturingMailer, makeNamedRegistry } from "./shared/Harness.ts";
 import { snapshot, type Snapshot } from "./shared/WireJson.ts";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, type UserAgent } from "@awthaq/test";
+import * as Cookies from "effect/http/Cookies";
 
 /** The record stores the memory layer provides, named so the inferred layer type below can be emitted. */
 export type RecordServiceNames =
@@ -106,6 +105,8 @@ type AppLayer = ReturnType<typeof buildAppLayer>;
 
 export interface AppHandle {
   readonly handler: (request: Request) => Promise<Response>;
+  /** A fresh browser over the app (its own cookies, a CSRF cookie already held). */
+  readonly agent: () => Promise<UserAgent.UserAgent>;
   /** Runs `effect` against the exact services `handler` runs on (the same memo map). */
   readonly withContext: <A, E>(effect: Effect.Effect<A, E, Layer.Success<AppLayer>>) => Promise<A>;
   readonly sentMail: Effect.Effect<ReadonlyArray<Mailer.MailMessage>>;
@@ -134,6 +135,7 @@ const buildApp = (options: AppOptions = {}): AppHandle => {
   const app = TestAuth.app(buildAppLayer(options, mailer, eventsLayer));
   return {
     handler: app.handler,
+    agent: () => app.agent(),
     withContext: (effect) => app.run(effect),
     sentMail: sent,
     publishedEvents: Ref.get(events),
@@ -141,12 +143,14 @@ const buildApp = (options: AppOptions = {}): AppHandle => {
   };
 };
 
-/** One signed-in caller: a real user and one real session cookie. */
+/** One signed-in caller: a real user and a browser holding one real session. */
 export interface Actor {
   readonly name: string;
   readonly userId: Users.UserId;
   readonly email: string;
-  readonly cookie: string;
+  /** The session's `Set-Cookie`, so a step can open a second browser holding the same session. */
+  readonly setCookie: string;
+  readonly agent: UserAgent.UserAgent;
 }
 
 export interface WorldShape {
@@ -234,8 +238,24 @@ export const currentApp = Effect.gen(function* () {
   return yield* Ref.get(app);
 });
 
-const sessionCookieFor = (token: Redacted.Redacted<string>) =>
-  `${Sessions.SESSION_COOKIE_NAME}=${encodeURIComponent(Redacted.value(token))}`;
+/** The `Set-Cookie` a freshly issued session is delivered as, under the composition's cookie config. */
+const renderSession = (issued: Sessions.IssuedSession) =>
+  Effect.map(SessionCookie.render(issued.session, issued.token), (rendered) =>
+    Cookies.serializeCookie(
+      Cookies.makeCookieUnsafe(rendered.name, rendered.value, rendered.options),
+    ),
+  );
+
+/** A fresh browser holding the session `setCookie` renders. */
+export const browserWith = Effect.fn("features.organization.browserWith")(function* (
+  setCookie: string,
+) {
+  const app = yield* currentApp;
+  const agent = yield* Effect.promise(() => app.agent());
+  const received = agent.cookies.receive(setCookie);
+  if (received._tag !== "Stored") throw new Error("the browser did not store the session cookie");
+  return agent;
+});
 
 /**
  * Creates a real user (with a verified address unless `verified: false`) and a real
@@ -248,7 +268,7 @@ export const signInUser = Effect.fn("features.organization.signInUser")(function
   const world = yield* World;
   const app = yield* currentApp;
   const email = input.email ?? `${name}@example.com`;
-  const actor = yield* Effect.promise(() =>
+  const minted = yield* Effect.promise(() =>
     app.withContext(
       Effect.gen(function* () {
         const users = yield* Users.Users;
@@ -258,10 +278,11 @@ export const signInUser = Effect.fn("features.organization.signInUser")(function
           .pipe(Effect.orDie);
         if (input.verified !== false) yield* users.verifyEmail(created.id).pipe(Effect.orDie);
         const issued = yield* sessions.issue({ userId: created.id }).pipe(Effect.orDie);
-        return { name, userId: created.id, email, cookie: sessionCookieFor(issued.token) };
+        return { name, userId: created.id, email, setCookie: yield* renderSession(issued) };
       }),
     ),
   );
+  const actor: Actor = { ...minted, agent: yield* browserWith(minted.setCookie) };
   yield* world.users.set(name, actor);
   yield* Ref.update(world.roster, (existing) => [...existing, actor]);
   return actor;
@@ -275,45 +296,38 @@ export const openSession = Effect.fn("features.organization.openSession")(functi
   const world = yield* World;
   const app = yield* currentApp;
   const owner = yield* world.users.get(userName);
-  const cookie = yield* Effect.promise(() =>
+  const setCookie = yield* Effect.promise(() =>
     app.withContext(
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         const issued = yield* sessions.issue({ userId: owner.userId }).pipe(Effect.orDie);
-        return sessionCookieFor(issued.token);
+        return yield* renderSession(issued);
       }),
     ),
   );
-  yield* world.users.set(sessionName, { ...owner, cookie });
+  yield* world.users.set(sessionName, {
+    ...owner,
+    setCookie,
+    agent: yield* browserWith(setCookie),
+  });
 });
 
-const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-
-/** One request as `cookie`'s owner; unsafe methods carry the double-submit CSRF pair a real client would. */
+/**
+ * One request from `agent` (a signed-in caller's browser, which keeps its cookies and echoes CSRF on an
+ * unsafe method), or from a fresh anonymous browser.
+ */
 export const send = Effect.fn("features.organization.send")(function* (
-  cookie: string | undefined,
+  agent: UserAgent.UserAgent | undefined,
   method: string,
   path: string,
   body?: unknown,
   options: { readonly observe?: boolean } = {},
 ) {
   const world = yield* World;
-  const { handler } = yield* currentApp;
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (UNSAFE.has(method)) {
-    headers["cookie"] = withCsrfCookie(cookie);
-    headers["x-csrf-token"] = CSRF_TEST_COOKIE_VALUE;
-  } else if (cookie !== undefined) {
-    headers["cookie"] = cookie;
-  }
+  const app = yield* currentApp;
+  const from = agent ?? (yield* Effect.promise(() => app.agent()));
   const response = yield* Effect.promise(() =>
-    handler(
-      new Request(`http://localhost${path}`, {
-        method,
-        headers,
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      }),
-    ),
+    from.request(method, path, body === undefined ? {} : { json: body }),
   );
   const drained = yield* snapshot(response);
   // An observation (a Then checking state as some user) must not overwrite the response
@@ -333,7 +347,7 @@ export const sendAs = Effect.fn("features.organization.sendAs")(function* (
 ) {
   const world = yield* World;
   const actor = yield* world.users.get(who);
-  return yield* send(actor.cookie, method, path, body, options);
+  return yield* send(actor.agent, method, path, body, options);
 });
 
 export const lastResponse = Effect.gen(function* () {

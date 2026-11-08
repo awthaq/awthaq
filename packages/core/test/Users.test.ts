@@ -5,14 +5,16 @@
 // the identity compare-and-swap, the delete that takes the fields with it, the keyset page) is
 // `StoreContract.users`, run on the `Ref`, SQLite, WAL-file and (`pnpm test:pg`) Postgres adapters;
 // the SQL adapter's own failure mapping is `packages/sql/test/UserStoreSql.test.ts`.
-import { UserStore } from "@awthaq/ports";
+import { Sealed, UserStore } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
+import * as References from "effect/References";
 import { StoreUnavailable } from "../src/Errors.ts";
 import * as Hooks from "../src/Hooks.ts";
 import { ErasureClearance } from "../src/internal/erasureClearance.ts";
@@ -857,4 +859,59 @@ describe("Users infrastructure failures (MA-004)", () => {
       assert.strictEqual(yield* operationOf(users.list()), "Users.list");
     }).pipe(Effect.provide(DownLayer)),
   );
+});
+
+// Plan 17 (ADR-EA-019 rev 1.3, CSG-006): `metadata` crosses the store port sealed. A value that does not open
+// degrades to absent with one ids-only warning; the user is still returned.
+describe("Users: an unreadable sealed metadata value", () => {
+  const unreadable = new Sealed.Unreadable({
+    table: "users",
+    column: "metadata",
+    rowKey: "u-broken",
+    reason: "DecryptionFailed",
+  });
+  const UnreadableStore = Layer.effect(
+    UserStore.UserStore,
+    Effect.map(UserStore.UserStore, (store) =>
+      UserStore.UserStore.of({
+        ...store,
+        get: (id) =>
+          Effect.map(
+            store.get(id),
+            Option.map((user) => ({
+              ...user,
+              metadata: Option.map(user.metadata, () => ({ open: Effect.fail(unreadable) })),
+            })),
+          ),
+      }),
+    ),
+  ).pipe(Layer.provide(UserStore.layerMemory));
+  const UnreadableLayer = Users.layer.pipe(
+    Layer.provide(UnreadableStore),
+    Layer.provide(NodeCrypto.layer),
+  );
+
+  it.effect("reads as absent, logs one warning with the column ids, and returns the user", () => {
+    const warnings: Array<string> = [];
+    const logger = Logger.make<unknown, void>((entry) => {
+      if (entry.logLevel === "Warn") {
+        warnings.push(JSON.stringify(entry.fiber.getRef(References.CurrentLogAnnotations)));
+      }
+    });
+    return Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const created = yield* users.create({
+        identity: { _tag: "Email", email: "broken@example.com" },
+        name: "B",
+        metadata: '{"secret":"pii"}',
+      });
+      const found = yield* users.findById(created.id);
+      assert.strictEqual(found.name, "B");
+      assert.isTrue(Option.isNone(found.metadata));
+      assert.strictEqual(warnings.length, 1);
+      assert.include(warnings[0] ?? "", '"table":"users"');
+      assert.include(warnings[0] ?? "", '"column":"metadata"');
+      assert.notInclude(warnings[0] ?? "", "pii");
+    }).pipe(Effect.provide(Layer.merge(UnreadableLayer, Logger.layer([logger]))));
+  });
 });

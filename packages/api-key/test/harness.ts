@@ -8,7 +8,6 @@ import { Jwt, JwtConfig } from "@awthaq/jwt";
 import { TestAuth } from "@awthaq/test";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
@@ -80,10 +79,17 @@ export const makeApp = (options: HarnessOptions) => {
     app.run(effect);
 
   /**
-   * A real session (cookie) for the user named `label`, against the same running `Sessions`. The
-   * user is a stored one (created on first use): a key resolves only while its owner exists.
+   * A browser signed in as the user named `label`, its session issued against the same running `Sessions`.
+   * The user is a stored one (created on first use): a key resolves only while its owner exists.
    */
-  const sessionCookie = (label: string): Promise<string> =>
+  const signIn = async (label: string) => {
+    const browser = await app.agent();
+    browser.cookies.receive(await issueSession(label));
+    return browser;
+  };
+
+  /** The `Set-Cookie` the server would answer for a fresh session of `label`. */
+  const issueSession = (label: string): Promise<string> =>
     withContext(
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
@@ -93,11 +99,11 @@ export const makeApp = (options: HarnessOptions) => {
           name: label,
         });
         const issued = yield* sessions.issue({ userId: user.id });
-        return `${Api.SESSION_COOKIE_NAME}=${encodeURIComponent(Redacted.value(issued.token))}`;
+        return yield* TestAuth.sessionSetCookie(issued);
       }),
     );
 
-  return { handler: app.handler, withContext, sessionCookie, request: app.request, layer };
+  return { handler: app.handler, withContext, signIn, request: app.request, layer };
 };
 
 /**

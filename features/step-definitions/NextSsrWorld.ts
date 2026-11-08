@@ -5,7 +5,7 @@
 // session row really exists (or does not) behind each cookie; `withNextCookies` over a recording
 // cookie jar standing in for `next/headers`' `cookies()`.
 import { Api } from "@awthaq/api";
-import { Auth } from "@awthaq/core";
+import { Auth, SessionCookie } from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { SubjectResolver } from "@awthaq/qadi";
 import { TestAuth } from "@awthaq/test";
@@ -126,3 +126,21 @@ export const send = (request: Request) =>
     const { handler } = yield* World;
     return yield* Effect.promise(() => handler(request));
   });
+
+/**
+ * IC-007: the same application under `SessionCookie.SecureDomain`, so `getSession` has to read `__Secure-session`
+ * (and not `__Host-session`). Built per scenario that needs it and disposed by that scenario.
+ */
+export const makeSecureDomainApp = (
+  roles: Ref.Ref<ReadonlyArray<string>>,
+  calls: Ref.Ref<number>,
+) =>
+  TestAuth.app(
+    appLayer(roles, calls).pipe(
+      Layer.provideMerge(
+        SessionCookie.config({
+          mode: SessionCookie.SecureDomain({ domain: "example.com", sameSite: "lax" }),
+        }),
+      ),
+    ),
+  );

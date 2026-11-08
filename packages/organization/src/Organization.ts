@@ -13,7 +13,7 @@
 // as a separate, additive export — this file does not need to anticipate
 // their shape.
 
-import { Api } from "@awthaq/api";
+import { Api, type SessionLifecycle } from "@awthaq/api";
 import {
   AuthEvents,
   AuthPlugin,
@@ -29,6 +29,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as ConnectionRecords from "./ConnectionRecords.ts";
 import * as InvitationRecords from "./InvitationRecords.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
@@ -54,6 +55,9 @@ import * as OrganizationTeams from "./OrganizationTeams.ts";
 import type { OrganizationShape } from "./OrganizationShape.ts";
 import { ownsEmail } from "./internal/invitee.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
+
+/** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type OrganizationLifecycle = SessionLifecycle.Refreshes;
 
 // ---- cross-organization witnesses (plan 05, ADR-EA-018 decision 10) ----------------------
 //
@@ -104,6 +108,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     apiVersion: 1,
     contract: OrganizationApi.OrganizationApi,
     migrations: organizationMigrations,
+    // Plan 17: the sealed OAuth connection secret, declared beside the records that seal it.
+    sealedColumns: [ConnectionRecords.clientSecretColumn],
     // Plan 08 (BEH-EA-T4): the eight record stores, memory and SQL, matched.
     records: OrganizationBundle,
     // Plan 08: the 46 hook points this plugin owns; `TestAuth.layer` provides them once beneath application taps.

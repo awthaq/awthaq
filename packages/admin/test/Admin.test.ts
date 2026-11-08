@@ -46,8 +46,6 @@ const seedUsers = Effect.gen(function* () {
   return { adminId: admin.id, targetId: target.id, users };
 });
 
-const protectedIds = new Set<string>();
-
 const asCaller = (input: {
   readonly id: string;
   readonly sessionId: string;
@@ -60,46 +58,6 @@ const asCaller = (input: {
   });
 
 describe("Admin", () => {
-  it.effect(
-    "BEH-EA-212/218: a denied gate produces AdminImpersonationDenied, no session issued",
-    () =>
-      Effect.gen(function* () {
-        const { adminId, targetId } = yield* seedUsers;
-        const admin = yield* Admin.Admin;
-        const events = yield* AuthEvents.AuthEvents;
-        const sessions = yield* Sessions.Sessions;
-
-        const seen = yield* Effect.forkChild(
-          events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.admin.impersonationDenied"),
-            Stream.take(1),
-            Stream.runCollect,
-          ),
-          { startImmediately: true },
-        );
-
-        const caller = asCaller({ id: adminId, sessionId: "admin-session" });
-        const failure = yield* admin
-          .impersonate({ caller, targetUserId: targetId, reason: "reproducing a bug" })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "AdminImpersonationDenied");
-
-        const collected = yield* Fiber.join(seen);
-        assert.strictEqual(collected.length, 1);
-        // IDS-006: the denied event names the refused call and the attempted target.
-        const [denied] = collected;
-        assert.strictEqual(denied?._tag, "auth.admin.impersonationDenied");
-        if (denied?._tag === "auth.admin.impersonationDenied") {
-          assert.strictEqual(denied.adminUserId, adminId);
-          assert.strictEqual(denied.operation, "impersonate");
-          assert.strictEqual(denied.targetUserId, targetId);
-        }
-
-        const listed = yield* sessions.list(targetId);
-        assert.strictEqual(listed.length, 0);
-      }).pipe(Effect.provide(buildLayer(deny))),
-  );
-
   it.effect(
     "BEH-EA-213/215: a successful impersonate issues a dual-identity session and an audit row, leaving the caller's own session untouched",
     () =>
@@ -255,28 +213,6 @@ describe("Admin", () => {
       }).pipe(Effect.provide(buildLayer(allow))),
   );
 
-  it.effect("forceStop is gated: a gate that refuses the episode's target denies the stop", () =>
-    Effect.gen(function* () {
-      const { adminId, targetId } = yield* seedUsers;
-      const admin = yield* Admin.Admin;
-      const sessions = yield* Sessions.Sessions;
-      const records = yield* ImpersonationRecords.ImpersonationRecords;
-      const ownSession = yield* sessions.issue({ userId: adminId });
-      // The episode row exists (created out of band, as another admin's would be);
-      // the deny-all gate must refuse to end it.
-      yield* records.create({
-        adminUserId: adminId,
-        targetUserId: targetId,
-        sessionId: ownSession.session.id,
-        reason: "seed",
-        expiresAt: DateTime.addDuration(yield* DateTime.now, Duration.days(1)),
-      });
-      const anotherAdmin = asCaller({ id: "admin-2", sessionId: "admin-2-session" });
-      const failure = yield* admin.forceStop(anotherAdmin, ownSession.session.id).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "AdminImpersonationDenied");
-    }).pipe(Effect.provide(buildLayer(deny))),
-  );
-
   it.effect(
     "BEH-EA-219/220: list returns full history newest-first and an active filter, gated by the same predicate",
     () =>
@@ -304,96 +240,6 @@ describe("Admin", () => {
         assert.strictEqual(active.length, 1);
         assert.strictEqual(active[0]?.reason, "second");
       }).pipe(Effect.provide(buildLayer(allow))),
-  );
-
-  it.effect("IDS-001: list under a deny-all gate exposes no episodes (fail-closed)", () =>
-    Effect.gen(function* () {
-      const { adminId, targetId } = yield* seedUsers;
-      const admin = yield* Admin.Admin;
-      const records = yield* ImpersonationRecords.ImpersonationRecords;
-      yield* records.create({
-        adminUserId: adminId,
-        targetUserId: targetId,
-        sessionId: "seeded-session",
-        reason: "seed",
-        expiresAt: DateTime.addDuration(yield* DateTime.now, Duration.days(1)),
-      });
-      const caller = asCaller({ id: adminId, sessionId: "admin-session" });
-      const page = (yield* admin.list(caller)).items;
-      assert.strictEqual(page.length, 0);
-    }).pipe(Effect.provide(buildLayer(deny))),
-  );
-
-  it.effect("IDS-001: canImpersonate receives the target and can refuse a protected target", () =>
-    Effect.gen(function* () {
-      const { adminId, targetId, users } = yield* seedUsers;
-      const protectedUser = yield* users.create({
-        identity: { _tag: "Email", email: "superadmin-2@example.com" },
-        name: "superadmin",
-      });
-      protectedIds.add(protectedUser.id);
-      const admin = yield* Admin.Admin;
-      const events = yield* AuthEvents.AuthEvents;
-      const seen = yield* Effect.forkChild(
-        events.stream.pipe(
-          Stream.filter((event) => event._tag === "auth.admin.impersonationDenied"),
-          Stream.take(1),
-          Stream.runCollect,
-        ),
-        { startImmediately: true },
-      );
-      const caller = asCaller({ id: adminId, sessionId: "admin-session" });
-
-      const refused = yield* admin
-        .impersonate({ caller, targetUserId: protectedUser.id, reason: "not allowed" })
-        .pipe(Effect.flip);
-      assert.strictEqual(refused._tag, "AdminImpersonationDenied");
-      assert.strictEqual((yield* Fiber.join(seen)).length, 1);
-
-      const issued = yield* admin.impersonate({
-        caller,
-        targetUserId: targetId,
-        reason: "allowed",
-      });
-      assert.strictEqual(issued.session.userId, targetId);
-    }).pipe(
-      Effect.provide(buildLayer(({ target }) => Effect.succeed(!protectedIds.has(target.id)))),
-    ),
-  );
-
-  it.effect("IDS-001: forceStop/list are filtered by canManageEpisode", () =>
-    Effect.gen(function* () {
-      const { adminId, targetId, users } = yield* seedUsers;
-      const other = yield* users.create({
-        identity: { _tag: "Email", email: "other@example.com" },
-        name: "other",
-      });
-      const admin = yield* Admin.Admin;
-      const sessions = yield* Sessions.Sessions;
-      const caller = asCaller({ id: adminId, sessionId: "admin-session" });
-
-      const visible = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "a" });
-      const hidden = yield* admin.impersonate({ caller, targetUserId: other.id, reason: "b" });
-
-      const page = (yield* admin.list(caller)).items;
-      assert.strictEqual(page.length, 1);
-      assert.strictEqual(page[0]?.sessionId, visible.session.id);
-
-      const failure = yield* admin.forceStop(caller, hidden.session.id).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "AdminImpersonationDenied");
-      // The refused episode's session is still live.
-      const stillLive = yield* sessions.verify(hidden.token);
-      assert.strictEqual(stillLive.session.id, hidden.session.id);
-
-      yield* admin.forceStop(caller, visible.session.id);
-    }).pipe(
-      Effect.provide(
-        buildLayerWith({
-          canImpersonate: () => Effect.succeed(true),
-          canManageEpisode: ({ episode }) => Effect.succeed(episode.reason === "a"),
-        }),
-      ),
-    ),
   );
 
   it.effect(
@@ -426,20 +272,6 @@ describe("Admin", () => {
         assert.isUndefined(seen.pollUnsafe());
         yield* Fiber.interrupt(seen);
       }).pipe(Effect.provide(buildLayer(allow))),
-  );
-
-  it.effect(
-    "IDS-003: a gate-refused caller gets 403, not 404, for an unknown target (no existence oracle)",
-    () =>
-      Effect.gen(function* () {
-        const { adminId } = yield* seedUsers;
-        const admin = yield* Admin.Admin;
-        const caller = asCaller({ id: adminId, sessionId: "admin-session" });
-        const failure = yield* admin
-          .impersonate({ caller, targetUserId: Users.UserId("ghost-user"), reason: "probe" })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "AdminImpersonationDenied");
-      }).pipe(Effect.provide(buildLayer(deny))),
   );
 
   /** Collects every `impersonationStopped` event published from now on (the fork is registered before it returns). */
@@ -610,11 +442,8 @@ describe("Admin", () => {
 
 // ---- IDS-002 (ADR-EA-018): impersonation is tenant-scoped ------------------------------
 
-/** What `canImpersonate` was asked, tenant-wise. */
-const seenTenants: Array<Option.Option<string>> = [];
-
 describe("Admin tenant scoping (IDS-002)", () => {
-  it.effect("the gate sees the ambient tenant and the episode is stamped with it", () =>
+  it.effect("an episode is stamped with the ambient tenant", () =>
     Effect.gen(function* () {
       const { adminId, targetId } = yield* seedUsers;
       const admin = yield* Admin.Admin;
@@ -625,20 +454,7 @@ describe("Admin tenant scoping (IDS-002)", () => {
       const [episode] = (yield* admin.list(caller).pipe(Tenant.withTenant("org-a"))).items;
       assert.deepStrictEqual(episode?.tenantId, Option.some("org-a"));
       assert.strictEqual(episode?.sessionId, issued.session.id);
-      // Asked once by `impersonate` (the request's tenant) and once per listed row by the default
-      // per-episode gate (the episode's own tenant).
-      assert.deepStrictEqual(seenTenants, [Option.some("org-a"), Option.some("org-a")]);
-    }).pipe(
-      Effect.provide(
-        buildLayerWith({
-          canImpersonate: ({ tenantId }) =>
-            Effect.sync(() => {
-              seenTenants.push(tenantId);
-              return true;
-            }),
-        }),
-      ),
-    ),
+    }).pipe(Effect.provide(buildLayerWith({ canImpersonate: allow }))),
   );
 
   it.effect(

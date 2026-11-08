@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-04 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-11-08): BEH-EA-343, the session lifecycle is declared on the contract (ADR-EA-045, architecture plan 21) |
 
 ---
 
@@ -174,6 +174,30 @@ REQUIREMENT: Merging two contracts that declare the same `HttpApiGroup` id
 MW-002 (wayfinder ticket 26): the composed `api` is the one served document. `Auth.make` seeds it with core's own `session` and `account` groups (attributed to the pseudo-owner `core` in a conflict message, so a plugin reusing one of those ids, or one of their routes, is refused exactly as two plugins colliding are), then the optional `extraGroups` a host passes for groups no plugin owns (`@awthaq/qadi`'s `SubjectApi.SubjectGroup`), then every plugin group. `Built<P, Extra>["api"]` types all of them; `publicApi` keeps core's and the host's groups (none is admin-tier). Their handlers are `@awthaq/server`'s `AuthHttp.coreHandlers` (a composition that serves `built.api` without them fails at layer build); the standalone `AuthCore.AuthCoreApi` remains the typed input those handlers are built against, not a separately served document.
 
 AVS-004: group ids are not the only thing two plugins can collide on. `Auth.make` also refuses two contributed endpoints, in the same or different groups, with the same method and path (`RouteConflict`, `E_ROUTE_CONFLICT`, naming both plugins, the method and the path); the router would otherwise serve whichever registered first and shadow the other. This is a composition-time check rather than a registry of reserved paths, so it covers a plugin's deliberate root-level routes too — currently informative: `@awthaq/password` owns `POST /verify-email`, `/resend-verification` and `/change-password` at the root, alongside its `/password/*` routes.
+
+## BEH-EA-343: An endpoint declares what it does to the caller's session on the contract
+
+> **See:** [ADR-EA-045](../decisions/045-session-lifecycle-on-the-contract.md)
+
+```ts
+HttpApiEndpoint.post("signIn", "/password/sign-in", { payload, success: SessionDto })
+  .middleware(SessionLifecycle.Mints)
+```
+
+```text
+REQUIREMENT: An endpoint whose success mints, rotates, ends or swaps the
+             caller's credential, or changes its session's view or subject,
+             MUST declare exactly one `SessionLifecycle` marker (`Mints`,
+             `Rotates`, `Ends`, `Swaps`, `Refreshes`). A handler MUST NOT
+             change the credential except through `SessionDelivery`, which
+             only a declared endpoint's handler can call (compile time), and a
+             declared endpoint MUST settle its declaration (deliver or
+             decline) on every successful response (run time, fail closed).
+```
+
+The markers are `HttpApiMiddleware` services, not endpoint annotations: an annotation is type-erased (`Context.Context<never>`), a middleware is in the endpoint's type and reflectable. Each of `Mints`/`Rotates`, `Ends` and `Swaps` provides a grant (`MintGrant`, `EndGrant`, `SwapGrant`) that `SessionDelivery`'s functions require, so a handler of an undeclared (or differently declared) endpoint leaves `HttpRouter.Request<"Requires", Grant>` in its group layer and cannot be served. `Mints`, `Rotates` and `Swaps` declare `InvalidTokenDelivery`, and their server half resolves `X-Awthaq-Token-Delivery` before the handler runs. Every declared response is `Cache-Control: no-store`; a bearer delivery carries `set-auth-token`, an ended session `x-awthaq-session-ended`. `SessionLifecycle.inventory(api)` lists the declared endpoints by `operationId` (`Auth.make` runs it, refusing an endpoint that declares two kinds) and `SessionLifecycle.openApi` documents them.
+
+*Implementation* (`packages/api/src/SessionLifecycle.ts`, `packages/server/src/SessionLifecycle.ts`, `packages/server/src/SessionDelivery.ts`; tests `packages/api/test/SessionLifecycle.test.ts`, `packages/server/test/SessionLifecycle.test.ts`, `packages/server/test/SessionLifecycle.types.test.ts`, the type gates `session-delivery-needs-a-declared-endpoint` and `a-declared-endpoint-gets-its-grant` in `features/step-definitions/CompileTimeGates.ts`, and one `SessionLifecycle.inventory` pin per plugin in its `test/Contract.test.ts`). Core declares `Ends` on `session.signOut`, `session.revoke` (declined for another device) and `session.revokeAll` and `account.deleteUser`; `session.current`'s EHA-009 expiry is hygiene for an already-dead credential, not a lifecycle event.
 
 _Previous: [BEH-EA-024](03-ports-slots-hooks-registries.md#beh-ea-024-tapping-a-hook-point-nobody-defines-is-a-compile-error-and-registries-aggregate-through-layereffectdiscard-ordered-and-frozen-at-first-read)_
 _Next: [BEH-EA-033](05-persistence-stratum.md#beh-ea-033-every-entity-is-a-modelclass-with-modeluuidv7insert-ids)_

@@ -9,6 +9,7 @@ import { Password } from "@awthaq/password";
 import { AuthorizedSubject, SubjectApi, SubjectExtractor } from "@awthaq/qadi";
 import { Roles } from "@awthaq/roles";
 import { TestAuth } from "@awthaq/test";
+import { parseSetCookie } from "@awthaq/web/cookies";
 import { EvaluationServicesNone, hasPermission, permission, role } from "@qadi/core";
 import {
   RequirePermission,
@@ -162,7 +163,7 @@ export const subjectFor = (email: string, roles: ReadonlyArray<string>) =>
         }).pipe(Effect.orDie),
     });
     const response = yield* dispatch(
-      new Request("http://localhost/subject", { headers: { cookie: signedIn.cookieHeader } }),
+      new Request("http://localhost/subject", { headers: { cookie: sessionPairOf(signedIn) } }),
     );
     const body = yield* Effect.promise(() => response.json());
     return {
@@ -186,10 +187,22 @@ export const requestAdminOnlyAs = (email: string, roles: ReadonlyArray<string>) 
         }).pipe(Effect.orDie),
     });
     const response = yield* dispatch(
-      new Request("http://localhost/admin-only", { headers: { cookie: signedIn.cookieHeader } }),
+      new Request("http://localhost/admin-only", {
+        headers: { cookie: sessionPairOf(signedIn) },
+      }),
     );
     return { status: response.status, body: yield* Effect.promise(() => response.text()) };
   });
+
+/**
+ * The `Cookie` pair a browser sends back for a session `signInAs` minted (its `Set-Cookie`, read by
+ * `@awthaq/web`'s one parser). The router here is the ambient `TestAuth.layer`'s, reached without a web
+ * handler, so there is no user agent to hold the cookie.
+ */
+export const sessionPairOf = (signedIn: TestAuth.SignedInSession): string => {
+  const { name, rawValue } = parseSetCookie(signedIn.setCookie);
+  return `${name}=${rawValue}`;
+};
 
 /** Dispatches a web `Request` through the composed router of the ambient `TestAuth.layer` — no listener, no socket. */
 export const dispatch = (request: Request) =>

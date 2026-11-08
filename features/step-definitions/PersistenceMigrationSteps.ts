@@ -8,27 +8,35 @@ import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import { Admin } from "@awthaq/admin";
 import { ApiKey } from "@awthaq/api-key";
-import { Migration } from "@awthaq/cli";
-import { Auth, Migrations, UserFields } from "@awthaq/core";
+import { Auth, type AuthPlugin, Migrations, UserFields } from "@awthaq/core";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Jwt } from "@awthaq/jwt";
 import { Organization } from "@awthaq/organization";
 import { Passkey } from "@awthaq/passkey";
 import { Roles } from "@awthaq/roles";
 import { Scim } from "@awthaq/scim";
 import { TestAuth } from "@awthaq/test";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { RateLimiter, UserStore } from "@awthaq/ports";
+import { AuthHost, Csrf } from "@awthaq/server";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { CoreMigrations } from "@awthaq/sql";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServer from "effect/http/HttpServer";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 import { assertTypeGate, cell, isObject, put, take, type World } from "./FoundationsWorld.ts";
-import { MigOauth, MigPassword, migrateSqlite } from "./MigrationFixtures.ts";
-import { insertSession, insertUser, withDatabase } from "./PersistenceStratumWorld.ts";
+import { MigOauth, MigPassword, MigTwoFactor, migrateSqlite } from "./MigrationFixtures.ts";
+import { insertUser, withDatabase } from "./PersistenceStratumWorld.ts";
 import { layerEvaluations, PasswordFixture } from "./PluginFixtures.ts";
 import { Profile, fieldKey } from "./UserFieldsFixture.ts";
 
@@ -49,12 +57,60 @@ const ledger = cell(
   } => isObject(value) && "core" in value && "plugin" in value,
 );
 
+/** BEH-EA-341: how an `AuthHost` boot ended: the failure's tag and message, and whether `oauth`'s table appeared. */
+const boot = cell(
+  "boot",
+  (
+    value,
+  ): value is { readonly tag: string; readonly message: string; readonly oauthTable: boolean } =>
+    isObject(value) && "tag" in value && "message" in value,
+);
+
+/** An `AuthHost` server over the given SQLite file, with the fixtures' ports: building it is booting it. */
+const bootServer = <P extends ReadonlyArray<AuthPlugin.Any>>(
+  built: Auth.Built<P>,
+  filename: string,
+  migrations: Migrations.OnBuild,
+) =>
+  Effect.gen(function* () {
+    const exit = yield* Effect.exit(
+      Effect.scoped(
+        Layer.build(
+          AuthHost.layer(built, {
+            persistence: { records: "sql", client: SqliteClient.layer({ filename }), migrations },
+            csrf: Layer.succeed(Csrf.CsrfConfig, TestAuth.TestCsrfConfig),
+          }).pipe(
+            Layer.provide(Layer.mergeAll(RateLimiter.layerPermissive, TestAuth.encryption)),
+            Layer.provide(NodeCrypto.layer),
+            Layer.provide(HttpServer.layerServices),
+            Layer.provide(HttpRouter.layer),
+          ),
+        ),
+      ),
+    );
+    const error = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
+    const oauthTable = yield* Migrations.tableExists("oauth_account").pipe(
+      Effect.provide(SqliteClient.layer({ filename })),
+      Effect.orDie,
+    );
+    return Option.match(error, {
+      onNone: () => ({ tag: "built", message: "", oauthTable }),
+      onSome: (failure) => ({
+        tag: isObject(failure) && "_tag" in failure ? String(failure._tag) : "unknown",
+        message: isObject(failure) && "message" in failure ? String(failure.message) : "",
+        oauthTable,
+      }),
+    });
+  });
+
+/** A fresh SQLite file per scenario (the boots under test open their own client on it). */
+const scratchDatabase = () =>
+  path.join(mkdtempSync(path.join(tmpdir(), "awthaq-bdd-host-")), "auth.sqlite");
+
 /** The linker's tuple for BEH-EA-038: `oauth` depends on `password`. */
 const composeLinked = () => Auth.make([MigPassword, MigOauth]);
 
 const BASE = DateTime.makeUnsafe("2026-03-01T00:00:00.000Z");
-/** Each fixture session expires at its own `createdAt`, so list from just before the first. */
-const before = DateTime.subtract(BASE, { seconds: 1 });
 
 /** Every shipped plugin class that owns migrations, in an order where cross-plugin reads find their tables. */
 const SHIPPED = [
@@ -67,40 +123,33 @@ const SHIPPED = [
   Scim.Scim,
 ];
 
-/** Five sessions a second apart, listed two at a time; the pages and cursors that came back. */
+/** Five users a second apart, listed two at a time; the pages and cursors that came back. */
 const paginate = withDatabase(
   Effect.gen(function* () {
-    const sessions = yield* Repositories.SessionsRepository;
-    const user = yield* insertUser("pages@example.com");
+    const users = yield* UserStore.UserStore;
     for (let i = 0; i < 5; i++) {
-      yield* insertSession(user.id, `h${i}`, DateTime.add(BASE, { seconds: i }));
+      yield* insertUser(`pages${i}@example.com`, DateTime.add(BASE, { seconds: i }));
     }
-    const first = yield* sessions.listByUser(user.id, before, undefined, 2);
-    const cursor = Option.getOrUndefined(first.nextCursor);
-    const second = yield* sessions.listByUser(user.id, before, cursor, 2);
-    const third = yield* sessions.listByUser(
-      user.id,
-      before,
-      Option.getOrUndefined(second.nextCursor),
-      2,
-    );
-    return { first, cursor, second, third };
+    const first = yield* users.listPage({ after: Option.none(), limit: 2 });
+    const second = yield* users.listPage({ after: first.next, limit: 2 });
+    const third = yield* users.listPage({ after: second.next, limit: 2 });
+    return { first, cursor: Option.getOrUndefined(first.next), second, third };
   }),
 );
 
 export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- BEH-EA-036: keyset pagination ----
 
-  Given("a {string} query for a user's sessions", function* (query: string) {
+  Given("a {string} query over the users", function* (query: string) {
     yield* Effect.void; // an assertion-only step: nothing to await
-    assert.equal(query, "listByUser");
+    assert.equal(query, "listPage");
   });
 
   Given(
-    "a {string} query for a user's sessions with more rows beyond the requested limit",
+    "a {string} query over the users with more rows beyond the requested limit",
     function* (query: string) {
       yield* Effect.void; // an assertion-only step: nothing to await
-      assert.equal(query, "listByUser");
+      assert.equal(query, "listPage");
     },
   );
 
@@ -136,7 +185,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   When("the query is called", function* () {
     const { first, third } = yield* paginate;
     const last = first.items.at(-1);
-    const cursor = Option.getOrUndefined(first.nextCursor);
+    const cursor = Option.getOrUndefined(first.next);
     yield* put(strings, [
       cursor === undefined ? "none" : "some",
       String(last !== undefined && cursor?.id === last.id),
@@ -145,7 +194,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
           cursor !== undefined &&
           DateTime.Equivalence(cursor.createdAt, last.createdAt),
       ),
-      Option.isSome(third.nextCursor) ? "some" : "none",
+      Option.isSome(third.next) ? "some" : "none",
     ]);
   });
 
@@ -162,7 +211,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   );
 
   Given(
-    "two session rows with an identical createdAt timestamp down to the millisecond",
+    "two user rows with an identical createdAt timestamp down to the millisecond",
     function* () {
       yield* Effect.void; // an assertion-only step: nothing to await
       // Arranged in the When, which needs the rows and the queries on one database.
@@ -172,21 +221,15 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   When("a paginated query orders by \\(createdAt, id\\)", function* () {
     const outcome = yield* withDatabase(
       Effect.gen(function* () {
-        const sessions = yield* Repositories.SessionsRepository;
-        const user = yield* insertUser("ties@example.com");
+        const users = yield* UserStore.UserStore;
         const sameInstant = DateTime.add(BASE, { seconds: 30 });
-        yield* insertSession(user.id, "tie-a", sameInstant);
-        yield* insertSession(user.id, "tie-b", sameInstant);
-        const all = yield* sessions.listByUser(user.id, before, undefined, 10);
-        const again = yield* sessions.listByUser(user.id, before, undefined, 10);
+        yield* insertUser("tie-a@example.com", sameInstant);
+        yield* insertUser("tie-b@example.com", sameInstant);
+        const all = yield* users.listPage({ after: Option.none(), limit: 10 });
+        const again = yield* users.listPage({ after: Option.none(), limit: 10 });
         // One row at a time, following cursors: neither tied row is skipped or repeated.
-        const one = yield* sessions.listByUser(user.id, before, undefined, 1);
-        const two = yield* sessions.listByUser(
-          user.id,
-          before,
-          Option.getOrUndefined(one.nextCursor),
-          1,
-        );
+        const one = yield* users.listPage({ after: Option.none(), limit: 1 });
+        const two = yield* users.listPage({ after: one.next, limit: 1 });
         return {
           ids: all.items.map((row) => row.id),
           again: again.items.map((row) => row.id),
@@ -397,14 +440,13 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
     yield* put(strings, [...Object.keys(built), ...Object.keys(Migrations), ...Object.keys(Auth)]);
   });
 
-  Then(
-    "it does not depend on a snapshot-diff planner, a checksum ledger, or a live-database drift check",
-    function* () {
-      for (const name of yield* take(strings)) {
-        assert.doesNotMatch(name, /snapshot|checksum|drift|planner|diff/i, name);
-      }
-    },
-  );
+  Then("it does not depend on a snapshot-diff planner or a checksum ledger", function* () {
+    // Plan 15: the key-level ledger check is core's `Migrations.status` (shared by the CLI and `AuthHost`),
+    // which `Auth.make` never calls; snapshot diffing and checksums remain a deferred CLI feature.
+    for (const name of yield* take(strings)) {
+      assert.doesNotMatch(name, /snapshot|checksum|planner/i, name);
+    }
+  });
 
   Given("a CLI schema-diff feature that will need the composed migration set", function* () {
     yield* Effect.void; // an assertion-only step: nothing to await
@@ -414,15 +456,14 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   When("the CLI feature is built", function* () {
     const built = Auth.make([MigPassword, MigOauth]);
     const report = yield* Effect.gen(function* () {
-      // The runner's two steps (what `migration apply` does): core first, then the linker's list.
-      yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
-      yield* Migrations.run(built.migrations);
-      return yield* Migration.inspect(built);
+      // The runner `migration apply` writes through: core first, then the linker's list.
+      yield* Migrations.apply(built.migrations);
+      return yield* Migrations.status(built.migrations);
     }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" })), Effect.scoped);
     const plugins = report.ledgers.find((entry) => entry.ledger === "plugins");
     yield* put(strings, [
       built.migrations.map((migration) => migration.name).join(","),
-      Migration.pluginKnown(built)
+      Migrations.pluginKnown(built.migrations)
         .map((entry) => entry.name)
         .join(","),
       String(plugins?.pending.length),
@@ -683,4 +724,59 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
     assert.deepEqual(Profile.migrations, []);
     assertTypeGate("table-foreign-prefix", GATES_PLUGIN, ["@ts-expect-error"]);
   });
+
+  // ---- BEH-EA-341: a SQL host composition never serves a schema behind it ----
+
+  Given(
+    "an {string} server in {string} mode over an unmigrated database",
+    function* (host: string, mode: string) {
+      yield* Effect.void; // an assertion-only step: the When boots it
+      assert.deepEqual([host, mode], ["AuthHost.layer", "verify"]);
+    },
+  );
+
+  When("the server starts", function* () {
+    yield* put(boot, yield* bootServer(Auth.make([MigPassword]), scratchDatabase(), "verify"));
+  });
+
+  Then(
+    "it refuses to start with {string} naming {string}",
+    function* (tag: string, migration: string) {
+      const outcome = yield* take(boot);
+      assert.equal(outcome.tag, tag);
+      assert.ok(outcome.message.includes(`plugins ${migration}`), outcome.message);
+    },
+  );
+
+  Given("a database migrated for {string}", function* (composition: string) {
+    assert.equal(composition, "Auth.make([password, two_factor])");
+    const filename = scratchDatabase();
+    yield* Migrations.apply(Auth.make([MigPassword, MigTwoFactor]).migrations).pipe(
+      Effect.provide(SqliteClient.layer({ filename })),
+      Effect.orDie,
+    );
+    yield* put(strings, [filename]);
+  });
+
+  When(
+    "a server composing {string} starts in {string} mode",
+    function* (composition: string, mode: string) {
+      assert.deepEqual([composition, mode], ["Auth.make([password, oauth, two_factor])", "apply"]);
+      const [filename = ""] = yield* take(strings);
+      yield* put(
+        boot,
+        yield* bootServer(Auth.make([MigPassword, MigOauth, MigTwoFactor]), filename, "apply"),
+      );
+    },
+  );
+
+  Then(
+    "it refuses to start with {string} and {string} gets no table",
+    function* (tag: string, plugin: string) {
+      const outcome = yield* take(boot);
+      assert.equal(outcome.tag, tag);
+      assert.equal(plugin, "oauth");
+      assert.equal(outcome.oauthTable, false);
+    },
+  );
 });

@@ -10,7 +10,7 @@
 // writes and replica catch-ups instead of reading Postgres LSNs.
 //
 //   const lag = yield* LaggingReplica.make({ replica });
-//   … Layer.provide(lag.layer) below the repositories …
+//   … Layer.provide(lag.layer) below the store adapters …
 //   yield* write;               // primary moves ahead; the replica is stale
 //   yield* lag.catchUp;         // the replica has now applied everything
 //
@@ -42,7 +42,7 @@ export interface LaggingReplica {
   readonly replica: SqlClient.SqlClient;
   /** Applies everything the primary has committed so far to the replica, and advances its replay position. */
   readonly catchUp: Effect.Effect<void, unknown>;
-  /** Provides `ReadRouting.ReplicaSqlClient` and this replica's `ReplicationPosition`; put it below the repositories. */
+  /** Provides `ReadRouting.ReplicaSqlClient` and this replica's `ReplicationPosition`; put it below the store adapters. */
   readonly layer: Layer.Layer<never>;
 }
 

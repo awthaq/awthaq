@@ -657,11 +657,15 @@ export const hooksSteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   Then("no foreign key or database-level cascade into a core table is required", function* () {
-    // The user really is gone, and the plugin's table has no link into core: it declares no
-    // migration and reads no core table — the tap was the whole mechanism.
+    // The user really is gone, and the plugin's table has no link into core: its one migration
+    // creates its own prefixed table and nothing else, and it reads no core table — the tap was
+    // the whole mechanism.
     assert.equal(yield* userExists("alice@example.com"), false);
     assert.equal(yield* userExists("bob@example.com"), true);
-    assert.deepEqual(AcmeInvite.migrations, []);
+    assert.deepEqual(
+      AcmeInvite.migrations.map((migration) => migration.name),
+      ["create_acme_invite_invitation"],
+    );
     assert.deepEqual(AcmeInvite.readsTables, []);
     assert.ok(AcmeInvite.tables.every((table) => table.startsWith("acme.invite_")));
   });

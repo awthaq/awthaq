@@ -1226,7 +1226,7 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     const http = yield* httpApp;
     const response = yield* Effect.promise(async () =>
       http.call("POST", "/admin/webhooks/endpoints", {
-        cookie: await http.sessionCookie(),
+        as: await http.signIn(),
         body: newEndpoint,
       }),
     );
@@ -1237,7 +1237,7 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     const http = yield* httpApp;
     const response = yield* Effect.promise(async () =>
       http.call("POST", "/admin/webhooks/endpoints", {
-        cookie: await http.sessionCookie(),
+        as: await http.signIn(),
         body: newEndpoint,
         csrf: false,
       }),

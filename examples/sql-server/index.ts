@@ -1,9 +1,9 @@
 // @awthaq/example-sql-server
 //
-// SEA-007: the runnable counterpart of the README quickstart. The same composition the
-// quickstart shows, over a real, migrated SQL backend that is a SQLite file by default (no
-// server to install) and Postgres as soon as `DATABASE_URL` is set. The plugin code does not
-// change between the two; only the `SqlClient` layer does (see `app.ts`).
+// SEA-007: the runnable counterpart of the README quickstart. `AuthHost.layer` over a real,
+// migrated SQL backend (Password and Organization) that is a SQLite file by default (no server
+// to install) and Postgres as soon as `DATABASE_URL` is set. The plugin code does not change
+// between the two; only the `SqlClient` layer does (see `app.ts`).
 //
 // Run it:
 //   pnpm start

@@ -217,6 +217,20 @@ const suite = (
       }).pipe(Effect.provide(layer)),
     );
 
+    // Plan 22, D2 (BEH-EA-131): a WebAuthn signCount is a uint32. The test fails on Postgres alone while
+    // the column is int4 (`pnpm test:pg`); memory and SQLite already store it.
+    it.effect("a WebAuthn signature counter up to 2^32 - 1 round-trips", () =>
+      Effect.gen(function* () {
+        const credentials = yield* PasskeyCredentials.PasskeyCredentials;
+        const max = 2 ** 32 - 1;
+        yield* credentials.create({ ...seed("cred-wide", userA), counter: max - 1 });
+        yield* credentials.recordUsage("cred-wide", max, false);
+        const found = yield* credentials.findById("cred-wide");
+        assert.isTrue(Option.isSome(found));
+        if (Option.isSome(found)) assert.strictEqual(found.value.counter, max);
+      }).pipe(Effect.provide(layer)),
+    );
+
     it.effect("WPS-006: flagCounterAnomaly stamps the credential and counts each anomaly", () =>
       Effect.gen(function* () {
         const credentials = yield* PasskeyCredentials.PasskeyCredentials;

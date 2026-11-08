@@ -12,7 +12,9 @@ import {
   Accounts,
   AuditLog,
   AuthEvents,
+  CurrentUser,
   DataExport,
+  Defects,
   Erasure,
   Hooks,
   Persistence,
@@ -47,8 +49,6 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Account from "../src/Account.ts";
 import * as Authentication from "../src/Authentication.ts";
 import * as AuthHttp from "../src/AuthHttp.ts";
-import { currentUser } from "../src/internal/CurrentUser.ts";
-import { HandlerInvariantViolation } from "../src/internal/Defects.ts";
 import * as Session from "../src/Session.ts";
 import * as Wiring from "./support/Wiring.ts";
 
@@ -90,6 +90,8 @@ const makeAppLayer = (
     AuthHttp.docs(AuthCore.AuthCoreApi),
   ).pipe(
     Layer.provideMerge(Authentication.AuthenticationLive),
+    // ADR-EA-045: sign-out, revoke, revoke-all and delete-user declare `SessionLifecycle.Ends`.
+    Layer.provide(AuthHttp.sessionLifecycle),
     Layer.provide(Wiring.resolver),
     Layer.provide(Wiring.csrfLive()),
     // CSG-001: `Account.deleteUser` runs core's `AccountErasure` and `Account.exportData` its `AccountExport` (CSG-005).
@@ -392,6 +394,13 @@ const assertSessionCookieExpired = (response: HttpServerResponse.HttpServerRespo
   assert.strictEqual(cookie.value.options?.sameSite, "strict");
 };
 
+/** ADR-EA-045: a declared `Ends` response expires the cookie, tells a bearer client, and is never cacheable. */
+const assertSessionEnded = (response: HttpServerResponse.HttpServerResponse) => {
+  assertSessionCookieExpired(response);
+  assert.strictEqual(response.headers[Api.SESSION_ENDED_HEADER], "1");
+  assert.strictEqual(response.headers["cache-control"], "no-store");
+};
+
 describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)", () => {
   it.effect("POST /session/sign-out expires __Host-session", () =>
     Effect.scoped(
@@ -400,7 +409,7 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
         const { token } = yield* sessions.issue({ userId });
         const response = yield* sendHandled("/session/sign-out", { method: "POST", token });
         assert.strictEqual(response.status, 204);
-        assertSessionCookieExpired(response);
+        assertSessionEnded(response);
       }),
     ).pipe(Effect.provide(AppLayer)),
   );
@@ -432,7 +441,7 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
         const { token } = yield* sessions.issue({ userId });
         const response = yield* sendHandled("/session/revoke-all", { method: "POST", token });
         assert.strictEqual(response.status, 204);
-        assertSessionCookieExpired(response);
+        assertSessionEnded(response);
       }),
     ).pipe(Effect.provide(AppLayer)),
   );
@@ -448,7 +457,7 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
           body: { id: session.id },
         });
         assert.strictEqual(response.status, 204);
-        assertSessionCookieExpired(response);
+        assertSessionEnded(response);
       }),
     ).pipe(Effect.provide(AppLayer)),
   );
@@ -466,6 +475,9 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
         });
         assert.strictEqual(response.status, 204);
         assert.isTrue(Option.isNone(Cookies.get(response.cookies, Sessions.SESSION_COOKIE_NAME)));
+        // The declaration is declined: nothing of the caller's ended, but the response stays uncacheable.
+        assert.isUndefined(response.headers[Api.SESSION_ENDED_HEADER]);
+        assert.strictEqual(response.headers["cache-control"], "no-store");
       }),
     ).pipe(Effect.provide(AppLayer)),
   );
@@ -482,7 +494,7 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
         const { token } = yield* sessions.issue({ userId: user.id });
         const response = yield* sendHandled("/user", { method: "DELETE", token });
         assert.strictEqual(response.status, 204);
-        assertSessionCookieExpired(response);
+        assertSessionEnded(response);
       }),
     ).pipe(Effect.provide(AppLayer)),
   );
@@ -630,10 +642,10 @@ describe("AuthHttp + Session: a concurrently revoked current session (EHA-009)",
 
 describe("server handler invariants (GC-003/GC-008)", () => {
   it.effect(
-    "a non-User principal reaching a required-auth group dies with HandlerInvariantViolation",
+    "a non-User principal reaching a required-auth group dies with Defects/InvariantViolation",
     () =>
       Effect.gen(function* () {
-        const exit = yield* currentUser.pipe(
+        const exit = yield* CurrentUser.current.pipe(
           Effect.provideService(
             Api.CurrentPrincipal,
             new Api.ApiKeyPrincipal({
@@ -647,8 +659,8 @@ describe("server handler invariants (GC-003/GC-008)", () => {
         if (!Exit.isFailure(exit)) return;
         assert.isTrue(Cause.hasDies(exit.cause));
         const defect = Cause.squash(exit.cause);
-        assert.instanceOf(defect, HandlerInvariantViolation);
-        if (defect instanceof HandlerInvariantViolation) {
+        assert.instanceOf(defect, Defects.InvariantViolation);
+        if (defect instanceof Defects.InvariantViolation) {
           assert.strictEqual(defect.invariant, "NonUserPrincipal");
         }
       }),

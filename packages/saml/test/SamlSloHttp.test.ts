@@ -8,7 +8,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import { inflateRawSync } from "node:zlib";
-import { TestAuth } from "@awthaq/test";
+import { CookieAssertions, TestAuth, UserAgent } from "@awthaq/test";
 import * as Saml from "../src/Saml.ts";
 import * as SamlConnections from "../src/SamlConnections.ts";
 import * as SamlKeys from "../src/SamlKeys.ts";
@@ -18,8 +18,6 @@ import { redirectParts } from "./samlMetadata.ts";
 import { BASE_URL, IDP_ENTITY_ID, SamlLive, seedConnection } from "./support.ts";
 import { Organization } from "@awthaq/organization";
 
-const CSRF_VALUE: string = TestAuth.csrfToken(TestAuth.TestCsrfConfig.secret);
-
 const IDP_SLO = "https://idp.example.com/slo";
 
 const around = () => ({
@@ -28,7 +26,7 @@ const around = () => ({
 });
 
 const buildApp = (config: Parameters<typeof SamlLive>[0] = {}) => {
-  const app = TestAuth.app(SamlLive(config));
+  const app = TestAuth.app(SamlLive(config), { baseUrl: BASE_URL });
   /** Runs `effect` against the very same service instances the web handler uses. */
   const inside = <A, E>(
     effect: Effect.Effect<
@@ -41,26 +39,25 @@ const buildApp = (config: Parameters<typeof SamlLive>[0] = {}) => {
       | Users.Users
     >,
   ) => app.run(effect);
-  return { handler: app.handler, inside };
+  return {
+    handler: app.handler,
+    inside,
+    agent: () => app.agent(),
+    signIn: (email: string) => app.signIn(email),
+  };
 };
 
-const cookieHeaderOf = (response: Response, name: string): string | undefined =>
-  response.headers.getSetCookie().find((cookie) => cookie.startsWith(`${name}=`));
-
-/** Signs a user in through the ACS over HTTP and returns the session cookie the browser now holds. */
+/** Signs a user in through the ACS over HTTP: the browser agent, now holding the session, and its token. */
 const signInOverHttp = (
-  handler: (request: Request) => Promise<Response>,
+  app: ReturnType<typeof buildApp>,
   connectionId: string,
   assertionId: string,
 ) =>
   Effect.gen(function* () {
+    const browser = yield* Effect.promise(app.agent);
     const login = yield* Effect.promise(() =>
-      handler(new Request(`${BASE_URL}/auth/saml/login?connection=${connectionId}`)),
+      browser.request("GET", `/auth/saml/login?connection=${connectionId}`),
     );
-    const state =
-      (cookieHeaderOf(login, Saml.REQUEST_COOKIE) ?? "")
-        .split(";")[0]
-        ?.slice(Saml.REQUEST_COOKIE.length + 1) ?? "";
     const location = new URL(login.headers.get("location") ?? "");
     const requestId = /ID="([^"]+)"/.exec(
       inflateRawSync(
@@ -79,28 +76,24 @@ const signInOverHttp = (
         { assertionId },
       ),
     ).toString("base64");
-    const response = yield* Effect.promise(() =>
-      handler(
-        new Request(`${BASE_URL}/auth/saml/acs`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/x-www-form-urlencoded",
-            cookie: `${Saml.REQUEST_COOKIE}=${state}`,
-          },
-          body: new URLSearchParams({ SAMLResponse: samlResponse }).toString(),
-        }),
-      ),
+    // The IdP's answer: a cross-site form post to the ACS (the `SameSite=None` request cookie travels).
+    yield* Effect.promise(() =>
+      browser.request("POST", "/auth/saml/acs", {
+        form: { SAMLResponse: samlResponse },
+        site: "cross-site",
+        navigation: true,
+      }),
     );
-    const session = cookieHeaderOf(response, "__Host-session")?.split(";")[0] ?? "";
-    return session;
+    const token = browser.cookies.value("__Host-session");
+    if (token === undefined) throw new Error("expected the ACS to sign the browser in");
+    return { browser, token };
   });
 
-/** Is the session behind `cookie` (`__Host-session=<token>`) still valid, judged against the very services the handler uses? */
-const sessionAlive = (inside: ReturnType<typeof buildApp>["inside"], cookie: string) =>
+/** Is the session behind `token` still valid, judged against the very services the handler uses? */
+const sessionAlive = (inside: ReturnType<typeof buildApp>["inside"], token: string) =>
   inside(
     Effect.gen(function* () {
       const sessions = yield* Sessions.Sessions;
-      const token = decodeURIComponent(cookie.slice("__Host-session=".length));
       return yield* sessions.verify(Redacted.make(token)).pipe(
         Effect.map(() => true),
         Effect.catch(() => Effect.succeed(false)),
@@ -119,12 +112,12 @@ describe("the logout endpoint over HTTP", () => {
     "GET with the IdP's signed redirect ends the session and answers 302 to the IdP with a signed LogoutResponse",
     () =>
       Effect.gen(function* () {
-        const { handler, inside } = buildApp();
+        const app = buildApp();
+        const { handler, inside } = app;
         const { connection } = yield* Effect.promise(() =>
           inside(seedConnection({ sloUrl: IDP_SLO, authnRequestsSigned: true })),
         );
-        const session = yield* signInOverHttp(handler, connection.id, "_http-a1");
-        assert.isTrue(session.startsWith("__Host-session="));
+        const { token: session } = yield* signInOverHttp(app, connection.id, "_http-a1");
         const query = SamlKeys.signRedirect({
           kind: "SAMLRequest",
           message: SamlProtocol.deflateBase64(logoutRequest(connection.id, "_http-logout-1")),
@@ -141,7 +134,9 @@ describe("the logout endpoint over HTTP", () => {
         assert.strictEqual(redirectParts(location).sigAlg, SamlKeys.SIG_ALG_RSA_SHA256);
         assert.strictEqual(decodeURIComponent(redirectParts(location).relay ?? ""), "state 1");
         // The logout state cookie is single-use: cleared on every response here.
-        assert.include(cookieHeaderOf(response, Saml.LOGOUT_COOKIE) ?? "", "Max-Age=0");
+        CookieAssertions.assertExpiredCookie(
+          CookieAssertions.findSetCookie(response, Saml.LOGOUT_COOKIE),
+        );
         // The session is gone: the same cookie no longer authenticates.
         assert.isFalse(yield* Effect.promise(() => sessionAlive(inside, session)));
       }),
@@ -149,11 +144,12 @@ describe("the logout endpoint over HTTP", () => {
 
   it.effect("GET with an unsigned or tampered message is the uniform 400, and ends nothing", () =>
     Effect.gen(function* () {
-      const { handler, inside } = buildApp();
+      const app = buildApp();
+      const { handler, inside } = app;
       const { connection } = yield* Effect.promise(() =>
         inside(seedConnection({ sloUrl: IDP_SLO })),
       );
-      const session = yield* signInOverHttp(handler, connection.id, "_http-a2");
+      const { token: session } = yield* signInOverHttp(app, connection.id, "_http-a2");
       const message = SamlProtocol.deflateBase64(logoutRequest(connection.id, "_http-logout-2"));
       const unsigned = SamlKeys.plainRedirect({ kind: "SAMLRequest", message });
       const signed = SamlKeys.signRedirect({
@@ -180,11 +176,12 @@ describe("the logout endpoint over HTTP", () => {
     "POST with the IdP's XML-signed LogoutRequest ends the session and answers 200 with a self-submitting form (IdP takes POST)",
     () =>
       Effect.gen(function* () {
-        const { handler, inside } = buildApp();
+        const app = buildApp();
+        const { handler, inside } = app;
         const { connection } = yield* Effect.promise(() =>
           inside(seedConnection({ sloUrl: IDP_SLO, sloBinding: "post" })),
         );
-        yield* signInOverHttp(handler, connection.id, "_http-a3");
+        yield* signInOverHttp(app, connection.id, "_http-a3");
         const signed = SamlKeys.signXml({
           xml: logoutRequest(connection.id, "_http-logout-3"),
           referenceId: "_http-logout-3",
@@ -216,44 +213,39 @@ describe("the signed-in user's own logout over HTTP", () => {
     "requires authentication and the CSRF token, then expires the session cookie and sends the browser to the IdP",
     () =>
       Effect.gen(function* () {
-        const { handler, inside } = buildApp();
+        const app = buildApp();
+        const { inside } = app;
         const { connection } = yield* Effect.promise(() =>
           inside(seedConnection({ sloUrl: IDP_SLO, authnRequestsSigned: true })),
         );
-        const session = yield* signInOverHttp(handler, connection.id, "_http-a4");
-        const call = (options: { readonly cookie?: string; readonly csrf?: boolean }) =>
-          handler(
-            new Request(`${BASE_URL}/auth/saml/logout`, {
-              method: "POST",
-              headers: {
-                "content-type": "application/json",
-                cookie: [
-                  options.cookie,
-                  options.csrf === false ? undefined : `${Api.CSRF_COOKIE_NAME}=${CSRF_VALUE}`,
-                ]
-                  .filter(Boolean)
-                  .join("; "),
-                ...(options.csrf === false ? {} : { "x-csrf-token": CSRF_VALUE }),
-              },
-              body: JSON.stringify({ callbackURL: "/bye" }),
-            }),
-          );
+        const { browser, token } = yield* signInOverHttp(app, connection.id, "_http-a4");
+        const call = (agent: UserAgent.UserAgent, options: { readonly csrf?: boolean } = {}) =>
+          agent.request("POST", "/auth/saml/logout", {
+            json: { callbackURL: "/bye" },
+            // Without the token: the echo is blanked, the cookies still travel.
+            ...(options.csrf === false ? { headers: { [Api.CSRF_HEADER_NAME]: "" } } : {}),
+          });
         // Unauthenticated: 401. Authenticated without the CSRF token: 403. Neither ends anything.
-        assert.strictEqual((yield* Effect.promise(() => call({}))).status, 401);
+        const anonymous = yield* Effect.promise(app.agent);
+        assert.strictEqual((yield* Effect.promise(() => call(anonymous))).status, 401);
         assert.strictEqual(
-          (yield* Effect.promise(() => call({ cookie: session, csrf: false }))).status,
+          (yield* Effect.promise(() => call(browser, { csrf: false }))).status,
           403,
         );
-        const response = yield* Effect.promise(() => call({ cookie: session }));
+        assert.isTrue(yield* Effect.promise(() => sessionAlive(inside, token)));
+        const response = yield* Effect.promise(() => call(browser));
         assert.strictEqual(response.status, 302);
         const location = response.headers.get("location") ?? "";
         assert.strictEqual(location.slice(0, location.indexOf("?")), IDP_SLO);
         // The session cookie is expired, and the logout state cookie is set for the IdP's cross-site answer.
-        assert.include(cookieHeaderOf(response, "__Host-session") ?? "", "Max-Age=0");
-        const logoutCookie = cookieHeaderOf(response, Saml.LOGOUT_COOKIE) ?? "";
-        assert.include(logoutCookie, "SameSite=None");
-        assert.include(logoutCookie, "HttpOnly");
-        assert.include(logoutCookie, "Secure");
+        CookieAssertions.assertExpiredCookie(
+          CookieAssertions.findSetCookie(response, "__Host-session"),
+        );
+        assert.isUndefined(browser.cookies.get("__Host-session"));
+        const logoutCookie = CookieAssertions.findSetCookie(response, Saml.LOGOUT_COOKIE);
+        assert.strictEqual(logoutCookie.sameSite, "none");
+        assert.isTrue(logoutCookie.httpOnly);
+        assert.isTrue(logoutCookie.secure);
         const message = inflateRawSync(
           Buffer.from(decodeURIComponent(redirectParts(location).message), "base64"),
         ).toString("utf8");
@@ -266,36 +258,23 @@ describe("the signed-in user's own logout over HTTP", () => {
 describe("the admin group over HTTP", () => {
   const adminApp = (gate: boolean) => {
     const app = buildApp({ canManageSaml: () => Effect.succeed(gate) });
-    const sessionCookie = () =>
-      app.inside(
-        Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          const issued = yield* sessions.issue({ userId: Users.UserId("admin-1"), request: {} });
-          return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
-        }),
-      );
-    const call = (
+    /** An operator's browser, signed in. */
+    const operator = () => app.signIn("admin-1@example.com");
+    const call = async (
       method: string,
       path: string,
-      options: { readonly cookie?: string; readonly body?: unknown; readonly csrf?: boolean } = {},
+      options: {
+        readonly agent?: UserAgent.UserAgent;
+        readonly body?: unknown;
+        readonly csrf?: boolean;
+      } = {},
     ) =>
-      app.handler(
-        new Request(`${BASE_URL}${path}`, {
-          method,
-          headers: {
-            ...(options.body === undefined ? {} : { "content-type": "application/json" }),
-            cookie: [
-              options.cookie,
-              options.csrf === false ? undefined : `${Api.CSRF_COOKIE_NAME}=${CSRF_VALUE}`,
-            ]
-              .filter(Boolean)
-              .join("; "),
-            ...(options.csrf === false ? {} : { "x-csrf-token": CSRF_VALUE }),
-          },
-          ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-        }),
-      );
-    return { ...app, sessionCookie, call };
+      (options.agent ?? (await app.agent())).request(method, path, {
+        ...(options.body === undefined ? {} : { json: options.body }),
+        // Without the token: the echo is blanked, the cookies still travel.
+        ...(options.csrf === false ? { headers: { [Api.CSRF_HEADER_NAME]: "" } } : {}),
+      });
+    return { ...app, operator, call };
   };
 
   it.effect(
@@ -307,16 +286,16 @@ describe("the admin group over HTTP", () => {
           closed.call("GET", "/admin/saml/connections?organizationId=x"),
         );
         assert.strictEqual(anonymous.status, 401);
-        const cookie = yield* Effect.promise(closed.sessionCookie);
+        const agent = yield* Effect.promise(closed.operator);
         const denied = yield* Effect.promise(() =>
-          closed.call("GET", "/admin/saml/connections?organizationId=x", { cookie }),
+          closed.call("GET", "/admin/saml/connections?organizationId=x", { agent }),
         );
         assert.strictEqual(denied.status, 403);
         assert.deepStrictEqual(JSON.parse(yield* Effect.promise(() => denied.text())), {
           _tag: "SamlActionDenied",
         });
         const noCsrf = yield* Effect.promise(() =>
-          closed.call("DELETE", "/admin/saml/connections/x", { cookie, csrf: false }),
+          closed.call("DELETE", "/admin/saml/connections/x", { agent, csrf: false }),
         );
         assert.strictEqual(noCsrf.status, 403);
       }),
@@ -327,7 +306,7 @@ describe("the admin group over HTTP", () => {
     () =>
       Effect.gen(function* () {
         const open = adminApp(true);
-        const cookie = yield* Effect.promise(open.sessionCookie);
+        const agent = yield* Effect.promise(open.operator);
         const organizationId = yield* Effect.promise(() =>
           open.inside(
             Effect.gen(function* () {
@@ -343,7 +322,7 @@ describe("the admin group over HTTP", () => {
         );
         const created = yield* Effect.promise(() =>
           open.call("POST", "/admin/saml/connections", {
-            cookie,
+            agent,
             body: {
               organizationId,
               name: "Acme Okta",
@@ -366,16 +345,16 @@ describe("the admin group over HTTP", () => {
         assert.notStrictEqual(id, "");
         // Round trip through the read endpoints.
         const read = yield* Effect.promise(() =>
-          open.call("GET", `/admin/saml/connections/${id}`, { cookie }),
+          open.call("GET", `/admin/saml/connections/${id}`, { agent }),
         );
         assert.strictEqual(read.status, 200);
         const listed = yield* Effect.promise(() =>
-          open.call("GET", `/admin/saml/connections?organizationId=${organizationId}`, { cookie }),
+          open.call("GET", `/admin/saml/connections?organizationId=${organizationId}`, { agent }),
         );
         assert.strictEqual(listed.status, 200);
         const bad = yield* Effect.promise(() =>
           open.call("PATCH", `/admin/saml/connections/${id}`, {
-            cookie,
+            agent,
             body: { ssoUrl: "http://insecure.example.com" },
           }),
         );
@@ -385,18 +364,18 @@ describe("the admin group over HTTP", () => {
           "InvalidSamlConnectionRequest",
         );
         const missing = yield* Effect.promise(() =>
-          open.call("GET", "/admin/saml/connections/nope", { cookie }),
+          open.call("GET", "/admin/saml/connections/nope", { agent }),
         );
         assert.strictEqual(missing.status, 404);
         const key = yield* Effect.promise(() =>
-          open.call("POST", `/admin/saml/connections/${id}/signing-key`, { cookie, body: {} }),
+          open.call("POST", `/admin/saml/connections/${id}/signing-key`, { agent, body: {} }),
         );
         assert.strictEqual(key.status, 200);
         const keyBody = yield* Effect.promise(() => key.text());
         assert.include(keyBody, "BEGIN CERTIFICATE");
         assert.notInclude(keyBody, "PRIVATE KEY");
         const removed = yield* Effect.promise(() =>
-          open.call("DELETE", `/admin/saml/connections/${id}`, { cookie }),
+          open.call("DELETE", `/admin/saml/connections/${id}`, { agent }),
         );
         assert.strictEqual(removed.status, 204);
       }),

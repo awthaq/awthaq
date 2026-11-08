@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-GLOSSARY |
-> | Revision | 1.5 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.12 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) <br> 1.7 (2026-10-18): External identity, Email trust and Federated identity resolution (architecture plan 14) <br> 1.8 (2026-10-18): Credential carrier and Tier; CurrentPrincipal names `CurrentUser.current` as the user-tier read (architecture plan 11) <br> 1.9 (2026-10-18): Link purpose; VerificationToken names `VerificationLink.redeemer` (architecture plan 18) <br> 1.10 (2026-10-18): Sealed column (architecture plan 17) <br> 1.11 (2026-11-08): AuthHost; Port: what the composition owns is not a port; Auth.make is served with `AuthHost.layer`; TestAuth is `AuthHost.layer` over test ports (ADR-EA-044, architecture plan 15) <br> 1.12 (2026-11-08): Session lifecycle (ADR-EA-045, architecture plan 21) |
 
 ---
 
@@ -32,11 +32,35 @@ A `Model.Class` entity representing a registered person or account holder, indep
 
 ### Account
 
-A `Model.Class` entity linking a User to one sign-in method, keyed on `(provider, subject)` (for example, a password credential or one linked OAuth provider identity). A User cannot unlink their last remaining Account, since that would leave them with no way to authenticate. See: [BEH-EA-041](behaviors/06-domain-users-accounts.md#beh-ea-041-a-user-is-identified-by-a-case-insensitively-unique-email).
+A `Model.Class` entity linking a User to one sign-in method, keyed on `(provider, subject, issuer)` (for example, a password credential or one linked OAuth provider identity). A User cannot unlink their last remaining Account, since that would leave them with no way to authenticate. See: [BEH-EA-041](behaviors/06-domain-users-accounts.md#beh-ea-041-a-user-is-identified-by-a-case-insensitively-unique-email).
+
+### External identity
+
+What an asserting party (an OAuth provider, an organization's OIDC or SAML connection) proved about a person: provider id, subject, issuer, an asserted email (with whether the party vouches for it), profile and the token set to store. Resolved to a local User by `FederatedIdentity`. See: [BEH-EA-338](behaviors/06-domain-users-accounts.md#beh-ea-338-a-federated-sign-in-resolves-its-identity-through-federatedidentity-and-a-lost-race-resolves-to-the-anchors-user).
+
+### Email trust
+
+The caller's verdict on an asserting party's email claims: untrusted, or trusted for any domain or for a list of domains. `FederatedIdentity` applies the rule (trusted party, address inside its domains, claim verified, local address verified); the plugin supplies the verdict from its own configuration. See: [BEH-EA-338](behaviors/06-domain-users-accounts.md#beh-ea-338-a-federated-sign-in-resolves-its-identity-through-federatedidentity-and-a-lost-race-resolves-to-the-anchors-user).
+
+### Federated identity resolution
+
+Deciding which local User an External identity is: the Account anchored at `(provider, subject, issuer)`, else a trusted email match, else a sign-up through `SignUp`. A request that loses a race for the same identity reads the anchor again and signs in as the winner's User. See: [ADR-EA-043](decisions/043-federated-identity-resolution.md).
+
+### Credential carrier
+
+One of the four places a request may present a credential: the `impersonation` and `cookie` cookies, the `x-api-key` header and `Authorization: Bearer`. A middleware's security declaration lists its carriers in order; that list is the strategy chain (BEH-EA-072). See: [ADR-EA-042](decisions/042-credential-resolution-module.md).
+
+### Sealed column
+
+A table column stored as an `Encryption` envelope, declared once (`SealedColumn.column`), AAD `<table>:<rowKey>:<column>`, read as a `Sealed<A>` whose `open` is the only place the plaintext appears. Core's six (`users.metadata`, `sessions.ipAddress`/`userAgent`, the three provider tokens) are declared the same way as a plugin's. See: [ADR-EA-019](decisions/019-encryption-key-rotation.md) decision 6, [BEH-EA-324](behaviors/05-persistence-stratum.md#beh-ea-324-a-sealed-column-is-declared-once-opens-lazily-and-re-seals-on-read).
+
+### Tier
+
+Which principals an authentication middleware admits: the user tier (`Authentication`, `OptionalAuthentication`, `AdminAuthentication`) only a `User`, the machine tier (`MachineAuthentication`) any. `Credentials` applies the rule to every resolved principal, claimed or session-derived. See: [BEH-EA-066](behaviors/09-authentication-middleware.md#beh-ea-066-the-bearer-handler-is-tried-after-the-cookie-handler-fails-over-the-same-session-resolution-logic).
 
 ### CurrentPrincipal
 
-The `Context.Reference` (or middleware-provided environment value) carrying the current request's resolved `Principal`, put in place by `Authentication` middleware before a handler runs. `AuthorizedSubject` (Path A) requires `CurrentPrincipal` and derives qadi's `CurrentSubject` from it — a handler is never expected to resolve a Principal itself. See: [BEH-EA-145](behaviors/19-qadi-bridge-path-a.md#beh-ea-145-authorizedsubject-bridges-currentprincipal-to-currentsubject).
+The `Context.Reference` (or middleware-provided environment value) carrying the current request's resolved `Principal`, put in place by `Authentication` middleware before a handler runs. `AuthorizedSubject` (Path A) requires `CurrentPrincipal` and derives qadi's `CurrentSubject` from it — a handler is never expected to resolve a Principal itself. A handler behind the user tier reads its caller (re-branded into the domain) with `CurrentUser.current`. See: [BEH-EA-145](behaviors/19-qadi-bridge-path-a.md#beh-ea-145-authorizedsubject-bridges-currentprincipal-to-currentsubject).
 
 ### CurrentSubject
 
@@ -46,9 +70,21 @@ qadi's environment value carrying the current request's `AuthSubject`, the thing
 
 A `Model.Class` entity representing one authenticated device or client instance. Sessions are opaque `id.secret` tokens; only `SHA-256(secret)` is stored at rest, never the secret itself. A session carries absolute and idle expiry, refreshes on a throttled sliding schedule, and is reissued (not extended) at sign-in and at privilege change. See: [BEH-EA-049](behaviors/07-sessions.md#beh-ea-049-a-session-token-is-an-opaque-idsecret-pair).
 
+### Session lifecycle
+
+What a successful response of an endpoint does to the caller's own session, declared on the contract with one of five `SessionLifecycle` markers ([ADR-EA-045](decisions/045-session-lifecycle-on-the-contract.md), [BEH-EA-343](behaviors/04-contract-stratum.md#beh-ea-343-an-endpoint-declares-what-it-does-to-the-callers-session-on-the-contract)): `Mints` (a new session), `Rotates` (the credential is replaced), `Ends` (the caller's session ends), `Swaps` (impersonation shadows the caller's cookie and back) and `Refreshes` (the session's view or subject changes, the credential does not). The first four provide a **grant** (`MintGrant`, `EndGrant`, `SwapGrant`), the capability `SessionDelivery`'s functions require, which the handler settles by delivering or declining.
+
 ### VerificationToken
 
-A `Model.Class` entity for a purpose-scoped, single-use token — email verification, password reset, and similar flows. A token is valid for one purpose only and is consumed exactly once, through `Verification.redeem`, in the same transaction as the action it authorizes; a replay is a distinct, published event (`auth.token.replay`), not a silent failure. See: [BEH-EA-057](behaviors/08-verification-tokens.md#beh-ea-057-a-verification-token-is-scoped-to-one-purpose).
+A `Model.Class` entity for a purpose-scoped, single-use token — email verification, password reset, and similar flows. A token is valid for one purpose only and is consumed exactly once, through `Verification.redeem` (a link through `VerificationLink.redeemer`), in the same transaction as the action it authorizes; a replay is a distinct, published event (`auth.token.replay`), not a silent failure. See: [BEH-EA-057](behaviors/08-verification-tokens.md#beh-ea-057-a-verification-token-is-scoped-to-one-purpose).
+
+### Link purpose
+
+A `VerificationLink` value naming one purpose of a client-held `Verification` token: its name, payload schema, subject (a user is required, or optional) and how its public id is chosen. Minting and redeeming one flow share it. See: [BEH-EA-057](behaviors/08-verification-tokens.md), [ADR-EA-039](decisions/039-verification-redeem.md).
+
+### Passkey ceremony
+
+One registration (modal or conditional), sign-in or step-up exchange of a WebAuthn challenge for a browser response. Its kind decides the challenge scope (`passkey.register[.conditional]:<sessionId>`, `passkey.authenticate:<ceremonyId>`, `passkey.reauthenticate:<sessionId>`). Verification spends the challenge first, then checks the origin, the signature and the kind's policy (user verification, attestation, user handle, signature counter), and answers a verified credential or a refusal reason. How precisely an endpoint reports a refusal is its posture. See: [BEH-EA-132](behaviors/17-passkey.md#beh-ea-132-challenges-are-single-use-and-short-lived), [BEH-EA-136](behaviors/17-passkey.md#beh-ea-136-typed-errors-are-enumeration-safe).
 
 ### CsrfProtection
 
@@ -56,7 +92,7 @@ The domain service that composes awthaq's CSRF defenses into one strategy chain,
 
 ### TestAuth
 
-The testing harness's entry point (`@awthaq/test`): `TestAuth.layer` runs the whole plugin pipeline — the same `Auth.make` composition an application uses — over an in-memory backend, so a plugin author's tests exercise the real contract and Layer graph rather than a stand-in. See: [BEH-EA-193](behaviors/25-testing-harness.md#beh-ea-193-testauthlayer-is-the-whole-pipeline-over-memory).
+The testing harness's entry point (`@awthaq/test`): `TestAuth.layer` runs the whole plugin pipeline — the same `Auth.make` composition an application uses — over an in-memory backend, so a plugin author's tests exercise the real contract and Layer graph rather than a stand-in. See: [BEH-EA-193](behaviors/25-testing-harness.md#beh-ea-193-testauthlayer-is-the-whole-pipeline-over-memory). It is `AuthHost.layer` over test ports ([BEH-EA-342](behaviors/25-testing-harness.md#beh-ea-342-testauthlayer-is-authhostlayer-over-the-test-ports)).
 
 ### Redacted
 
@@ -90,7 +126,7 @@ A literal integer (currently `1`) every plugin declares as part of its static sh
 
 ### Port
 
-A service a plugin requires and the application — never another plugin — provides: examples include `PasswordHasher`, `Mailer`, `WebAuthn`, and the Effect-native `Crypto`, `KeyValueStore`, `RateLimiter`, `SqlClient`. Because plugins can only require ports and never provide them, two plugins cannot conflict over "who provides the hasher" — that situation cannot arise by construction. See: [BEH-EA-017](behaviors/03-ports-slots-hooks-registries.md#beh-ea-017-configuration-is-a-contextreference-with-a-default-value), [ADR-EA-010](decisions/010-plugins-require-ports-never-provide.md#adr-ea-010-plugins-require-ports-and-never-provide-them).
+A service a plugin requires and the application — never another plugin — provides: examples include `PasswordHasher`, `Mailer`, `WebAuthn`, and the Effect-native `Crypto`, `KeyValueStore`, `RateLimiter`, `SqlClient`. Because plugins can only require ports and never provide them, two plugins cannot conflict over "who provides the hasher" — that situation cannot arise by construction. Core services, records bundles, hook points and registries are not ports: the composition owns them, and `AuthHost` provides them ([ADR-EA-044](decisions/044-host-composition.md)). See: [BEH-EA-017](behaviors/03-ports-slots-hooks-registries.md#beh-ea-017-configuration-is-a-contextreference-with-a-default-value), [ADR-EA-010](decisions/010-plugins-require-ports-never-provide.md#adr-ea-010-plugins-require-ports-and-never-provide-them).
 
 ### Slot
 
@@ -134,7 +170,11 @@ A plugin's declared list of other plugin classes it requires to be installed alo
 
 ### Auth.make
 
-The single composition function applications call with a tuple of plugins. It prepends the fixed core plugin tuple, runs `Validate<P>` over the result, and returns `{ api, layer, migrations, manifest }` — the merged contract, the merged (and still-to-be-provided) Layer, ordered migrations, and a derived manifest the CLI reads. See: [BEH-EA-009](behaviors/02-plugin-composition-validate.md#beh-ea-009-authmake-computes-three-outputs-from-one-plugin-tuple), [ADR-EA-002](decisions/002-plugin-graph-read-off-service-graph.md#adr-ea-002-the-plugin-graph-is-read-off-the-service-graph).
+The single composition function applications call with a tuple of plugins. It prepends the fixed core plugin tuple, runs `Validate<P>` over the result, and returns `{ api, layer, migrations, manifest }` — the merged contract, the merged (and still-to-be-provided) Layer, ordered migrations, and a derived manifest the CLI reads. The result is served with `AuthHost.layer` ([BEH-EA-340](behaviors/02-plugin-composition-validate.md#beh-ea-340-authhostlayer-derives-the-servable-layer-from-authmake-and-its-requirements-are-exactly-what-the-host-owns)). See: [BEH-EA-009](behaviors/02-plugin-composition-validate.md#beh-ea-009-authmake-computes-three-outputs-from-one-plugin-tuple), [ADR-EA-002](decisions/002-plugin-graph-read-off-service-graph.md#adr-ea-002-the-plugin-graph-is-read-off-the-service-graph).
+
+### AuthHost
+
+The module (`@awthaq/server`) that turns an `Auth.make` result into the servable layer: it derives the routes, core's handlers, every plugin's records bundle and hook points, the core services and registries, the middleware, the user fields and, over SQL, the migrations; the host provides persistence, the CSRF secret, its ports and its policy layers. See: [BEH-EA-340](behaviors/02-plugin-composition-validate.md#beh-ea-340-authhostlayer-derives-the-servable-layer-from-authmake-and-its-requirements-are-exactly-what-the-host-owns), [ADR-EA-044](decisions/044-host-composition.md).
 
 ### Context.Service
 

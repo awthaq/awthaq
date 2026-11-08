@@ -53,14 +53,37 @@ export const storeUnavailable = (operation: string) => (cause: unknown) =>
         Effect.andThen(Effect.fail(new StoreUnavailable({ operation }))),
       );
 
-/** What a repository statement fails with besides the domain's own outcomes. */
+/**
+ * Whether a statement failed on a unique (or primary-key) constraint. `UniqueViolation` is what the
+ * pg and `node:sqlite` drivers classify it as; `@effect/sql-libsql` only exposes the generic
+ * `SQLITE_CONSTRAINT` code, so a libSQL violation arrives as a `ConstraintError` whose cause says
+ * "UNIQUE constraint failed" (plan 16: found by running `StoreContract` on libSQL). A foreign-key,
+ * NOT NULL or CHECK failure is a `ConstraintError` with another message and stays a defect.
+ */
+export const isUniqueViolation = (error: unknown): error is SqlError => {
+  if (!isSqlError(error)) {
+    return false;
+  }
+  const reason = error.reason;
+  if (reason._tag === "UniqueViolation") {
+    return true;
+  }
+  if (reason._tag !== "ConstraintError") {
+    return false;
+  }
+  const cause = reason.cause;
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return message.includes("UNIQUE constraint failed");
+};
+
+/** What a store statement fails with besides the domain's own outcomes. */
 type Fault = SqlError | SchemaError | NoSuchElementError;
 
 const isFault = <E>(error: E): error is Extract<E, Fault> =>
   isSqlError(error) || isSchemaError(error) || isNoSuchElementError(error);
 
 /**
- * A repository call with nothing else to recover from: an outage is `StoreUnavailable`, a row that
+ * A store statement with nothing else to recover from: an outage is `StoreUnavailable`, a row that
  * no longer decodes (`SchemaError`) or a `RETURNING` that returned no row (`NoSuchElementError`) is
  * a defect. It leaves every other failure in `E` alone, so a method whose `E` also carries domain
  * outcomes (`SlugTaken`, `NotFound`) pipes through it too.
@@ -84,9 +107,7 @@ export const orConflict =
   ) =>
   <A, E, R>(self: Effect.Effect<A, E, R>) =>
     self.pipe(
-      Effect.mapError((error) =>
-        isSqlError(error) && error.reason._tag === "UniqueViolation" ? onUnique(error) : error,
-      ),
+      Effect.mapError((error) => (isUniqueViolation(error) ? onUnique(error) : error)),
       orStoreUnavailable(operation),
     );
 

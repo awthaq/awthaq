@@ -18,6 +18,7 @@ import * as HttpApiClient from "effect/http-api/HttpApiClient";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import {
   actorNamed,
+  browserOf,
   authProbeApp,
   coreOnlyApp,
   passwordApp,
@@ -37,7 +38,9 @@ import {
   type World as ScratchWorld,
 } from "./FoundationsWorld.ts";
 import { LegacyLogin, LoginHost, PasswordFixture, SessionImposter } from "./PluginFixtures.ts";
+import { agentOver } from "./shared/Csrf.ts";
 import { STRONG_PASSWORD } from "./shared/Harness.ts";
+import type { UserAgent } from "@awthaq/test";
 import { subjectApp, subjectFor } from "./TestingHarnessWorld.ts";
 
 const GATES = "ContractTypeGates.ts";
@@ -93,13 +96,18 @@ const presented = cell(
     value,
   ): value is {
     readonly path: string;
-    readonly cookie?: string;
+    /** The browser presenting a session cookie, when one is presented. */
+    readonly as?: UserAgent.UserAgent;
     readonly bearer?: string;
   } => isObject(value) && "path" in value,
 );
 const cookieUserId = cell("cookieUserId", (value): value is string => typeof value === "string");
 const bearerUserId = cell("bearerUserId", (value): value is string => typeof value === "string");
 const strings = cell("strings", (value): value is ReadonlyArray<string> => Array.isArray(value));
+const signedInBrowser = cell(
+  "signedInBrowser",
+  (value): value is UserAgent.UserAgent => isObject(value) && "cookies" in value,
+);
 
 const ref = (id: string) => new Api.PrincipalRef({ type: "user", id });
 
@@ -336,17 +344,24 @@ export const contractStratumSteps = defineSteps<ScratchWorld | AppWorld>(
       const { handler } = yield* passwordApp;
       const email = "one-shape@example.com";
       const signedUp = yield* signUp(handler, email);
-      const signedIn = yield* signInAttempt(handler, email, STRONG_PASSWORD);
+      // One browser signs in and keeps the session cookie the sign-in sets.
+      const browser = agentOver(handler);
+      const signedIn = yield* send(handler, "POST", "/password/sign-in", {
+        as: browser,
+        body: { email, password: STRONG_PASSWORD },
+      });
       yield* put(replies, [signedUp, signedIn]);
+      yield* put(signedInBrowser, browser);
     });
 
     When("the user requests the current session", function* () {
       const { handler } = yield* passwordApp;
-      const [, signedIn] = yield* take(replies);
-      assert.ok(signedIn !== undefined);
-      const cookie = signedIn.headers.get("set-cookie")?.split(";")[0];
-      assert.ok(cookie !== undefined, "sign-in set a session cookie");
-      const current = yield* send(handler, "GET", "/session", { cookie });
+      const browser = yield* take(signedInBrowser);
+      assert.ok(
+        browser.cookies.get(Api.SESSION_COOKIE_NAME) !== undefined,
+        "sign-in set a session cookie",
+      );
+      const current = yield* send(handler, "GET", "/session", { as: browser });
       yield* put(replies, [...(yield* take(replies)), current]);
     });
 
@@ -494,7 +509,7 @@ export const contractStratumSteps = defineSteps<ScratchWorld | AppWorld>(
       yield* Ref.set(app.attempts, []);
       yield* Ref.set(app.resolvedBy, []);
       const reply = yield* send(app.handler, "GET", spec.path, {
-        ...(spec.cookie === undefined ? {} : { cookie: spec.cookie }),
+        ...(spec.as === undefined ? {} : { as: spec.as }),
         ...(spec.bearer === undefined ? {} : { bearer: spec.bearer }),
       });
       yield* put(probeReply, {
@@ -526,7 +541,7 @@ export const contractStratumSteps = defineSteps<ScratchWorld | AppWorld>(
         yield* put(bearerUserId, bob.userId);
         yield* put(presented, {
           ...spec,
-          ...(cookie ? { cookie: alice.cookie } : {}),
+          ...(cookie ? { as: browserOf((yield* authProbeApp).handler, alice) } : {}),
           ...(bearer ? { bearer: bob.token } : {}),
         });
       });
@@ -583,7 +598,7 @@ export const contractStratumSteps = defineSteps<ScratchWorld | AppWorld>(
         const app = yield* authProbeApp;
         const spec = yield* take(presented);
         const viaCookieFirst = yield* send(app.handler, "GET", "/app/who", {
-          ...(spec.cookie === undefined ? {} : { cookie: spec.cookie }),
+          ...(spec.as === undefined ? {} : { as: spec.as }),
           ...(spec.bearer === undefined ? {} : { bearer: spec.bearer }),
         });
         const cookieFirstUser = probeWho(viaCookieFirst.body)?.id;
@@ -606,7 +621,10 @@ export const contractStratumSteps = defineSteps<ScratchWorld | AppWorld>(
     Given("a signed-in user {string} with a valid session cookie", function* (name: string) {
       const user = yield* signInProbe(name);
       yield* put(cookieUserId, user.userId);
-      yield* put(presented, { path: "/optional/who", cookie: user.cookie });
+      yield* put(presented, {
+        path: "/optional/who",
+        as: browserOf((yield* authProbeApp).handler, user),
+      });
     });
 
     When("the request reaches the handler", function* () {
@@ -643,7 +661,9 @@ export const contractStratumSteps = defineSteps<ScratchWorld | AppWorld>(
       const app = yield* authProbeApp;
       const user = yield* signInProbe("branching");
       const anonymous = yield* send(app.handler, "GET", "/optional/who");
-      const signedIn = yield* send(app.handler, "GET", "/optional/who", { cookie: user.cookie });
+      const signedIn = yield* send(app.handler, "GET", "/optional/who", {
+        as: browserOf(app.handler, user),
+      });
       yield* put(strings, [
         `${anonymous.status}:${probeWho(anonymous.body)?.tag}`,
         `${signedIn.status}:${probeWho(signedIn.body)?.tag}`,
@@ -801,14 +821,12 @@ export const contractStratumSteps = defineSteps<ScratchWorld | AppWorld>(
             return issued.session.id;
           }),
         );
+        const browser = browserOf(app.handler, alice);
         const calls = [
-          yield* send(app.handler, "GET", "/session/list", { cookie: alice.cookie }),
-          yield* send(app.handler, "POST", "/session/revoke", {
-            cookie: alice.cookie,
-            body: { id: other },
-          }),
-          yield* send(app.handler, "POST", "/session/revoke-others", { cookie: alice.cookie }),
-          yield* send(app.handler, "POST", "/session/sign-out", { cookie: alice.cookie }),
+          yield* send(app.handler, "GET", "/session/list", { as: browser }),
+          yield* send(app.handler, "POST", "/session/revoke", { as: browser, body: { id: other } }),
+          yield* send(app.handler, "POST", "/session/revoke-others", { as: browser }),
+          yield* send(app.handler, "POST", "/session/sign-out", { as: browser }),
         ];
         yield* put(
           strings,

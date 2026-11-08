@@ -2,7 +2,7 @@
 // enqueue idempotence, signed requests a receiver can verify, retry/backoff/dead-letter, no redirects,
 // SSRF refusal at attempt time, rate deferral, secret rotation overlap and endpoint auto-disable.
 import { AuthEvents, EventRelay, Users } from "@awthaq/core";
-import { Encryption, RateLimiter } from "@awthaq/ports";
+import { Encryption, RateLimiter, RelayCursorStore } from "@awthaq/ports";
 import { SealedColumn } from "@awthaq/sql";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -181,7 +181,7 @@ describe("enqueue and the event relay", () => {
         yield* events.publish({ _tag: "auth.user.created", userId: Users.UserId("ignored") });
         yield* TestClock.adjust(Duration.seconds(3));
         const transport = yield* Layer.build(
-          Layer.mergeAll(WebhookDelivery.transportLayer, EventRelay.layerCursorMemory),
+          Layer.mergeAll(WebhookDelivery.transportLayer, RelayCursorStore.layerMemory),
         );
         const drain = EventRelay.drainOnce({ name: WebhookDelivery.RELAY_NAME }).pipe(
           Effect.provide(transport),

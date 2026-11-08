@@ -4,6 +4,7 @@
 import { defineSteps } from "@effect-cucumber/vitest";
 import { Hmac } from "@awthaq/ports";
 import { SecretHash, Sessions, Users } from "@awthaq/core";
+import { CookieAssertions } from "@awthaq/test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -35,10 +36,11 @@ import {
   signUp,
   startRequest,
   aliasActor,
+  heldSessionPair,
   type SessionRow,
 } from "./SessionWorld.ts";
 import { mailedToken } from "./MailedToken.ts";
-import { cookieFrom, setCookieFrom, STRONG_PASSWORD } from "./shared/Harness.ts";
+import { STRONG_PASSWORD } from "./shared/Harness.ts";
 
 /** The `id.secret` halves of a `__Host-session=...` cookie pair. */
 const tokenParts = (cookie: string) => {
@@ -103,10 +105,11 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then('the returned token has the shape "<id>.<secret>"', function* () {
     const { actors, responses } = yield* World;
     const name = yield* actors.current;
-    const response = yield* responses.get(name);
-    const { id, secret } = tokenParts(cookieFrom(response));
+    assert.equal((yield* responses.get(name)).status, 200);
+    // The token the response set, as the actor's agent now holds it.
+    const { id, secret } = tokenParts(heldSessionPair(yield* actors.get(name)));
     // The id half is the public session id the service reports for that very session.
-    const current = yield* getSession("/session", (yield* actors.get(name)).cookie);
+    const current = yield* getSession("/session", yield* actors.get(name));
     const body = yield* Effect.promise(() => current.json());
     const decoded = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(
       body,
@@ -121,8 +124,8 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then("the secret component is redacted in any log or span", function* () {
     const { actors } = yield* World;
     const actor = yield* actors.get(yield* actors.current);
-    yield* assertSecretNeverObserved(tokenParts(actor.cookie).secret);
-    assert.equal((yield* getSession("/session", actor.cookie)).status, 200);
+    yield* assertSecretNeverObserved(tokenParts(heldSessionPair(actor)).secret);
+    assert.equal((yield* getSession("/session", actor)).status, 200);
     yield* assertNoLeaks();
   });
 
@@ -131,13 +134,13 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* () {
       const { actors, snapshots } = yield* World;
       const actor = yield* actors.get(yield* actors.current);
-      yield* snapshots.set("row", yield* readSessionRow(tokenParts(actor.cookie).id));
+      yield* snapshots.set("row", yield* readSessionRow(tokenParts(heldSessionPair(actor)).id));
     },
   );
 
   Then("the secret component cannot be reconstructed from it", function* () {
     const { actors, snapshots } = yield* World;
-    const { secret } = tokenParts((yield* actors.get(yield* actors.current)).cookie);
+    const { secret } = tokenParts(heldSessionPair(yield* actors.get(yield* actors.current)));
     const row = yield* snapshots.get("row");
     // No column carries the secret, and the one credential column is a one-way digest of it.
     for (const [key, value] of Object.entries(row)) {
@@ -149,7 +152,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then('the persisted Session row stores "SHA-256\\(secret\\)"', function* () {
     const { actors } = yield* World;
-    const { id, secret } = tokenParts((yield* actors.get(yield* actors.current)).cookie);
+    const { id, secret } = tokenParts(heldSessionPair(yield* actors.get(yield* actors.current)));
     const row = yield* readSessionRow(id);
     // Computed independently with node:crypto, not the code under test.
     assert.equal(column(row, "secretHash"), sha256Hex(secret));
@@ -157,7 +160,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then("the persisted Session row does not store the plaintext secret", function* () {
     const { actors } = yield* World;
-    const { id, secret } = tokenParts((yield* actors.get(yield* actors.current)).cookie);
+    const { id, secret } = tokenParts(heldSessionPair(yield* actors.get(yield* actors.current)));
     const row = yield* readSessionRow(id);
     for (const [key, value] of Object.entries(row)) {
       assert.ok(!String(value).includes(secret), `column "${key}" stores the plaintext secret`);
@@ -172,9 +175,12 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { actors } = yield* World;
       yield* signUp(name);
       const actor = yield* actors.get(name);
-      const { id } = tokenParts(actor.cookie);
+      const { id } = tokenParts(heldSessionPair(actor));
       yield* pinSessionSecret(id, sha256Hex(secret));
-      yield* actors.set(name, { ...actor, cookie: `__Host-session=${id}.${secret}` });
+      // The actor's browser now holds the session under the named secret.
+      actor.agent.cookies.receive(
+        `__Host-session=${id}.${secret}; Path=/; Secure; HttpOnly; SameSite=Strict`,
+      );
     },
   );
 
@@ -182,7 +188,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { actors, responses } = yield* World;
     const name = yield* actors.current;
     const actor = yield* actors.get(name);
-    yield* responses.set(name, yield* getSession("/session", actor.cookie));
+    yield* responses.set(name, yield* getSession("/session", actor));
   });
 
   Then(
@@ -191,7 +197,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { actors, responses } = yield* World;
       const name = yield* actors.current;
       const actor = yield* actors.get(name);
-      const { id, secret } = tokenParts(actor.cookie);
+      const { id, secret } = tokenParts(heldSessionPair(actor));
       assert.equal((yield* responses.get(name)).status, 200);
       const stored = column(yield* readSessionRow(id), "secretHash");
       assert.equal(stored, sha256Hex(secret));
@@ -204,7 +210,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then("no comparison is made against a stored plaintext value", function* () {
     const { actors } = yield* World;
-    const { id, secret } = tokenParts((yield* actors.get(yield* actors.current)).cookie);
+    const { id, secret } = tokenParts(heldSessionPair(yield* actors.get(yield* actors.current)));
     const row = yield* readSessionRow(id);
     for (const [key, value] of Object.entries(row)) {
       assert.ok(!String(value).includes(secret), `column "${key}" stores the plaintext secret`);
@@ -217,7 +223,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (_digest: string) {
       const { actors, responses } = yield* World;
       const name = yield* actors.current;
-      const { id, secret } = tokenParts((yield* actors.get(name)).cookie);
+      const { id, secret } = tokenParts(heldSessionPair(yield* actors.get(name)));
       assert.equal((yield* responses.get(name)).status, 200);
       const stored = column(yield* readSessionRow(id), "secretHash");
       // The comparator: equal digests match, and one flipped character at either end does not.
@@ -226,10 +232,12 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.equal(SecretHash.equals(`${sha256Hex(secret).slice(0, -1)}0`, stored), false);
       // The verifier: every comparison of a presented digest goes through it, and none uses `===`.
       const sessions = readFileSync(
-        fileURLToPath(new URL("../../packages/core/src/Sessions.ts", import.meta.url)),
+        fileURLToPath(
+          new URL("../../packages/core/src/internal/sessionVerdict.ts", import.meta.url),
+        ),
         "utf8",
       );
-      assert.ok((sessions.match(/secretMatches\(presentedHash, /g) ?? []).length >= 2);
+      assert.ok((sessions.match(/SecretHash\.equals\(presentedHash, /g) ?? []).length >= 2);
       assert.doesNotMatch(sessions, /presentedHash\s*[!=]==|[!=]==\s*presentedHash/);
       // ...and `SecretHash.equals` is the shared constant-time comparator, not an ordinary equality.
       const recipe = readFileSync(
@@ -300,7 +308,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     "secrets of {int}, {int} and {int} characters are presented under {string}'s session id",
     function* (short: number, medium: number, long: number, name: string) {
       const { actors, texts } = yield* World;
-      const { id } = tokenParts((yield* actors.get(name)).cookie);
+      const { id } = tokenParts(heldSessionPair(yield* actors.get(name)));
       const statuses: Array<number> = [];
       for (const length of [short, medium, long]) {
         const secret = "x".repeat(length);
@@ -319,7 +327,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     "the stored digest keeps its fixed {int}-hex length, so the comparison is over digests and never over the presented secrets themselves",
     function* (length: number) {
       const { actors } = yield* World;
-      const { id } = tokenParts((yield* actors.get(yield* actors.current)).cookie);
+      const { id } = tokenParts(heldSessionPair(yield* actors.get(yield* actors.current)));
       const stored = column(yield* readSessionRow(id), "secretHash");
       assert.equal(stored.length, length);
       assert.match(stored, /^[0-9a-f]+$/);
@@ -332,7 +340,10 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { actors, snapshots } = yield* World;
       yield* signUp("alice");
       const actor = yield* actors.get("alice");
-      yield* snapshots.set("disclosed", yield* readSessionRow(tokenParts(actor.cookie).id));
+      yield* snapshots.set(
+        "disclosed",
+        yield* readSessionRow(tokenParts(heldSessionPair(actor)).id),
+      );
     },
   );
 
@@ -352,10 +363,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { actors, responses } = yield* World;
       assert.equal((yield* responses.get("attacker")).status, 401);
       // The victim's real token is what is still accepted — the rejection is about the hash.
-      assert.equal(
-        (yield* getSession("/session", (yield* actors.get("alice")).cookie)).status,
-        200,
-      );
+      assert.equal((yield* getSession("/session", yield* actors.get("alice"))).status, 200);
     },
   );
 
@@ -367,7 +375,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { snapshots } = yield* World;
       yield* configureSessions({ absolute: Duration.days(days) });
       const actor = yield* signedUp(name);
-      yield* snapshots.set("issued", yield* readSessionRow(tokenParts(actor.cookie).id));
+      yield* snapshots.set("issued", yield* readSessionRow(tokenParts(heldSessionPair(actor)).id));
     },
   );
 
@@ -404,7 +412,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* configureSessions({ idle: Duration.hours(hours), touchEvery: Duration.minutes(1) });
       const actor = yield* signedUp(name);
       yield* advance(Duration.minutes(30));
-      yield* snapshots.set("before", yield* readSessionRow(tokenParts(actor.cookie).id));
+      yield* snapshots.set("before", yield* readSessionRow(tokenParts(heldSessionPair(actor)).id));
     },
   );
 
@@ -433,7 +441,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       });
       const actor = yield* signedUp(name);
       yield* advance(elapsed);
-      yield* snapshots.set("before", yield* readSessionRow(tokenParts(actor.cookie).id));
+      yield* snapshots.set("before", yield* readSessionRow(tokenParts(heldSessionPair(actor)).id));
     },
   );
 
@@ -506,7 +514,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { snapshots } = yield* World;
     const actor = yield* signedUp("alice");
     yield* advance(Duration.minutes(minutes));
-    yield* snapshots.set("before", yield* readSessionRow(tokenParts(actor.cookie).id));
+    yield* snapshots.set("before", yield* readSessionRow(tokenParts(heldSessionPair(actor)).id));
   });
 
   // The World is built from `SessionConfig` (default touchEvery = 1 hour) when the session is
@@ -569,11 +577,11 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("{string} has no existing session", function* (name: string) {
     const { snapshots } = yield* World;
     const actor = yield* signedUp(name);
-    const prior = yield* readSessionRow(tokenParts(actor.cookie).id);
+    const prior = yield* readSessionRow(tokenParts(heldSessionPair(actor)).id);
     yield* snapshots.set(`prior:${name}`, prior);
-    const revoked = yield* postSession("/session/revoke-all", undefined, actor.cookie);
+    const revoked = yield* postSession("/session/revoke-all", undefined, actor);
     assert.equal(revoked.status, 204);
-    assert.equal((yield* getSession("/session", actor.cookie)).status, 401);
+    assert.equal((yield* getSession("/session", actor)).status, 401);
     assert.equal(yield* countSessionRows(column(prior, "userId")), 0);
   });
 
@@ -584,10 +592,10 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
 
   Then("a newly minted session is issued for {string}", function* (name: string) {
-    const { responses, snapshots } = yield* World;
+    const { actors, responses, snapshots } = yield* World;
     const response = yield* responses.get(name);
     assert.equal(response.status, 200);
-    const { id } = tokenParts(cookieFrom(response));
+    const { id } = tokenParts(heldSessionPair(yield* actors.get(name)));
     const prior = yield* snapshots.get(`prior:${name}`);
     assert.notEqual(id, column(prior, "id"));
     const row = yield* readSessionRow(id);
@@ -604,7 +612,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* aliasActor(sessionName, name);
       yield* snapshots.set(
         `session:${sessionName}`,
-        yield* readSessionRow(tokenParts(actor.cookie).id),
+        yield* readSessionRow(tokenParts(heldSessionPair(actor)).id),
       );
     },
   );
@@ -617,7 +625,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       // (a public endpoint: the link may be opened anywhere) replaces the address.
       const { texts } = yield* World;
       const newEmail = `${name}-changed@example.com`;
-      const requested = yield* postSession("/change-email", { newEmail }, actor.cookie);
+      const requested = yield* postSession("/change-email", { newEmail }, actor);
       assert.equal(requested.status, 202);
       const token = mailedToken(yield* mailedTo(newEmail, "change-email"));
       yield* texts.set(`newEmail:${name}`, newEmail);
@@ -633,7 +641,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* postSession(
         "/change-password",
         { currentPassword: STRONG_PASSWORD, newPassword: `${STRONG_PASSWORD} again` },
-        actor.cookie,
+        actor,
       ),
     );
     yield* actors.use(name);
@@ -643,10 +651,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then("session {string} no longer verifies", function* (sessionName: string) {
     const { actors, responses } = yield* World;
     assert.equal((yield* responses.get(yield* actors.current)).status, 204);
-    assert.equal(
-      (yield* getSession("/session", (yield* actors.get(sessionName)).cookie)).status,
-      401,
-    );
+    assert.equal((yield* getSession("/session", yield* actors.get(sessionName))).status, 401);
   });
 
   Then("{string} signs in afresh under the new address", function* (name: string) {
@@ -663,10 +668,11 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { actors, responses, snapshots } = yield* World;
     const response = yield* responses.get(yield* actors.current);
     assert.equal(response.status, 200);
-    const replacement = cookieFrom(response);
+    // The replacement is what the actor's agent holds once the change answered it.
+    const actor = yield* actors.get(yield* actors.current);
     const original = yield* snapshots.get(`session:${sessionName}`);
-    assert.notEqual(tokenParts(replacement).id, column(original, "id"));
-    assert.equal((yield* getSession("/session", replacement)).status, 200);
+    assert.notEqual(tokenParts(heldSessionPair(actor)).id, column(original, "id"));
+    assert.equal((yield* getSession("/session", actor)).status, 200);
   });
 
   Then(
@@ -681,12 +687,10 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
         typeof row["supersededAt"] === "string" || row["supersededAt"] instanceof Date,
         "the superseded row carries a tombstone",
       );
-      const replacement = tokenParts(cookieFrom(yield* responses.get(yield* actors.current))).id;
+      assert.equal((yield* responses.get(yield* actors.current)).status, 200);
+      const replacement = tokenParts(heldSessionPair(yield* actors.get(yield* actors.current))).id;
       assert.equal(row["supersededBy"], replacement);
-      assert.equal(
-        (yield* getSession("/session", (yield* actors.get(sessionName)).cookie)).status,
-        401,
-      );
+      assert.equal((yield* getSession("/session", yield* actors.get(sessionName))).status, 401);
     },
   );
 
@@ -805,7 +809,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { actors, responses } = yield* World;
     const actor = yield* actors.get(name);
     yield* actors.use(name);
-    yield* responses.set(name, yield* getSession("/session/list", actor.cookie));
+    yield* responses.set(name, yield* getSession("/session/list", actor));
   });
 
   Then(
@@ -848,8 +852,8 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* actors.use(name);
     const response = yield* postSession(
       "/session/revoke",
-      { id: tokenParts(target.cookie).id },
-      actor.cookie,
+      { id: tokenParts(heldSessionPair(target)).id },
+      actor,
     );
     yield* responses.set("revoke", response);
   });
@@ -857,13 +861,13 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then("session {string} is no longer valid", function* (sessionName: string) {
     const { actors } = yield* World;
     const target = yield* actors.get(sessionName);
-    assert.equal((yield* getSession("/session", target.cookie)).status, 401);
+    assert.equal((yield* getSession("/session", target)).status, 401);
   });
 
   Then("session {string} remains valid", function* (sessionName: string) {
     const { actors } = yield* World;
     const target = yield* actors.get(sessionName);
-    assert.equal((yield* getSession("/session", target.cookie)).status, 200);
+    assert.equal((yield* getSession("/session", target)).status, 200);
   });
 
   // ---- REQ-EA-151: revoke-others ----
@@ -884,21 +888,21 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* actors.use(name);
     yield* responses.set(
       "revokeOthers",
-      yield* postSession("/session/revoke-others", undefined, actor.cookie),
+      yield* postSession("/session/revoke-others", undefined, actor),
     );
   });
 
   Then("{string} and {string} are no longer valid", function* (session2: string, session3: string) {
     const { actors } = yield* World;
     for (const name of [session2, session3]) {
-      assert.equal((yield* getSession("/session", (yield* actors.get(name)).cookie)).status, 401);
+      assert.equal((yield* getSession("/session", yield* actors.get(name))).status, 401);
     }
   });
 
   Then("{string} remains valid", function* (sessionName: string) {
     const { actors } = yield* World;
     const target = yield* actors.get(sessionName);
-    assert.equal((yield* getSession("/session", target.cookie)).status, 200);
+    assert.equal((yield* getSession("/session", target)).status, 200);
   });
 
   // ---- TIR-006: revoke-all ----
@@ -907,10 +911,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { actors, responses } = yield* World;
     const actor = yield* actors.get(name);
     yield* actors.use(name);
-    yield* responses.set(
-      "revokeAll",
-      yield* postSession("/session/revoke-all", undefined, actor.cookie),
-    );
+    yield* responses.set("revokeAll", yield* postSession("/session/revoke-all", undefined, actor));
   });
 
   Then(
@@ -918,16 +919,15 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (session1: string, session2: string, session3: string) {
       const { actors } = yield* World;
       for (const name of [session1, session2, session3]) {
-        assert.equal((yield* getSession("/session", (yield* actors.get(name)).cookie)).status, 401);
+        assert.equal((yield* getSession("/session", yield* actors.get(name))).status, 401);
       }
     },
   );
 
   Then("the response expires the {string} cookie", function* (cookieName: string) {
     const { responses } = yield* World;
-    const raw = setCookieFrom(yield* responses.get("revokeAll"));
-    assert.ok(raw.startsWith(`${cookieName}=`), "the expiring cookie is the session cookie");
-    assert.match(raw, /max-age=0/i);
+    const expiring = CookieAssertions.findSetCookie(yield* responses.get("revokeAll"), cookieName);
+    CookieAssertions.assertExpiredCookie(expiring);
   });
 
   // ---- REQ-EA-152/153: in-flight requests around a revoke ----
@@ -937,15 +937,19 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { actors } = yield* World;
       yield* signUp(name);
       yield* aliasActor(sessionName, name);
-      yield* startRequest("first", "/gate/hold", (yield* actors.get(sessionName)).cookie);
+      yield* startRequest("first", "/gate/hold", yield* actors.get(sessionName));
       yield* awaitGateEntered();
     });
 
   const revokeConcurrently = (sessionName: string) =>
     Effect.gen(function* () {
       const { actors, responses } = yield* World;
-      const cookie = (yield* actors.get(sessionName)).cookie;
-      const revoked = yield* postSession("/session/revoke", { id: tokenParts(cookie).id }, cookie);
+      const holder = yield* actors.get(sessionName);
+      const revoked = yield* postSession(
+        "/session/revoke",
+        { id: tokenParts(heldSessionPair(holder)).id },
+        holder,
+      );
       assert.equal(revoked.status, 204);
       yield* responses.set("concurrentRevoke", revoked);
     });
@@ -976,10 +980,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then("the next request presenting session {string} is rejected", function* (sessionName: string) {
     const { actors } = yield* World;
-    assert.equal(
-      (yield* getSession("/session", (yield* actors.get(sessionName)).cookie)).status,
-      401,
-    );
+    assert.equal((yield* getSession("/session", yield* actors.get(sessionName))).status, 401);
   });
 
   Given(
@@ -994,7 +995,7 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
     "a second, new request presents session {string} while the first request is still in flight",
     function* (sessionName: string) {
       const { actors } = yield* World;
-      yield* startRequest("second", "/gate/hold", (yield* actors.get(sessionName)).cookie);
+      yield* startRequest("second", "/gate/hold", yield* actors.get(sessionName));
     },
   );
 
@@ -1019,24 +1020,35 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Then('the response sets a cookie named "__Host-session"', function* () {
     const { actors, responses } = yield* World;
-    assert.match(cookieFrom(yield* responses.get(yield* actors.current)), /^__Host-session=/);
+    CookieAssertions.findSetCookie(yield* responses.get(yield* actors.current), "__Host-session");
   });
 
   Then('the cookie carries "Secure", "HttpOnly", and "SameSite=Strict"', function* () {
     const { actors, responses } = yield* World;
-    const setCookie = setCookieFrom(yield* responses.get(yield* actors.current));
-    assert.match(setCookie, /secure/i);
-    assert.match(setCookie, /httponly/i);
-    assert.match(setCookie, /samesite=strict/i);
+    const cookie = CookieAssertions.findSetCookie(
+      yield* responses.get(yield* actors.current),
+      "__Host-session",
+    );
+    assert.equal(cookie.secure, true);
+    assert.equal(cookie.httpOnly, true);
+    assert.equal(cookie.sameSite, "strict");
   });
 
   Then('the cookie sets "Path=\\/"', function* () {
     const { actors, responses } = yield* World;
-    assert.match(setCookieFrom(yield* responses.get(yield* actors.current)), /path=\//i);
+    assert.equal(
+      CookieAssertions.findSetCookie(yield* responses.get(yield* actors.current), "__Host-session")
+        .path,
+      "/",
+    );
   });
 
   Then('the cookie sets no "Domain" attribute', function* () {
     const { actors, responses } = yield* World;
-    assert.doesNotMatch(setCookieFrom(yield* responses.get(yield* actors.current)), /domain=/i);
+    assert.equal(
+      CookieAssertions.findSetCookie(yield* responses.get(yield* actors.current), "__Host-session")
+        .domain,
+      undefined,
+    );
   });
 });

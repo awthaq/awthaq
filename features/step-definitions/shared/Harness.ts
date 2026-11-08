@@ -1,6 +1,6 @@
 // BDD-007: the wire-level harness every World was copying. One definition here; each World
-// keeps its own Layer composition and actor state, but the plumbing (request cookies, the
-// no-op HTTP platform services, a capturing mailer, the cheap KDF layers, the named-actor
+// keeps its own Layer composition and actor state, but the plumbing (the no-op HTTP
+// platform services, a capturing mailer, the cheap KDF layers, the named-actor
 // registry) is shared so a fix lands once.
 import { Mailer, PasswordHasher } from "@awthaq/ports";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -33,20 +33,6 @@ export const cheapScrypt = PasswordHasher.layerScrypt.pipe(
   ),
   Layer.orDie,
 );
-
-/** The bare `name=value` pair of a response's `Set-Cookie`, ready to send back as a request's `cookie` header. */
-export const cookieFrom = (response: Response): string => {
-  const raw = response.headers.get("set-cookie");
-  if (raw === null) throw new Error("expected a set-cookie header");
-  return raw.split(";")[0] ?? raw;
-};
-
-/** The full raw `Set-Cookie` header — carries the attributes (`Secure`, `HttpOnly`, `SameSite`, `Path`, `Domain`) a cookie-hardening scenario inspects. */
-export const setCookieFrom = (response: Response): string => {
-  const raw = response.headers.get("set-cookie");
-  if (raw === null) throw new Error("expected a set-cookie header");
-  return raw;
-};
 
 /**
  * A few cooperative scheduler turns, so a detached fiber that does no I/O (e.g. `signUp`'s never-awaited

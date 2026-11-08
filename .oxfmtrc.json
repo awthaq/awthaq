@@ -17,6 +17,7 @@
     "**/*.html",
     "**/*.feature",
     "pnpm-lock.yaml",
+    "**/schema.sqlite.json",
     "**/lib",
     "**/node_modules"
   ]

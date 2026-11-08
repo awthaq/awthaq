@@ -18,7 +18,7 @@
 // whatever `Layer` `AuthHttp.routes` (and an application's own handlers)
 // produce; see `test/AuthHttp.test.ts` for both exercised end to end.
 
-import { Api } from "@awthaq/api";
+import { Api, SessionLifecycle } from "@awthaq/api";
 import type {
   Accounts,
   AuthEvents,
@@ -44,9 +44,11 @@ import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpApiScalar from "effect/http-api/HttpApiScalar";
 import * as Account from "./Account.ts";
 import * as Authentication from "./Authentication.ts";
+import * as Credentials from "./Credentials.ts";
 import * as Csrf from "./Csrf.ts";
 import * as RequestContext from "./RequestContext.ts";
 import * as Session from "./Session.ts";
+import * as SessionLifecycleLive from "./SessionLifecycle.ts";
 
 /** BEH-EA-083/084: registers `api`'s routes with the ambient `HttpRouter`. */
 export const routes: typeof HttpApiBuilder.layer = HttpApiBuilder.layer;
@@ -118,15 +120,21 @@ export const coreHandlers = Layer.mergeAll(
 );
 
 /**
- * Plan 08 (BEH-EA-T1): the five host middleware `@awthaq/server` implements. A plugin's contract declares
+ * Plan 08 (BEH-EA-T1): the host middleware `@awthaq/server` implements. A plugin's contract declares
  * which of them its groups need (`.middleware(Api.Authentication)`); `middlewareFor` builds exactly those.
+ * Plan 21 (ADR-EA-045): the five `SessionLifecycle` markers are host middleware too.
  */
 export type HostMiddleware =
   | Api.Authentication
   | Api.OptionalAuthentication
   | Api.MachineAuthentication
   | Api.AdminAuthentication
-  | Api.CsrfProtection;
+  | Api.CsrfProtection
+  | SessionLifecycle.Mints
+  | SessionLifecycle.Rotates
+  | SessionLifecycle.Ends
+  | SessionLifecycle.Swaps
+  | SessionLifecycle.Refreshes;
 
 /** Plan 08: the host middleware the groups of a contract declare (group and endpoint middleware, merged). */
 export type DeclaredMiddleware<Groups extends HttpApiGroup.Constraint> = Extract<
@@ -137,8 +145,8 @@ export type DeclaredMiddleware<Groups extends HttpApiGroup.Constraint> = Extract
 export interface MiddlewareOptions<CE, CR, PR> {
   /** The CSRF secret and allowed origins (`Csrf.layerConfig` in production, a fixed test config in `TestAuth`). */
   readonly csrf: Layer.Layer<Csrf.CsrfConfig, CE, CR>;
-  /** Defaults to `Authentication.PrincipalResolverLive`; `PrincipalResolverWithUserFactsLive` opts into `emailVerified`. */
-  readonly principalResolver?: Layer.Layer<Authentication.PrincipalResolver, never, PR>;
+  /** Defaults to `Credentials.PrincipalResolverLive`; `PrincipalResolverWithUserFactsLive` opts into `emailVerified`. */
+  readonly principalResolver?: Layer.Layer<Credentials.PrincipalResolver, never, PR>;
 }
 
 /**
@@ -175,7 +183,7 @@ export function middlewareFor(
       for (const service of middleware) declared.add(service.key);
     },
   });
-  const resolver = options.principalResolver ?? Authentication.PrincipalResolverLive;
+  const resolver = options.principalResolver ?? Credentials.PrincipalResolverLive;
   // `Layer.fresh`: the module-level `...Live` constants are memoized by reference, so a host (or a test) that
   // builds one itself, over its own config, in the same composition would otherwise share whichever instance
   // was built first. The derived middleware is its own instance, and what a `services` layer provides wins
@@ -201,12 +209,23 @@ export function middlewareFor(
       Api.CsrfProtection.key,
       Layer.fresh(Csrf.CsrfProtectionLive).pipe(Layer.provide(options.csrf)),
     ),
+    entry(SessionLifecycle.Mints.key, SessionLifecycleLive.MintsLive),
+    entry(SessionLifecycle.Rotates.key, SessionLifecycleLive.RotatesLive),
+    entry(SessionLifecycle.Ends.key, SessionLifecycleLive.EndsLive),
+    entry(SessionLifecycle.Swaps.key, SessionLifecycleLive.SwapsLive),
+    entry(SessionLifecycle.Refreshes.key, SessionLifecycleLive.RefreshesLive),
   ];
   return table.reduce<Layer.Layer<never, unknown, unknown>>(
     (acc, entry) => (declared.has(entry.key) ? Layer.merge(acc, entry.layer) : acc),
     Layer.empty,
   );
 }
+
+/**
+ * ADR-EA-045: the server half of all five `SessionLifecycle` markers, for a composition (a hand-wired BDD
+ * world) that provides middleware itself instead of through `middlewareFor`.
+ */
+export const sessionLifecycle = SessionLifecycleLive.layer;
 
 /**
  * BEH-EA-084: serves generated OpenAPI/Scalar documentation from the same
@@ -233,7 +252,7 @@ export const layerRedactedHeaders = Layer.succeed(Headers.CurrentRedactedNames, 
 export interface CorsOptions {
   /** Extra request headers a cross-origin caller may send, beyond `content-type`, the CSRF header and `authorization`. */
   readonly allowedHeaders?: ReadonlyArray<string>;
-  /** Extra response headers a cross-origin caller may read, beyond the rotated-token header. */
+  /** Extra response headers a cross-origin caller may read, beyond the rotated-token and session-ended headers. */
   readonly exposedHeaders?: ReadonlyArray<string>;
   /** Seconds a browser may cache a preflight answer. */
   readonly maxAge?: number;
@@ -268,7 +287,11 @@ export const cors = (options?: CorsOptions) =>
             "authorization",
             ...(options?.allowedHeaders ?? []),
           ],
-          exposedHeaders: [Api.ROTATED_TOKEN_HEADER, ...(options?.exposedHeaders ?? [])],
+          exposedHeaders: [
+            Api.ROTATED_TOKEN_HEADER,
+            Api.SESSION_ENDED_HEADER,
+            ...(options?.exposedHeaders ?? []),
+          ],
           maxAge: options?.maxAge,
         }),
         { global: true },

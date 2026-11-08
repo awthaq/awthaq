@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-010 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-11-08 |
 > | Status | Accepted — implemented (enforced at the type level by `Auth.make`, JH-008) |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Corrected the bcrypt example to the shipped verify-only `LegacyPasswordVerifiers` mechanism (SAM-002) <br> 1.2 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Corrected the bcrypt example to the shipped verify-only `LegacyPasswordVerifiers` mechanism (SAM-002) <br> 1.2 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) <br> 1.3 (2026-11-08): Decision: what the composition owns is not a port; `AuthHost` provides it and never a port (ADR-EA-044, architecture plan 15) |
 
 ---
 
@@ -21,6 +21,8 @@ Stratum 2, Ports (PRD §11), defines a small set of capability interfaces every 
 ## Decision
 
 A plugin **requires** ports — they appear only in its Layer's `RIn`, never in `ROut` — and only the **application** provides port implementations, exactly once, at the top of the composition (`auth.layer.pipe(Layer.provide(PasswordHasher.layerArgon2id), Layer.provide(Mailer.layerSes))`, `archive/design/plugins-as-layers.md` §5). A component that would have been "a bcrypt plugin providing `PasswordHasher`" under the old model is, under this decision, not a plugin at all: it is not a plugin at all. For a legacy format an application is migrating away from, it is a verify-only entry in `PasswordHasher.LegacyPasswordVerifiers`, a `Context.Reference` the application provides like any port configuration (`@awthaq/migrate-auth0`'s `bcryptVerifier` is the shipped example, used for Auth0 and Supabase/GoTrue imports; `@awthaq/migrate-firebase` and `@awthaq/migrate-better-auth` ship the others) — while argon2id/scrypt remain the only algorithms `hash()` ever produces, so a legacy format is retired by rehash-on-login, never adopted as a standing target. As for any port implementation, "which is what it should have been" (`archive/design/plugins-as-layers.md` §3.3). Because two plugins cannot both provide one port (plugins never provide ports at all), the conflict this ADR exists to prevent — two implementations of one port in scope — cannot happen by construction; it becomes a visible, deliberate ordering choice the application makes in its own composition code, not a plugin-authoring hazard requiring a linker-enforced conflict rule.
+
+What the composition owns (core services, records bundles, hook points, registries, derived middleware) is not a port; `AuthHost` provides it and still never provides a port, which stays in `RIn` ([ADR-EA-044](044-host-composition.md)).
 
 ## Alternatives considered
 

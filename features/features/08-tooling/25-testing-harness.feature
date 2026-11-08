@@ -275,6 +275,28 @@ Feature: Testing Harness
       When a session is minted through the app's context runner and used on its handler
       Then the handler authenticates the request
 
+    @REQ-EA-1333
+    Scenario: Each agent of a TestAuth.app keeps its own cookies
+      Given a composition served through "TestAuth.app"
+      When one agent of the app is signed in and a second agent of the same app is fresh
+      Then the signed-in agent's session is served and the fresh agent's is refused
+
+    @REQ-EA-1334
+    Scenario: A signed-in agent's session follows the composition's cookie configuration
+      Given a composition served through "TestAuth.app" under the "SecureDomain" cookie mode for "example.com"
+      When an agent is signed in through the app at "https://app.example.com"
+      Then it holds "__Secure-session" for "example.com" and its session request is served
+
+  # BEH-EA-342 — spec/behaviors/25-testing-harness.md (ADR-EA-044)
+  @BEH-EA-342
+  Rule: TestAuth.layer is AuthHost.layer over the test ports
+
+    @REQ-EA-1325
+    Scenario: The harness serves the same wiring a host composition serves
+      Given one composition built through "TestAuth.layer" and through "AuthHost.layer" over the same ports
+      When both are built
+      Then the harness holds every service the host composition holds, plus only the redaction guard's
+
   # BEH-EA-336 — spec/behaviors/25-testing-harness.md
   @BEH-EA-336
   Rule: Every shipped plugin runs the contract suite, which checks its records

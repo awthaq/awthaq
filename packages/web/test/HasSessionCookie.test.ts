@@ -23,15 +23,25 @@ const requestWithCookie = (cookieHeader: string | null): { readonly headers: Hea
 
 describe("hasSessionCookie (BEH-EA-188)", () => {
   it("returns false when the session cookie is absent", () => {
-    assert.isFalse(hasSessionCookie(requestWithCookie(null)));
+    assert.isFalse(hasSessionCookie(requestWithCookie(null), {}));
   });
 
   it("returns false when other cookies are present but not the session cookie", () => {
-    assert.isFalse(hasSessionCookie(requestWithCookie("theme=dark; lang=en")));
+    assert.isFalse(hasSessionCookie(requestWithCookie("theme=dark; lang=en"), {}));
   });
 
   it("returns true when the session cookie is present, valid, and unexpired", () => {
-    assert.isTrue(hasSessionCookie(requestWithCookie(`${Api.SessionCookie.key}=whatever-value`)));
+    assert.isTrue(
+      hasSessionCookie(requestWithCookie(`${Api.SessionCookie.key}=whatever-value`), {}),
+    );
+  });
+
+  it("IC-007: under SecureDomain, a __Secure-session cookie is present, and a bare __Host-session is not", () => {
+    const cookie = {
+      mode: { _tag: "SecureDomain", domain: "example.com", sameSite: "lax" },
+    } as const;
+    assert.isTrue(hasSessionCookie(requestWithCookie("__Secure-session=abc"), cookie));
+    assert.isFalse(hasSessionCookie(requestWithCookie("__Host-session=abc"), cookie));
   });
 
   it("returns true even when the cookie names a session that has since expired — proving no verification happens", async () => {
@@ -63,7 +73,10 @@ describe("hasSessionCookie (BEH-EA-188)", () => {
       await runtime.runPromise(TestClock.adjust(Duration.days(31)));
 
       assert.isTrue(
-        hasSessionCookie(requestWithCookie(`${Api.SessionCookie.key}=${Redacted.value(token)}`)),
+        hasSessionCookie(
+          requestWithCookie(`${Api.SessionCookie.key}=${Redacted.value(token)}`),
+          {},
+        ),
       );
     } finally {
       await runtime.dispose();

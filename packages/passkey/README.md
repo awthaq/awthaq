@@ -69,6 +69,7 @@ The defaults (`rpId: "localhost"`, `origins: ["http://localhost:3000"]`) are dev
 Notable behavior:
 
 - **Sign-in is enumeration-safe.** Every failure after the challenge check answers the same `InvalidCredentials`, an unknown email gets deterministic decoy `allowCredentials`, and an unknown credential id costs the same signature verification as a bad signature.
+- **Every verification attempt spends its challenge first**, before the origin is even checked, so no refused attempt can be retried with the same challenge (BEH-EA-132).
 - **One stable WebAuthn user handle per user**, sent as `user.id` in every registration ceremony and checked against the `userHandle` a discoverable credential returns.
 - **Registration requires user presence** except for Conditional Create; a registration whose credential id is already registered fails `PasskeyAlreadyRegistered`.
 - **Signals.** `GET /passkey/signals` feeds the browser's WebAuthn Signals API (see the client below) so a deleted passkey stops being offered.
@@ -89,5 +90,4 @@ There is no self-service recovery when a passkey is the only way into an account
 
 - No passkey-first sign-up: a passkey is added to an existing account by a freshly authenticated session.
 - No FIDO MDS3 attestation validation (deferred, BEH-EA-135); `attestationPolicy` is an AAGUID allow-list.
-- The session issued by a passkey sign-in does not yet record the client address or user agent, and carries no authentication-method (`amr`) assurance signal; both are tracked with the shared session work.
 - Credentials registered before the stable user handle shipped stored a random handle no authenticator holds, so their discoverable assertions fail the `userHandle` check; those users re-register.

@@ -20,11 +20,12 @@
 //     is only relayed once it is `settleDelay` old (default 2 s): delivery lags the bus by that
 //     much, in exchange for not missing late-committing rows. Raise it if your processes' clocks
 //     or commit latencies differ by more.
-//   - **Resumable.** The position lives in a `RelayCursorStore` (SQL: `auth_relay_cursor`, core
-//     migration 27; memory for tests), one row per relay `name`. Several relays with different
-//     names (one per consumer) each keep their own.
+//   - **Resumable.** The position lives in a `RelayCursorStore` (`@awthaq/ports`; `Persistence.memory`
+//     and `Persistence.sql()` both provide one, SQL: `auth_relay_cursor`, core migration 27), one row
+//     per relay `name`. Several relays with different names (one per consumer) each keep their own.
 //   - **One writer per name.** Two processes running the same name both deliver: that is safe
-//     (at-least-once) but wasteful, so run one per name, or accept the duplicates.
+//     (at-least-once) but wasteful, so run one per name, or accept the duplicates. `advance` only
+//     moves the position forward, so relays sharing a name cannot pull each other back.
 //
 // A row that no longer decodes (`AuditLogDecodeError`) stops the relay at that row, loudly, rather
 // than skipping an event silently; the failure is logged and counted on every retry.
@@ -42,7 +43,7 @@ import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import { Repositories as SqlRepositories } from "@awthaq/sql";
+import { RelayCursorStore } from "@awthaq/ports";
 import * as AuditLog from "./AuditLog.ts";
 import type { AuthEventTag, Published } from "./AuthEventSchemas.ts";
 import * as Observability from "./Observability.ts";
@@ -59,43 +60,6 @@ export interface EventTransportShape {
 export class EventTransport extends Context.Service<EventTransport, EventTransportShape>()(
   "awthaq/core/EventTransport",
 ) {}
-
-/** Where a relay stopped: the id of the last audit event its transport accepted. */
-export interface RelayCursorStoreShape {
-  readonly get: (name: string) => Effect.Effect<Option.Option<string>>;
-  readonly set: (name: string, lastEventId: string) => Effect.Effect<void>;
-}
-
-export class RelayCursorStore extends Context.Service<RelayCursorStore, RelayCursorStoreShape>()(
-  "awthaq/core/RelayCursorStore",
-) {}
-
-/** In-process positions: lost on restart (a restarted relay begins again), for tests and single-process demos. */
-export const layerCursorMemory = Layer.effect(
-  RelayCursorStore,
-  Effect.gen(function* () {
-    const positions = yield* Ref.make<ReadonlyMap<string, string>>(new Map());
-    return RelayCursorStore.of({
-      get: (name) =>
-        Ref.get(positions).pipe(Effect.map((all) => Option.fromNullishOr(all.get(name)))),
-      set: (name, lastEventId) =>
-        Ref.update(positions, (all) => new Map(all).set(name, lastEventId)),
-    });
-  }),
-);
-
-/** Durable positions in `auth_relay_cursor` (run core migrations, including 27). */
-export const layerCursorSql = Layer.effect(
-  RelayCursorStore,
-  Effect.gen(function* () {
-    const repo = yield* SqlRepositories.RelayCursorRepository;
-    return RelayCursorStore.of({
-      get: (name) => repo.get(name).pipe(Effect.orDie),
-      set: (name, lastEventId) =>
-        Effect.flatMap(DateTime.now, (now) => repo.set(name, lastEventId, now)).pipe(Effect.orDie),
-    });
-  }),
-);
 
 export interface EventRelayOptions {
   /** Identifies this relay's position (and its metric label). One per consumer. */
@@ -125,13 +89,14 @@ const MAX_BACKOFF = Duration.seconds(30);
  * One tick: reads the next batch after the stored position, drops the not-yet-settled tail,
  * hands the rest to the transport and, only if it accepted, advances the position. Resolves to how
  * many events were delivered (0 when caught up). Fails with the transport's error (position
- * unchanged, the batch is retried by the next tick) or an `AuditLogDecodeError`.
+ * unchanged, the batch is retried by the next tick), an `AuditLogDecodeError`, or `StoreUnavailable`
+ * when the cursor store is down (ADR-EA-028).
  */
 export const drainOnce = (options: EventRelayOptions) =>
   Effect.gen(function* () {
     const auditLog = yield* AuditLog.AuditLog;
     const transport = yield* EventTransport;
-    const store = yield* RelayCursorStore;
+    const store = yield* RelayCursorStore.RelayCursorStore;
     const batchSize = options.batchSize ?? DEFAULTS.batchSize;
     const settleMillis = Duration.toMillis(
       Duration.fromInputUnsafe(options.settleDelay ?? DEFAULTS.settleDelay),
@@ -162,7 +127,7 @@ export const drainOnce = (options: EventRelayOptions) =>
     if (last === undefined) return 0;
 
     yield* transport.deliver(settled.map(AuditLog.toPublished));
-    yield* store.set(options.name, last.id);
+    yield* store.advance({ name: options.name, lastEventId: last.id, at: yield* DateTime.now });
     yield* Metric.update(
       Metric.withAttributes(Observability.relayDelivered, { relay: options.name }),
       settled.length,
@@ -174,7 +139,7 @@ export const drainOnce = (options: EventRelayOptions) =>
  * Opt-in: a scoped background fiber running `drainOnce` until caught up, then every `pollInterval`.
  * A failing tick is logged as `auth.relay.failed`, counted, and retried with exponential backoff
  * (capped at 30 s) from the same position; it never stops the relay and never affects the
- * operations that publish. Requires `AuditLog`, an `EventTransport` and a `RelayCursorStore`.
+ * operations that publish. Requires `AuditLog`, an `EventTransport` and a `RelayCursorStore` (both `Persistence` bundles provide one).
  */
 export const layer = (options: EventRelayOptions) =>
   Layer.effectDiscard(

@@ -1,0 +1,34 @@
+{
+  "migrations": [
+    "create_claims_user"
+  ],
+  "schema": {
+    "tables": {
+      "claims_user": [
+        {
+          "name": "subject",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "claims",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "updated",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ]
+    },
+    "indexes": [],
+    "triggers": []
+  }
+}

@@ -9,10 +9,10 @@
 // and documents `AuthHttp` serves, and the status a client sees.
 import { Api } from "@awthaq/api";
 import { ApiKey, ApiKeyClientRecords, ApiKeyRecords } from "@awthaq/api-key";
-import { Auth, AuthPlugin, Sessions, Users } from "@awthaq/core";
+import { Auth, AuthPlugin, Users } from "@awthaq/core";
 import { Jwt, JwtConfig, KeyRing, RevocationStore, SigningKeyRecords } from "@awthaq/jwt";
 import { Password } from "@awthaq/password";
-import { Authentication } from "@awthaq/server";
+import { findCookieValue } from "@awthaq/web/cookies";
 import { TestAuth } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -24,13 +24,13 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Option from "effect/Option";
 import * as HttpRouter from "effect/http/HttpRouter";
-import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
-import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
+import { agentOver } from "./shared/Csrf.ts";
+import { resolveCredential } from "./shared/ResolveCredential.ts";
 
 // ---- the World's own plugins ------------------------------------------------------------
 
@@ -214,35 +214,17 @@ export type RuntimeApp = ReturnType<typeof makeRuntimeAndRouted>;
 /**
  * REQ-EA-238/239: a route handler of a host that is not built on `HttpRouter` (a Hono `app.get`,
  * say), calling into awthaq only through `runtime.runPromise`. It resolves the session with
- * `Authentication.resolvePrincipal` — the function the `Authentication` middleware itself runs —
+ * `Credentials` (through `resolveCredential`) — the module the `Authentication` middleware itself runs —
  * so no domain logic is written a second time for imperative callers.
  */
 export const imperativeMe = async (
   runtime: RuntimeApp["runtime"],
   cookieHeader: string,
 ): Promise<Response> => {
-  const token = cookieHeader
-    .split("; ")
-    .map((pair) => pair.split("="))
-    .find(([name]) => name === Api.SESSION_COOKIE_NAME)?.[1];
+  const token = findCookieValue(cookieHeader, Api.SESSION_COOKIE_NAME);
   if (token === undefined) return new Response(null, { status: 401 });
   const principal = await runtime.runPromise(
-    Effect.gen(function* () {
-      const sessions = yield* Sessions.Sessions;
-      const resolver = yield* Authentication.PrincipalResolver;
-      return yield* Authentication.resolvePrincipal(
-        sessions,
-        resolver,
-        Redacted.make(token),
-        "cookie",
-      );
-    }).pipe(
-      Effect.provideService(
-        HttpServerRequest.HttpServerRequest,
-        HttpServerRequest.fromWeb(new Request("http://localhost/")),
-      ),
-      Effect.option,
-    ),
+    resolveCredential("cookie", token).pipe(Effect.option),
   );
   return Option.match(principal, {
     onNone: () => new Response(null, { status: 401 }),
@@ -361,26 +343,15 @@ export const answerOf = Effect.fn("features.httpError.answerOf")(function* (resp
   } satisfies Answer;
 });
 
-/** An unsafe request as a browser client would send it: with the double-submit pair. */
+/**
+ * An unsafe request as a browser page would send it: a fresh agent (`shared/Csrf.ts`'s `agentOver`) already
+ * holding a `__Host-csrf`, which it sends and echoes as the double-submit pair.
+ */
 export const postJson = (
   handler: (request: Request) => Promise<Response>,
   path: string,
   body: unknown,
-  cookie?: string,
-) =>
-  Effect.promise(() =>
-    handler(
-      new Request(`http://localhost${path}`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          cookie: withCsrfCookie(cookie),
-          "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
-        },
-        body: JSON.stringify(body),
-      }),
-    ),
-  );
+) => Effect.promise(() => agentOver(handler).request("POST", path, { json: body }));
 
 export const get = (handler: (request: Request) => Promise<Response>, path: string) =>
   Effect.promise(() => handler(new Request(`http://localhost${path}`)));

@@ -1,0 +1,45 @@
+{
+  "migrations": [
+    "create_roles_assignments",
+    "create_roles_assignments_user_id_index"
+  ],
+  "schema": {
+    "tables": {
+      "roles_assignments": [
+        {
+          "name": "userId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "role",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "primaryKey": false
+        }
+      ]
+    },
+    "indexes": [
+      {
+        "name": "roles_assignments_user_id",
+        "table": "roles_assignments",
+        "columns": [
+          "userId"
+        ],
+        "unique": false,
+        "partial": false
+      }
+    ],
+    "triggers": []
+  }
+}

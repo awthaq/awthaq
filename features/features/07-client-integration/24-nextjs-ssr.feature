@@ -30,6 +30,13 @@ Feature: Next.js Server Rendering
       Then it calls "getSession" to verify the cookie against the session store
       And it never treats cookie presence alone as sufficient for that authorization check
 
+    @REQ-EA-1316
+    Scenario: Under a domain-scoped session cookie getSession verifies the configured cookie
+      Given a deployment whose session cookie is domain-scoped and a live session for "alice"
+      When a React Server Component calls getSession with the "__Secure-session" cookie
+      Then it returns a database-verified session for "alice"
+      But a request carrying the same token under "__Host-session" resolves no session
+
   # BEH-EA-186 — spec/behaviors/24-nextjs-ssr.md
   @BEH-EA-186
   Rule: Server-side decide produces the client seed
@@ -105,6 +112,13 @@ Feature: Next.js Server Rendering
       When the page or server action reached past "proxy.ts" runs
       Then it independently verifies the session itself
       And it does not treat having passed "proxy.ts" as proof of authentication or authorization
+
+    @REQ-EA-1314
+    Scenario: Under a domain-scoped session cookie proxy.ts checks the configured cookie name
+      Given a deployment whose session cookie is domain-scoped
+      When "proxy.ts" runs against a request carrying only a "__Secure-session" cookie
+      Then the request is allowed past "proxy.ts" because the configured cookie is present
+      But a request carrying only a "__Host-session" cookie is redirected to "/sign-in"
 
   # BEH-EA-189 — spec/behaviors/24-nextjs-ssr.md
   @BEH-EA-189
@@ -198,3 +212,13 @@ Feature: Next.js Server Rendering
       Given a policy whose attribute resolver can only run in the browser and was not evaluated server-side
       When the client hydrates decisions via "hydrateDecisions" and renders the gate for that policy
       Then the gate correctly stays "pending" until the client's own evaluation completes
+
+  # BEH-EA-344 — spec/behaviors/24-nextjs-ssr.md (architecture plan 20)
+  @BEH-EA-344
+  Rule: An in-process user agent keeps cookie state the way a browser does
+
+    @REQ-EA-1332
+    Scenario: A server action's client honours an expiring Set-Cookie within the action
+      Given a server action's in-process client over an application route that sets a cookie and one that expires it by "Expires"
+      When the action sets the cookie, expires it, and then makes a third call
+      Then the third call carries no such cookie

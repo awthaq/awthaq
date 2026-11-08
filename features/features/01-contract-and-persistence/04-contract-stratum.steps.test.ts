@@ -3,6 +3,7 @@ import * as Layer from "effect/Layer";
 import { fileURLToPath } from "node:url";
 import { WorldLive as AppWorld } from "../../step-definitions/ContractStratumWorld.ts";
 import { contractStratumSteps } from "../../step-definitions/ContractStratumSteps.ts";
+import { sessionLifecycleSteps } from "../../step-definitions/SessionLifecycleSteps.ts";
 import { WorldLive as ScratchWorld } from "../../step-definitions/FoundationsWorld.ts";
 
 const feature = await loadFeature(
@@ -11,4 +12,5 @@ const feature = await loadFeature(
 
 describeFeature(feature, Layer.mergeAll(ScratchWorld, AppWorld), ({ use }) => {
   use(contractStratumSteps);
+  use(sessionLifecycleSteps);
 });

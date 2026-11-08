@@ -37,7 +37,6 @@
     "@awthaq/ports": "workspace:*",
     "@awthaq/roles": "workspace:*",
     "@awthaq/server": "workspace:*",
-    "@awthaq/sql": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
@@ -45,6 +44,7 @@
   },
   "devDependencies": {
     "@awthaq/password": "workspace:*",
+    "@awthaq/sql": "workspace:*",
     "@awthaq/test": "workspace:*",
     "@effect/vitest": "catalog:",
     "@qadi/core": "catalog:",

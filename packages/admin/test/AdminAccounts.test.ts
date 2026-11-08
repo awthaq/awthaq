@@ -22,6 +22,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -114,75 +115,6 @@ const collectEvents = Effect.gen(function* () {
     Effect.forkScoped({ startImmediately: true }),
   );
   return seen;
-});
-
-describe("AdminAccounts: gates (BAM-005)", () => {
-  it.effect("every capability is fail-closed by default and publishes actionDenied", () =>
-    Effect.gen(function* () {
-      const { adminId, targetId } = yield* seed;
-      const accounts = yield* AdminAccounts.AdminAccounts;
-      const seen = yield* collectEvents;
-      const caller = asCaller(adminId);
-      // Sequential, so the events come in this order.
-      const failures = yield* Effect.all({
-        deleteUser: accounts.deleteUser(caller, targetId).pipe(Effect.flip),
-        setUserEmail: accounts
-          .setUserEmail(caller, targetId, { email: "new@example.com" })
-          .pipe(Effect.flip),
-        setUserPassword: accounts
-          .setUserPassword(caller, targetId, {
-            password: Redacted.make("a brand new strong password"),
-          })
-          .pipe(Effect.flip),
-      });
-      for (const [action, failure] of Object.entries(failures)) {
-        assert.strictEqual(failure._tag, "AdminActionDenied", action);
-      }
-      yield* TestClock.adjust(Duration.millis(10));
-      const denied = (yield* Ref.get(seen)).flatMap((e) =>
-        e._tag === "auth.admin.actionDenied" ? [e.action] : [],
-      );
-      assert.deepStrictEqual(denied, Object.keys(failures));
-    }).pipe(Effect.scoped, Effect.provide(buildLayer({}))),
-  );
-
-  it.effect(
-    "the predicates are separate: managing users grants neither deleting nor credentials",
-    () =>
-      Effect.gen(function* () {
-        const { adminId, targetId } = yield* seed;
-        const accounts = yield* AdminAccounts.AdminAccounts;
-        const caller = asCaller(adminId);
-        const deleted = yield* accounts.deleteUser(caller, targetId).pipe(Effect.flip);
-        assert.strictEqual(deleted._tag, "AdminActionDenied");
-        const credentials = yield* accounts
-          .setUserPassword(caller, targetId, {
-            password: Redacted.make("a brand new strong password"),
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(credentials._tag, "AdminActionDenied");
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            canManageUsers: () => Effect.succeed(true),
-            canBanUsers: () => Effect.succeed(true),
-          }),
-        ),
-      ),
-  );
-
-  it.effect(
-    "the gate runs before existence: only a gate-passing caller learns a user is unknown",
-    () =>
-      Effect.gen(function* () {
-        const { adminId } = yield* seed;
-        const accounts = yield* AdminAccounts.AdminAccounts;
-        const missing = yield* accounts
-          .deleteUser(asCaller(adminId), Users.UserId("ghost"))
-          .pipe(Effect.flip);
-        assert.strictEqual(missing._tag, "AdminTargetNotFound");
-      }).pipe(Effect.provide(buildLayer(manageAll))),
-  );
 });
 
 describe("AdminAccounts: deleteUser (BAM-005)", () => {
@@ -286,7 +218,10 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
       );
       assert.strictEqual(Option.getOrNull(consumed.userId), targetId);
       assert.deepStrictEqual(
-        EmailChange.newEmailOf(consumed.payload),
+        Option.map(
+          Schema.decodeUnknownOption(EmailChange.Payload)(consumed.payload),
+          (p) => p.newEmail,
+        ),
         Option.some("new@example.com"),
       );
       yield* TestClock.adjust(Duration.millis(10));

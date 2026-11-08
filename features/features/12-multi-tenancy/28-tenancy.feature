@@ -4,7 +4,7 @@
 # so only its passing scenarios are runtime evidence.
 
 # P20a (AH-003 / decision 36, tenancy follow-up): authored against the implemented tenancy
-# surface — `@awthaq/ports` `Tenant`, `@awthaq/sql` `TenantScope` and the stamped repositories,
+# surface — `@awthaq/ports` `Tenant`, `@awthaq/sql` `TenantScope` and the stamped store adapters,
 # `@awthaq/organization` `tenantMiddleware*`, `@awthaq/oauth` connections and the suspension
 # state `@awthaq/admin` `AdminTenants` flips. Stamping and the global identity directory run
 # over a real in-memory SQLite database migrated by core's own migrations; the organization
@@ -87,10 +87,10 @@ Feature: Multi-Tenancy
         | auth_audit_log            |
 
     @REQ-EA-821
-    Scenario: An explicit tenant on the input wins over the ambient one
+    Scenario: An explicit tenant on an audit row wins over the ambient one
       Given the ambient tenant is "tenant-a"
-      When a user "explicit@example.com" is inserted with the explicit tenant "tenant-explicit"
-      Then that user's tenant is "tenant-explicit"
+      When an audit row is appended with the explicit tenant "tenant-explicit"
+      Then the stored "tenantId" of that row is "tenant-explicit"
 
     @REQ-EA-822
     Scenario: A row is stamped once and a later update does not move it
@@ -167,7 +167,7 @@ Feature: Multi-Tenancy
       When a user "scoped@example.com" is created inside a "TenantScope" for "tenant-a"
       Then that user's tenant is "tenant-a"
 
-    # @skip: needs a real Postgres session (row-level security does not exist on SQLite); covered by the pg suite `pnpm run test:pg` — packages/sql/test/Repositories.postgres.test.ts, "Tenant RLS (real Postgres)"
+    # @skip: needs a real Postgres session (row-level security does not exist on SQLite); covered by the pg suite `pnpm run test:pg` — packages/sql/test/TenantScope.postgres.test.ts, "Tenant RLS (real Postgres)"
     @skip
     @REQ-EA-832
     Scenario: Inside a tenant scope a read cannot see another tenant's row
@@ -176,7 +176,7 @@ Feature: Multi-Tenancy
       When the sessions are read inside a tenant scope for "tenant-a"
       Then only the "tenant-a" row is visible
 
-    # @skip: needs a real Postgres session; covered by the pg suite `pnpm run test:pg` — packages/sql/test/Repositories.postgres.test.ts, "Tenant RLS (real Postgres)"
+    # @skip: needs a real Postgres session; covered by the pg suite `pnpm run test:pg` — packages/sql/test/TenantScope.postgres.test.ts, "Tenant RLS (real Postgres)"
     @skip
     @REQ-EA-833
     Scenario: Inside a tenant scope a write can neither touch nor create another tenant's row
@@ -184,7 +184,7 @@ Feature: Multi-Tenancy
       When a write naming the tenant "tenant-b" runs inside a tenant scope for "tenant-a"
       Then the write is refused and no "tenant-b" row exists
 
-    # @skip: needs a real Postgres session; covered by the pg suite `pnpm run test:pg` — packages/sql/test/Repositories.postgres.test.ts, "Tenant RLS (real Postgres)"
+    # @skip: needs a real Postgres session; covered by the pg suite `pnpm run test:pg` — packages/sql/test/TenantScope.postgres.test.ts, "Tenant RLS (real Postgres)"
     @skip
     @REQ-EA-834
     Scenario: With no tenant set the policy admits every row
@@ -360,6 +360,20 @@ Feature: Multi-Tenancy
       Given a signed-in user "alice" who owns the organization "acme"
       When three members are added in turn with no per-request configuration
       Then the first two additions succeed and the third is refused with "MembershipLimitReached"
+
+    @REQ-EA-1307
+    Scenario: A tenant's administration configuration can refuse deleting a user the platform would allow
+      Given a user "victim" exists in a composition whose build-time configuration lets every administrator delete users and manage credentials
+      And the tenant "acme" configures credential administration and a password policy, but no account deletion
+      When an administrator deletes "victim" in a request naming the tenant "acme"
+      Then the deletion of "victim" is refused with "AdminActionDenied" and the user still exists
+
+    @REQ-EA-1308
+    Scenario: A tenant's administration configuration supplies its own password policy
+      Given a user "victim" exists in a composition whose build-time configuration lets every administrator delete users and manage credentials
+      And the tenant "acme" configures credential administration and a password policy, but no account deletion
+      When an administrator sets a password with no digit for "victim" in a request naming the tenant "acme"
+      Then the password change for "victim" is refused with "AdminWeakPassword"
 
   # BEH-EA-237 — spec/behaviors/28-tenancy.md; see also ADR-EA-018
   @BEH-EA-237

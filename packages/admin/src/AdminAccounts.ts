@@ -27,30 +27,28 @@
 
 import { Api } from "@awthaq/api";
 import {
+  CurrentUser,
   Accounts,
   AuthEvents,
   AuthPlugin,
-  Defects,
   EmailChange,
   Erasure,
   Errors,
   HookPoint,
   Hooks,
   Sessions,
-  Tenant,
   Users,
   Verification,
 } from "@awthaq/core";
 import { Mailer, PasswordHasher, SqlTransaction } from "@awthaq/ports";
-import { makeSubject } from "@qadi/core";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
-import { AdminConfig } from "./Admin.ts";
 import * as AdminAccountsApi from "./AdminAccountsApi.ts";
 import * as AdminApi from "./AdminApi.ts";
+import * as AdminGate from "./internal/AdminGate.ts";
 
 export interface AdminAccountsShape {
   /**
@@ -100,17 +98,6 @@ export interface AdminAccountsShape {
   >;
 }
 
-const currentUserPrincipal = Effect.gen(function* () {
-  const principal = yield* Api.CurrentPrincipal;
-  if (principal._tag !== "User") {
-    return yield* Defects.invariantViolation(
-      "NonUserPrincipal",
-      `awthaq: admin.accounts group reached with a non-User principal: ${principal._tag}`,
-    );
-  }
-  return principal;
-});
-
 export const AdminAccountsHandlers = HttpApiBuilder.group(
   AdminAccountsApi.AdminAccountsApi,
   "admin.accounts",
@@ -118,7 +105,7 @@ export const AdminAccountsHandlers = HttpApiBuilder.group(
     const accounts = yield* AdminAccounts;
     return handlers.handleAll({
       deleteUser: Effect.fnUntraced(function* ({ params }: { params: AdminApi.UserIdParams }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         yield* accounts.deleteUser(caller, Users.UserId(params.userId));
       }),
       setUserEmail: Effect.fnUntraced(function* ({
@@ -128,7 +115,7 @@ export const AdminAccountsHandlers = HttpApiBuilder.group(
         params: AdminApi.UserIdParams;
         payload: AdminAccountsApi.SetUserEmailPayload;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         yield* accounts.setUserEmail(caller, Users.UserId(params.userId), payload);
       }),
       setUserPassword: Effect.fnUntraced(function* ({
@@ -138,7 +125,7 @@ export const AdminAccountsHandlers = HttpApiBuilder.group(
         params: AdminApi.UserIdParams;
         payload: AdminAccountsApi.SetUserPasswordPayload;
       }) {
-        const caller = yield* currentUserPrincipal;
+        const { principal: caller } = yield* CurrentUser.current;
         yield* accounts.setUserPassword(caller, Users.UserId(params.userId), payload);
       }),
     });
@@ -166,49 +153,20 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
       const mailer = yield* Mailer.Mailer;
       const random = yield* SecureRandom.SecureRandom;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
-      const adminConfig = yield* AdminConfig;
+      const gate = yield* AdminGate.make;
       const beforeCredentialReset = yield* Hooks.BeforeCredentialReset;
-
-      /** Gate first (a denied caller learns nothing about ids or refusal rules), same event as `Admin`'s user gates. */
-      const authorize = Effect.fnUntraced(function* (
-        caller: Api.UserPrincipal,
-        action: string,
-        userId: Users.UserId,
-        gate: "canDeleteUsers" | "canManageCredentials",
-      ) {
-        const allowed = yield* adminConfig[gate]({
-          admin: makeSubject({ id: caller.ref.id }),
-          target: Option.some(makeSubject({ id: userId })),
-          tenantId: yield* Tenant.TenantContext,
-        });
-        if (!allowed) {
-          yield* events.publish({
-            _tag: "auth.admin.actionDenied",
-            adminUserId: Users.UserId(caller.ref.id),
-            action,
-          });
-          return yield* Effect.fail(new AdminApi.AdminActionDenied());
-        }
-      });
-
-      const existing = (userId: Users.UserId) =>
-        users
-          .findById(userId)
-          .pipe(
-            Effect.catchTag("UserNotFound", () => Effect.fail(new AdminApi.AdminTargetNotFound())),
-          );
 
       const deleteUser: AdminAccountsShape["deleteUser"] = Effect.fnUntraced(
         function* (caller, userId) {
-          yield* authorize(caller, "deleteUser", userId, "canDeleteUsers");
+          const cleared = yield* gate.user(caller, "deleteUser", userId);
           if (caller.ref.id === userId) {
             return yield* Effect.fail(new AdminAccountsApi.AdminSelfActionRefused());
           }
-          yield* existing(userId);
+          yield* cleared.target;
           yield* erasure
             .eraseAccount(
               userId,
-              Erasure.ErasureInitiator.Admin({ adminUserId: Users.UserId(caller.ref.id) }),
+              Erasure.ErasureInitiator.Admin({ adminUserId: cleared.adminUserId }),
             )
             // Gone between the check and the erasure: the desired end state was reached by someone else.
             .pipe(
@@ -226,8 +184,8 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
 
       const setUserEmail: AdminAccountsShape["setUserEmail"] = Effect.fnUntraced(
         function* (caller, userId, input) {
-          yield* authorize(caller, "setUserEmail", userId, "canManageCredentials");
-          const user = yield* existing(userId);
+          const cleared = yield* gate.user(caller, "setUserEmail", userId);
+          const user = yield* cleared.target;
           const current = Users.emailOf(user);
           if (Option.isNone(current)) {
             return yield* Effect.fail(new AdminAccountsApi.AdminNoEmailIdentity());
@@ -241,7 +199,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
           }
           yield* EmailChange.request(
             { verification, random, mailer },
-            { userId, newEmail: input.email, link: adminConfig.links.changeEmail },
+            { userId, newEmail: input.email, link: cleared.config.links.changeEmail },
           ).pipe(
             Effect.catchTag(
               "MailDeliveryFailed",
@@ -258,16 +216,16 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
 
       const setUserPassword: AdminAccountsShape["setUserPassword"] = Effect.fnUntraced(
         function* (caller, userId, input) {
-          yield* authorize(caller, "setUserPassword", userId, "canManageCredentials");
+          const cleared = yield* gate.user(caller, "setUserPassword", userId);
           if (caller.ref.id === userId) {
             return yield* Effect.fail(new AdminAccountsApi.AdminSelfActionRefused());
           }
-          const user = yield* existing(userId);
+          const user = yield* cleared.target;
           // A password is what an address signs in with: a user with no email identity has nowhere to use one.
           if (Option.isNone(Users.emailOf(user))) {
             return yield* Effect.fail(new AdminAccountsApi.AdminNoEmailIdentity());
           }
-          const hints = yield* adminConfig.passwordPolicy(input.password);
+          const hints = yield* cleared.config.passwordPolicy(input.password);
           if (hints.length > 0) {
             return yield* Effect.fail(new AdminAccountsApi.AdminWeakPassword({ hints }));
           }

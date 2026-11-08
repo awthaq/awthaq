@@ -4,7 +4,7 @@ import { getSession, hasSessionCookie, withNextCookies } from "@awthaq/next";
 import { Password } from "@awthaq/password";
 import { SubjectResolver } from "@awthaq/qadi";
 import { dehydrateDecisions, hydrateDecisions, makeQadiAtoms } from "@awthaq/react";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, UserAgent } from "@awthaq/test";
 import { defineSteps } from "@effect-cucumber/vitest";
 import {
   CurrentSubject,
@@ -27,8 +27,14 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import assert from "node:assert/strict";
-import { CSRF_COOKIE_NAME, CSRF_TEST_COOKIE_VALUE } from "./shared/Csrf.ts";
-import { headersWithCookie, SESSION_COOKIE, send, World } from "./NextSsrWorld.ts";
+import { agentOver, CSRF_COOKIE_NAME } from "./shared/Csrf.ts";
+import {
+  headersWithCookie,
+  makeSecureDomainApp,
+  SESSION_COOKIE,
+  send,
+  World,
+} from "./NextSsrWorld.ts";
 import { isBoolean, isNumber, isString, isStringArray } from "./shared/Outcomes.ts";
 
 /** What a Server Component / server action sees of `getSession`'s answer. */
@@ -54,10 +60,25 @@ const readSession = (cookieHeader: string) =>
     } satisfies Seen;
   });
 
+const never = () => Promise.reject(new Error("recorded, never dispatched"));
+
+/**
+ * The `Cookie` header a browser holding `setCookie` sends to this origin: recorded from a user agent that
+ * received it and never dispatches (`hold`), so the header is the agent's, not a hand-cut `name=value`.
+ */
+const browserCookieHeader = (setCookie: string) => {
+  const browser = UserAgent.make({ handler: never, hold: () => true });
+  browser.cookies.receive(setCookie);
+  void browser.fetch("/");
+  return browser.sent[0]?.headers.get("cookie") ?? "";
+};
+
+/** A minted session, and the incoming request's `Cookie` header of the browser holding it. */
 const signInAlice = (email: string) =>
   Effect.gen(function* () {
     const { runtime } = yield* World;
-    return yield* Effect.promise(() => runtime.runPromise(TestAuth.signInAs({ email })));
+    const signedIn = yield* Effect.promise(() => runtime.runPromise(TestAuth.signInAs({ email })));
+    return { ...signedIn, cookie: browserCookieHeader(signedIn.setCookie) };
   });
 
 const revokeEverything = (userId: Users.UserId) =>
@@ -141,7 +162,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (name: string) {
       const { outcomes } = yield* World;
       const signedIn = yield* signInAlice(`${name}@example.com`);
-      yield* outcomes.set("cookie", signedIn.cookieHeader);
+      yield* outcomes.set("cookie", signedIn.cookie);
       yield* outcomes.set("expectedUserId", signedIn.userId);
     },
   );
@@ -163,6 +184,69 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
+  // IC-007: under a domain-scoped session cookie the configured name is the one `getSession` verifies.
+  Given(
+    "a deployment whose session cookie is domain-scoped and a live session for {string}",
+    function* (name: string) {
+      const world = yield* World;
+      const app = makeSecureDomainApp(world.roles, world.resolverCalls);
+      const outcome = yield* Effect.promise(async () => {
+        try {
+          const issued = await app.runtime.runPromise(
+            Effect.gen(function* () {
+              const users = yield* Users.Users;
+              const sessions = yield* Sessions.Sessions;
+              const user = yield* users
+                .create({ identity: { _tag: "Email", email: `${name}@example.com` }, name })
+                .pipe(Effect.orDie);
+              return { userId: user.id, issued: yield* sessions.issue({ userId: user.id }) };
+            }),
+          );
+          const token = Redacted.value(issued.issued.token);
+          const read = async (cookieName: string) => {
+            const session = await getSession(
+              headersWithCookie(`${cookieName}=${token}`),
+              app.runtime,
+            );
+            return session?.user.id;
+          };
+          return {
+            userId: issued.userId,
+            configured: await read("__Secure-session"),
+            defaultName: await read("__Host-session"),
+          };
+        } finally {
+          await app.dispose();
+        }
+      });
+      yield* world.outcomes.set("secureUserId", outcome.userId);
+      yield* world.outcomes.set("secureConfigured", outcome.configured ?? "");
+      yield* world.outcomes.set("secureDefaultName", outcome.defaultName ?? "");
+    },
+  );
+
+  When(
+    "a React Server Component calls getSession with the {string} cookie",
+    function* (_cookieName: string) {
+      // The reads happened in the Given, against the one runtime that carries the domain-scoped configuration.
+      yield* Effect.void;
+    },
+  );
+
+  Then("it returns a database-verified session for {string}", function* (_name: string) {
+    const { outcomes } = yield* World;
+    const expected = yield* outcomes.getAs("secureUserId", isString);
+    assert.equal(yield* outcomes.getAs("secureConfigured", isString), expected);
+  });
+
+  Then(
+    "a request carrying the same token under {string} resolves no session",
+    function* (_cookieName: string) {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.getAs("secureDefaultName", isString), "");
+    },
+  );
+
   Given("a session cookie that is present but does not match any live session row", function* () {
     const { outcomes } = yield* World;
     yield* outcomes.set("cookie", forgedCookie);
@@ -172,7 +256,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { outcomes } = yield* World;
     const cookie = yield* outcomes.getAs("cookie", isString);
     yield* outcomes.set("seen", yield* readSession(cookie));
-    yield* outcomes.set("presence", hasSessionCookie({ headers: headersWithCookie(cookie) }));
+    yield* outcomes.set("presence", hasSessionCookie({ headers: headersWithCookie(cookie) }, {}));
   });
 
   Then("it returns {string}", function* (literalValue: string) {
@@ -194,8 +278,8 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("a request carrying a session cookie", function* () {
     const { outcomes } = yield* World;
     const signedIn = yield* signInAlice("carrier@example.com");
-    yield* outcomes.set("cookie", signedIn.cookieHeader);
-    yield* outcomes.set("liveBefore", (yield* readSession(signedIn.cookieHeader)).found);
+    yield* outcomes.set("cookie", signedIn.cookie);
+    yield* outcomes.set("liveBefore", (yield* readSession(signedIn.cookie)).found);
     // The row goes away underneath the cookie, which is still sitting in the browser.
     yield* revokeEverything(signedIn.userId);
   });
@@ -203,7 +287,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
   When("a page or server action performs its own authorization", function* () {
     const { outcomes } = yield* World;
     const cookie = yield* outcomes.getAs("cookie", isString);
-    yield* outcomes.set("presence", hasSessionCookie({ headers: headersWithCookie(cookie) }));
+    yield* outcomes.set("presence", hasSessionCookie({ headers: headersWithCookie(cookie) }, {}));
     yield* outcomes.set("seen", yield* readSession(cookie));
   });
 
@@ -434,7 +518,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   /** An application's `proxy.ts`: an optimistic, synchronous, cookie-presence-only redirect. */
   const proxyDecision = (request: { readonly headers: ReturnType<typeof headersWithCookie> }) =>
-    hasSessionCookie(request) ? { action: "next" } : { action: "redirect", to: "/sign-in" };
+    hasSessionCookie(request, {}) ? { action: "next" } : { action: "redirect", to: "/sign-in" };
 
   Given("a request to a path under {string} carrying no session cookie", function* (_path: string) {
     const { outcomes } = yield* World;
@@ -463,13 +547,55 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(yield* outcomes.getAs("proxySync", isBoolean), true);
   });
 
+  // IC-007: the deployment's session-cookie mode is the argument `proxy.ts` passes to `hasSessionCookie`.
+  const domainScoped = {
+    mode: { _tag: "SecureDomain", domain: "example.com", sameSite: "lax" },
+  } as const;
+
+  Given("a deployment whose session cookie is domain-scoped", function* () {
+    const { outcomes } = yield* World;
+    yield* outcomes.set("domainScoped", true);
+  });
+
+  When(
+    "{string} runs against a request carrying only a {string} cookie",
+    function* (_proxy: string, name: string) {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.getAs("domainScoped", isBoolean), true);
+      yield* outcomes.set(
+        "configuredPresent",
+        hasSessionCookie({ headers: headersWithCookie(`${name}=anything`) }, domainScoped),
+      );
+      yield* outcomes.set(
+        "defaultNamePresent",
+        hasSessionCookie({ headers: headersWithCookie("__Host-session=anything") }, domainScoped),
+      );
+    },
+  );
+
+  Then(
+    "the request is allowed past {string} because the configured cookie is present",
+    function* (_proxy: string) {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.getAs("configuredPresent", isBoolean), true);
+    },
+  );
+
+  Then(
+    "a request carrying only a {string} cookie is redirected to {string}",
+    function* (_name: string, _target: string) {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.getAs("defaultNamePresent", isBoolean), false);
+    },
+  );
+
   Given(
     "a request to a path under {string} carrying a session cookie that is present but stale",
     function* (_path: string) {
       const { outcomes } = yield* World;
       const signedIn = yield* signInAlice("stale@example.com");
       yield* revokeEverything(signedIn.userId);
-      yield* outcomes.set("cookie", signedIn.cookieHeader);
+      yield* outcomes.set("cookie", signedIn.cookie);
     },
   );
 
@@ -494,8 +620,8 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { outcomes } = yield* World;
     const signedIn = yield* signInAlice("passed@example.com");
     yield* revokeEverything(signedIn.userId);
-    yield* outcomes.set("cookie", signedIn.cookieHeader);
-    const decision = proxyDecision({ headers: headersWithCookie(signedIn.cookieHeader) });
+    yield* outcomes.set("cookie", signedIn.cookie);
+    const decision = proxyDecision({ headers: headersWithCookie(signedIn.cookie) });
     yield* outcomes.set("passedProxy", decision.action === "next");
   });
 
@@ -537,7 +663,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
       // A privilege change: the password change issues a fresh, superseding session.
       const password = Redacted.make("correct horse battery staple");
       const email = "privilege@example.com";
-      const issued = yield* Effect.promise(() =>
+      yield* Effect.promise(() =>
         runtime.runPromise(
           Effect.gen(function* () {
             const passwords = yield* Password.Password;
@@ -548,18 +674,22 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
           }),
         ),
       );
-      return yield* send(
-        new Request("http://localhost/change-password", {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            cookie: `${SESSION_COOKIE}=${Redacted.value(issued.token)}; ${CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`,
-            "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
-          },
-          body: JSON.stringify({
+      // The user's browser: it signs in over HTTP and keeps the session (and its CSRF cookie), then
+      // changes the password; the raw response is what the action's bridge sees.
+      const { handler } = yield* World;
+      const browser = agentOver(handler);
+      const signedIn = yield* Effect.promise(() =>
+        browser.request("POST", "/password/sign-in", {
+          json: { email, password: Redacted.value(password) },
+        }),
+      );
+      assert.equal(signedIn.status, 200);
+      return yield* Effect.promise(() =>
+        browser.request("POST", "/change-password", {
+          json: {
             currentPassword: Redacted.value(password),
             newPassword: "a different and equally strong passphrase",
-          }),
+          },
         }),
       );
     });
@@ -632,7 +762,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("a server action {string}", function* (name: string) {
     const { outcomes } = yield* World;
     const signedIn = yield* signInAlice("actor@example.com");
-    yield* outcomes.set("cookie", signedIn.cookieHeader);
+    yield* outcomes.set("cookie", signedIn.cookie);
     yield* outcomes.set("action", name);
   });
 
@@ -658,9 +788,9 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (name: string, _action: string) {
       const { outcomes, roles } = yield* World;
       const signedIn = yield* signInAlice(`${name}@example.com`);
-      yield* outcomes.set("cookie", signedIn.cookieHeader);
+      yield* outcomes.set("cookie", signedIn.cookie);
       yield* Ref.set(roles, ["owner"]);
-      const rendered = yield* invokeAction(signedIn.cookieHeader);
+      const rendered = yield* invokeAction(signedIn.cookie);
       yield* outcomes.set("renderRoles", rendered === undefined ? [] : [...rendered.roles]);
     },
   );
@@ -708,9 +838,9 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("a subject resolved once during a page's initial server render", function* () {
     const { outcomes, roles } = yield* World;
     const signedIn = yield* signInAlice("renderer@example.com");
-    yield* outcomes.set("cookie", signedIn.cookieHeader);
+    yield* outcomes.set("cookie", signedIn.cookie);
     yield* Ref.set(roles, ["member"]);
-    const subject = yield* invokeAction(signedIn.cookieHeader);
+    const subject = yield* invokeAction(signedIn.cookie);
     yield* outcomes.set("renderSubject", subject);
   });
 
@@ -771,7 +901,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("a page's server-side data-loading {string} block", function* (_block: string) {
     const { outcomes, roles } = yield* World;
     const signedIn = yield* signInAlice("pager@example.com");
-    yield* outcomes.set("cookie", signedIn.cookieHeader);
+    yield* outcomes.set("cookie", signedIn.cookie);
     yield* Ref.set(roles, ["member"]);
   });
 
@@ -789,7 +919,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("the subject resolved once at the top of a page's data-loading Effect", function* () {
     const { outcomes, roles } = yield* World;
     const signedIn = yield* signInAlice("subject-once@example.com");
-    yield* outcomes.set("cookie", signedIn.cookieHeader);
+    yield* outcomes.set("cookie", signedIn.cookie);
     yield* Ref.set(roles, ["member"]);
   });
 
@@ -823,7 +953,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (_n: string) {
       const { outcomes, roles } = yield* World;
       const signedIn = yield* signInAlice("many@example.com");
-      yield* outcomes.set("cookie", signedIn.cookieHeader);
+      yield* outcomes.set("cookie", signedIn.cookie);
       yield* Ref.set(roles, ["member"]);
     },
   );

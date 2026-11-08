@@ -6,7 +6,7 @@
 // `StoreContract.accounts`, run on the `Ref`, SQLite, WAL-file and (`pnpm test:pg`) Postgres
 // adapters; the SQL adapter's own token encryption and failure mapping are
 // `packages/sql/test/AccountStoreSql.test.ts`.
-import { AccountStore, PasswordHasher } from "@awthaq/ports";
+import { AccountStore, PasswordHasher, Sealed } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -530,11 +530,26 @@ describe("Accounts over a store that cannot read its tokens (SMS-002)", () => {
   const UnreadableStore = Layer.mock(AccountStore.AccountStore, {
     readProviderTokens: () =>
       Effect.succeed(
-        Option.some<AccountStore.TokensRead>({
-          _tag: "Undecryptable",
-          field: "accessToken",
-          reason: "UnknownKeyId",
-        }),
+        Option.some(
+          Option.some<AccountStore.SealedProviderTokens>({
+            accessToken: Sealed.plain("access"),
+            refreshToken: Option.some({
+              open: Effect.fail(
+                new Sealed.Unreadable({
+                  table: "accounts",
+                  column: "refreshToken",
+                  rowKey: "33333333-3333-3333-3333-333333333333",
+                  reason: "UnknownKeyId",
+                }),
+              ),
+            }),
+            idToken: Option.none(),
+            accessTokenExpiresAt: Option.none(),
+            refreshTokenExpiresAt: Option.none(),
+            scope: Option.none(),
+            tokenType: Option.none(),
+          }),
+        ),
       ),
   });
 
@@ -548,7 +563,7 @@ describe("Accounts over a store that cannot read its tokens (SMS-002)", () => {
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "ProviderTokensUnreadable");
         if (failure._tag === "ProviderTokensUnreadable") {
-          assert.strictEqual(failure.field, "accessToken");
+          assert.strictEqual(failure.field, "refreshToken");
           assert.strictEqual(failure.reason, "UnknownKeyId");
         }
       }).pipe(

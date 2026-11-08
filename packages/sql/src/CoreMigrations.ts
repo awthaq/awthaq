@@ -234,8 +234,8 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
-  // Ticket 03: `accounts.userId` is a real filter key (`Repositories.ts`'s
-  // `listByUser`/`deleteAllByUser`), unindexed until now.
+  // Ticket 03: `accounts.userId` is a real filter key (`AccountStoreSql`'s
+  // `listByUser`/`deleteByUser`), unindexed until now.
   migration(8, "create_accounts_user_id_index", (sql) =>
     sql.onDialectOrElse({
       pg: () => sql`CREATE INDEX IF NOT EXISTS accounts_user_id ON accounts("userId")`,
@@ -243,8 +243,8 @@ export const coreMigrations: Migrator.Loader<never> = Effect.succeed([
       orElse: () => Defects.unsupportedDialect("migrations"),
     }),
   ),
-  // Ticket 03: `sessions.userId` is a real filter key (`Repositories.ts`'s
-  // `listByUser`/`deleteAllForUserExcept`), unindexed until now.
+  // Ticket 03: `sessions.userId` is a real filter key (`SessionStoreSql`'s
+  // `listLive`/`removeForUser`), unindexed until now.
   migration(9, "create_sessions_user_id_index", (sql) =>
     sql.onDialectOrElse({
       pg: () => sql`CREATE INDEX IF NOT EXISTS sessions_user_id ON sessions("userId")`,

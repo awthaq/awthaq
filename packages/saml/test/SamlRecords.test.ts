@@ -616,3 +616,10 @@ TestAuth.runSealedColumnTests<string, SamlRecords.SamlRecords | SqlClient.SqlCli
     read: readKey,
   },
 );
+
+// Plan 17: the plugin declares its sealed column, so `auth.sealedColumns` (the `also` of a rotation sweep) lists it.
+describe("SamlRecords sealed column declaration", () => {
+  it("the plugin declares the SP private key", () => {
+    assert.deepStrictEqual(Saml.Saml.sealedColumns, [SamlRecords.privateKeyColumn]);
+  });
+});

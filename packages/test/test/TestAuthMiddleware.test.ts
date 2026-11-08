@@ -2,7 +2,7 @@
 // never builds `Authentication`, `CsrfProtection` or their configuration, and `services` may still override one.
 import { Api } from "@awthaq/api";
 import { Auth, AuthPlugin } from "@awthaq/core";
-import { Authentication } from "@awthaq/server";
+import { Credentials } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -69,7 +69,7 @@ class MwAdmin extends AuthPlugin.Service<MwAdmin, {}>()("mw", {
   });
 }
 
-const machineKey = Authentication.contribute("apiKey", {
+const machineKey = Credentials.contribute("apiKey", {
   id: "test-key",
   claims: (raw) => raw.startsWith("tk_"),
   resolve: () =>
@@ -97,12 +97,10 @@ describe("TestAuth.layer derives the host middleware (BEH-EA-T1)", () => {
   it("Authentication: 401 without a credential, 200 with a minted session", async () => {
     await withApp(TestAuth.layer(Auth.make([Mw])), async (app) => {
       assert.strictEqual((await app.handler(new Request("http://localhost/mw/user"))).status, 401);
-      const signedIn = await app.signIn("user@example.com");
-      const response = await app.handler(
-        new Request("http://localhost/mw/user", { headers: { cookie: signedIn.cookieHeader } }),
-      );
+      const user = await app.signIn("user@example.com");
+      const response = await user.request("GET", "/mw/user");
       assert.strictEqual(response.status, 200);
-      assert.include(await response.json(), signedIn.userId);
+      assert.include(await response.json(), user.userId);
     });
   });
 
@@ -117,10 +115,8 @@ describe("TestAuth.layer derives the host middleware (BEH-EA-T1)", () => {
   it("AdminAuthentication alone (an admin-only composition) builds, delegating to Authentication", async () => {
     await withApp(TestAuth.layer(Auth.make([MwAdmin])), async (app) => {
       assert.strictEqual((await app.handler(new Request("http://localhost/mw/admin"))).status, 401);
-      const signedIn = await app.signIn("admin@example.com");
-      const response = await app.handler(
-        new Request("http://localhost/mw/admin", { headers: { cookie: signedIn.cookieHeader } }),
-      );
+      const admin = await app.signIn("admin@example.com");
+      const response = await admin.request("GET", "/mw/admin");
       assert.strictEqual(response.status, 200);
     });
   });

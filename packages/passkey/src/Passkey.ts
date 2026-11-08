@@ -16,14 +16,18 @@
 //
 // Passkey registration is always adding a credential to an *existing*,
 // already-authenticated account — this spec has no passkey-first sign-up
-// (`spec.md`'s own Out of Scope) — so both registration ceremonies key
-// their own `ChallengeStore` scope by the caller's session id, known at
-// both `.../options` and `.../verify` time. The authenticate ceremony has
-// no session yet (it's how one is created); see `PasskeyApi.ts`'s own
-// header comment for how it correlates its two anonymous calls instead.
+// (`spec.md`'s own Out of Scope). What each ceremony's challenge is scoped by
+// (the caller's session id, or the anonymous sign-in's `ceremonyId`), and the
+// one order in which a verify spends it, checks the origin, calls the port and
+// applies policy, live in `PasskeyCeremony.ts`; this file keeps what differs
+// per endpoint: admission, the posture of each refusal (BEH-EA-136), what a
+// registration persists, and sign-in / step-up completion. See `PasskeyApi.ts`'s
+// own header comment for how the anonymous authenticate ceremony correlates
+// its two calls.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract, type SessionLifecycle } from "@awthaq/api";
 import {
+  CurrentUser,
   Accounts,
   AuthEvents,
   AuthPlugin,
@@ -44,7 +48,6 @@ import {
 } from "@awthaq/core";
 import { ClientAddress, Defects, RateLimiter, WebAuthn } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
-import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Mac from "effect/crypto/Mac";
 import * as DateTime from "effect/DateTime";
@@ -54,176 +57,26 @@ import * as Base64Url from "effect/encoding/Base64Url";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as Headers from "effect/http/Headers";
 import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ChallengeStore from "./ChallengeStore.ts";
 import { hmacSha256 } from "./Hmac.ts";
 import * as PasskeyApi from "./PasskeyApi.ts";
+import * as PasskeyCeremony from "./PasskeyCeremony.ts";
+import { PasskeyConfig, type PasskeyConfigShape } from "./PasskeyConfig.ts";
 import * as PasskeyCredentials from "./PasskeyCredentials.ts";
 import * as PasskeyUserHandles from "./PasskeyUserHandles.ts";
 
-/**
- * HSK-005/THS-003 (BEH-EA-258): how a verified assertion authenticated the user, as RFC 8176
- * method references — `hwk` for a device-bound (`singleDevice`) credential, `swk` for a synced
- * (`multiDevice`) one, plus `user` when the authenticator performed user verification. This is
- * what lets a policy require a hardware-bound key (`amr contains "hwk"`) or user verification,
- * and what `Assurance` maps onto aal2/aal3.
- */
-const passkeyAmr = (verified: {
-  readonly credentialDeviceType: "singleDevice" | "multiDevice";
-  readonly userVerified: boolean;
-}): ReadonlyArray<Sessions.AuthMethod> => {
-  const key: Sessions.AuthMethod = verified.credentialDeviceType === "singleDevice" ? "hwk" : "swk";
-  return verified.userVerified ? [key, "user"] : [key];
-};
+/** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type PasskeyLifecycle = SessionLifecycle.Mints | SessionLifecycle.Refreshes;
+
+export { PasskeyConfig, config } from "./PasskeyConfig.ts";
+export type { AttestationPolicy, PasskeyConfigShape } from "./PasskeyConfig.ts";
 
 /** BEH-EA-044-style reserved provider id, this plugin's own concern (BEH-EA-004: confined to its own scope). */
 const PASSKEY_PROVIDER_ID = "passkey";
-
-/**
- * HSK-002: what a registration's attestation must satisfy. Conveyance
- * (`PasskeyConfigShape.attestation`) is only a *request* — it decides nothing
- * by itself. With a policy, `register/verify` rejects (as
- * `PasskeyAttestationRejected`) a registration that carries no attestation,
- * a self-signed one (unless `rejectSelfAttestation: false`), or whose
- * authenticator model (AAGUID) is not in `trustedAaguids`.
- *
- * What this is **not**: FIDO Metadata Service (MDS3) validation, which stays
- * deferred (BEH-EA-135). An AAGUID is only as trustworthy as the attestation
- * carrying it — for a `certificate` attestation the wrapped library checks the
- * statement's signature, and validates the certificate chain against a root
- * store only if the host has installed one in `@simplewebauthn/server`'s
- * (process-global) settings service. Without roots, `trustedAaguids` is a
- * model *allow-list*, not proof of provenance.
- */
-export interface AttestationPolicy {
-  /** Authenticator models (canonical `8-4-4-4-12` AAGUIDs, case-insensitive) a registration may come from. */
-  readonly trustedAaguids: ReadonlyArray<string>;
-  /** Defaults to `true`: a self-attestation says nothing about the authenticator model, so it cannot satisfy an allow-list. */
-  readonly rejectSelfAttestation?: boolean;
-}
-
-export interface PasskeyConfigShape {
-  readonly rpId: string;
-  readonly rpName: string;
-  /**
-   * BEH-EA-133: exact `(scheme, host, port)` tuples — never a bare host.
-   * MNA-007: a native Android app's assertions carry an
-   * `android:apk-key-hash:<base64url SHA-256 of the signing certificate>`
-   * origin instead of a web one — list it here verbatim (and publish the
-   * matching Digital Asset Links statement for `rpId`). Such an origin is an
-   * exact-match origin exempt from the web rpId-suffix check; the RP-ID
-   * binding itself is still enforced by the authenticator data's `rpIdHash`.
-   */
-  readonly origins: ReadonlyArray<string>;
-  /**
-   * CB-003: top-level origins a ceremony may run *embedded* under (a
-   * cross-origin iframe). A ceremony whose client data reports
-   * `crossOrigin: true` is refused unless its `topOrigin` is listed here;
-   * the default `[]` refuses every embedded ceremony.
-   */
-  readonly allowedTopOrigins: ReadonlyArray<string>;
-  /**
-   * TC-008: WebAuthn Related Origin Requests — extra web origins (exact `https` origins, e.g.
-   * `https://example.co.uk`) whose *host is not under `rpId`* but which may still use this relying
-   * party's passkeys. A ceremony from one is accepted like one from `origins`, minus the rpId host-suffix
-   * check (the authenticator data's `rpIdHash` still binds the credential to `rpId`), and the plugin
-   * serves the same list at `GET /.well-known/webauthn` — a document the browser fetches from
-   * `https://<rpId>/.well-known/webauthn` to decide whether to let the requesting origin use `rpId` at
-   * all, so the app must be reachable there. Off by default (`[]`: the endpoint answers 404); browsers
-   * consider only a handful of distinct registrable labels (five is the floor the specification asks
-   * clients to honour), so keep the list short.
-   */
-  readonly relatedOrigins: ReadonlyArray<string>;
-  /** BEH-EA-135: defaults to `"none"`. Conveyance ≠ verification — see `attestationPolicy`. */
-  readonly attestation: WebAuthn.AttestationConveyance;
-  /** HSK-002: absent ⇒ no trust decision is made on attestation, and `Passkey.layer` warns when `attestation` asks for one anyway. */
-  readonly attestationPolicy?: AttestationPolicy;
-  readonly authenticatorSelection: WebAuthn.AuthenticatorSelection;
-  /**
-   * Ticket 07: defaults to `true`, per this spec's own "richness over complexity" decision.
-   *
-   * HSK-007: Conditional Create always requests `residentKey: "required"` (a
-   * discoverable credential is also what makes autofill possible), so U2F-only
-   * and early-CTAP2 security keys — which cannot store one — cannot complete
-   * it. A fleet of such keys should set this to `false`.
-   *
-   * CB-009: Chrome's Conditional Create cannot produce UV=1, so it is
-   * implicitly disabled whenever `authenticatorSelection.userVerification` is
-   * `"required"` — `registerOptionsConditional` answers
-   * `PasskeyConditionalCreateDisabled` rather than issue options that could
-   * only yield a credential the policy would refuse.
-   */
-  readonly conditionalCreate: boolean;
-  /**
-   * TC-003: how long the *browser* lets a ceremony run, sent as the options'
-   * `timeout`. Must not exceed the server's challenge TTL
-   * (`ChallengeStore.CHALLENGE_TTL`, five minutes, fixed by BEH-EA-132) —
-   * `Passkey.layer` refuses to build otherwise — so the browser's prompt never
-   * outlives the challenge it answers. Defaults to 4m30s.
-   */
-  readonly ceremonyTimeout: Duration.Duration;
-  /** TC-003: WebAuthn L3 `hints` sent with every options response (which kind of authenticator to prompt for). */
-  readonly hints?: ReadonlyArray<WebAuthn.CeremonyHint>;
-  /** TC-003: client extension inputs requested on registration/authentication (absent ⇒ the wrapped library's defaults, `credProps` on registration). */
-  readonly extensions?: WebAuthn.CeremonyExtensions;
-  /**
-   * CB-004/WPS-006: what a signature-counter regression (a possibly cloned
-   * authenticator) does. `"flag"` (default, wayfinder ticket 08's "log +
-   * step-up, not an instant kill"): publish `auth.passkey.counterAnomaly`,
-   * flag the credential, still complete the ceremony — the flagged credential
-   * then needs user verification on every later use. `"reject"`: additionally
-   * fail the ceremony with `PasskeyCounterAnomaly`.
-   */
-  readonly counterAnomalyPolicy: "flag" | "reject";
-  /**
-   * TC-001: keys the deterministic decoy `allowCredentials` an unknown email
-   * receives. Absent ⇒ a random per-process secret is generated at layer
-   * build (with a warning): decoys are then stable only within one process, so
-   * a multi-instance deployment should set one shared secret.
-   */
-  readonly enumerationSecret?: Redacted.Redacted<string>;
-  /**
-   * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
-   * (BPAS-001): a baked-in, fail-closed freshness gate on enrollment —
-   * mirroring `@awthaq/admin`'s own `AdminConfig.canImpersonate`
-   * precedent (a core safety invariant a plugin bakes in itself, not left
-   * to an app-composed qadi policy the host might forget to attach).
-   * Defaults to 5 minutes, matching the `reauth(300)` example already in
-   * `@awthaq/qadi`'s own `Resolvers.ts` doc comments.
-   */
-  readonly reauthMaxAgeSeconds: Duration.Duration;
-}
-
-const defaultPasskeyConfig: PasskeyConfigShape = {
-  // Deliberately insecure-looking dev defaults, the same posture
-  // `@awthaq/oauth`'s own `OAuthConfig.baseUrl` default takes — real
-  // deployments are expected to override every one of these via `config()`.
-  rpId: "localhost",
-  rpName: "awthaq",
-  origins: ["http://localhost:3000"],
-  allowedTopOrigins: [],
-  relatedOrigins: [],
-  attestation: "none",
-  authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
-  conditionalCreate: true,
-  reauthMaxAgeSeconds: Duration.minutes(5),
-  ceremonyTimeout: Duration.seconds(270),
-  counterAnomalyPolicy: "flag",
-};
-
-/** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
-export const PasskeyConfig: Context.Reference<PasskeyConfigShape> = Context.Reference(
-  "awthaq/passkey/Config",
-  { defaultValue: () => defaultPasskeyConfig },
-);
-
-export const config = (partial: Partial<PasskeyConfigShape>): Layer.Layer<never> =>
-  Layer.succeed(PasskeyConfig, { ...defaultPasskeyConfig, ...partial });
 
 // ---- AAGUID-derived friendly labels (BEH-EA — ticket 06/09) -----------------
 
@@ -244,170 +97,7 @@ const KNOWN_AAGUID_LABELS: Record<string, string> = {
 
 const friendlyCredentialName = (aaguid: string): string => KNOWN_AAGUID_LABELS[aaguid] ?? "Passkey";
 
-// ---- Wire-response decoding (glue, not crypto — see WebAuthn.ts's own header) ----
-
-const ClientDataSchema = Schema.Struct({
-  type: Schema.String,
-  challenge: Schema.String,
-  origin: Schema.String,
-  /** CB-003: reported by the browser for a ceremony run inside a cross-origin iframe. */
-  crossOrigin: Schema.optionalKey(Schema.Boolean),
-  topOrigin: Schema.optionalKey(Schema.String),
-});
-
-type ClientData = typeof ClientDataSchema.Type;
-
-/**
- * Reads only `origin`/`challenge`/`type` (and the cross-origin members) out of
- * the browser's `clientDataJSON` — plain base64url + JSON decoding, not
- * attestation or signature verification (BEH-EA-129's own prohibition is about
- * the latter, never about reading a JSON field). Used to look up the right
- * `ChallengeStore` scope and to pre-check origin/rpId before ever calling
- * the `WebAuthn` port.
- */
-const decodeClientData = (clientDataJSON: string): Option.Option<ClientData> => {
-  const decoded = Base64Url.decode(clientDataJSON);
-  if (Result.isFailure(decoded)) return Option.none();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(new TextDecoder().decode(decoded.success));
-  } catch {
-    return Option.none();
-  }
-  return Schema.decodeUnknownOption(ClientDataSchema)(parsed);
-};
-
-/** BEH-EA-133: `rpId` MUST be validated as a registrable-domain suffix of the origin, never a bare host match. */
-const originMatchesRpId = (origin: string, rpId: string): boolean => {
-  try {
-    const host = new URL(origin).hostname;
-    return host === rpId || host.endsWith(`.${rpId}`);
-  } catch {
-    return false;
-  }
-};
-
-/** MNA-007: the origin a native Android app's assertions carry (`android:apk-key-hash:<base64url SHA-256 of the signing cert>`). */
-const ANDROID_APK_KEY_HASH_ORIGIN_PREFIX = "android:apk-key-hash:";
-
-/**
- * The one origin policy every ceremony applies (BEH-EA-133, MNA-007, CB-003):
- * 1. the ceremony's origin is an exact member of `origins`;
- * 2. a ceremony run cross-origin (`crossOrigin: true`, i.e. inside an
- *    iframe) must name a `topOrigin` the host explicitly allows — the wrapped
- *    library only rejects this for authentication, and only when the browser
- *    reports `topOrigin`, so registration and step-up would otherwise accept
- *    an embedded ceremony;
- * 3. a web origin's host is `rpId` or a subdomain of it (never a bare host
- *    match); an `android:apk-key-hash:` origin is exempt from that web-only
- *    check — it is accepted only by being listed verbatim in `origins`.
- */
-const checkOrigin = (
-  clientData: ClientData,
-  config: PasskeyConfigShape,
-): Effect.Effect<void, PasskeyApi.PasskeyOriginMismatch | PasskeyApi.PasskeyRpIdMismatch> => {
-  if (!acceptedOrigins(config).includes(clientData.origin)) {
-    return Effect.fail(new PasskeyApi.PasskeyOriginMismatch());
-  }
-  if (
-    clientData.crossOrigin === true &&
-    (clientData.topOrigin === undefined || !config.allowedTopOrigins.includes(clientData.topOrigin))
-  ) {
-    return Effect.fail(new PasskeyApi.PasskeyOriginMismatch());
-  }
-  if (clientData.origin.startsWith(ANDROID_APK_KEY_HASH_ORIGIN_PREFIX)) return Effect.void;
-  // TC-008: a related origin is by definition not under `rpId`.
-  if (config.relatedOrigins.includes(clientData.origin)) return Effect.void;
-  if (!originMatchesRpId(clientData.origin, config.rpId)) {
-    return Effect.fail(new PasskeyApi.PasskeyRpIdMismatch());
-  }
-  return Effect.void;
-};
-
-/** TC-008: every origin a ceremony may report: the exact `origins` plus the Related Origin Requests list. */
-const acceptedOrigins = (config: PasskeyConfigShape): ReadonlyArray<string> => [
-  ...config.origins,
-  ...config.relatedOrigins,
-];
-
-/** TC-008: a related origin is an exact `https` origin — the shape `new URL(x).origin` round-trips. */
-const isHttpsOrigin = (value: string): boolean => {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && url.origin === value;
-  } catch {
-    return false;
-  }
-};
-
-/** CB-003: only forwarded to the port when the host allows any embedded ceremony at all. */
-const topOriginExpectation = (
-  config: PasskeyConfigShape,
-): { readonly expectedTopOrigin?: ReadonlyArray<string> } =>
-  config.allowedTopOrigins.length === 0 ? {} : { expectedTopOrigin: config.allowedTopOrigins };
-
-/** HSK-003: the authenticator transports this plugin stores and echoes back into `excludeCredentials`/`allowCredentials`; anything else a browser reports is dropped. */
-const KNOWN_TRANSPORTS: ReadonlyArray<string> = [
-  "ble",
-  "cable",
-  "hybrid",
-  "internal",
-  "nfc",
-  "smart-card",
-  "usb",
-];
-
-const toRegistrationResponseJSON = (
-  input: PasskeyApi.RegistrationCredentialInput,
-): Parameters<WebAuthn.WebAuthnShape["verifyRegistration"]>[0]["response"] => ({
-  id: input.id,
-  rawId: input.rawId,
-  response: {
-    clientDataJSON: input.response.clientDataJSON,
-    attestationObject: input.response.attestationObject,
-    ...(input.response.transports === undefined
-      ? {}
-      : {
-          transports: input.response.transports.filter((transport) =>
-            KNOWN_TRANSPORTS.includes(transport),
-          ),
-        }),
-  },
-  clientExtensionResults: {},
-  type: "public-key",
-});
-
-const toAuthenticationResponseJSON = (
-  input: PasskeyApi.AuthenticationCredentialInput,
-): Parameters<WebAuthn.WebAuthnShape["verifyAuthentication"]>[0]["response"] => ({
-  id: input.id,
-  rawId: input.rawId,
-  response: {
-    clientDataJSON: input.response.clientDataJSON,
-    authenticatorData: input.response.authenticatorData,
-    signature: input.response.signature,
-    ...(input.response.userHandle === undefined ? {} : { userHandle: input.response.userHandle }),
-  },
-  clientExtensionResults: {},
-  type: "public-key",
-});
-
 const toBase64Url = (bytes: Uint8Array): string => Base64Url.encode(bytes);
-
-/**
- * TSS-004: a fixed, well-formed COSE ES256 public key nobody holds the private
- * half of (generated once, offline). An assertion naming an unknown credential
- * id is verified against it and the result discarded, so the unknown-credential
- * path performs the same signature verification a known credential's does —
- * the way `@awthaq/password`'s `dummyHash` equalizes an unknown email.
- */
-const DECOY_COSE_PUBLIC_KEY =
-  "pQECAyYgASFYIDUd8pj_isGtVhaCN1Bo9s3jMUGZnyfu_woIMrJon1KjIlggExq74U54Cegms_CY6g320bYfldpa89-O72ccIzqVy9s";
-
-const decoyPublicKey = (): Uint8Array<ArrayBuffer> => {
-  const decoded = Base64Url.decode(DECOY_COSE_PUBLIC_KEY);
-  return Result.isSuccess(decoded) ? new Uint8Array(decoded.success) : new Uint8Array();
-};
 
 /**
  * TC-001: shapes a decoy descriptor set can take, picked deterministically per
@@ -459,12 +149,6 @@ const rules = {
 /** TC-001: no user has this id, so listing its (empty) credentials costs what a real user's listing does. */
 const DECOY_USER_ID = Users.UserId("awthaq-decoy-user");
 
-const registrationScope = (sessionId: string): string => `passkey.register:${sessionId}`;
-const conditionalScope = (sessionId: string): string => `passkey.register.conditional:${sessionId}`;
-const authenticateScope = (ceremonyId: string): string => `passkey.authenticate:${ceremonyId}`;
-/** Ticket 15: scoped by the caller's own session id, mirroring `registrationScope` — this ceremony always has one, unlike `passkey.authenticate`'s anonymous `ceremonyId`. */
-const reauthenticateScope = (sessionId: string): string => `passkey.reauthenticate:${sessionId}`;
-
 const toCredentialDto = (
   record: PasskeyCredentials.PasskeyCredentialRecord,
 ): PasskeyApi.PasskeyCredentialDto =>
@@ -490,11 +174,6 @@ export interface PasskeySignals {
   readonly name: string;
   readonly displayName: string;
   readonly allAcceptedCredentialIds: ReadonlyArray<string>;
-}
-
-export interface IssuedSession {
-  readonly session: Sessions.SessionView;
-  readonly token: Redacted.Redacted<string>;
 }
 
 export interface PasskeyShape {
@@ -572,7 +251,7 @@ export interface PasskeyShape {
     /** CSD-003: extra request context recorded on the issued session (its `User-Agent`; capped by `Sessions.issue`). The address is `input.ip`. */
     context?: { readonly userAgent?: string },
   ) => Effect.Effect<
-    IssuedSession,
+    Sessions.IssuedSession,
     | Api.InvalidCredentials
     | Api.RateLimited
     | PasskeyApi.PasskeyChallengeInvalid
@@ -614,19 +293,6 @@ export interface PasskeyShape {
   >;
 }
 
-/** Same forward-reference pattern `@awthaq/password`'s own `PasswordHandlers` documents. */
-const currentUserPrincipal: Effect.Effect<Api.UserPrincipal, never, Api.CurrentPrincipal> =
-  Effect.gen(function* () {
-    const principal = yield* Api.CurrentPrincipal;
-    if (principal._tag !== "User") {
-      return yield* Defects.invariantViolation(
-        "NonUserPrincipal",
-        `awthaq: passkey group reached with a non-User principal: ${principal._tag}`,
-      );
-    }
-    return principal;
-  });
-
 export const PasskeyHandlers = Layer.mergeAll(
   HttpApiBuilder.group(
     PasskeyApi.PasskeyApi,
@@ -635,14 +301,14 @@ export const PasskeyHandlers = Layer.mergeAll(
       const passkey = yield* Passkey;
       return handlers.handleAll({
         registerOptions: Effect.fnUntraced(function* () {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           return yield* passkey.registerOptions(
             Users.UserId(principal.ref.id),
             principal.sessionId,
           );
         }),
         registerOptionsConditional: Effect.fnUntraced(function* () {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           return yield* passkey.registerOptionsConditional(
             Users.UserId(principal.ref.id),
             principal.sessionId,
@@ -653,7 +319,7 @@ export const PasskeyHandlers = Layer.mergeAll(
         }: {
           payload: PasskeyApi.RegisterVerifyPayload;
         }) {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           const record = yield* passkey.registerVerify(
             Users.UserId(principal.ref.id),
             principal.sessionId,
@@ -697,14 +363,9 @@ export const PasskeyHandlers = Layer.mergeAll(
           // port (trusted-proxy aware), user agent from the header.
           // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
           const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-            request,
             Effect.gen(function* () {
-              const resolvedAddress = yield* clientAddress.resolve(request);
-              const userAgent = Headers.get(request.headers, "user-agent");
-              return yield* passkey.authenticateVerify(
-                { ...payload, ip: Option.getOrUndefined(resolvedAddress) },
-                Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
-              );
+              const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
+              return yield* passkey.authenticateVerify({ ...payload, ip }, context);
             }),
           );
           return response;
@@ -719,12 +380,12 @@ export const PasskeyHandlers = Layer.mergeAll(
       const passkey = yield* Passkey;
       return handlers.handleAll({
         listCredentials: Effect.fnUntraced(function* () {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           const records = yield* passkey.listCredentials(Users.UserId(principal.ref.id));
           return records.map(toCredentialDto);
         }),
         signals: Effect.fnUntraced(function* () {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           const signals = yield* passkey.signals(Users.UserId(principal.ref.id));
           return new PasskeyApi.PasskeySignalsDto(signals);
         }),
@@ -735,7 +396,7 @@ export const PasskeyHandlers = Layer.mergeAll(
           params: PasskeyApi.CredentialIdParams;
           payload: PasskeyApi.RenamePayload;
         }) {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           const record = yield* passkey.renameCredential(
             Users.UserId(principal.ref.id),
             params.id,
@@ -748,7 +409,7 @@ export const PasskeyHandlers = Layer.mergeAll(
         }: {
           params: PasskeyApi.CredentialIdParams;
         }) {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           yield* passkey.removeCredential(Users.UserId(principal.ref.id), params.id);
         }),
       });
@@ -778,7 +439,7 @@ export const PasskeyHandlers = Layer.mergeAll(
       const passkey = yield* Passkey;
       return handlers.handleAll({
         reauthenticateOptions: Effect.fnUntraced(function* () {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           return yield* passkey.reauthenticateOptions(
             Users.UserId(principal.ref.id),
             principal.sessionId,
@@ -789,7 +450,7 @@ export const PasskeyHandlers = Layer.mergeAll(
         }: {
           payload: PasskeyApi.ReauthenticateVerifyPayload;
         }) {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           yield* passkey.reauthenticateVerify(
             Users.UserId(principal.ref.id),
             principal.sessionId,
@@ -956,15 +617,22 @@ const passkeyMigrations: Migrations.Migrations = [
       });
     }),
   },
+  {
+    // Plan 22, D2: a WebAuthn signature counter is a uint32 (WebAuthn L2 §6.1, `signCount`), but
+    // Postgres `INTEGER` is int4 and refused any counter >= 2^31. SQLite's `INTEGER` is already
+    // 64-bit, so this is Postgres-only. Appended, never edited into the original CREATE TABLE.
+    name: "widen_passkey_credential_counter",
+    up: Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.onDialectOrElse({
+        pg: () => sql`ALTER TABLE passkey_credential ALTER COLUMN counter TYPE BIGINT`,
+        sqlite: () => Effect.void,
+        orElse: () => Defects.unsupportedDialect("migrations"),
+      });
+    }),
+  },
 ];
 
-/**
- * CSG-001/DRS-002 (.issues/high), wayfinder ticket 30: this plugin's part of
- * `AccountErasure.eraseAccount`, part of `Passkey.layer` itself (it requires
- * `Erasure.ErasureRegistry`, so a composition without one does not compile). It
- * removes the user's `passkey_credential` rows and — since BPAS-003 — their
- * stable WebAuthn user handle, inside `eraseAccount`'s transaction.
- */
 /**
  * CSG-005: this plugin's section of the data-subject export — each credential's metadata
  * (a name, when it was registered and last used, device class, transports, authenticator
@@ -1006,6 +674,13 @@ export const passkeyChallengeRetention = Retention.contribute({
   }),
 });
 
+/**
+ * CSG-001/DRS-002 (.issues/high), wayfinder ticket 30: this plugin's part of
+ * `AccountErasure.eraseAccount`, part of `Passkey.layer` itself (it requires
+ * `Erasure.ErasureRegistry`, so a composition without one does not compile). It
+ * removes the user's `passkey_credential` rows and — since BPAS-003 — their
+ * stable WebAuthn user handle, inside `eraseAccount`'s transaction.
+ */
 export const passkeyErasure = Erasure.contribute({
   id: "passkey",
   make: Effect.gen(function* () {
@@ -1017,6 +692,47 @@ export const passkeyErasure = Erasure.contribute({
         .pipe(Effect.andThen(handles.deleteByUser(subject.userId)));
   }),
 });
+
+const invalidCredentials = () => new Api.InvalidCredentials();
+
+/** BEH-EA-136: `register/verify` is authenticated and names no one else's identifier, so it reports every refusal precisely. */
+const registrationPosture = {
+  challenge: () => new PasskeyApi.PasskeyChallengeInvalid(),
+  origin: () => new PasskeyApi.PasskeyOriginMismatch(),
+  rpId: () => new PasskeyApi.PasskeyRpIdMismatch(),
+  signature: () => new PasskeyApi.PasskeyVerificationFailed(),
+  userVerification: () => new PasskeyApi.PasskeyUserVerificationRequired(),
+  attestation: () => new PasskeyApi.PasskeyAttestationRejected(),
+} satisfies PasskeyCeremony.Posture<PasskeyCeremony.RegistrationRefusal>;
+
+/**
+ * BEH-EA-136: the anonymous sign-in collapses every refusal past the challenge into the same
+ * `InvalidCredentials` an unknown password-sign-in email answers. The two exceptions are refusals a
+ * client must act on (verify the user; a counter anomaly), and both are reachable only after a valid
+ * signature from a registered credential.
+ */
+const signInPosture = {
+  challenge: () => new PasskeyApi.PasskeyChallengeInvalid(),
+  origin: invalidCredentials,
+  rpId: invalidCredentials,
+  unknownCredential: invalidCredentials,
+  signature: invalidCredentials,
+  userHandle: invalidCredentials,
+  userVerification: () => new PasskeyApi.PasskeyUserVerificationRequired(),
+  counterAnomaly: () => new PasskeyApi.PasskeyCounterAnomaly(),
+} satisfies PasskeyCeremony.Posture<PasskeyCeremony.AssertionRefusal>;
+
+/** Ticket 15: step-up is authenticated as the credential's would-be owner, so it reports precisely, like registration. */
+const stepUpPosture = {
+  challenge: () => new PasskeyApi.PasskeyChallengeInvalid(),
+  origin: () => new PasskeyApi.PasskeyOriginMismatch(),
+  rpId: () => new PasskeyApi.PasskeyRpIdMismatch(),
+  unknownCredential: () => new PasskeyApi.PasskeyCredentialNotFound(),
+  signature: () => new PasskeyApi.PasskeyVerificationFailed(),
+  userHandle: () => new PasskeyApi.PasskeyVerificationFailed(),
+  userVerification: () => new PasskeyApi.PasskeyUserVerificationRequired(),
+  counterAnomaly: () => new PasskeyApi.PasskeyCounterAnomaly(),
+} satisfies PasskeyCeremony.Posture<PasskeyCeremony.AssertionRefusal>;
 
 export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passkey", {
   apiVersion: 1,
@@ -1095,6 +811,8 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const mac = yield* Mac.Mac;
       // ADR-EA-038: the gate, the sign-in veto, the MFA divert point and the announcement.
       const signIn = yield* SignIn.make;
+      // The one implementation of what a ceremony verifies and in which order (BEH-EA-132).
+      const ceremonies = yield* PasskeyCeremony.make;
 
       // ---- layer-build validation and operator warnings --------------------
 
@@ -1110,7 +828,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       }
       // TC-008: a related origin the browser could never match (or that would widen the origin policy
       // beyond an exact https origin) is a configuration error, not something to serve at the well-known URL.
-      const badRelated = builtConfig.relatedOrigins.find((origin) => !isHttpsOrigin(origin));
+      const badRelated = builtConfig.relatedOrigins.find(
+        (origin) => !PasskeyCeremony.isHttpsOrigin(origin),
+      );
       if (badRelated !== undefined) {
         return yield* Defects.invalidConfiguration(
           "relatedOrigins",
@@ -1139,7 +859,6 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           return Redacted.make(toBase64Url(yield* random.randomBytes(32)));
         }));
       const enumerationKey = new TextEncoder().encode(Redacted.value(enumerationSecret));
-      const decoyCredential = { id: "awthaq-decoy-credential", publicKey: decoyPublicKey() };
 
       // BEH-EA-107/110/111: the table above is registered (introspectable) and spent through one
       // budget; a breach is published, logged and counted, and answers `Api.RateLimited` (EOTS-007).
@@ -1176,13 +895,13 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       /** BPAS-003: one stable per-user handle in every registration's options; `credentials.create` stores exactly it. */
       const creationOptions = Effect.fnUntraced(function* (
         userId: Users.UserId,
-        scope: string,
+        ceremony: PasskeyCeremony.Registration,
         authenticatorSelection: WebAuthn.AuthenticatorSelection,
       ) {
         const config = yield* configNow;
         const user = yield* users.findById(userId).pipe(Effect.orDie);
         const existing = yield* credentials.listByUser(userId);
-        const challenge = yield* challengeStore.issue(scope);
+        const challenge = yield* ceremonies.begin(ceremony);
         const webauthnUserId = yield* handles.getOrCreate(userId);
         const options = yield* webAuthn.registrationOptions({
           rpId: config.rpId,
@@ -1216,7 +935,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           yield* requireFreshSession(userId, sessionId);
           return yield* creationOptions(
             userId,
-            registrationScope(sessionId),
+            PasskeyCeremony.Ceremony.Registration({ sessionId, mode: "modal" }),
             config.authenticatorSelection,
           );
         },
@@ -1237,88 +956,37 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // BEH-EA-256: Chrome's Conditional Create flow produces
           // UP=0/UV=0 — a `residentKey: "required"` discoverable
           // credential is also what makes autofill possible at all.
-          return yield* creationOptions(userId, conditionalScope(sessionId), {
-            ...config.authenticatorSelection,
-            residentKey: "required",
-            userVerification: "discouraged",
-          });
+          return yield* creationOptions(
+            userId,
+            PasskeyCeremony.Ceremony.Registration({ sessionId, mode: "conditional" }),
+            {
+              ...config.authenticatorSelection,
+              residentKey: "required",
+              userVerification: "discouraged",
+            },
+          );
         });
-
-      /**
-       * HSK-002: whether a verified registration's attestation satisfies the
-       * configured policy (vacuously, when none is configured).
-       */
-      const attestationAcceptable = (
-        verified: WebAuthn.VerifiedRegistration,
-        config: PasskeyConfigShape,
-      ): boolean => {
-        const policy = config.attestationPolicy;
-        if (policy === undefined) return true;
-        // No statement at all: nothing to base any trust in the claimed model on.
-        if (verified.attestationType === "none") return false;
-        if (verified.attestationType === "self" && (policy.rejectSelfAttestation ?? true)) {
-          return false;
-        }
-        const aaguid = verified.aaguid.toLowerCase();
-        return policy.trustedAaguids.some((trusted) => trusted.toLowerCase() === aaguid);
-      };
 
       const registerVerify: PasskeyShape["registerVerify"] = Effect.fnUntraced(
         function* (userId, sessionId, input) {
           const config = yield* configNow;
+          // Admission (BEH-EA-255): a stale session is refused before the attempt starts, so its
+          // challenge survives the step-up that discharges the gate (BEH-EA-132).
           yield* requireFreshSession(userId, sessionId);
-          const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
-          if (Option.isNone(clientDataOpt)) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
-          }
-          const clientData = clientDataOpt.value;
-
-          yield* checkOrigin(clientData, config);
-
-          // WPS-003: the payload names its ceremony, and only that ceremony's
-          // scope is consumed — probing both destroyed a sibling's still-valid
-          // challenge (BEH-EA-132 deletes the addressed one on every attempt).
-          const conditional = input.ceremony === "conditional";
-          const consumed = yield* challengeStore.consume(
-            conditional ? conditionalScope(sessionId) : registrationScope(sessionId),
-            clientData.challenge,
-          );
-          if (!consumed) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
-          }
-
-          const verified = yield* webAuthn
+          const verified = yield* ceremonies
             .verifyRegistration({
-              response: toRegistrationResponseJSON(input.credential),
-              expectedChallenge: clientData.challenge,
-              expectedOrigin: acceptedOrigins(config),
-              expectedRpId: config.rpId,
-              // CB-002: an ordinary (user-initiated) registration MUST show
-              // user presence; only Conditional Create, which Chrome performs
-              // without a user gesture, is allowed UP=0.
-              requireUserPresence: !conditional,
+              ceremony: PasskeyCeremony.Ceremony.Registration({
+                sessionId,
+                mode: input.ceremony ?? "modal",
+              }),
+              credential: input.credential,
+              policy: config,
             })
             .pipe(
-              Effect.catchTag("WebAuthn/VerificationFailed", () =>
-                Effect.fail(new PasskeyApi.PasskeyVerificationFailed()),
+              Effect.catchTag("PasskeyCeremony/RegistrationRefused", (refused) =>
+                Effect.fail(registrationPosture[refused.reason]()),
               ),
             );
-
-          // CB-001 (.issues/high): enforcement follows the RP's own conveyed
-          // `userVerification` policy (WebAuthn §7.1). CB-009: the same policy
-          // binds Conditional Create too, so the UV exemption can never
-          // outlive a "required" policy (`registerOptionsConditional` already
-          // refuses to issue that ceremony under it).
-          if (
-            config.authenticatorSelection.userVerification === "required" &&
-            !verified.userVerified
-          ) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyUserVerificationRequired());
-          }
-
-          if (!attestationAcceptable(verified, config)) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyAttestationRejected());
-          }
 
           // BPAS-003: exactly the handle the options ceremony sent — the
           // authenticator bound this same per-user value.
@@ -1393,7 +1061,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
             yield* limits.spend("authenticateOptionsByEmail", { email });
           }
           const ceremonyId = toBase64Url(yield* random.randomBytes(16));
-          const challenge = yield* challengeStore.issue(authenticateScope(ceremonyId));
+          const challenge = yield* ceremonies.begin(
+            PasskeyCeremony.Ceremony.SignIn({ ceremonyId }),
+          );
           let allowCredentials: ReadonlyArray<{
             readonly id: string;
             readonly transports?: ReadonlyArray<string>;
@@ -1423,130 +1093,23 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         },
       );
 
-      /**
-       * CB-004/WPS-006: the counter-regression policy shared by
-       * `authenticateVerify` and `reauthenticateVerify`. A regression
-       * (`newCounter <= stored`, except the normal `0 === 0` of an
-       * authenticator that never reports a counter) is published, flagged on
-       * the credential, and — only under `counterAnomalyPolicy: "reject"` —
-       * fails the ceremony. Never advances the stored counter (see
-       * `PasskeyCredentials.recordUsage`).
-       */
-      const applyCounterPolicy = (
-        stored: PasskeyCredentials.PasskeyCredentialRecord,
-        verified: WebAuthn.VerifiedAuthentication,
-      ): Effect.Effect<void, PasskeyApi.PasskeyCounterAnomaly | Errors.StoreUnavailable> =>
-        Effect.gen(function* () {
-          const config = yield* configNow;
-          const regressed =
-            verified.newCounter <= stored.counter &&
-            !(verified.newCounter === 0 && stored.counter === 0);
-          if (!regressed) return;
-          yield* events.publish({
-            _tag: "auth.passkey.counterAnomaly",
-            userId: stored.userId,
-            credentialId: stored.id,
-          });
-          // The credential was read a moment ago in this ceremony: a vanished row is a bug, not a domain outcome.
-          yield* credentials
-            .flagCounterAnomaly(stored.id)
-            .pipe(Effect.catchTag("PasskeyCredentials/NotFound", Effect.die));
-          if (config.counterAnomalyPolicy === "reject") {
-            return yield* Effect.fail(new PasskeyApi.PasskeyCounterAnomaly());
-          }
-        });
-
       const authenticateCeremony: PasskeyShape["authenticateVerify"] = Effect.fnUntraced(
         function* (input, context) {
           const config = yield* configNow;
-          // Per-source budget first: cheap to enforce, bounds signature work
-          // and challenge probing from one address.
+          // Admission (plan 06): the per-source budget first: cheap to enforce, bounds signature
+          // work and challenge probing from one address, and spent before the attempt starts.
           yield* limits.spend("authenticateVerifyByIp", { ip: input.ip });
-          const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
-          if (Option.isNone(clientDataOpt)) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
-          }
-          const clientData = clientDataOpt.value;
-
-          const consumed = yield* challengeStore.consume(
-            authenticateScope(input.ceremonyId),
-            clientData.challenge,
-          );
-          if (!consumed) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
-          }
-
-          // BEH-EA-136: from here on, every failure collapses into the same
-          // `Api.InvalidCredentials` an unknown password-sign-in email
-          // already answers — see `PasskeyApi.ts`'s own header comment.
-          // MNA-007/CB-003: the same origin policy the registration ceremonies apply.
-          yield* checkOrigin(clientData, config).pipe(
-            Effect.mapError(() => new Api.InvalidCredentials()),
-          );
-
-          const storedOpt = yield* credentials.findById(input.credential.id);
-          if (Option.isNone(storedOpt)) {
-            // TSS-004: still pay for one signature verification (against a
-            // decoy key, result discarded) so this path costs what a known
-            // credential's bad signature does.
-            yield* webAuthn
-              .verifyAuthentication({
-                response: toAuthenticationResponseJSON(input.credential),
-                expectedChallenge: clientData.challenge,
-                expectedOrigin: acceptedOrigins(config),
-                expectedRpId: config.rpId,
-                ...topOriginExpectation(config),
-                credential: decoyCredential,
-              })
-              .pipe(Effect.exit);
-            return yield* Effect.fail(new Api.InvalidCredentials());
-          }
-          const stored = storedOpt.value;
-
-          const verified = yield* webAuthn
-            .verifyAuthentication({
-              response: toAuthenticationResponseJSON(input.credential),
-              expectedChallenge: clientData.challenge,
-              expectedOrigin: acceptedOrigins(config),
-              expectedRpId: config.rpId,
-              ...topOriginExpectation(config),
-              credential: {
-                id: stored.id,
-                publicKey: new Uint8Array(stored.publicKey),
-                transports: stored.transports,
-              },
+          const { credential, amr } = yield* ceremonies
+            .verifyAssertion({
+              ceremony: PasskeyCeremony.Ceremony.SignIn({ ceremonyId: input.ceremonyId }),
+              credential: input.credential,
+              policy: config,
             })
             .pipe(
-              Effect.catchTag("WebAuthn/VerificationFailed", () =>
-                Effect.fail(new Api.InvalidCredentials()),
+              Effect.catchTag("PasskeyCeremony/AssertionRefused", (refused) =>
+                Effect.fail(signInPosture[refused.reason]()),
               ),
             );
-
-          // BPAS-003: a discoverable credential's assertion carries the user
-          // handle its authenticator bound at registration — it must be the
-          // one this credential was registered under.
-          if (
-            input.credential.response.userHandle !== undefined &&
-            input.credential.response.userHandle !== stored.webauthnUserId
-          ) {
-            return yield* Effect.fail(new Api.InvalidCredentials());
-          }
-
-          if (
-            (config.authenticatorSelection.userVerification === "required" ||
-              // WPS-006: a credential flagged for a counter anomaly needs UV on
-              // every later use — the concrete "step-up" of BEH-EA-131's policy.
-              Option.isSome(stored.counterAnomalyAt)) &&
-            !verified.userVerified
-          ) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyUserVerificationRequired());
-          }
-
-          // BEH-EA-131: "log + step-up, not an instant kill" by default.
-          yield* applyCounterPolicy(stored, verified);
-          yield* credentials
-            .recordUsage(stored.id, verified.newCounter, verified.credentialBackedUp)
-            .pipe(Effect.catchTag("PasskeyCredentials/NotFound", Effect.die));
 
           // ADR-EA-038: core's sign-in completes it (lookup, gate, veto, MFA divert, session,
           // announcement). WPS-001: a deleted user's passkey credential row can outlive the
@@ -1557,7 +1120,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // synced), plus user verification when the authenticator performed it.
           return yield* signIn
             .complete(
-              { userId: stored.userId, strategy: "passkey", amr: passkeyAmr(verified) },
+              { userId: credential.userId, strategy: "passkey", amr },
               { ip: input.ip, userAgent: context?.userAgent },
             )
             .pipe(
@@ -1664,7 +1227,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         function* (userId, sessionId) {
           const config = yield* configNow;
           const owned = yield* credentials.listByUser(userId);
-          const challenge = yield* challengeStore.issue(reauthenticateScope(sessionId));
+          const challenge = yield* ceremonies.begin(
+            PasskeyCeremony.Ceremony.StepUp({ sessionId, userId }),
+          );
           return yield* requestOptions({
             rpId: config.rpId,
             challenge: Redacted.value(challenge),
@@ -1682,75 +1247,22 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       const reauthenticateVerify: PasskeyShape["reauthenticateVerify"] = Effect.fnUntraced(
         function* (userId, sessionId, input) {
           const config = yield* configNow;
-          const clientDataOpt = decodeClientData(input.credential.response.clientDataJSON);
-          if (Option.isNone(clientDataOpt)) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
-          }
-          const clientData = clientDataOpt.value;
-
-          yield* checkOrigin(clientData, config);
-
-          const consumed = yield* challengeStore.consume(
-            reauthenticateScope(sessionId),
-            clientData.challenge,
-          );
-          if (!consumed) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyChallengeInvalid());
-          }
-
-          const storedOpt = yield* credentials.findById(input.credential.id);
-          if (Option.isNone(storedOpt) || storedOpt.value.userId !== userId) {
-            // Ticket 15: unlike `authenticateVerify`'s anonymous
-            // ceremony, this caller is already authenticated as
-            // `userId` — presenting someone else's credential id here
-            // is a real, precise condition to report, not an
-            // enumeration risk (mirrors `registerVerify`'s own posture,
-            // see this file's header comment).
-            return yield* Effect.fail(new PasskeyApi.PasskeyCredentialNotFound());
-          }
-          const stored = storedOpt.value;
-
-          const verified = yield* webAuthn
-            .verifyAuthentication({
-              response: toAuthenticationResponseJSON(input.credential),
-              expectedChallenge: clientData.challenge,
-              expectedOrigin: acceptedOrigins(config),
-              expectedRpId: config.rpId,
-              ...topOriginExpectation(config),
-              credential: {
-                id: stored.id,
-                publicKey: new Uint8Array(stored.publicKey),
-                transports: stored.transports,
-              },
+          const { amr } = yield* ceremonies
+            .verifyAssertion({
+              ceremony: PasskeyCeremony.Ceremony.StepUp({ sessionId, userId }),
+              credential: input.credential,
+              policy: config,
             })
             .pipe(
-              Effect.catchTag("WebAuthn/VerificationFailed", () =>
-                Effect.fail(new PasskeyApi.PasskeyVerificationFailed()),
+              Effect.catchTag("PasskeyCeremony/AssertionRefused", (refused) =>
+                Effect.fail(stepUpPosture[refused.reason]()),
               ),
             );
-
-          // BPAS-003: same handle cross-check as `authenticateVerify`.
-          if (
-            input.credential.response.userHandle !== undefined &&
-            input.credential.response.userHandle !== stored.webauthnUserId
-          ) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyVerificationFailed());
-          }
-
-          if (!verified.userVerified) {
-            return yield* Effect.fail(new PasskeyApi.PasskeyUserVerificationRequired());
-          }
-
-          // BEH-EA-131: same "log + step-up, not an instant kill" posture as `authenticateVerify`.
-          yield* applyCounterPolicy(stored, verified);
-          yield* credentials
-            .recordUsage(stored.id, verified.newCounter, verified.credentialBackedUp)
-            .pipe(Effect.catchTag("PasskeyCredentials/NotFound", Effect.die));
 
           // BEH-EA-319: ended since the middleware's verify (revoked, superseded,
           // expired) is "no longer authenticated": 401, not a defect.
           yield* sessions
-            .reauthenticate(userId, Sessions.SessionId(sessionId), passkeyAmr(verified))
+            .reauthenticate(userId, Sessions.SessionId(sessionId), amr)
             .pipe(
               Effect.catchTag("Sessions/NotFound", () => Effect.fail(new Api.Unauthenticated())),
             );

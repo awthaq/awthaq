@@ -26,24 +26,24 @@
 // ceiling (BEH-EA-316, `SamlRoleMapping`). Not offered, by decision (spec/behaviors/29-saml-sp.md BEH-EA-244, ADR-EA-036):
 // IdP-initiated LOGIN and encrypted assertions.
 
-import { Api } from "@awthaq/api";
+import { Api, type SessionLifecycle } from "@awthaq/api";
 import {
-  Accounts,
+  CurrentUser,
   AuthEvents,
   AuthPlugin,
   Errors,
+  FederatedIdentity,
   HookPoint,
   Hooks,
   Migrations,
   RateLimits,
   Retention,
-  SessionCookie,
   Sessions,
   SignIn,
-  SignUp,
   Tenant,
   Users,
   Verification,
+  VerificationLink,
 } from "@awthaq/core";
 import {
   ClientAddress,
@@ -62,6 +62,7 @@ import {
   OrganizationDirectory,
   OrganizationMembers,
 } from "@awthaq/organization";
+import { SessionDelivery } from "@awthaq/server";
 import { TenantScoped } from "@awthaq/sql";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -75,7 +76,6 @@ import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as HttpEffect from "effect/http/HttpEffect";
-import * as Headers from "effect/http/Headers";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
@@ -98,6 +98,9 @@ import * as SamlRoleMapping from "./SamlRoleMapping.ts";
 import * as SamlSlo from "./SamlSlo.ts";
 import * as SamlSpKeys from "./SamlSpKeys.ts";
 
+/** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type SamlLifecycle = SessionLifecycle.Mints | SessionLifecycle.Ends;
+
 /** The session-row sweep covers every connection's sign-ins. */
 const sweepGrant = TenantScoped.crossTenant(
   "saml: retention sweep of every connection's session rows",
@@ -108,12 +111,23 @@ export type { SamlConfigShape, SamlConfigInput } from "./SamlConfig.ts";
 
 export const REQUEST_COOKIE = "__Host-saml-request";
 export const LOGOUT_COOKIE = SamlSlo.LOGOUT_COOKIE;
-const REQUEST_PREFIX = "saml-request:";
+// BEH-EA-057: a codec-only purpose (the request state is burn-first, ADR-EA-039 decision 6).
+const REQUEST = { name: "saml-request" } as const;
 const ASSERTION_PREFIX = "saml-assertion:";
 
 /** The `providerId` accounts link under: `saml:<organizationId>:<connectionId>` (BEH-EA-245). */
 export const providerIdOf = (organizationId: string, connectionId: string): string =>
   `saml:${organizationId}:${connectionId}`;
+
+/**
+ * BEH-EA-245: a connection that trusts email is trusted only for the domains it claims (BEH-EA-317), so a
+ * trusting connection can never link or verify an address that belongs to another organization. An empty
+ * list links nothing.
+ */
+const emailTrustOf = (connection: SamlRecords.ConnectionRecord) =>
+  connection.trustsEmail
+    ? FederatedIdentity.trusted(connection.emailDomains)
+    : FederatedIdentity.untrusted;
 
 const RequestPayload = Schema.Struct({
   connectionId: Schema.String,
@@ -123,7 +137,6 @@ const RequestPayload = Schema.Struct({
 const decodeRequestPayload = Schema.decodeUnknownOption(RequestPayload);
 
 type ServerError = Errors.StoreUnavailable;
-type IssuedSession = Effect.Success<ReturnType<Sessions.SessionsShape["issue"]>>;
 
 export interface SamlShape {
   /** BEH-EA-241: the SP metadata document for one connection. */
@@ -145,7 +158,7 @@ export interface SamlShape {
     readonly ip?: string | undefined;
     readonly userAgent?: string | undefined;
   }) => Effect.Effect<
-    { readonly callbackURL: string; readonly session: IssuedSession },
+    { readonly callbackURL: string; readonly session: Sessions.IssuedSession },
     | SamlApi.SamlAssertionRejected
     | Users.UserSuspended
     | HookPoint.HookAborted
@@ -447,10 +460,10 @@ export const SamlHandlers = HttpApiBuilder.group(
         request: HttpServerRequest.HttpServerRequest;
       }) {
         yield* noReferrer;
-        const resolved = yield* clientAddress.resolve(request);
+        const address = yield* ClientAddress.address(clientAddress, request);
         const started = yield* saml.authnRequest(query.connection, {
           callbackURL: query.callbackURL,
-          ...(Option.isSome(resolved) ? { ip: resolved.value } : {}),
+          ...address,
         });
         return yield* HttpServerResponse.setCookie(
           HttpServerResponse.redirect(started.location),
@@ -470,23 +483,17 @@ export const SamlHandlers = HttpApiBuilder.group(
         yield* noReferrer;
         // The request state is single-use: every ACS response, success or failure, clears it.
         yield* expireRequestCookie;
-        const resolved = yield* clientAddress.resolve(request);
+        const facts = yield* ClientAddress.facts(clientAddress, request);
         const outcome = yield* saml.acs({
           samlResponse: payload.SAMLResponse,
           cookieState: request.cookies[REQUEST_COOKIE],
-          ...(Option.isSome(resolved) ? { ip: resolved.value } : {}),
-          ...Option.match(Headers.get(request.headers, "user-agent"), {
-            onNone: () => ({}),
-            onSome: (userAgent) => ({ userAgent }),
-          }),
+          ...facts,
         });
-        const cookie = yield* SessionCookie.render(outcome.session.session, outcome.session.token);
-        return yield* HttpServerResponse.setCookie(
+        // ADR-EA-045: the session cookie rides the redirect through `SessionDelivery` (`SessionLifecycle.Mints`).
+        return yield* SessionDelivery.redirect(
           HttpServerResponse.redirect(outcome.callbackURL),
-          cookie.name,
-          cookie.value,
-          cookie.options,
-        ).pipe(Effect.orDie);
+          outcome.session,
+        );
       }),
 
       slo: Effect.fnUntraced(function* ({
@@ -578,20 +585,15 @@ export const SamlAccountHandlers = HttpApiBuilder.group(
         request: HttpServerRequest.HttpServerRequest;
       }) {
         yield* noReferrer;
-        const principal = yield* Api.CurrentPrincipal;
-        if (principal._tag !== "User") {
-          return yield* Defects.invariantViolation(
-            "NonUserPrincipal",
-            `awthaq: saml.account reached with a non-User principal: ${principal._tag}`,
-          );
-        }
+        const { principal } = yield* CurrentUser.current;
         const resolved = yield* clientAddress.resolve(request);
         const started = yield* saml.logout(principal, {
           callbackURL: payload.callbackURL,
           ip: Option.getOrUndefined(resolved),
         });
-        // The caller's own session ended, so its cookie is expired, whatever the IdP does next.
-        yield* SessionCookie.expire;
+        // The caller's own session ended (`SessionLifecycle.Ends`), so its cookie is expired and a bearer
+        // client told so, whatever the IdP does next.
+        yield* SessionDelivery.end;
         if (started._tag === "local") return HttpServerResponse.redirect(started.callbackURL);
         const response =
           started._tag === "redirect"
@@ -624,21 +626,27 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
       }: {
         payload: SamlApi.CreateConnectionPayload;
       }) {
-        return yield* admin.createConnection(yield* currentUserPrincipal, payload);
+        return yield* admin.createConnection((yield* CurrentUser.current).principal, payload);
       }),
       listConnections: Effect.fnUntraced(function* ({
         query,
       }: {
         query: SamlApi.ListConnectionsQuery;
       }) {
-        return yield* admin.listConnections(yield* currentUserPrincipal, query.organizationId);
+        return yield* admin.listConnections(
+          (yield* CurrentUser.current).principal,
+          query.organizationId,
+        );
       }),
       getConnection: Effect.fnUntraced(function* ({
         params,
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        return yield* admin.getConnection(yield* currentUserPrincipal, params.connectionId);
+        return yield* admin.getConnection(
+          (yield* CurrentUser.current).principal,
+          params.connectionId,
+        );
       }),
       updateConnection: Effect.fnUntraced(function* ({
         params,
@@ -648,7 +656,7 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
         payload: SamlApi.UpdateConnectionPayload;
       }) {
         return yield* admin.updateConnection(
-          yield* currentUserPrincipal,
+          (yield* CurrentUser.current).principal,
           params.connectionId,
           payload,
         );
@@ -658,14 +666,17 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        yield* admin.deleteConnection(yield* currentUserPrincipal, params.connectionId);
+        yield* admin.deleteConnection((yield* CurrentUser.current).principal, params.connectionId);
       }),
       refreshMetadata: Effect.fnUntraced(function* ({
         params,
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        return yield* admin.refreshMetadata(yield* currentUserPrincipal, params.connectionId);
+        return yield* admin.refreshMetadata(
+          (yield* CurrentUser.current).principal,
+          params.connectionId,
+        );
       }),
       rotateSigningKey: Effect.fnUntraced(function* ({
         params,
@@ -675,7 +686,7 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
         payload: SamlApi.SigningKeyPayload;
       }) {
         return yield* admin.rotateSigningKey(
-          yield* currentUserPrincipal,
+          (yield* CurrentUser.current).principal,
           params.connectionId,
           payload,
         );
@@ -685,23 +696,14 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        return yield* admin.listSigningKeys(yield* currentUserPrincipal, params.connectionId);
+        return yield* admin.listSigningKeys(
+          (yield* CurrentUser.current).principal,
+          params.connectionId,
+        );
       }),
     });
   }),
 );
-
-/** Same forward-reference pattern `@awthaq/admin` and `@awthaq/webhooks` document: a handler reached without a `User` principal is a wiring defect. */
-const currentUserPrincipal = Effect.gen(function* () {
-  const principal = yield* Api.CurrentPrincipal;
-  if (principal._tag !== "User") {
-    return yield* Defects.invariantViolation(
-      "NonUserPrincipal",
-      `awthaq: saml.admin reached with a non-User principal: ${principal._tag}`,
-    );
-  }
-  return principal;
-});
 
 // ---- rate limits --------------------------------------------------------------------------------------
 
@@ -816,6 +818,8 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
     saml_sp_key: AuthPlugin.Table.derived("saml_connection", "connectionId"),
     saml_session: AuthPlugin.Table.derived("saml_connection", "connectionId"),
   },
+  // Plan 17: the sealed SP private key, declared beside the records that seal it.
+  sealedColumns: [SamlRecords.privateKeyColumn],
   migrations: samlMigrations,
   // Plan 08 (BEH-EA-T4): the connection/key/session store, memory and SQL, matched.
   records: SamlRecords.records,
@@ -831,8 +835,6 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
     contributes: Layer.mergeAll(samlOrganizationDeletion, samlSessionRetention),
     handlers: Layer.mergeAll(SamlHandlers, SamlAccountHandlers, SamlAdminHandlers),
     make: Effect.gen(function* () {
-      const users = yield* Users.Users;
-      const accounts = yield* Accounts.Accounts;
       const sessions = yield* Sessions.Sessions;
       const verification = yield* Verification.Verification;
       const events = yield* AuthEvents.AuthEvents;
@@ -846,7 +848,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const random = yield* SecureRandom.SecureRandom;
       const hasher = yield* Digest.Digest;
       const settings = yield* SamlConfig.SamlConfig;
-      const creation = yield* SignUp.make;
+      const federation = yield* FederatedIdentity.make;
       const completion = yield* SignIn.make;
 
       const acsUrl = SamlConfig.acsUrl(settings);
@@ -907,7 +909,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
           const uuid = yield* random.uuidV7();
           // The AuthnRequest id is an NCName: a letter or underscore first.
           const requestId = `_${uuid}`;
-          const identifier = `${REQUEST_PREFIX}${uuid}`;
+          const identifier = VerificationLink.identifierOf(REQUEST.name, uuid);
           const { value } = yield* verification.issue({
             identifier,
             ttl: settings.requestTtl,
@@ -944,7 +946,10 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
               : undefined,
           });
           // The cookie carries `<identifier>.<secret>`: the browser proves it is the one that started this login.
-          return { location, state: Redacted.make(`${identifier}.${Redacted.value(value)}`) };
+          return {
+            location,
+            state: VerificationLink.encode({ purpose: REQUEST.name, publicId: uuid, value }),
+          };
         },
       );
 
@@ -955,16 +960,14 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         // Unsolicited (IdP-initiated) responses, and any browser that did not start this login, stop here.
         if (cookieState === undefined)
           return yield* Effect.fail(new AssertionInvalid({ reason: "noRequestState" }));
-        const dot = cookieState.indexOf(".");
-        const identifier = dot < 0 ? "" : cookieState.slice(0, dot);
-        const secret = dot < 0 ? "" : cookieState.slice(dot + 1);
-        if (!identifier.startsWith(REQUEST_PREFIX) || secret === "") {
+        const decoded = VerificationLink.decode(cookieState, REQUEST);
+        if (Option.isNone(decoded)) {
           return yield* Effect.fail(new AssertionInvalid({ reason: "requestStateMalformed" }));
         }
         // ADR-EA-039: burn-first on purpose (BEH-EA-244: the ACS consumes the request state exactly once;
         // the assertion id is reserved separately, so giving the request back would not let a response be reused).
         const consumed = yield* verification
-          .consume(identifier, Redacted.make(secret))
+          .consume(decoded.value.identifier, decoded.value.value)
           .pipe(
             Effect.catchTag("Verification/TokenConsumed", () =>
               Effect.fail(new AssertionInvalid({ reason: "requestUnknownOrConsumed" })),
@@ -1139,59 +1142,37 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         input: { readonly ip?: string | undefined; readonly userAgent?: string | undefined },
       ) {
         const providerId = providerIdOf(connection.organizationId, connection.id);
-        const subject = assertion.nameId.value;
-        const email = emailOf(assertion);
-        const linked = yield* accounts.findByProviderSubject(
-          providerId,
-          subject,
-          connection.idpEntityId,
-        );
-
-        const targetUserId: Users.UserId = yield* Option.match(linked, {
-          onSome: (account) => Effect.succeed(account.userId),
-          onNone: () =>
-            Effect.gen(function* () {
-              const existing =
-                email === undefined ? Option.none() : yield* users.findByEmail(email);
-              if (Option.isSome(existing)) {
-                // BEH-EA-245: never linked by email alone. An explicitly trusted connection may link to a local
-                // account whose own address is already verified; every other case is the uniform rejection.
-                if (!connection.trustsEmail || !Users.isEmailVerified(existing.value)) {
-                  return yield* Effect.fail(new AssertionInvalid({ reason: "emailInUse" }));
-                }
-                yield* accounts
-                  .link({
-                    userId: existing.value.id,
-                    providerId,
-                    subject,
-                    issuer: connection.idpEntityId,
-                  })
-                  .pipe(Effect.catchTag("AccountAlreadyLinked", Effect.die));
-                return existing.value.id;
-              }
-              const name = attributeOf(assertion, NAME_ATTRIBUTES) ?? email ?? subject;
-              // ADR-EA-038: `SignUp` vets (`BeforeSignUp`, `strategy` is the provider id), then creates and
-              // links in one unit and announces after it commits.
-              const vetted = yield* creation.vet({
-                identity: email === undefined ? { _tag: "Anonymous" } : { _tag: "Email", email },
-                name,
-                strategy: providerId,
-              });
-              const created = yield* creation
-                .create(vetted, {
-                  link: { providerId, subject, issuer: connection.idpEntityId },
-                })
-                .pipe(
-                  Effect.catchTag("SignUp/IdentityTaken", (taken) =>
-                    taken.kind === "Email"
-                      ? Effect.fail(new AssertionInvalid({ reason: "emailInUse" }))
-                      : // A fresh user has no phone, and a fresh user's subject is not yet linked.
-                        Defects.invariantViolation("SamlSignUpConflict", taken.message),
-                  ),
-                );
-              return created.id;
+        // ADR-EA-043: which local user is this NameID is core's `FederatedIdentity` (the anchor, a trusted email
+        // match within the connection's claimed domains, or a sign-up through `SignUp`); a lost race signs in
+        // as the user the winner linked. Both refusals stay the uniform rejection.
+        const resolved = yield* federation
+          .resolve(
+            {
+              providerId,
+              subject: assertion.nameId.value,
+              issuer: Option.some(connection.idpEntityId),
+              // A signed assertion has no per-claim verified flag: the IdP's directory is speaking, and whether
+              // that directory is believed is the connection's `trustsEmail` verdict.
+              email: Option.map(Option.fromNullishOr(emailOf(assertion)), (address) => ({
+                address,
+                verified: true,
+              })),
+              name: Option.fromNullishOr(attributeOf(assertion, NAME_ATTRIBUTES)),
+              image: Option.none(),
+              tokens: Option.none(),
+            },
+            emailTrustOf(connection),
+          )
+          .pipe(
+            Effect.catchTags({
+              // BEH-EA-245: never linked by email alone; the reason is logged, not revealed.
+              "FederatedIdentity/EmailInUse": () =>
+                Effect.fail(new AssertionInvalid({ reason: "emailInUse" })),
+              "FederatedIdentity/Contended": () =>
+                Effect.fail(new AssertionInvalid({ reason: "identityContended" })),
             }),
-        });
+          );
+        const targetUserId = resolved.userId;
 
         // ADR-EA-038: the IdP proved the identity, so core's sign-in takes over (gate, veto, MFA divert, session,
         // announcement). The role mapping and the Single Logout record ride as a continuation, so they also

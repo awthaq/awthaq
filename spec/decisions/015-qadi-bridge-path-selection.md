@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-015 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-09-29 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-18): Consequences: both bridges resolve the caller through the same `Credentials` module (ADR-EA-042) (plan 11) |
 
 ---
 
@@ -36,7 +36,7 @@ Both bridges remain available in the same application simultaneously, wired from
 
 ## Consequences
 
-**Positive**: An application author has one place — this ADR — that states the deciding question ("does this endpoint's decision need a loaded resource?") before either path's own file, so the choice is made once per endpoint rather than re-derived from BEH-EA-159 in isolation each time. The registry-visibility and contract-placement factors are named as secondary considerations explicitly, so an author is not left assuming resource-dependence is the only axis that matters when a resource-independent endpoint's registry visibility is also a legitimate reason to prefer Path B.
+**Positive**: Both bridges resolve the caller through the same `Credentials` module (ADR-EA-042), so the identity Path A serves and the subject Path B authorises are the same for every credential combination. An application author has one place — this ADR — that states the deciding question ("does this endpoint's decision need a loaded resource?") before either path's own file, so the choice is made once per endpoint rather than re-derived from BEH-EA-159 in isolation each time. The registry-visibility and contract-placement factors are named as secondary considerations explicitly, so an author is not left assuming resource-dependence is the only axis that matters when a resource-independent endpoint's registry visibility is also a legitimate reason to prefer Path B.
 
 **Negative**: The three factors do not always agree, and this ADR does not fully resolve every case where they conflict — a resource-independent endpoint that an operator wants in the permission registry (favoring Path B) but that a team has already built extensive Path-A tooling around (custom `enforceProjected` wrappers, shared `hideDenied`/`outagesAreDefects` catches per BEH-EA-147/148) is left to a judgment call this ADR does not fully adjudicate; an application with both bridges wired therefore still requires editorial discipline (a code-review convention, or a lint rule not yet specified anywhere in this specification) to keep endpoints from drifting toward whichever bridge a given author reached for out of habit rather than the criteria stated here.
 

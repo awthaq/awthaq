@@ -6,7 +6,7 @@
 // `Session` shape are framework-neutral and live in `@awthaq/web`
 // (`Session.ts`, where the full contract is documented). The one Next-specific
 // piece stays here: the per-render dedup.
-import { applyRotatedSession, makeGetSession, verifySessionToken } from "@awthaq/web";
+import { applyRotatedSession, makeGetSession, resolveSessionCookies } from "@awthaq/web";
 import { cache } from "react";
 
 export type { HeadersLike, Session } from "@awthaq/web";
@@ -29,4 +29,4 @@ export { applyRotatedSession };
  * missing, malformed, expired, or unknown-session cookie; only a genuine
  * backing-store outage propagates as a rejection.
  */
-export const getSession = makeGetSession(cache(verifySessionToken));
+export const getSession = makeGetSession(cache(resolveSessionCookies));

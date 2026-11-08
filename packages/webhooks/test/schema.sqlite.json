@@ -1,0 +1,267 @@
+{
+  "migrations": [
+    "create_webhooks_endpoint",
+    "create_webhooks_delivery",
+    "add_webhooks_endpoint_tenant",
+    "add_webhooks_endpoint_headers"
+  ],
+  "schema": {
+    "tables": {
+      "webhooks_delivery": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "endpointId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "eventId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "eventTag",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "subjectUserId",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "body",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "attempts",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "primaryKey": false
+        },
+        {
+          "name": "nextAttemptAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "lastAttemptAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "lastStatusCode",
+          "type": "integer",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "lastError",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "completedAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "webhooks_endpoint": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "url",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "eventTags",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "secret",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "previousSecret",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "previousSecretExpiresAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "disabledAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "disabledReason",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "consecutiveDead",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": true,
+          "primaryKey": false
+        },
+        {
+          "name": "createdBy",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "updatedAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "tenantId",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "headers",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "headerNames",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "primaryKey": false
+        }
+      ]
+    },
+    "indexes": [
+      {
+        "name": "webhooks_delivery_due",
+        "table": "webhooks_delivery",
+        "columns": [
+          "status",
+          "nextAttemptAt"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "webhooks_delivery_event_unique",
+        "table": "webhooks_delivery",
+        "columns": [
+          "endpointId",
+          "eventId"
+        ],
+        "unique": true,
+        "partial": false
+      },
+      {
+        "name": "webhooks_delivery_subject",
+        "table": "webhooks_delivery",
+        "columns": [
+          "subjectUserId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "webhooks_endpoint_tenant",
+        "table": "webhooks_endpoint",
+        "columns": [
+          "tenantId"
+        ],
+        "unique": false,
+        "partial": false
+      }
+    ],
+    "triggers": []
+  }
+}

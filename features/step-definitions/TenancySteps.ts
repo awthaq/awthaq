@@ -1,8 +1,8 @@
 // P20a: step definitions for 28-tenancy.feature (BEH-EA-230..237). Every assertion reads the
-// state the real services and repositories produced: the raw `"tenantId"` column, the response
+// state the real services and store adapters produced: the raw `"tenantId"` column, the response
 // a router middleware wrote, the typed refusal an organization operation returned.
 import { Accounts, AuditLog, Sessions, Users, Verification } from "@awthaq/core";
-import { Encryption, Tenant } from "@awthaq/ports";
+import { AuditLogStore, Encryption, PasswordHasher, Tenant } from "@awthaq/ports";
 import {
   Organization,
   OrganizationActor,
@@ -10,9 +10,9 @@ import {
   OrganizationMembers,
 } from "@awthaq/organization";
 import { ConnectionRecords, OrganizationRecords } from "@awthaq/organization/records";
-import { AdminTenants } from "@awthaq/admin";
+import { AdminAccounts, AdminTenants } from "@awthaq/admin";
 import { OAuthConnections } from "@awthaq/oauth";
-import { Models, Repositories, TenantScope, TenantScoped } from "@awthaq/sql";
+import { Models, TenantScope, TenantScoped } from "@awthaq/sql";
 import { defineSteps } from "@effect-cucumber/vitest";
 import { makeResourceId, makeSubjectId, RelationshipResolver } from "@qadi/core";
 import assert from "node:assert/strict";
@@ -27,6 +27,8 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
+  adminAccounts,
+  AdminAccountsTenantConfig,
   callerOf,
   identity,
   OAUTH_BASE_URL,
@@ -505,21 +507,25 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.deepEqual(new Set(stored), new Set([null]));
   });
 
-  When(
-    "a user {string} is inserted with the explicit tenant {string}",
-    function* (email: string, tenant: string) {
-      const world = yield* World;
-      const row = yield* identity(
-        Effect.gen(function* () {
-          const users = yield* Repositories.UsersRepository;
-          return yield* users.insert(
-            yield* M.User.insert.makeEffect({ email, name: email, tenantId: tenant }),
-          );
-        }),
-      );
-      yield* Ref.set(world.userTenant, Option.fromNullishOr(row.tenantId));
-    },
-  );
+  When("an audit row is appended with the explicit tenant {string}", function* (tenant: string) {
+    const world = yield* World;
+    yield* identity(
+      Effect.gen(function* () {
+        const store = yield* AuditLogStore.AuditLogStore;
+        const occurredAt = yield* DateTime.now;
+        return yield* store.append({
+          id: fresh("explicit-audit"),
+          eventTag: "auth.test",
+          actorUserId: Option.none(),
+          occurredAt,
+          correlationId: Option.none(),
+          tenantId: Option.some(tenant),
+          payloadJson: "{}",
+        });
+      }),
+    );
+    yield* Ref.set(world.storedTenants, yield* storedTenants("auth_audit_log"));
+  });
 
   When("that user's profile is updated under the tenant {string}", function* (tenant: string) {
     const world = yield* World;
@@ -575,7 +581,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(Object.hasOwn(M.User.jsonUpdate.fields, "tenantId"), false);
     // Non-vacuity: the same variants do carry the fields that may change.
     assert.equal(Object.hasOwn(M.User.update.fields, "name"), true);
-    // The insert variant is the only one that names a tenant: stamped by the repository, never by a caller's body.
+    // The insert variant is the only one that names a tenant: stamped by the store adapter, never by a caller's body.
     assert.equal(Object.hasOwn(M.User.insert.fields, "tenantId"), true);
   });
 
@@ -1078,6 +1084,103 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const { outcomes } = yield* World;
       assert.equal(yield* outcomes.get(`${name}:first`), "success");
       assert.equal(yield* outcomes.get(`${name}:second`), tag);
+    },
+  );
+
+  // ---- BEH-EA-236 (Admin accounts per operation, plan 13) ----
+
+  Given(
+    "a user {string} exists in a composition whose build-time configuration lets every administrator delete users and manage credentials",
+    function* (name: string) {
+      const { outcomes } = yield* World;
+      const created = yield* adminAccounts(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const accounts = yield* Accounts.Accounts;
+          const user = yield* users.create({
+            identity: { _tag: "Email", email: `${name}@example.com` },
+            name,
+          });
+          yield* accounts.link({
+            userId: user.id,
+            providerId: Accounts.PASSWORD_PROVIDER_ID,
+            subject: user.id,
+            credentialHash: Redacted.make(
+              yield* (yield* PasswordHasher.PasswordHasher).hash(
+                Redacted.make("an old password 1"),
+              ),
+            ),
+          });
+          return user.id;
+        }),
+      );
+      yield* outcomes.set(`${name}:id`, created);
+    },
+  );
+
+  Given(
+    "the tenant {string} configures credential administration and a password policy, but no account deletion",
+    function* (_tenant: string) {
+      // The lookup in `AdminAccountsTenantConfig` is the configuration; nothing to arrange per scenario.
+    },
+  );
+
+  When(
+    "an administrator deletes {string} in a request naming the tenant {string}",
+    function* (name: string, tenant: string) {
+      const { outcomes } = yield* World;
+      const id = Users.UserId(yield* outcomes.get(`${name}:id`));
+      yield* outcomes.set(
+        `${name}:delete`,
+        yield* adminAccounts(
+          outcomeTag(
+            Effect.flatMap(AdminAccounts.AdminAccounts, (accounts) =>
+              accounts.deleteUser(callerOf("an-administrator"), id),
+            ).pipe(Effect.provide(AdminAccountsTenantConfig.get(tenant))),
+          ),
+        ),
+      );
+    },
+  );
+
+  Then(
+    "the deletion of {string} is refused with {string} and the user still exists",
+    function* (name: string, tag: string) {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.get(`${name}:delete`), tag);
+      const id = Users.UserId(yield* outcomes.get(`${name}:id`));
+      const found = yield* adminAccounts(
+        Effect.flatMap(Users.Users, (users) => users.findById(id)),
+      );
+      assert.equal(found.id, id);
+    },
+  );
+
+  When(
+    "an administrator sets a password with no digit for {string} in a request naming the tenant {string}",
+    function* (name: string, tenant: string) {
+      const { outcomes } = yield* World;
+      const id = Users.UserId(yield* outcomes.get(`${name}:id`));
+      yield* outcomes.set(
+        `${name}:password`,
+        yield* adminAccounts(
+          outcomeTag(
+            Effect.flatMap(AdminAccounts.AdminAccounts, (accounts) =>
+              accounts.setUserPassword(callerOf("an-administrator"), id, {
+                password: Redacted.make("a thirty character password no digit"),
+              }),
+            ).pipe(Effect.provide(AdminAccountsTenantConfig.get(tenant))),
+          ),
+        ),
+      );
+    },
+  );
+
+  Then(
+    "the password change for {string} is refused with {string}",
+    function* (name: string, tag: string) {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.get(`${name}:password`), tag);
     },
   );
 

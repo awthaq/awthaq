@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-035 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-11-08 |
 > | Status | Accepted — implemented for `users` (core `UserFields`, `AuthPlugin`'s `userFields`, `Auth.make`'s generated migrations, `Users.getFields`/`setFields`/`typedFields`, the profile endpoint, the client helper); `Account` and `Session` extension not built |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (SAM-004, BE-007; decision A of the plan) |
+> | Change History | 1.0 (2026-09-29): Initial release (SAM-004, BE-007; decision A of the plan) <br> 1.1 (2026-11-08): Decision 5: `AuthHost.layer` (and therefore `TestAuth.layer`) provides the registry (ADR-EA-044, architecture plan 15) |
 
 ---
 
@@ -26,7 +26,7 @@ Apps migrating from Supabase (`raw_user_meta_data`, `raw_app_meta_data`) or bett
 2. **The linker owns the DDL.** `Auth.make` appends one generated migration per field to `migrations`, after every plugin's own, named `NNNN_<plugin>_add_user_field_<field>`: `ALTER TABLE users ADD COLUMN "<plugin id>_<field>"`, nullable and unbackfilled, dialect-neutral through `sql.onDialectOrElse` (a dot in a plugin id becomes `_`, since quoting would read it as `table.column`). A plugin therefore cannot write DDL against `users` at all, which is BEH-EA-040 enforced by construction rather than by review. Two declarations that would share a column are refused at composition (`UserFieldConflict`). Adding a field to a database that already ran the plugin ledger follows the plugin ledger's existing rule: append (the migration id must sort after every applied one, which `awthaq migration status` checks), because a numeric-id ledger skips a migration numbered below the newest applied.
 3. **Types are folded, not declared twice.** `Auth.UserFieldsOf<P>` is the composed record keyed `<plugin id>_<field>` with each field's own schema, the type of `Built.userFields`. `Users.typedFields(auth.userFields)` reads and writes exactly those fields with their decoded types; `UserFields.client(auth.userFields)` encodes a patch of only the client-writable fields (the `serverOnly` marker is part of the schema's type, so a server-only key does not compile) and decodes an `AccountDto.fields`.
 4. **The gate is in `Users`, not in each caller.** `Users.setFields(id, patch, { source })` validates a patch as a whole before storing anything (every key declared, every non-null value accepted by its schema, `null` clears): `UnknownUserField` (422), `InvalidUserField` (422), and for `source: "client"` (the profile endpoint) `UserFieldNotWritable` (403) for a `serverOnly` field. The default `source: "server"` is trusted code (a billing webhook) and may write any declared field. `getFields` is not gated: a user may read what they may not write. A write announces the changed keys on `Hooks.AfterUserAttributesChanged` (AAPS-005), so a policy that reads a field is refreshed.
-5. **The registry is provided by the composition.** `UserFields.UserFieldRegistry` (a `Context.Reference`, empty by default) is what `Users` and the account handler read; `auth.userFieldsLayer` provides it (`TestAuth.layer` does so itself). A composition that declares no field pays nothing: no query, `fields: {}`.
+5. **The registry is provided by the composition.** `UserFields.UserFieldRegistry` (a `Context.Reference`, empty by default) is what `Users` and the account handler read; `auth.userFieldsLayer` provides it; `AuthHost.layer` (and therefore `TestAuth.layer`) provides it, and a hand-built composition must provide `auth.userFieldsLayer` itself ([ADR-EA-044](044-host-composition.md)). A composition that declares no field pays nothing: no query, `fields: {}`.
 6. **On the wire**: `AccountDto.fields` (`{}` when none) and an optional `fields` bag in `PATCH /user`'s payload.
 
 **The default stays BEH-EA-048's**: a field is client-writable unless declared `serverOnly`. The base system cannot know that a plugin's field carries authority, so anything a policy or an authorization decision may rely on must be declared `serverOnly`; a plugin that forgets is the party responsible for the resulting corruption (BEH-EA-048's own blame rule).

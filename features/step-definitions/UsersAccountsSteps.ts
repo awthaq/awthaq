@@ -29,11 +29,12 @@ import {
   numbered,
   rows,
   setPerson,
+  signIn,
   signUp,
   signUpVerified,
 } from "./DomainSupport.ts";
 import { mailedToken } from "./MailedToken.ts";
-import { cookieFrom, STRONG_PASSWORD } from "./shared/Harness.ts";
+import { STRONG_PASSWORD } from "./shared/Harness.ts";
 
 const emailOf = (name: string) => `${name}@example.com`;
 
@@ -722,11 +723,7 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
       assert.ok(Option.isSome(person.cookie));
       yield* nameSession(first, person.cookie.value);
       // A second, independent session: a real sign-in.
-      const signedIn = yield* request("POST", "/password/sign-in", {
-        body: { email: person.email, password: person.password },
-      });
-      assert.equal(signedIn.status, 200);
-      yield* nameSession(second, cookieFrom(signedIn));
+      yield* nameSession(second, yield* signIn(name));
       assert.equal(yield* sessionStatus(first), 200);
       assert.equal(yield* sessionStatus(second), 200);
     },
@@ -791,19 +788,13 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
   When(
     "{string} signs in from a laptop, a phone, and a CI service account acting on her behalf",
     function* (name: string) {
-      const person = yield* getPerson(name);
       for (const [session, agent] of [
         ["laptop", "Laptop/1.0"],
         ["phone", "Phone/1.0"],
         ["ci", "CI-Runner/1.0"],
       ]) {
         assert.ok(session !== undefined && agent !== undefined);
-        const signedIn = yield* request("POST", "/password/sign-in", {
-          body: { email: person.email, password: person.password },
-          headers: { "user-agent": agent },
-        });
-        assert.equal(signedIn.status, 200);
-        yield* nameSession(session, cookieFrom(signedIn));
+        yield* nameSession(session, yield* signIn(name, { "user-agent": agent }));
       }
     },
   );
@@ -826,13 +817,7 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
   );
 
   When("{string} signs in again from a second device", function* (name: string) {
-    const person = yield* getPerson(name);
-    const signedIn = yield* request("POST", "/password/sign-in", {
-      body: { email: person.email, password: person.password },
-      headers: { "user-agent": "SecondDevice/1.0" },
-    });
-    assert.equal(signedIn.status, 200);
-    yield* nameSession("s2", cookieFrom(signedIn));
+    yield* nameSession("s2", yield* signIn(name, { "user-agent": "SecondDevice/1.0" }));
   });
 
   Then("a new session {string} is issued", function* (session: string) {

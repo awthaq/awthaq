@@ -20,7 +20,7 @@
 import { Api, SessionContract } from "@awthaq/api";
 import { Auth, Errors, Sessions } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
-import { TestAuth } from "@awthaq/test";
+import { CookieAssertions, TestAuth, type UserAgent } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -29,19 +29,6 @@ import * as Ref from "effect/Ref";
 import * as Password from "../src/Password.ts";
 import * as PasswordApi from "../src/PasswordApi.ts";
 import { NoBreachHttpClient, tokenOf } from "./harness.ts";
-
-/**
- * `PasswordGroup` carries `.middleware(Api.CsrfProtection)`, and this file calls the composed app's real HTTP
- * handler directly, never through `@awthaq/client`'s `CsrfClientLive`, so every unsafe-method request below plays the
- * double-submit role a browser client would, with a pair minted against the harness's own `CsrfConfig` (the handler
- * runs on the real clock, so it is stamped now).
- */
-const CSRF_TEST_COOKIE_VALUE: string = TestAuth.csrfToken(TestAuth.TestCsrfConfig.secret);
-
-const withCsrfCookie = (cookie?: string): string =>
-  cookie
-    ? `${cookie}; ${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`
-    : `${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`;
 
 const built = Auth.make([Password.Password]);
 
@@ -97,31 +84,27 @@ const letForkedFibersRun = Effect.gen(function* () {
   for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
 });
 
+/**
+ * `PasswordGroup` carries `.middleware(Api.CsrfProtection)`: every request comes from an agent of the app, which
+ * holds a `__Host-csrf` minted against the harness's own `CsrfConfig` and echoes it on unsafe methods, as a
+ * browser's script would. `from` is the app (a fresh anonymous agent per call) or a browser that keeps the
+ * cookies it is answered with.
+ */
+type Requester = {
+  readonly request: (
+    method: string,
+    path: string,
+    init?: UserAgent.RequestInit,
+  ) => Promise<Response>;
+};
+
 const post = (
-  handler: (request: Request) => Promise<Response>,
+  from: Requester,
   path: string,
   body: unknown,
-  cookie?: string,
-  extraHeaders: Record<string, string> = {},
+  headers?: Record<string, string>,
 ): Promise<Response> =>
-  handler(
-    new Request(`http://localhost${path}`, {
-      method: "POST",
-      headers: {
-        ...extraHeaders,
-        "content-type": "application/json",
-        cookie: withCsrfCookie(cookie),
-        [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
-      },
-      body: JSON.stringify(body),
-    }),
-  );
-
-const cookieFrom = (response: Response): string => {
-  const raw = response.headers.get("set-cookie");
-  if (raw === null) throw new Error("expected a set-cookie header");
-  return raw.split(";")[0] ?? raw;
-};
+  from.request("POST", path, { json: body, ...(headers === undefined ? {} : { headers }) });
 
 /**
  * Upstream-hardening ticket 04: `signIn` now hard-blocks an unverified
@@ -130,7 +113,7 @@ const cookieFrom = (response: Response): string => {
  * the same wiring `shipping-gaps/08`'s own test already proves works.
  */
 const verifyLatestSignUp = (
-  handler: (request: Request) => Promise<Response>,
+  app: Requester,
   mailer: { readonly sent: Effect.Effect<ReadonlyArray<Mailer.MailMessage>> },
 ) =>
   Effect.gen(function* () {
@@ -139,23 +122,26 @@ const verifyLatestSignUp = (
     const verifyMail = messages.findLast((m) => m.template === "verify-email");
     if (verifyMail === undefined) throw new Error("expected a verify-email mail");
     const token = tokenOf(verifyMail);
-    const verified = yield* Effect.promise(() => post(handler, "/verify-email", { token }));
+    const verified = yield* Effect.promise(() => post(app, "/verify-email", { token }));
     assert.strictEqual(verified.status, 204);
   });
 
 describe("AuthHttp + Password (real HTTP)", () => {
   it.effect("BEH-EA-113/083: sign-up sets a session cookie and answers 200", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(AppLayer);
+      const app = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
-        post(handler, "/password/sign-up", { email: "ada@example.com", password: strongPassword }),
+        post(app, "/password/sign-up", { email: "ada@example.com", password: strongPassword }),
       );
       assert.strictEqual(response.status, 200);
       const body = Schema.decodeUnknownSync(SessionContract.SessionDto)(
         yield* Effect.promise(() => response.json()),
       );
       assert.isTrue(body.current);
-      assert.match(cookieFrom(response), /^__Host-session=/);
+      assert.strictEqual(
+        CookieAssertions.findSetCookie(response, Api.SESSION_COOKIE_NAME).name,
+        Api.SESSION_COOKIE_NAME,
+      );
     }),
   );
 
@@ -163,20 +149,14 @@ describe("AuthHttp + Password (real HTTP)", () => {
     "CSD-003: sign-up records the request's User-Agent on the session (capped at 512)",
     () =>
       Effect.gen(function* () {
-        const { handler } = TestAuth.app(AppLayer);
+        const app = TestAuth.app(AppLayer);
         const signUp = (email: string, userAgent: string) =>
           Effect.promise(() =>
-            handler(
-              new Request("http://localhost/password/sign-up", {
-                method: "POST",
-                headers: {
-                  "content-type": "application/json",
-                  "user-agent": userAgent,
-                  cookie: withCsrfCookie(),
-                  [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
-                },
-                body: JSON.stringify({ email, password: strongPassword }),
-              }),
+            post(
+              app,
+              "/password/sign-up",
+              { email, password: strongPassword },
+              { "user-agent": userAgent },
             ),
           );
         const plain = yield* signUp("ua-plain@example.com", "TestBrowser/1.0");
@@ -198,34 +178,28 @@ describe("AuthHttp + Password (real HTTP)", () => {
     "IC-007/BO-005: the session Set-Cookie carries the default attributes and a 30-day Max-Age",
     () =>
       Effect.gen(function* () {
-        const { handler } = TestAuth.app(AppLayer);
+        const app = TestAuth.app(AppLayer);
         const response = yield* Effect.promise(() =>
-          post(handler, "/password/sign-up", {
+          post(app, "/password/sign-up", {
             email: "cookie-attrs@example.com",
             password: strongPassword,
           }),
         );
         assert.strictEqual(response.status, 200);
-        const setCookie = response.headers.get("set-cookie") ?? "";
-        assert.match(setCookie, /^__Host-session=/);
+        const session = CookieAssertions.findSetCookie(response, Api.SESSION_COOKIE_NAME);
         // Real clock here (a web handler, no TestClock): a hair under 30 days.
-        const maxAge = Number(/;\s*Max-Age=(\d+)/i.exec(setCookie)?.[1]);
-        assert.isAtMost(maxAge, 2_592_000);
-        assert.isAtLeast(maxAge, 2_591_990);
-        assert.match(setCookie, /;\s*Path=\/(;|$)/i);
-        assert.match(setCookie, /;\s*Secure/i);
-        assert.match(setCookie, /;\s*HttpOnly/i);
-        assert.match(setCookie, /;\s*SameSite=Strict/i);
-        assert.notMatch(setCookie, /;\s*Domain=/i);
-        assert.notMatch(setCookie, /;\s*Partitioned/i);
+        assert.isAtMost(session.maxAge ?? 0, 2_592_000);
+        assert.isAtLeast(session.maxAge ?? 0, 2_591_990);
+        CookieAssertions.assertHostPrefixedCookie(session, { httpOnly: true, sameSite: "strict" });
+        assert.isFalse(session.partitioned);
       }),
   );
 
   it.effect("BEH-EA-113/422: a too-short password answers WeakPassword", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(AppLayer);
+      const app = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
-        post(handler, "/password/sign-up", { email: "weak@example.com", password: "short" }),
+        post(app, "/password/sign-up", { email: "weak@example.com", password: "short" }),
       );
       assert.strictEqual(response.status, 422);
     }),
@@ -233,9 +207,9 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   it.effect("BEH-EA-113/409: signing up twice with the same email answers EmailAlreadyExists", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(AppLayer);
+      const app = TestAuth.app(AppLayer);
       const signUp = () =>
-        post(handler, "/password/sign-up", { email: "dupe@example.com", password: strongPassword });
+        post(app, "/password/sign-up", { email: "dupe@example.com", password: strongPassword });
       assert.strictEqual((yield* Effect.promise(signUp)).status, 200);
       assert.strictEqual((yield* Effect.promise(signUp)).status, 409);
     }),
@@ -246,16 +220,16 @@ describe("AuthHttp + Password (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const mailer = capturingMailer();
-        const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
+        const app = TestAuth.app(buildAppLayer(mailer.layer));
 
         const signedUp = yield* Effect.promise(() =>
-          post(handler, "/password/sign-up", { email: "bo@example.com", password: strongPassword }),
+          post(app, "/password/sign-up", { email: "bo@example.com", password: strongPassword }),
         );
         assert.strictEqual(signedUp.status, 200);
-        yield* verifyLatestSignUp(handler, mailer);
+        yield* verifyLatestSignUp(app, mailer);
 
         const wrongPassword = yield* Effect.promise(() =>
-          post(handler, "/password/sign-in", {
+          post(app, "/password/sign-in", {
             email: "bo@example.com",
             password: "totally wrong password",
           }),
@@ -263,7 +237,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
         assert.strictEqual(wrongPassword.status, 401);
 
         const unknownEmail = yield* Effect.promise(() =>
-          post(handler, "/password/sign-in", {
+          post(app, "/password/sign-in", {
             email: "nobody@example.com",
             password: strongPassword,
           }),
@@ -271,10 +245,13 @@ describe("AuthHttp + Password (real HTTP)", () => {
         assert.strictEqual(unknownEmail.status, 401);
 
         const correct = yield* Effect.promise(() =>
-          post(handler, "/password/sign-in", { email: "bo@example.com", password: strongPassword }),
+          post(app, "/password/sign-in", { email: "bo@example.com", password: strongPassword }),
         );
         assert.strictEqual(correct.status, 200);
-        assert.match(cookieFrom(correct), /^__Host-session=/);
+        assert.strictEqual(
+          CookieAssertions.findSetCookie(correct, Api.SESSION_COOKIE_NAME).name,
+          Api.SESSION_COOKIE_NAME,
+        );
       }),
   );
 
@@ -287,24 +264,24 @@ describe("AuthHttp + Password (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const mailer = capturingMailer();
-        const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
+        const app = TestAuth.app(buildAppLayer(mailer.layer));
 
         const signUp = yield* Effect.promise(() =>
-          post(handler, "/password/sign-up", {
+          post(app, "/password/sign-up", {
             email: "reset@example.com",
             password: strongPassword,
           }),
         );
         assert.strictEqual(signUp.status, 200);
-        yield* verifyLatestSignUp(handler, mailer);
+        yield* verifyLatestSignUp(app, mailer);
 
         const requestUnknown = yield* Effect.promise(() =>
-          post(handler, "/password/request-reset", { email: "not-a-real-user@example.com" }),
+          post(app, "/password/request-reset", { email: "not-a-real-user@example.com" }),
         );
         assert.strictEqual(requestUnknown.status, 202);
 
         const requestReal = yield* Effect.promise(() =>
-          post(handler, "/password/request-reset", { email: "reset@example.com" }),
+          post(app, "/password/request-reset", { email: "reset@example.com" }),
         );
         assert.strictEqual(requestReal.status, 202);
 
@@ -318,7 +295,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
         const token = tokenOf(resetMail);
 
         const confirmed = yield* Effect.promise(() =>
-          post(handler, "/password/confirm-reset", {
+          post(app, "/password/confirm-reset", {
             token,
             password: "a whole new strong password",
           }),
@@ -326,7 +303,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
         assert.strictEqual(confirmed.status, 204);
 
         const oldPassword = yield* Effect.promise(() =>
-          post(handler, "/password/sign-in", {
+          post(app, "/password/sign-in", {
             email: "reset@example.com",
             password: strongPassword,
           }),
@@ -334,7 +311,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
         assert.strictEqual(oldPassword.status, 401);
 
         const newPassword = yield* Effect.promise(() =>
-          post(handler, "/password/sign-in", {
+          post(app, "/password/sign-in", {
             email: "reset@example.com",
             password: "a whole new strong password",
           }),
@@ -348,16 +325,16 @@ describe("AuthHttp + Password (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const mailer = capturingMailer();
-        const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
+        const app = TestAuth.app(buildAppLayer(mailer.layer));
 
         yield* Effect.promise(() =>
-          post(handler, "/password/sign-up", {
+          post(app, "/password/sign-up", {
             email: "replay@example.com",
             password: strongPassword,
           }),
         );
         yield* Effect.promise(() =>
-          post(handler, "/password/request-reset", { email: "replay@example.com" }),
+          post(app, "/password/request-reset", { email: "replay@example.com" }),
         );
         yield* letForkedFibersRun;
         const messages = yield* mailer.sent;
@@ -366,12 +343,12 @@ describe("AuthHttp + Password (real HTTP)", () => {
         const token = tokenOf(resetMail);
 
         const first = yield* Effect.promise(() =>
-          post(handler, "/password/confirm-reset", { token, password: "second strong password" }),
+          post(app, "/password/confirm-reset", { token, password: "second strong password" }),
         );
         assert.strictEqual(first.status, 204);
 
         const replayed = yield* Effect.promise(() =>
-          post(handler, "/password/confirm-reset", { token, password: "third strong password" }),
+          post(app, "/password/confirm-reset", { token, password: "third strong password" }),
         );
         assert.strictEqual(replayed.status, 410);
       }),
@@ -386,10 +363,10 @@ describe("AuthHttp + Password (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const mailer = capturingMailer();
-        const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
+        const app = TestAuth.app(buildAppLayer(mailer.layer));
 
         const signUp = yield* Effect.promise(() =>
-          post(handler, "/password/sign-up", {
+          post(app, "/password/sign-up", {
             email: "verify@example.com",
             password: strongPassword,
           }),
@@ -402,19 +379,19 @@ describe("AuthHttp + Password (real HTTP)", () => {
         if (verifyMail === undefined) throw new Error("expected a verify-email mail");
         const token = tokenOf(verifyMail);
 
-        const verified = yield* Effect.promise(() => post(handler, "/verify-email", { token }));
+        const verified = yield* Effect.promise(() => post(app, "/verify-email", { token }));
         assert.strictEqual(verified.status, 204);
 
-        const replayed = yield* Effect.promise(() => post(handler, "/verify-email", { token }));
+        const replayed = yield* Effect.promise(() => post(app, "/verify-email", { token }));
         assert.strictEqual(replayed.status, 410);
       }),
   );
 
   it.effect("shipping-gaps/08/410: verifying with a garbage token answers TokenConsumed", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(AppLayer);
+      const app = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
-        post(handler, "/verify-email", { token: "not-a-real-token" }),
+        post(app, "/verify-email", { token: "not-a-real-token" }),
       );
       assert.strictEqual(response.status, 410);
     }),
@@ -423,29 +400,21 @@ describe("AuthHttp + Password (real HTTP)", () => {
   it.effect("shipping-gaps/11: change-password rotates the hash for the authenticated caller", () =>
     Effect.gen(function* () {
       const mailer = capturingMailer();
-      const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
+      const app = TestAuth.app(buildAppLayer(mailer.layer));
+      // One browser: it keeps the session sign-up answers with, and follows the rotation.
+      const browser = yield* Effect.promise(() => app.agent());
       const signUp = yield* Effect.promise(() =>
-        post(handler, "/password/sign-up", {
+        post(browser, "/password/sign-up", {
           email: "change@example.com",
           password: strongPassword,
         }),
       );
       assert.strictEqual(signUp.status, 200);
-      yield* verifyLatestSignUp(handler, mailer);
-      const cookie = cookieFrom(signUp);
+      yield* verifyLatestSignUp(app, mailer);
+      const before = browser.cookies.get(Api.SESSION_COOKIE_NAME)?.value;
+      assert.isString(before);
 
-      const authed = (path: string, body: unknown) =>
-        handler(
-          new Request(`http://localhost${path}`, {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              cookie: withCsrfCookie(cookie),
-              [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
-            },
-            body: JSON.stringify(body),
-          }),
-        );
+      const authed = (path: string, body: unknown) => post(browser, path, body);
 
       const wrongCurrent = yield* Effect.promise(() =>
         authed("/change-password", {
@@ -465,11 +434,18 @@ describe("AuthHttp + Password (real HTTP)", () => {
       // the caller's own session, so the response carries a fresh
       // SessionDto and Set-Cookie instead of a bare 204.
       assert.strictEqual(changed.status, 200);
-      const rotatedCookie = cookieFrom(changed);
-      assert.notStrictEqual(rotatedCookie, cookie);
+      CookieAssertions.findSetCookie(changed, Api.SESSION_COOKIE_NAME);
+      const rotated = browser.cookies.get(Api.SESSION_COOKIE_NAME)?.value;
+      assert.isString(rotated);
+      assert.notStrictEqual(rotated, before);
+      // The rotated session is the one the browser now presents.
+      assert.strictEqual(
+        (yield* Effect.promise(() => browser.request("GET", "/session"))).status,
+        200,
+      );
 
       const oldPassword = yield* Effect.promise(() =>
-        post(handler, "/password/sign-in", {
+        post(app, "/password/sign-in", {
           email: "change@example.com",
           password: strongPassword,
         }),
@@ -477,7 +453,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
       assert.strictEqual(oldPassword.status, 401);
 
       const newPassword = yield* Effect.promise(() =>
-        post(handler, "/password/sign-in", {
+        post(app, "/password/sign-in", {
           email: "change@example.com",
           password: "a whole new strong password",
         }),
@@ -491,35 +467,25 @@ describe("AuthHttp + Password (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const mailer = capturingMailer();
-        const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
+        const app = TestAuth.app(buildAppLayer(mailer.layer));
+        const browser = yield* Effect.promise(() => app.agent());
         const signUp = yield* Effect.promise(() =>
-          post(handler, "/password/sign-up", {
+          post(browser, "/password/sign-up", {
             email: "before@example.com",
             password: strongPassword,
           }),
         );
         assert.strictEqual(signUp.status, 200);
-        yield* verifyLatestSignUp(handler, mailer);
-        const cookie = cookieFrom(signUp);
+        yield* verifyLatestSignUp(app, mailer);
 
         // Anonymous: refused before anything is mailed.
         const anonymous = yield* Effect.promise(() =>
-          post(handler, "/change-email", { newEmail: "after@example.com" }),
+          post(app, "/change-email", { newEmail: "after@example.com" }),
         );
         assert.strictEqual(anonymous.status, 401);
 
         const requested = yield* Effect.promise(() =>
-          handler(
-            new Request("http://localhost/change-email", {
-              method: "POST",
-              headers: {
-                "content-type": "application/json",
-                cookie: withCsrfCookie(cookie),
-                [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
-              },
-              body: JSON.stringify({ newEmail: "after@example.com" }),
-            }),
-          ),
+          post(browser, "/change-email", { newEmail: "after@example.com" }),
         );
         assert.strictEqual(requested.status, 202);
         const mail = (yield* mailer.sent).findLast(
@@ -529,7 +495,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
         // The old address still signs in until the change is confirmed.
         const stillOld = yield* Effect.promise(() =>
-          post(handler, "/password/sign-in", {
+          post(app, "/password/sign-in", {
             email: "before@example.com",
             password: strongPassword,
           }),
@@ -538,23 +504,21 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
         const token = tokenOf(mail);
         const confirmed = yield* Effect.promise(() =>
-          post(handler, "/change-email/confirm", { token }),
+          post(app, "/change-email/confirm", { token }),
         );
         assert.strictEqual(confirmed.status, 204);
-        const replay = yield* Effect.promise(() =>
-          post(handler, "/change-email/confirm", { token }),
-        );
+        const replay = yield* Effect.promise(() => post(app, "/change-email/confirm", { token }));
         assert.strictEqual(replay.status, 410);
 
         const oldAddress = yield* Effect.promise(() =>
-          post(handler, "/password/sign-in", {
+          post(app, "/password/sign-in", {
             email: "before@example.com",
             password: strongPassword,
           }),
         );
         assert.strictEqual(oldAddress.status, 401);
         const newAddress = yield* Effect.promise(() =>
-          post(handler, "/password/sign-in", {
+          post(app, "/password/sign-in", {
             email: "after@example.com",
             password: strongPassword,
           }),
@@ -566,9 +530,9 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   it.effect("shipping-gaps/11/401: change-password without a session is rejected", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(AppLayer);
+      const app = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
-        post(handler, "/change-password", {
+        post(app, "/change-password", {
           currentPassword: strongPassword,
           newPassword: "a whole new strong password",
         }),
@@ -581,10 +545,10 @@ describe("AuthHttp + Password (real HTTP)", () => {
     "BEH-EA-084: serves generated OpenAPI JSON and Scalar docs from this plugin's own api",
     () =>
       Effect.gen(function* () {
-        const { handler } = TestAuth.app(AppLayer);
+        const app = TestAuth.app(AppLayer);
 
         const openapi = yield* Effect.promise(() =>
-          handler(new Request("http://localhost/openapi.json")),
+          app.handler(new Request("http://localhost/openapi.json")),
         );
         assert.strictEqual(openapi.status, 200);
         const spec = Schema.decodeUnknownSync(Schema.Struct({ paths: Schema.Unknown }))(
@@ -592,7 +556,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
         );
         assert.isDefined(spec.paths);
 
-        const docs = yield* Effect.promise(() => handler(new Request("http://localhost/docs")));
+        const docs = yield* Effect.promise(() => app.handler(new Request("http://localhost/docs")));
         assert.strictEqual(docs.status, 200);
       }),
   );
@@ -604,11 +568,9 @@ describe("AuthHttp + Password (real HTTP)", () => {
     () => {
       const mailer = capturingMailer();
       return Effect.gen(function* () {
-        const { handler } = TestAuth.app(
-          buildAppLayer(mailer.layer, { signUpEnumeration: "conceal" }),
-        );
+        const app = TestAuth.app(buildAppLayer(mailer.layer, { signUpEnumeration: "conceal" }));
         const signUp = () =>
-          post(handler, "/password/sign-up", {
+          post(app, "/password/sign-up", {
             email: "dupe@example.com",
             password: strongPassword,
           });
@@ -630,11 +592,9 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   it.effect("TMS-005: conceal still reports a weak password, and reveal stays the default", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(
-        buildAppLayer(Mailer.layerMemory, { signUpEnumeration: "conceal" }),
-      );
+      const app = TestAuth.app(buildAppLayer(Mailer.layerMemory, { signUpEnumeration: "conceal" }));
       const weak = yield* Effect.promise(() =>
-        post(handler, "/password/sign-up", { email: "weak@example.com", password: "short" }),
+        post(app, "/password/sign-up", { email: "weak@example.com", password: "short" }),
       );
       assert.strictEqual(weak.status, 422);
     }),
@@ -644,7 +604,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
   // hasher or database work.
   it.effect("ESS-006: a malformed email answers 400 and creates no user", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(AppLayer);
+      const app = TestAuth.app(AppLayer);
       for (const path of [
         "/password/sign-up",
         "/password/sign-in",
@@ -652,7 +612,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
         "/resend-verification",
       ]) {
         const response = yield* Effect.promise(() =>
-          post(handler, path, { email: "junk", password: strongPassword }),
+          post(app, path, { email: "junk", password: strongPassword }),
         );
         assert.strictEqual(response.status, 400, path);
       }
@@ -661,9 +621,9 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   it.effect("ESS-006: an oversized password answers 400 before reaching the hasher", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(AppLayer);
+      const app = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
-        post(handler, "/password/sign-in", {
+        post(app, "/password/sign-in", {
           email: "ada@example.com",
           password: "x".repeat(PasswordApi.MAX_PASSWORD_LENGTH + 1),
         }),
@@ -693,13 +653,12 @@ describe("AuthHttp + Password (real HTTP)", () => {
   // CSD-003: the handler threads the request's User-Agent onto the session.
   it.effect("CSD-003: sign-up with a User-Agent yields a session that reports it", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(AppLayer);
+      const app = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
         post(
-          handler,
+          app,
           "/password/sign-up",
           { email: "device@example.com", password: strongPassword },
-          undefined,
           { "user-agent": "AwthaqTest/1.0" },
         ),
       );
@@ -717,13 +676,12 @@ describe("AuthHttp + Password (real HTTP)", () => {
     "MNA-001: sign-up with X-Awthaq-Token-Delivery: bearer returns body.token and no Set-Cookie; the token authenticates a bearer request",
     () =>
       Effect.gen(function* () {
-        const { handler } = TestAuth.app(AppLayer);
+        const app = TestAuth.app(AppLayer);
         const signedUp = yield* Effect.promise(() =>
           post(
-            handler,
+            app,
             "/password/sign-up",
             { email: "native@example.com", password: strongPassword },
-            undefined,
             { [Api.TOKEN_DELIVERY_HEADER]: "bearer" },
           ),
         );
@@ -737,7 +695,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
         // The bearer token is a real credential: it authenticates change-password.
         const changed = yield* Effect.promise(() =>
-          handler(
+          app.handler(
             new Request("http://localhost/change-password", {
               method: "POST",
               headers: {
@@ -762,25 +720,74 @@ describe("AuthHttp + Password (real HTTP)", () => {
       }),
   );
 
+  // Plan 21 (ADR-EA-045): a bearer client follows `set-auth-token`; `changePassword` superseded the presented
+  // token, so presenting it again is refresh-token reuse (RRS-003) and revokes the whole family.
+  it.effect(
+    "a bearer changePassword names the new token in set-auth-token, so a client following the header stays signed in",
+    () =>
+      Effect.gen(function* () {
+        const app = TestAuth.app(AppLayer);
+        const signedUp = yield* Effect.promise(() =>
+          post(
+            app,
+            "/password/sign-up",
+            { email: "rotating@example.com", password: strongPassword },
+            { [Api.TOKEN_DELIVERY_HEADER]: "bearer" },
+          ),
+        );
+        const { token } = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+          yield* Effect.promise(() => signedUp.json()),
+        );
+        const bearer = (path: string, current: string | undefined, init: RequestInit = {}) =>
+          Effect.promise(() =>
+            app.handler(
+              new Request(`http://localhost${path}`, {
+                ...init,
+                headers: {
+                  "content-type": "application/json",
+                  authorization: `Bearer ${current}`,
+                  [Api.TOKEN_DELIVERY_HEADER]: "bearer",
+                },
+              }),
+            ),
+          );
+        const changed = yield* bearer("/change-password", token, {
+          method: "POST",
+          body: JSON.stringify({
+            currentPassword: strongPassword,
+            newPassword: "a whole new strong password",
+          }),
+        });
+        assert.strictEqual(changed.status, 200);
+        // What `bearerTransformClient` stores: the header when present, else what it already held.
+        const followed = changed.headers.get(Api.ROTATED_TOKEN_HEADER) ?? token;
+        assert.strictEqual((yield* bearer("/session", followed)).status, 200);
+        assert.strictEqual((yield* bearer("/session", followed)).status, 200);
+      }),
+  );
+
   it.effect("MNA-001: sign-in without the header sets the cookie and carries no body token", () =>
     Effect.gen(function* () {
       const mailer = capturingMailer();
-      const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
+      const app = TestAuth.app(buildAppLayer(mailer.layer));
       yield* Effect.promise(() =>
-        post(handler, "/password/sign-up", {
+        post(app, "/password/sign-up", {
           email: "cookie@example.com",
           password: strongPassword,
         }),
       );
-      yield* verifyLatestSignUp(handler, mailer);
+      yield* verifyLatestSignUp(app, mailer);
       const response = yield* Effect.promise(() =>
-        post(handler, "/password/sign-in", {
+        post(app, "/password/sign-in", {
           email: "cookie@example.com",
           password: strongPassword,
         }),
       );
       assert.strictEqual(response.status, 200);
-      assert.match(cookieFrom(response), /^__Host-session=/);
+      assert.strictEqual(
+        CookieAssertions.findSetCookie(response, Api.SESSION_COOKIE_NAME).name,
+        Api.SESSION_COOKIE_NAME,
+      );
       const body = Schema.decodeUnknownSync(SessionContract.SessionDto)(
         yield* Effect.promise(() => response.json()),
       );
@@ -791,20 +798,19 @@ describe("AuthHttp + Password (real HTTP)", () => {
   it.effect("MNA-001: sign-in with bearer delivery returns the token and no cookie", () =>
     Effect.gen(function* () {
       const mailer = capturingMailer();
-      const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
+      const app = TestAuth.app(buildAppLayer(mailer.layer));
       yield* Effect.promise(() =>
-        post(handler, "/password/sign-up", {
+        post(app, "/password/sign-up", {
           email: "device@example.com",
           password: strongPassword,
         }),
       );
-      yield* verifyLatestSignUp(handler, mailer);
+      yield* verifyLatestSignUp(app, mailer);
       const response = yield* Effect.promise(() =>
         post(
-          handler,
+          app,
           "/password/sign-in",
           { email: "device@example.com", password: strongPassword },
-          undefined,
           { [Api.TOKEN_DELIVERY_HEADER]: "bearer" },
         ),
       );
@@ -823,10 +829,10 @@ describe("AuthHttp + Password (real HTTP)", () => {
   it.effect("native first sign-up and sign-in with no cookies and no CSRF pair succeed", () =>
     Effect.gen(function* () {
       const mailer = capturingMailer();
-      const { handler } = TestAuth.app(buildAppLayer(mailer.layer));
+      const app = TestAuth.app(buildAppLayer(mailer.layer));
       const cookieless = (path: string, body: unknown, extra: Record<string, string> = {}) =>
         Effect.promise(() =>
-          handler(
+          app.handler(
             new Request(`http://localhost${path}`, {
               method: "POST",
               headers: {
@@ -841,7 +847,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
       const credentials = { email: "native@example.com", password: strongPassword };
       const signedUp = yield* cookieless("/password/sign-up", credentials);
       assert.strictEqual(signedUp.status, 200);
-      yield* verifyLatestSignUp(handler, mailer);
+      yield* verifyLatestSignUp(app, mailer);
       const signedIn = yield* cookieless("/password/sign-in", credentials);
       assert.strictEqual(signedIn.status, 200);
       const body = Schema.decodeUnknownSync(SessionContract.SessionDto)(
@@ -863,13 +869,12 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   it.effect("MNA-001: an unknown delivery mode answers 400 and mints no session", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(AppLayer);
+      const app = TestAuth.app(AppLayer);
       const response = yield* Effect.promise(() =>
         post(
-          handler,
+          app,
           "/password/sign-up",
           { email: "typo@example.com", password: strongPassword },
-          undefined,
           { [Api.TOKEN_DELIVERY_HEADER]: "beaerr" },
         ),
       );
@@ -877,7 +882,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
       assert.isNull(response.headers.get("set-cookie"));
       // Rejected before the account exists: the same address signs up cleanly afterwards.
       const retry = yield* Effect.promise(() =>
-        post(handler, "/password/sign-up", { email: "typo@example.com", password: strongPassword }),
+        post(app, "/password/sign-up", { email: "typo@example.com", password: strongPassword }),
       );
       assert.strictEqual(retry.status, 200);
     }),
@@ -900,16 +905,16 @@ describe("AuthHttp + Password (real HTTP)", () => {
           });
         }),
       );
-      const { handler } = TestAuth.app(buildAppLayer(mailer.layer, {}, sessionsDown));
+      const app = TestAuth.app(buildAppLayer(mailer.layer, {}, sessionsDown));
       const signedUp = yield* Effect.promise(() =>
-        post(handler, "/password/sign-up", { email: "cy@example.com", password: strongPassword }),
+        post(app, "/password/sign-up", { email: "cy@example.com", password: strongPassword }),
       );
       assert.strictEqual(signedUp.status, 200);
-      yield* verifyLatestSignUp(handler, mailer);
+      yield* verifyLatestSignUp(app, mailer);
 
       down.value = true;
       const response = yield* Effect.promise(() =>
-        post(handler, "/password/sign-in", { email: "cy@example.com", password: strongPassword }),
+        post(app, "/password/sign-in", { email: "cy@example.com", password: strongPassword }),
       );
       assert.strictEqual(response.status, 503);
       // The wire error carries only its static `operation` label, never a cause.

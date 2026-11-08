@@ -37,7 +37,7 @@ Feature: Admin and Impersonation
 
   # BEH-EA-211 — spec/behaviors/27-admin-impersonation.md
   @BEH-EA-211
-  Rule: resolvePrincipal closes the loop to UserPrincipal.actingAs
+  Rule: Credentials' session resolution closes the loop to UserPrincipal.actingAs
 
     @REQ-EA-605
     Scenario: Resolving the principal for an impersonation session's own token surfaces actingAs on the principal
@@ -103,6 +103,15 @@ Feature: Admin and Impersonation
       Given a signed-in admin permitted to impersonate
       When the admin calls "admin.impersonate" for an unknown user id
       Then the call is rejected with "404 Not Found" and the typed error "AdminTargetNotFound"
+      And no new session is issued for the target user
+      And the impersonation audit trail is still empty
+
+    # ADR-EA-045: the impersonation endpoints declare `SessionLifecycle.Swaps`, which delivers by cookie only.
+    @REQ-EA-1331
+    Scenario: A bearer request to impersonate is refused before anything is minted
+      Given a signed-in admin permitted to impersonate
+      When the admin calls "admin.impersonate" for a target user asking for bearer delivery
+      Then the call is rejected with "400 Bad Request"
       And no new session is issued for the target user
       And the impersonation audit trail is still empty
 

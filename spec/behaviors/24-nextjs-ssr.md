@@ -4,15 +4,15 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-24 |
-> | Revision | 1.1 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Examples updated to the shipped signatures (`getSession(headers, runtime)`, `withNextCookies(response, jar)`) and the banner given implementation pointers; requirement texts unchanged (NAM-010, BO-008, IC-006, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Examples updated to the shipped signatures (`getSession(headers, runtime)`, `withNextCookies(response, jar)`) and the banner given implementation pointers; requirement texts unchanged (NAM-010, BO-008, IC-006, CCR-EA-006) <br> 1.2 (2026-10-18): BEH-EA-185 reads and renders under the runtime's `SessionCookieConfig`; BEH-EA-188 `hasSessionCookie` takes the cookie mode (plan 11 phase 0) <br> 1.3 (2026-11-08): BEH-EA-344, one in-process user agent (`UserAgent`, `CookieStore`); BEH-EA-189 *As shipped*: the server-action client is that agent under the `trusted` policy and honours `Expires`/`Path` (architecture plan 20) |
 ---
 
-> Implemented in `@awthaq/web` — the framework-neutral core (`Session.ts`, `HasSessionCookie.ts`, `CookieJar.ts`, `InProcessClient.ts`; tests `packages/web/test`; BO-004) — and `@awthaq/next`, the Next adapter over it (`GetSession.ts`'s `React.cache` dedup, `WithNextCookies.ts`/`ServerActionClient.ts` name aliases, `edge.ts`, `Seed.ts`; tests `packages/next/test`) — the code and tests behind each BEH id are mapped in [`spec/traceability.md`](../traceability.md) §5. The examples below use the shipped signatures: `getSession(headers, runtime)` and `withNextCookies(response, jar)`. Its BDD scenarios are `@skip @unwired`.
+> Implemented in `@awthaq/web` — the framework-neutral core (`Session.ts`, `HasSessionCookie.ts`, `CookieJar.ts`, `CookieStore.ts`, `UserAgent.ts`, `InProcessClient.ts`; tests `packages/web/test`; BO-004) — and `@awthaq/next`, the Next adapter over it (`GetSession.ts`'s `React.cache` dedup, `WithNextCookies.ts`/`ServerActionClient.ts` name aliases, `edge.ts`, `Seed.ts`; tests `packages/next/test`) — the code and tests behind each BEH id are mapped in [`spec/traceability.md`](../traceability.md) §5. The examples below use the shipped signatures: `getSession(headers, runtime)` and `withNextCookies(response, jar)`. Its BDD scenarios are `@skip @unwired`.
 
 ## BEH-EA-185: `getSession` verifies the cookie against the database
 
@@ -30,6 +30,8 @@ REQUIREMENT: `getSession`, called from a React Server Component or a server
 ```
 
 `usage-examples-v4.md` §13 states this directly: "`getSession` reads the cookie and verifies against the database, server-side." Cookie presence is a legitimate optimistic signal for `proxy.ts` (BEH-EA-188), but it is not proof of a valid session — only a database (or equivalently authoritative) lookup is, which is why the two checks are named separately and used in different places.
+
+**Configured cookie names (IC-007, plan 11).** `getSession` reads the session and impersonation cookies under the runtime's `SessionCookieConfig`, so under `SessionCookie.SecureDomain` it reads `__Secure-session` and `__Secure-impersonation`, never the default names. `Session.rotated` carries the rotation already rendered under that config (name, `Domain`, `SameSite`, and a `Max-Age` computed from the runtime `Clock`) for the cookie kind it came in on; `applyRotatedSession` writes it into the jar unchanged. A planted ordinary session's rotation in the impersonation cookie is not rendered. `getSession` resolves through `Credentials` (the user tier, ADR-EA-042); the dedup unit an adapter injects is the whole cookie-header resolution (`resolveSessionCookies`; `@awthaq/next` passes `React.cache(resolveSessionCookies)`).
 
 _Previous: [BEH-EA-184](23-react.md#beh-ea-184-one-evaluation-path-across-server-client-and-tests) | Next: [BEH-EA-186](24-nextjs-ssr.md#beh-ea-186-server-side-decide-produces-the-client-seed)_
 
@@ -91,6 +93,8 @@ REQUIREMENT: `proxy.ts` MUST perform only a database-free check for redirect
 
 `usage-examples-v4.md` §13 labels this explicitly: "optimistic redirect only, never the boundary." research/11-client-frontend.md's Q84 gives the platform reason this is not merely a stylistic choice: Next.js's own guidance says Proxy "runs on every route... only read the session from the cookie... and avoid database checks," so a database-backed verification cannot live there without a real performance cost on every request — the real check belongs in the page's data-access layer, where `getSession` (BEH-EA-185) runs it once per request that actually needs it.
 
+**Configured cookie name (IC-007, plan 11).** `hasSessionCookie(request, cookie)` takes the session-cookie mode (the same partial given to `SessionCookie.config`; `{}` for the default) and checks that cookie's name (`__Secure-session` under `SecureDomain`). The argument is required, so a `SecureDomain` host cannot forget it. It imports nothing from `@awthaq/core`/`@awthaq/server` at runtime (the naming rule is `Api.sessionCookieName`) and is also exported from `@awthaq/web/cookies`.
+
 **Stateless edge tier (BO-006, decision D1 option C).** Presence alone lets a forged or long-expired opaque cookie through the edge. `@awthaq/jwt`'s `JwtConfig.sessionCookie` (default off) makes every cookie-authenticated response also carry a `__Host-`-prefixed, `HttpOnly`, `Secure`, `SameSite=Strict` cookie holding a JWT of the same principal that expires with the cookie (default 5 minutes); `@awthaq/next/edge`'s `verifySessionJwt` verifies it against the JWKS through the lite verifier (`@awthaq/jwt/verify`, free of `@awthaq/core`/`@awthaq/server` — pinned by an import-graph test) and yields the claims or `undefined`. It is still a redirect signal: the mirror is a copy, a revoked session's mirror keeps verifying for at most its `ttl` (sign-out does not clear it), and the boundary stays `getSession`. Edge deployments: `hasSessionCookie` and `@awthaq/next/edge` are the edge-safe entries; `getSession`/`serverActionClient` need the origin (Sessions/Users/SQL).
 
 _Previous: [BEH-EA-187](24-nextjs-ssr.md#beh-ea-187-decide-against-attributes-project-content-separately) | Next: [BEH-EA-189](24-nextjs-ssr.md#beh-ea-189-withnextcookies-bridges-set-cookie-from-server-actions)_
@@ -120,6 +124,8 @@ The archive cookbook (`usage-examples-v4.md` §13) sketched this as `withNextCoo
 **Implementation (BO-002).** The shipped surface is `serverActionClient`/`makeServerActionClient` (`@awthaq/next`): an `HttpApiClient` over the application's own composed `api` whose in-process transport dispatches to the application's web handler, forwards the action's `Cookie`/`User-Agent`/`X-Forwarded-For`, echoes the CSRF cookie as `x-csrf-token` (with the bootstrap retry of BEH-EA-170 for a cold action), and passes every response through `withNextCookies` into the action's jar. `withNextCookies` itself stays exported for callers who dispatch on their own.
 
 **Framework-neutral core (BO-004/BO-010).** The bridge, the client and `getSession` are framework-neutral and live in `@awthaq/web` (`applyResponseCookies`, `inProcessClient`/`makeInProcessClient`, `getSession`/`makeGetSession`); `@awthaq/next`'s names are aliases over them, so an Astro or SvelteKit adapter reuses the core unchanged. `CookieJarLike.set` always receives an explicit `path` (defaulted to `/` when the `Set-Cookie` omits it), which is what lets SvelteKit's `Cookies.set` (path required), Astro's `AstroCookies.set` and Next's `cookies()` all satisfy it structurally.
+
+*As shipped (plan 20):* the in-process client is `UserAgent` ([BEH-EA-344](24-nextjs-ssr.md#beh-ea-344-an-in-process-user-agent-keeps-cookie-state-the-way-a-browser-does)) under the `trusted` policy, seeded with the action's incoming cookies and mirroring every `Set-Cookie` into the framework jar; a cookie expired by `Expires` alone, or scoped to another `Path`, no longer reaches the action's later calls.
 
 _Previous: [BEH-EA-188](24-nextjs-ssr.md#beh-ea-188-proxyts-is-an-optimistic-redirect-never-the-boundary) | Next: [BEH-EA-190](24-nextjs-ssr.md#beh-ea-190-server-actions-re-resolve-the-subject-per-invocation)_
 
@@ -182,4 +188,36 @@ REQUIREMENT: The client MUST seed qadi's atoms from the server's
 
 `usage-qadi.md` §12.1 wires this exactly: `hydrateDecisions` reads the server's dehydrated entries and the resolved `subject` to populate the atom store's initial values, so a `Can` gate for a policy the server already decided renders its real verdict immediately. Browser-only attribute resolvers (ones the server evaluated with data the browser cannot independently fetch) stay correctly pending only until the client's own evaluation catches up — the server seed exists precisely to cover that gap, per `usage-qadi.md` §12.1's note that such attributes "stay pending, which is correct."
 
-_Previous: [BEH-EA-191](24-nextjs-ssr.md#beh-ea-191-one-subject-provided-once-per-page-render) | Next: [BEH-EA-193](25-testing-harness.md#beh-ea-193-testauthlayer-is-the-whole-pipeline-over-memory)_
+_Previous: [BEH-EA-191](24-nextjs-ssr.md#beh-ea-191-one-subject-provided-once-per-page-render) | Next: [BEH-EA-344](24-nextjs-ssr.md#beh-ea-344-an-in-process-user-agent-keeps-cookie-state-the-way-a-browser-does)_
+
+## BEH-EA-344: An in-process user agent keeps cookie state the way a browser does
+
+```ts
+const browser = UserAgent.make({ handler })                       // policy "browser", origin http://localhost
+await browser.request("POST", "/password/sign-in", { json })      // the session cookie lands in its store
+await browser.request("GET", "/session")                          // ...and is sent back; no cookie handling here
+await browser.request("GET", "/oauth/acme/callback?…", { site: "cross-site", navigation: true })
+```
+
+```text
+REQUIREMENT: `@awthaq/web`'s `UserAgent` MUST store a `Set-Cookie` per
+             RFC 6265bis §5.3 (expiry by `Max-Age` over `Expires`, the default
+             path, host-only vs `Domain`) and send it per §5.4 (path and domain
+             match, `Secure`, `SameSite` by the request's site, longer paths
+             first). Under the `browser` policy it MUST refuse a cookie a
+             conforming browser refuses (the `__Host-`/`__Secure-` prefix
+             rules, a `Secure` cookie from an insecure origin, `SameSite=None`
+             without `Secure`, a `Domain` that does not domain-match the host),
+             and by default a refusal MUST fail the request. Under the
+             `trusted` policy (a server action calling its own application)
+             `Domain`, `Secure` and `SameSite` are not enforced; expiry and
+             `Path` are. In bearer delivery it MUST send no cookie, MUST send
+             `X-Awthaq-Token-Delivery: bearer` and `Authorization`, and MUST
+             follow `set-auth-token` and `x-awthaq-session-ended`.
+```
+
+Four hand-made cookie jars, seven `Set-Cookie` parsers and twenty-one hand-threaded reads each re-implemented the user agent its test needed, and none applied the rules that make a browser *refuse* a cookie: the class of bug CSS-001 was (a `__Host-` cookie with a narrowed `Path`) passed every suite but one. One agent now carries the cookie state, the CSRF echo (`request` echoes `__Host-csrf` as `x-csrf-token` on an unsafe method, as a page script would; `fetch`/`httpClient` are the network and leave the echo to the application's CSRF client half), the bearer token, and a cross-site request's `Sec-Fetch-Site`/`Origin` (`site`, `navigation`). A fresh agent's first unsafe request carries no `Cookie` header and so relies on the cookie-less exemption of [BEH-EA-077](10-csrf.md#beh-ea-077-only-unsafe-methods-are-protected-safe-methods-are-exempt-by-construction); `UserAgent.client(agent, api)` adds `AuthClient.csrfClientLayer`'s bootstrap retry for a typed client. Partition keys and public-suffix checks are not modelled. The server-action client (BEH-EA-189) and `@awthaq/test`'s `TestAuth.app` agents ([BEH-EA-333](25-testing-harness.md#beh-ea-333-testauthapp-serves-the-composition-and-its-context-together)) are this module.
+
+*Implementation* (`packages/web/src/CookieStore.ts`, `packages/web/src/UserAgent.ts`, the one parser `CookieJar.parseSetCookie`; tests `packages/web/test/CookieStore.test.ts`, `packages/web/test/UserAgent.test.ts`, the expiry and path cases of `packages/web/test/InProcessClient.test.ts`).
+
+_Previous: [BEH-EA-192](24-nextjs-ssr.md#beh-ea-192-hydratedecisions-seeds-the-client-before-first-re-decide) | Next: [BEH-EA-193](25-testing-harness.md#beh-ea-193-testauthlayer-is-the-whole-pipeline-over-memory)_

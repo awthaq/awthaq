@@ -40,6 +40,8 @@ export type CallbackFailureReason =
   | "userinfo-sub-mismatch"
   | "no-subject"
   | "account-already-linked"
+  // ADR-EA-043: the identity's anchor changed under the resolution twice in a row.
+  | "identity-contended"
   // ADR-EA-038: the user was erased between the provider's proof and the session.
   | "account-missing"
   | "provider-unavailable"

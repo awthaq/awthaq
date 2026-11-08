@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-033 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-11-08 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (ELC-001, JH-002/003/004, PERS-003, NAM-002) <br> 1.1 (2026-10-13): Decision 5 names `SignUp.vet` and `SignIn.clear` as the consulting call sites (ADR-EA-038, architecture plan 01) |
+> | Change History | 1.0 (2026-09-29): Initial release (ELC-001, JH-002/003/004, PERS-003, NAM-002) <br> 1.1 (2026-10-13): Decision 5 names `SignUp.vet` and `SignIn.clear` as the consulting call sites (ADR-EA-038, architecture plan 01) <br> 1.2 (2026-11-08): Negative consequence: a host on `AuthHost` passes taps through `taps`, built over the composition's own points (ADR-EA-044, architecture plan 15) |
 
 ---
 
@@ -36,4 +36,4 @@ A hook point's tap registry lived in the closure of the module that declared it.
 
 **Positive**: compositions are independent; the compiler enforces INV-EA-005; the resolved order is inspectable.
 
-**Negative**: a tap built in a *different* layer graph from its point silently has no effect (the compiler cannot see two graphs); a test that builds the point and the tap in separate `Effect.provide` calls must merge them.
+**Negative**: a tap built in a *different* layer graph from its point silently has no effect (the compiler cannot see two graphs); a test that builds the point and the tap in separate `Effect.provide` calls must merge them. A host on `AuthHost` passes taps through `taps`, which is built over the composition's own point instances; a tap on an undeclared point fails to compile ([ADR-EA-044](044-host-composition.md)).

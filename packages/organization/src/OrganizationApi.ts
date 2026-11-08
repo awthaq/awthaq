@@ -9,7 +9,7 @@
 // Ticket 09 establishes this group empty-but-real; tickets 11/12 add the
 // organization-CRUD and membership endpoints below in the same pass.
 
-import { Api } from "@awthaq/api";
+import { Api, SessionLifecycle } from "@awthaq/api";
 import { HookPoint } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -347,7 +347,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
       payload: SetActivePayload,
       success: ActiveContextDto,
       error: MembershipNotFound,
-    }),
+    }).middleware(SessionLifecycle.Refreshes),
   )
   .add(
     HttpApiEndpoint.get("getActive", "/organization/active", {
@@ -359,7 +359,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
       payload: SetActiveTeamPayload,
       success: ActiveContextDto,
       error: TeamMembershipNotFound,
-    }),
+    }).middleware(SessionLifecycle.Refreshes),
   )
   .add(
     HttpApiEndpoint.get("getActiveMember", "/organization/active-member", {
@@ -461,7 +461,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         OwnerInvariantViolation,
         HookPoint.HookAborted,
       ],
-    }),
+    }).middleware(SessionLifecycle.Refreshes),
   )
   .add(
     HttpApiEndpoint.post("invite", "/organization/:organizationId/invitations", {
@@ -529,7 +529,7 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
         TeamMemberLimitReached,
         HookPoint.HookAborted,
       ],
-    }),
+    }).middleware(SessionLifecycle.Refreshes),
   )
   .add(
     HttpApiEndpoint.post("rejectInvitation", "/organization/invitations/:invitationId/reject", {

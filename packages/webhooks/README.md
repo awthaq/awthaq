@@ -16,9 +16,8 @@ Webhooks.Webhooks.layer.pipe(
 
 // The delivery machinery: the relay that tails the audit log + the worker that sends. One per deployment.
 Webhooks.Webhooks.background().pipe(
-  Layer.provide(EventRelay.layerCursorSql), // the relay's durable position (core migration 27)
   Layer.provide(WebhookTransport.layerNodePinned), // connects to the address the host was pinned to (below)
-  /* + AuditLog, WebhookRecords, Encryption, RateLimiter, HostResolver, Crypto */
+  /* + AuditLog and the RelayCursorStore (both from Persistence.sql(); the position is core migration 27), WebhookRecords, Encryption, RateLimiter, HostResolver, Crypto */
 );
 ```
 

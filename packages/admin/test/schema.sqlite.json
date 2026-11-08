@@ -1,0 +1,181 @@
+{
+  "migrations": [
+    "create_admin_impersonation",
+    "create_admin_impersonation_session_id_index",
+    "add_admin_impersonation_expires_at",
+    "create_admin_impersonation_started_at_index",
+    "create_admin_impersonation_chain",
+    "add_admin_impersonation_immutability_triggers",
+    "add_admin_impersonation_tenant_id"
+  ],
+  "schema": {
+    "tables": {
+      "admin_impersonation": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "adminUserId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "targetUserId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "sessionId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "reason",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "startedAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "endedAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "endedBy",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "expiresAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "tenantId",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "admin_impersonation_chain": [
+        {
+          "name": "seq",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "episodeId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "prevHash",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "payload",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "rowHash",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ]
+    },
+    "indexes": [
+      {
+        "name": "admin_impersonation_session_id",
+        "table": "admin_impersonation",
+        "columns": [
+          "sessionId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "admin_impersonation_started_at",
+        "table": "admin_impersonation",
+        "columns": [
+          "startedAt",
+          "id"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "admin_impersonation_tenant_started_at",
+        "table": "admin_impersonation",
+        "columns": [
+          "tenantId",
+          "startedAt",
+          "id"
+        ],
+        "unique": false,
+        "partial": false
+      }
+    ],
+    "triggers": [
+      {
+        "name": "admin_impersonation_chain_no_delete",
+        "table": "admin_impersonation_chain"
+      },
+      {
+        "name": "admin_impersonation_chain_no_update",
+        "table": "admin_impersonation_chain"
+      },
+      {
+        "name": "admin_impersonation_immutable",
+        "table": "admin_impersonation"
+      },
+      {
+        "name": "admin_impersonation_no_delete",
+        "table": "admin_impersonation"
+      }
+    ]
+  }
+}

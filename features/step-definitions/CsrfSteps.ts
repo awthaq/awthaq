@@ -7,6 +7,7 @@
 // it did not reject.
 import { Api } from "@awthaq/api";
 import { AuthClient } from "@awthaq/client";
+import { UserAgent } from "@awthaq/test";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
@@ -261,14 +262,12 @@ export const csrfSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* (_client: string, _atom: string, layerClient: string) {
       assert.match(layerClient, /^HttpApiMiddleware\.layerClient\(CsrfProtection/);
       const app = yield* appHandle();
-      const token = yield* issueCookie();
-      // A browser's jar: the transport carries the cookie the server issued, the client layer
-      // echoes it in the header (BEH-EA-170) — the two halves of the double-submit pair.
-      const shim: typeof globalThis.fetch = (input, init) => {
-        const headers = new Headers(init?.headers);
-        headers.set("cookie", cookieHeaderFor(token));
-        return app.handler(new Request(input, { ...init, headers }));
-      };
+      // A browser: its first page load (a safe request) is issued the cookie, the transport carries
+      // it back and the client layer echoes it in the header (BEH-EA-170) — the two halves of the
+      // double-submit pair.
+      const browser = UserAgent.make({ handler: app.handler });
+      yield* Effect.promise(() => browser.request("GET", "/app/thing"));
+      const shim: typeof globalThis.fetch = browser.fetch;
       const answer = yield* Effect.gen(function* () {
         const client = yield* AuthClient.make(AppApi, { baseUrl: "http://localhost" });
         return yield* client.app.post();
@@ -278,7 +277,7 @@ export const csrfSteps = defineSteps<World>(({ Given, When, Then }) => {
             FetchHttpClient.layer,
             Layer.succeed(FetchHttpClient.Fetch, shim),
             AuthClient.csrfClientLayer({
-              readCookie: (name) => (name === Api.CSRF_COOKIE_NAME ? token : undefined),
+              readCookie: browser.cookies.value,
               bootstrapRetry: false,
             }),
           ),

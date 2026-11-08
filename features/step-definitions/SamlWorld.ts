@@ -23,7 +23,7 @@ import {
   Sso,
   XmlSignatureNode,
 } from "@awthaq/saml";
-import { TestAuth } from "@awthaq/test";
+import { Rendezvous, TestAuth } from "@awthaq/test";
 
 type SamlConfigInput = Saml.SamlConfigInput;
 import { inflateRawSync } from "node:zlib";
@@ -164,6 +164,7 @@ const buildLive = (
   config: Partial<SamlConfigInput>,
   served: ReadonlyMap<string, string>,
   preferred: Sso.SsoProtocol | undefined,
+  meeting: number | undefined,
 ) => {
   // The suite's output is not one console line per rejection: the base loggers are replaced by the capture.
   const Capture = Logger.layer([
@@ -189,6 +190,8 @@ const buildLive = (
       // The same layer the bundle projects `SamlRecords` from (one instance), plus its `MemoryEnvelopes` seam.
       SamlRecords.layerMemory,
     ),
+    // ADR-EA-043: the first `meeting` anchor reads finish together, so that many concurrent sign-ins all read first.
+    ...(meeting === undefined ? {} : { decorate: Rendezvous.anchorReadsMeet(meeting) }),
   });
   return Sso.Sso.layer.pipe(
     Layer.provide(preferred === undefined ? Layer.empty : Sso.config({ preferred })),
@@ -210,8 +213,9 @@ const buildApp = (
   config: Partial<SamlConfigInput>,
   served: ReadonlyMap<string, string>,
   preferred: Sso.SsoProtocol | undefined,
+  meeting: number | undefined,
 ): AppHandle => {
-  const app = TestAuth.app(buildLive(observations, config, served, preferred));
+  const app = TestAuth.app(buildLive(observations, config, served, preferred, meeting));
   return {
     run: (effect) => app.run(Effect.exit(effect)),
     close: Effect.promise(() => app.dispose()),
@@ -275,6 +279,8 @@ export interface WorldShape {
   readonly config: Ref.Ref<Partial<SamlConfigInput>>;
   /** What the IdP metadata URLs serve (BEH-EA-318): a scenario edits it, the World's fetcher reads it. */
   readonly metadata: Map<string, string>;
+  /** ADR-EA-043: how many concurrent sign-ins must all read the account anchor before any writes. */
+  readonly anchorMeeting: Ref.Ref<number | undefined>;
   /** Which protocol the `Sso` dispatcher prefers when both route a hint (BEH-EA-317); default the plugin's. */
   readonly ssoPreference: Ref.Ref<Sso.SsoProtocol | undefined>;
   readonly started: Ref.Ref<boolean>;
@@ -325,6 +331,7 @@ export const WorldLive = Layer.effect(
       observations,
       config: yield* Ref.make<Partial<SamlConfigInput>>({}),
       metadata: new Map(),
+      anchorMeeting: yield* Ref.make<number | undefined>(undefined),
       ssoPreference: yield* Ref.make<Sso.SsoProtocol | undefined>(undefined),
       started: yield* Ref.make(false),
       app,
@@ -351,6 +358,7 @@ const currentApp = Effect.gen(function* () {
     yield* Ref.get(world.config),
     world.metadata,
     yield* Ref.get(world.ssoPreference),
+    yield* Ref.get(world.anchorMeeting),
   );
   yield* Ref.set(world.app, fresh);
   return fresh;

@@ -1,12 +1,12 @@
 // @awthaq/core — Persistence
 //
 // Plan 02 (ADR-EA-041): the matched store bundles. Each core service (`Users`, `Accounts`, `Sessions`,
-// `Verification`, `AuditLog`) is written once over a store port; a composition provides the five
-// stores, and the transaction that goes with them, once. Matching is the point: a bundle supplies every
-// store AND the right `SqlTransaction` (a no-op beside the `Ref` stores, a real one over the same
-// `SqlClient` beside the SQL stores), so a composition cannot pair a memory store with a SQL
-// transaction by accident, which used to leave a swapped module's writes silently outside it
-// (INV-EA-017, DRS-006).
+// `Verification`, `AuditLog`) is written once over a store port; a composition provides the six
+// stores (the sixth, `RelayCursorStore`, is the event relay's position, plan 23) and the transaction
+// that goes with them, once. Matching is the point: a bundle supplies every store AND the right
+// `SqlTransaction` (a no-op beside the `Ref` stores, a real one over the same `SqlClient` beside the
+// SQL stores), so a composition cannot pair a memory store with a SQL transaction by accident, which
+// used to leave a swapped module's writes silently outside it (INV-EA-017, DRS-006).
 //
 // Swapping one store is still legal (ADR-EA-014), and explicit:
 //
@@ -19,19 +19,13 @@ import {
   AccountStore,
   AuditLogStore,
   type Encryption,
+  RelayCursorStore,
   SessionStore,
   SqlTransaction,
   UserStore,
   VerificationStore,
 } from "@awthaq/ports";
-import {
-  AccountStoreSql,
-  AuditLogStoreSql,
-  Repositories,
-  SessionStoreSql,
-  UserStoreSql,
-  VerificationStoreSql,
-} from "@awthaq/sql";
+import { CoreStoresSql, type SealedColumn } from "@awthaq/sql";
 import * as Layer from "effect/Layer";
 import type * as SqlClient from "effect/sql/SqlClient";
 
@@ -46,16 +40,20 @@ export const memory = Layer.mergeAll(
   SessionStore.layerMemory,
   VerificationStore.layerMemory,
   AuditLogStore.layerMemory,
+  RelayCursorStore.layerMemory,
   SqlTransaction.layerNoop,
 );
 
-export interface SqlOptions {
-  /**
-   * CSG-006: seal `users.metadata` and `sessions.ipAddress`/`userAgent` at rest through `Encryption`
-   * (AAD `<entity>:<id>:<field>`). Default `false`. Provider tokens are always sealed.
-   */
-  readonly encryptPii?: boolean;
-}
+export type SqlOptions = CoreStoresSql.Options;
+
+/**
+ * What `sql(...)` provides: the stores, `SqlTransaction`, and the `SealedColumn.Deployed` list (named
+ * here so declaration emit can reach `Deployed` through this module, TS2883).
+ */
+export type SqlProvides =
+  | CoreStoresSql.Provides
+  | SealedColumn.Deployed
+  | SqlTransaction.SqlTransaction;
 
 /** What `sql(...)` requires of a composition: the one client, and the encryption provider tokens are sealed with. */
 export type SqlRequirements = SqlClient.SqlClient | Encryption.Encryption;
@@ -63,29 +61,6 @@ export type SqlRequirements = SqlClient.SqlClient | Encryption.Encryption;
 /**
  * Every SQL store over ONE `SqlClient`, and `SqlTransaction.layerSql` over the same client
  * (INV-EA-017: the core identity tables share one transaction domain). Requires `SqlClient` and
- * `Encryption` (the accounts repository seals provider tokens).
+ * `Encryption` (the accounts adapter seals provider tokens). It is `@awthaq/sql`'s `CoreStoresSql.layer`.
  */
-export const sql = (options?: SqlOptions) =>
-  Layer.mergeAll(
-    UserStoreSql.layer,
-    AccountStoreSql.layer,
-    SessionStoreSql.layer,
-    VerificationStoreSql.layer,
-    AuditLogStoreSql.layer,
-    SqlTransaction.layerSql,
-  ).pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        options?.encryptPii === true
-          ? Repositories.UsersRepositoryEncryptedLive
-          : Repositories.UsersRepositoryLive,
-        options?.encryptPii === true
-          ? Repositories.SessionsRepositoryEncryptedLive
-          : Repositories.SessionsRepositoryLive,
-        Repositories.AccountsRepositoryLive,
-        Repositories.VerificationRepositoryLive,
-        Repositories.VerificationReservationsRepositoryLive,
-        Repositories.AuditLogRepositoryLive,
-      ),
-    ),
-  );
+export const sql = CoreStoresSql.layer;

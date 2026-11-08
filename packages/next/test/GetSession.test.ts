@@ -7,7 +7,7 @@
 // wrapped `getSession` still resolves a real session.
 import { Api } from "@awthaq/api";
 import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
-import { Authentication } from "@awthaq/server";
+import { Credentials } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -19,7 +19,7 @@ import { applyRotatedSession, getSession } from "../src/GetSession.ts";
 const TestLayer = Layer.mergeAll(
   Users.layer.pipe(Layer.provide(Persistence.memory)),
   Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-  Authentication.PrincipalResolverLive,
+  Credentials.PrincipalResolverLive,
 ).pipe(
   Layer.provideMerge(NodeCrypto.layer),
   Layer.provideMerge(AuthEvents.layer),

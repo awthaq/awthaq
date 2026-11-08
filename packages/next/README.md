@@ -17,6 +17,10 @@ in-process client — lives in [`@awthaq/web`](../web/README.md) (BO-004), which
 an Astro or SvelteKit adapter reuses; this package adds only what is
 Next-specific: the `React.cache` per-render dedup on `getSession`, the
 `withNextCookies`/`serverActionClient` names, the RSC seeds and the `edge` tier.
+The in-process client is `@awthaq/web`'s `UserAgent` under its `trusted`
+policy, so within one action it honours a cookie's `Expires` and `Path`
+(a cookie expired by `Expires` alone, or scoped to another path, is not sent
+on the action's later calls).
 
 This package deliberately ships no `ManagedRuntime` construction of its
 own — every function below takes an explicit runtime (or, for
@@ -78,7 +82,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 export function proxy(request: NextRequest) {
-  if (!hasSessionCookie(request) && request.nextUrl.pathname.startsWith("/app")) {
+  if (!hasSessionCookie(request, {}) && request.nextUrl.pathname.startsWith("/app")) {
     return NextResponse.redirect(new URL("/sign-in", request.url));
   }
 }
@@ -89,6 +93,9 @@ function in `middleware.ts` and export it as `middleware`. The recipes in this
 README assume Next.js 15 or newer (`headers()`/`cookies()` are async there).
 
 `hasSessionCookie` checks presence only — a forged or expired cookie passes.
+The second argument is the same partial you give `SessionCookie.config(...)`
+(`{}` for the default): under `SessionCookie.SecureDomain` it checks
+`__Secure-session`, and `getSession` reads that configured name too.
 This exists purely to skip rendering a page the real boundary below would
 reject anyway; it is never itself the boundary.
 
@@ -247,7 +254,7 @@ composed, and the action's cookies and client metadata ride along:
 // app/lib/handler.ts — built once, next to the pinned runtime
 import "server-only";
 import * as HttpRouter from "effect/http/HttpRouter";
-import { AppRoutesLayer } from "./layer.ts"; // AuthHttp.routes(AppApi, ...) plus your services
+import { AppRoutesLayer } from "./layer.ts"; // AuthHost.layer(auth, { persistence, csrf }) plus your ports and HttpRouter.layer
 
 declare global {
   // eslint-disable-next-line no-var
@@ -324,7 +331,8 @@ this package's design exists to make hard to write.
 secret keeps verifying only for `SessionConfig.rotationGrace` (30 seconds by
 default) after that happens.
 `getSession`'s `Session` carries that fresh token on `session.rotated`
-(`undefined` when nothing rotated this call); deliver it in any context that
+(`undefined` when nothing rotated this call; `{ token, cookie }`, the cookie
+already rendered under the runtime's `SessionCookieConfig`); deliver it in any context that
 holds a mutable cookie jar — a Server Action or a Route Handler:
 
 ```ts

@@ -3,7 +3,11 @@
 // clients alike send `x-csrf-token` on guarded mutations. (`AtomHttpApi`
 // casts its client-service requirement away, so nothing but a runtime test
 // would ever notice the header missing.)
+import { AuthCore } from "@awthaq/api";
+import { AuthClient } from "@awthaq/client";
 import { assert, describe, it } from "@effect/vitest";
+import * as Layer from "effect/Layer";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
@@ -11,7 +15,7 @@ import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { afterEach, beforeEach, vi } from "vitest";
-import { ReactAuthClient } from "../src/AuthClientAtom.ts";
+import { ReactAuthClient, sessionAtom } from "../src/AuthClientAtom.ts";
 import { makeReactClient } from "../src/ReactClient.ts";
 import { installFetchStub, jsonResponse, restoreFetch } from "./support/stubFetch.ts";
 
@@ -66,6 +70,63 @@ describe("ReactAuthClient", () => {
       AppClient.query("g1", "n", {});
     };
     assert.isFunction(typeChecks);
+  });
+
+  // Plan 21 (ADR-EA-045, BEH-EA-178): the contract says sign-out ends the session; no call-site key needed.
+  it("a declared mutation refetches sessionAtom with no reactivityKeys", async () => {
+    const requests = installFetchStub({
+      "GET /session": () => jsonResponse({ _tag: "Unauthenticated" }, 401),
+      "POST /session/sign-out": () => new Response(null, { status: 204 }),
+    });
+    const registry = AtomRegistry.make();
+    const unmount = registry.mount(sessionAtom);
+    const current = () => requests.filter((request) => request.pathname === "/session").length;
+    await vi.waitFor(() => assert.strictEqual(current(), 1));
+    const signOut = ReactAuthClient.mutation("session", "signOut");
+    registry.mount(signOut);
+    registry.set(signOut, {});
+    await vi.waitFor(() => assert.isTrue(AsyncResult.isSuccess(registry.get(signOut))));
+    await vi.waitFor(() => assert.strictEqual(current(), 2));
+    unmount();
+  });
+
+  it("a failed declared mutation (4xx) does not refetch the session", async () => {
+    const requests = installFetchStub({
+      "GET /session": () => jsonResponse({ _tag: "Unauthenticated" }, 401),
+      "POST /session/revoke": () => jsonResponse({ _tag: "SessionNotFound" }, 404),
+    });
+    const registry = AtomRegistry.make();
+    const unmount = registry.mount(sessionAtom);
+    const current = () => requests.filter((request) => request.pathname === "/session").length;
+    await vi.waitFor(() => assert.strictEqual(current(), 1));
+    const revoke = ReactAuthClient.mutation("session", "revoke");
+    registry.mount(revoke);
+    registry.set(revoke, { payload: { id: "unknown" } });
+    await vi.waitFor(() => assert.isTrue(AsyncResult.isFailure(registry.get(revoke))));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.strictEqual(current(), 1);
+    unmount();
+  });
+
+  it("a caller-supplied httpClient keeps the session invalidation", async () => {
+    class OwnTransport extends makeReactClient<OwnTransport>()("test/OwnTransport", {
+      api: AuthCore.AuthCoreApi,
+      httpClient: Layer.merge(FetchHttpClient.layer, AuthClient.CsrfClientLive),
+    }) {}
+    const requests = installFetchStub({
+      "GET /session": () => jsonResponse({ _tag: "Unauthenticated" }, 401),
+      "POST /session/revoke-all": () => new Response(null, { status: 204 }),
+    });
+    const registry = AtomRegistry.make();
+    const unmount = registry.mount(sessionAtom);
+    const current = () => requests.filter((request) => request.pathname === "/session").length;
+    await vi.waitFor(() => assert.strictEqual(current(), 1));
+    const revokeAll = OwnTransport.mutation("session", "revokeAll");
+    registry.mount(revokeAll);
+    registry.set(revokeAll, {});
+    await vi.waitFor(() => assert.isTrue(AsyncResult.isSuccess(registry.get(revokeAll))));
+    await vi.waitFor(() => assert.strictEqual(current(), 2));
+    unmount();
   });
 
   it("CDS-007: a cold browser's first mutation succeeds with no application code handling the 403", async () => {

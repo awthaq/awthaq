@@ -6,12 +6,23 @@
 // gutted without its scenario failing. A gate is a `// type-gate: <name>` line followed by its
 // block (up to the next blank line).
 // @effect-diagnostics missingEffectContext:off
-import { Api } from "@awthaq/api";
-import { HookPoint, RateLimits, Verification } from "@awthaq/core";
+import { Api, SessionLifecycle } from "@awthaq/api";
+import {
+  Auth,
+  EmailChange,
+  HookPoint,
+  RateLimits,
+  type Users,
+  Verification,
+  VerificationLink,
+} from "@awthaq/core";
 import { TwoFactor } from "@awthaq/two-factor";
 import { OAuthProvider } from "@awthaq/oauth";
 import { Password } from "@awthaq/password";
-import { PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { ClientAddress, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { AuthHost, Csrf, SessionDelivery } from "@awthaq/server";
+import { TestAuth } from "@awthaq/test";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { AuthorizedSubject } from "@awthaq/qadi";
 import type { Authorized, Permission } from "@qadi/core";
 import { PublicEndpoint } from "@qadi/http";
@@ -20,6 +31,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServer from "effect/http/HttpServer";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 
@@ -93,6 +108,36 @@ export const unknownSettlement = (verification: Verification.VerificationShape) 
     // @ts-expect-error - a settlement is "rollback" or "commit"
     onFailure: () => "burn",
   });
+
+// ---- 08-verification-tokens.feature: BEH-EA-057 (REQ-EA-1317) ----
+
+type LinkDeps = Parameters<typeof VerificationLink.issue>[0];
+const GateReset = VerificationLink.forUser({ name: "reset-password" });
+const GateVerify = VerificationLink.forUser({ name: "verify-email" });
+
+// type-gate: verification-link-purpose
+export const mintWithoutUser = (deps: LinkDeps) =>
+  // @ts-expect-error - a `forUser` purpose requires the `userId` its row names
+  VerificationLink.issue(deps, GateReset, { ttl: Duration.hours(1) });
+export const mintWithAnotherPayload = (deps: LinkDeps, userId: Users.UserId) =>
+  VerificationLink.issue(deps, EmailChange.Link, {
+    ttl: Duration.hours(1),
+    userId,
+    // @ts-expect-error - the change-email payload is `{ newEmail }`, not another purpose's shape
+    payload: { email: "x" },
+  });
+export const redeemAnotherPurposesToken = (
+  verification: Verification.VerificationShape,
+  minted: VerificationLink.IssuedLink<"reset-password">,
+) =>
+  VerificationLink.redeemer(GateVerify, {
+    verification,
+    budget: { source: "caller", token: "none" },
+  })(
+    // @ts-expect-error - a token minted for "reset-password" is not accepted by the "verify-email" redeemer
+    { token: minted.token },
+    Effect.succeed,
+  );
 
 // ---- 14-rate-limiting.feature: BEH-EA-108 (REQ-EA-292) ----
 
@@ -213,3 +258,69 @@ export const leakyProvider = OAuthProvider.oauth2({
   },
   mapProfile: () => ({ subject: "x" }),
 });
+
+// ---- 02-plugin-composition-validate.feature: BEH-EA-340 (plan 15) ----
+
+// type-gate: auth-host-missing-port
+const hostedPassword = AuthHost.layer(Auth.make([Password.Password]), {
+  persistence: { records: "memory" },
+  csrf: Csrf.layerConfig,
+});
+const everyPortButMailer = Layer.mergeAll(
+  PasswordHasher.layerArgon2id,
+  RateLimiter.layerPermissive,
+  ClientAddress.layerDirect,
+  TestAuth.httpClient.noBreach,
+).pipe(
+  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(HttpServer.layerServices),
+  Layer.provideMerge(HttpRouter.layer),
+);
+export const hostWithoutMailer = () =>
+  // @ts-expect-error - `Mailer` is still in the layer's requirements: the host omitted a port (BEH-EA-014)
+  Effect.runPromise(Layer.launch(hostedPassword.pipe(Layer.provide(everyPortButMailer))));
+export const hostWithEveryPort = () =>
+  Effect.runPromise(
+    Layer.launch(
+      hostedPassword.pipe(Layer.provide(everyPortButMailer), Layer.provide(Mailer.layerMemory)),
+    ),
+  );
+
+// ---- 04-contract-stratum.feature: BEH-EA-343 (plan 21, ADR-EA-045) ----
+
+const lifecycleApi = HttpApi.make("auth").add(
+  HttpApiGroup.make("gate")
+    .add(
+      HttpApiEndpoint.post("mint", "/gate/mint", { success: Schema.String }).middleware(
+        SessionLifecycle.Mints,
+      ),
+    )
+    .add(HttpApiEndpoint.post("plain", "/gate/plain", { success: Schema.String })),
+);
+
+// type-gate: session-delivery-needs-a-declared-endpoint
+export const undeclaredDelivery = HttpApiBuilder.group(lifecycleApi, "gate", (handlers) =>
+  handlers
+    .handle("mint", () => Effect.as(SessionDelivery.decline(SessionLifecycle.MintGrant), "ok"))
+    .handle("plain", () => Effect.as(SessionDelivery.decline(SessionLifecycle.MintGrant), "ok")),
+);
+export const undeclaredLeavesTheGrant: [
+  Extract<
+    Layer.Services<typeof undeclaredDelivery>,
+    HttpRouter.Request<"Requires", SessionLifecycle.MintGrant>
+  >,
+] extends [never]
+  ? false
+  : true = true;
+
+// type-gate: a-declared-endpoint-gets-its-grant
+export const declaredDelivery = HttpApiBuilder.group(lifecycleApi, "gate", (handlers) =>
+  handlers
+    .handle("mint", () => Effect.as(SessionDelivery.decline(SessionLifecycle.MintGrant), "ok"))
+    .handle("plain", () => Effect.succeed("ok")),
+);
+export const declaredLeavesNothing: [
+  Extract<Layer.Services<typeof declaredDelivery>, HttpRouter.Request<"Requires", unknown>>,
+] extends [never]
+  ? true
+  : false = true;

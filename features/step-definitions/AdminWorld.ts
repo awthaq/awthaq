@@ -14,22 +14,21 @@
 // Several scenarios (BEH-EA-209/210/211/218) need to inspect state no HTTP
 // response ever carries — a session row's own `actingAs`/`idleExpiresAt`,
 // or a resolved `UserPrincipal`'s `actingAs` — so this World also exposes
-// direct domain-level access to `Sessions`/`Authentication.resolvePrincipal`
+// direct domain-level access to `Sessions`/`Credentials`
 // over the same shared `MemoMap` the HTTP handler itself resolves against.
 import { Auth, AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Admin } from "@awthaq/admin";
 import type { Api } from "@awthaq/api";
-import { Authentication } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import * as HttpServerRequest from "effect/http/HttpServerRequest";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, type UserAgent } from "@awthaq/test";
+import { resolveCredential } from "./shared/ResolveCredential.ts";
 
 const ORIGIN = "http://localhost:3000";
 
@@ -167,33 +166,61 @@ const appHandle = Effect.fn("features.admin.appHandle")(function* () {
   return (yield* Ref.get(world.app))!;
 });
 
+/**
+ * One request. `as` is the browser (user agent) making it, which keeps its own cookies and echoes CSRF;
+ * without it, a fresh anonymous agent. `extraCookies` replays a credential for this request only (a revoked
+ * impersonation token, presented again).
+ */
 export const request = Effect.fn("features.admin.request")(function* (
   method: string,
   path: string,
-  options?: { readonly body?: unknown; readonly headers?: Record<string, string> },
+  options?: {
+    readonly body?: unknown;
+    readonly headers?: Record<string, string>;
+    readonly as?: UserAgent.UserAgent;
+    readonly extraCookies?: Readonly<Record<string, string>>;
+  },
 ) {
   const { app } = yield* appHandle();
-  const { cookie, ...headers } = options?.headers ?? {};
+  const init = {
+    ...(options?.body === undefined ? {} : { json: options.body }),
+    ...(options?.headers === undefined ? {} : { headers: options.headers }),
+    ...(options?.extraCookies === undefined ? {} : { extraCookies: options.extraCookies }),
+  };
   const response = yield* Effect.promise(() =>
-    app.request(method, path, {
-      ...(cookie === undefined ? {} : { cookie }),
-      ...(options?.body === undefined ? {} : { json: options.body }),
-      headers,
-    }),
+    options?.as === undefined
+      ? app.request(method, path, init)
+      : options.as.request(method, path, init),
   );
   const world = yield* World;
   yield* Ref.set(world.lastResponse, response);
   return response;
 });
 
-export const tokenFromCookie = (cookie: string): string =>
-  decodeURIComponent(cookie.replace(/^__Host-(session|impersonation)=/, ""));
+/** A signed-in user: their raw session token and the `Set-Cookie` the session is rendered as. */
+export interface Actor {
+  readonly userId: string;
+  readonly token: string;
+  readonly setCookie: string;
+}
+
+/** A fresh browser holding `actor`'s session (and the CSRF cookie every app agent starts with). */
+export const browser = Effect.fn("features.admin.browser")(function* (actor: Actor) {
+  const { app } = yield* appHandle();
+  const agent = yield* Effect.promise(() => app.agent());
+  const received = agent.cookies.receive(actor.setCookie);
+  if (received._tag !== "Stored")
+    throw new Error(`the browser did not store ${actor.userId}'s session`);
+  return agent;
+});
 
 /**
  * Issues a real session directly against `Sessions`, reaching into the
  * same running services `handler` uses via the shared `MemoMap` — see this
  * file's own header comment for why `Effect.runPromise` (real clock,
  * bypassing any ambient `TestClock`) is load-bearing here, not stylistic.
+ * The literal `userId` is the session's subject (the gates compare ids), so
+ * this cannot be `TestAuth.signInAs`, which mints a generated id.
  */
 export const signIn = Effect.fn("features.admin.signIn")(function* (userId: string) {
   const { app } = yield* appHandle();
@@ -206,7 +233,13 @@ export const signIn = Effect.fn("features.admin.signIn")(function* (userId: stri
           .pipe(Effect.catchTag("Users/EmailAlreadyExists", () => Effect.void));
         const sessions = yield* Sessions.Sessions;
         const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
-        return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
+        const setCookie = yield* TestAuth.sessionSetCookie(issued);
+        const actor: Actor = {
+          userId,
+          token: Redacted.value(issued.token),
+          setCookie,
+        };
+        return actor;
       }),
     ),
   );
@@ -227,7 +260,7 @@ export const inspectSession = Effect.fn("features.admin.inspectSession")(functio
 });
 
 /**
- * Domain-level: `Authentication.resolvePrincipal` against a raw token —
+ * Domain-level: `Credentials` resolving a raw session token —
  * BEH-EA-211's own seam. Explicitly typed to `Api.Principal` — a real
  * TS2883 portability error otherwise (two different resolved filesystem
  * paths to the same, real `packages/api` behind the `@awthaq/admin`
@@ -235,32 +268,10 @@ export const inspectSession = Effect.fn("features.admin.inspectSession")(functio
  * layer-composition bug this time (see `OAuthWorld.ts`'s own comment,
  * ticket 22, for a case where the identical error *was* a real bug).
  */
-export const resolvePrincipal: (token: string) => Effect.Effect<Api.Principal, never, World> =
-  Effect.fn("features.admin.resolvePrincipal")(function* (token: string) {
+export const principalOfToken: (token: string) => Effect.Effect<Api.Principal, never, World> =
+  Effect.fn("features.admin.principalOfToken")(function* (token: string) {
     const { app } = yield* appHandle();
-    return yield* Effect.promise(() =>
-      app.run(
-        Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          const resolver = yield* Authentication.PrincipalResolver;
-          return yield* Authentication.resolvePrincipal(
-            sessions,
-            resolver,
-            Redacted.make(token),
-            "cookie",
-          ).pipe(
-            // Ticket 03: `resolvePrincipal` keys its per-request verify
-            // memoization off the ambient `HttpServerRequest` — this
-            // helper calls it directly, outside any real HTTP request,
-            // so it provides a synthetic one instead.
-            Effect.provideService(
-              HttpServerRequest.HttpServerRequest,
-              HttpServerRequest.fromWeb(new Request(ORIGIN)),
-            ),
-          );
-        }),
-      ),
-    );
+    return yield* Effect.promise(() => app.run(resolveCredential("cookie", token)));
   });
 
 export const publishedEvents = Effect.fn("features.admin.publishedEvents")(function* () {

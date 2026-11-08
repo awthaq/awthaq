@@ -4,7 +4,7 @@
 // persistence for the `passkey_credential` table (ticket 06) — a real
 // `Model.Class` built directly against `effect/schema`'s `Model`
 // and `effect/sql`'s `SqlSchema`, the same primitives
-// `@awthaq/sql`'s own `Models.ts`/`Repositories.ts` are built from, not
+// `@awthaq/sql`'s own `Models.ts` and store adapters are built from, not
 // imported from that package: this table belongs to the plugin, not the
 // shared persistence stratum.
 //
@@ -270,7 +270,7 @@ const makePasskeyCredentialRow = (wire: SqlModels.DialectWire) =>
     userId: Schema.String,
     webauthnUserId: Schema.String,
     publicKey: Schema.String,
-    counter: Schema.Int,
+    counter: wire.int64,
     deviceType: Schema.Literals(["singleDevice", "multiDevice"]),
     backedUp: wire.boolean,
     transports: Schema.fromJsonString(Schema.Array(Schema.String)),
@@ -331,7 +331,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
         userId: Schema.String,
         webauthnUserId: Schema.String,
         publicKey: Schema.String,
-        counter: Schema.Int,
+        counter: wire.int64,
         deviceType: Schema.Literals(["singleDevice", "multiDevice"]),
         backedUp: wire.boolean,
         transports: Schema.fromJsonString(Schema.Array(Schema.String)),
@@ -366,7 +366,7 @@ export const layerSql: Layer.Layer<PasskeyCredentials, never, SqlClient.SqlClien
     const recordUsageQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({
         id: Schema.String,
-        counter: Schema.Int,
+        counter: wire.int64,
         backedUp: wire.boolean,
         lastUsedAt: wire.dateTime,
       }),

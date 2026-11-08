@@ -12,6 +12,7 @@ import * as Schema from "effect/Schema";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { Authentication, CsrfProtection, RateLimited } from "./Api.ts";
+import * as SessionLifecycle from "./SessionLifecycle.ts";
 
 /**
  * FAMS-002: the wire shape of `@awthaq/core`'s `UserIdentity` — a tagged union,
@@ -146,7 +147,7 @@ export const AccountGroup = HttpApiGroup.make("account")
       error: [UnknownUserField, UserFieldNotWritable, InvalidUserField],
     }),
   )
-  .add(HttpApiEndpoint.delete("deleteUser", "/user"))
+  .add(HttpApiEndpoint.delete("deleteUser", "/user").middleware(SessionLifecycle.Ends))
   // CSG-005: GDPR Art. 15/20 self-service export — one JSON document, rate limited, audited.
   .add(
     HttpApiEndpoint.get("exportData", "/user/export", {

@@ -4,7 +4,7 @@
 // tenant is an `Organization` row, but core cannot import the organization
 // plugin (plugins depend on core, never the reverse), so the key is an opaque,
 // app-interpreted string. The reference lives in this stratum — not in
-// `@awthaq/core` — because `@awthaq/sql` sits *below* core and its repositories
+// `@awthaq/core` — because `@awthaq/sql` sits *below* core and its store adapters
 // are the choke point that stamps every insert; `@awthaq/core` re-exports it as
 // `Tenant`, which is where applications import it from.
 //

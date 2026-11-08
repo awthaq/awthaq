@@ -6,7 +6,7 @@
 import { Api } from "@awthaq/api";
 import { AuditLog, Auth, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
-import { Authentication } from "@awthaq/server";
+import { Authentication, Credentials } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -164,8 +164,8 @@ describe("JWT bearer re-entry (MAPS-001/NAM-001)", () => {
     () =>
       Effect.gen(function* () {
         const NoResolver = Layer.succeed(
-          Authentication.PrincipalResolver,
-          Authentication.PrincipalResolver.of({ resolve: () => Effect.die("not used") }),
+          Credentials.PrincipalResolver,
+          Credentials.PrincipalResolver.of({ resolve: () => Effect.die("not used") }),
         );
         const withoutRegistry = Jwt.Jwt.layer.pipe(
           Layer.provideMerge(Authentication.AuthenticationLive.pipe(Layer.provide(NoResolver))),

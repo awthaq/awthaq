@@ -343,6 +343,14 @@ Feature: SAML Service Provider
       When the ACS resolves the account
       Then a user is created and linked under the connection's provider id and that NameID
 
+    @REQ-EA-1312
+    Scenario: Two concurrent first sign-ins for one NameID sign in as one user
+      Given the account lookups of two concurrent sign-ins meet before either writes
+      And a fully validated response carrying a NameID no account is linked to
+      When the ACS receives that response from two browsers at once
+      Then both sign-ins resolve to one user
+      And that user has exactly one linked account
+
     @REQ-EA-907
     Scenario: An email attribute alone never links to an existing local account
       Given an existing local account "victim@acme.example"
@@ -357,6 +365,14 @@ Feature: SAML Service Provider
       And a linking policy that trusts the connection
       When a fully validated response whose email attribute is "ada@acme.example" is resolved
       Then the account is linked under the connection's provider id
+
+    @REQ-EA-1313
+    Scenario: A connection that trusts email links only addresses in its own domains
+      Given an existing local account "ceo@other.example" whose address is verified
+      And a linking policy that trusts the connection
+      When a fully validated response whose email attribute is "ceo@other.example" is resolved
+      Then the existing account is not linked
+      And the sign-in does not resolve to "ceo@other.example"
 
     @REQ-EA-909
     Scenario: The same NameID on two connections resolves to two different accounts

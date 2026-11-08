@@ -59,48 +59,48 @@ Feature: The Persistence Stratum
 
   # BEH-EA-035 — spec/behaviors/05-persistence-stratum.md
   @BEH-EA-035
-  Rule: Repositories are built with SqlModel.makeRepository over the ambient SqlClient, never opening their own transactions
+  Rule: A core store adapter owns its statements over the ambient SqlClient; a multi-statement primitive opens one unit, never the caller's boundary
 
     @REQ-EA-090
-    Scenario: A repository is constructed as a Context.Service via SqlModel.makeRepository
-      Given a "Users" repository built with SqlModel.makeRepository against the ambient SqlClient
-      When the repository is resolved
-      Then it is provided as a Context.Service
+    Scenario: A core store adapter is a layer over the ambient SqlClient that owns its statements
+      Given the "UserStoreSql" adapter built with SqlModel.makeRepository against the ambient SqlClient
+      When the adapter is resolved
+      Then it provides the "UserStore" port from a layer that needs only the SqlClient
 
     @REQ-EA-091
-    Scenario: A repository method does not open its own transaction
-      Given a repository method that reads or writes a "User" row
-      When the method executes
-      Then it does not call SqlClient.withTransaction itself
+    Scenario: A single-statement primitive opens no transaction; a multi-statement primitive opens exactly one unit
+      Given store primitives that read or write a "User" row and an "Account" row
+      When the primitives execute
+      Then the single-statement one opens no transaction and the multi-statement one opens exactly one
 
     # Observed through Password.confirmReset over a real SQLite transaction with a fault injected between the two writes (PasswordWorld, TIR-005).
     @REQ-EA-092
-    Scenario: A domain service composing two repository calls holds the transaction boundary
+    Scenario: A domain service composing two store calls holds the transaction boundary
       Given "Password.confirmReset" consuming a verification token and rotating a session in one operation
       When "Password.confirmReset" runs
-      Then the domain service itself opens the transaction boundary around both repository calls
+      Then the domain service itself opens the transaction boundary around both store calls
       And the token consumption and the session rotation commit or roll back together
 
   # BEH-EA-036 — spec/behaviors/05-persistence-stratum.md
   @BEH-EA-036
-  Rule: Pagination is keyset-only; no repository interface accepts an offset
+  Rule: Pagination is keyset-only; no store port accepts an offset
 
     @REQ-EA-093
     Scenario: A paginated query accepts an opaque cursor instead of an offset
-      Given a "listByUser" query for a user's sessions
+      Given a "listPage" query over the users
       When the query is called with a cursor derived from a prior page's last (createdAt, id)
       Then the query accepts the cursor
       And the query's interface has no offset parameter
 
     @REQ-EA-094
     Scenario: A paginated query returns the next cursor alongside its page
-      Given a "listByUser" query for a user's sessions with more rows beyond the requested limit
+      Given a "listPage" query over the users with more rows beyond the requested limit
       When the query is called
       Then the returned page is accompanied by a next cursor derived from the page's last (createdAt, id)
 
     @REQ-EA-095
     Scenario: Rows sharing the same createdAt millisecond are still ordered deterministically
-      Given two session rows with an identical createdAt timestamp down to the millisecond
+      Given two user rows with an identical createdAt timestamp down to the millisecond
       When a paginated query orders by (createdAt, id)
       Then the "id" tiebreaker produces one deterministic order between the two rows
 
@@ -155,15 +155,16 @@ Feature: The Persistence Stratum
       When the linker composes the migration sequence
       Then "password"'s migration creating its table runs before "oauth"'s migration that references it
 
-  # BEH-EA-039 — spec/behaviors/05-persistence-stratum.md
+  # BEH-EA-039 — spec/behaviors/05-persistence-stratum.md. The key-level ledger check is core's
+  # `Migrations.status`, shared by `awthaq migration apply` and `AuthHost` (plan 15).
   @BEH-EA-039
   Rule: Schema diffing, snapshot comparison, and destructive-change guardrails are a deferred CLI feature, not a v1 runtime requirement
 
     @REQ-EA-103
-    Scenario: Auth.make functions without a snapshot-diff planner, checksum ledger, or drift check
+    Scenario: Auth.make functions without a snapshot-diff planner or a checksum ledger
       Given an application composing "Auth.make", "auth.layer", and "auth.migrations"
       When the application boots
-      Then it does not depend on a snapshot-diff planner, a checksum ledger, or a live-database drift check
+      Then it does not depend on a snapshot-diff planner or a checksum ledger
 
     @REQ-EA-104
     Scenario: A future CLI schema-diff feature consumes the runtime's existing auth.migrations value
@@ -171,6 +172,22 @@ Feature: The Persistence Stratum
       When the CLI feature is built
       Then it consumes the same "auth.migrations" value the runtime already produces
       And it does not require a separate migration representation from the runtime
+
+  # BEH-EA-341 — spec/behaviors/05-persistence-stratum.md (ADR-EA-044); see also INV-EA-019.
+  @BEH-EA-341
+  Rule: A SQL host composition never serves a schema that is behind it
+
+    @REQ-EA-1323
+    Scenario: A server in verify mode refuses to start while migrations are pending
+      Given an "AuthHost.layer" server in "verify" mode over an unmigrated database
+      When the server starts
+      Then it refuses to start with "Migrations/Pending" naming "0001_password_create_password_account"
+
+    @REQ-EA-1324
+    Scenario: A boot that would skip a plugin migration refuses to start
+      Given a database migrated for "Auth.make([password, two_factor])"
+      When a server composing "Auth.make([password, oauth, two_factor])" starts in "apply" mode
+      Then it refuses to start with "Migrations/LedgerDrift" and "oauth" gets no table
 
   # BEH-EA-040 — spec/behaviors/05-persistence-stratum.md; see also
   # INV-EA-016
@@ -207,3 +224,14 @@ Feature: The Persistence Stratum
       Then the extension is a primitive, nullable scalar column: text, real or boolean
       And a declaration that is not one scalar is refused when the plugin is defined
       And it is never an unmediated ALTER TABLE from the plugin's migration code
+
+  # BEH-EA-339 — spec/behaviors/05-persistence-stratum.md; ADR-EA-019 revision 1.3 (plan 17)
+  @BEH-EA-339
+  Rule: A composition's sealed columns are swept as one list
+
+    @REQ-EA-1320
+    Scenario: After a key rotation and a sweep of every deployed sealed column, the retired key can be dropped
+      Given a user with metadata, a session and a linked account, sealed under the key "k1"
+      When the key rotates to "k2", every deployed sealed column is swept and "k1" is retired
+      Then the user's metadata, the session's device details and the account's tokens still open
+      And a second sweep reports that nothing is left to re-seal

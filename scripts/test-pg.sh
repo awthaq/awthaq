@@ -18,19 +18,39 @@ set -euo pipefail
 
 suites=(
   packages/cli/test/Migration.postgres.test.ts
-  packages/sql/test/Repositories.postgres.test.ts
+  packages/sql/test/ReadRouting.postgres.test.ts
+  packages/sql/test/CoreMigrations.postgres.test.ts
   packages/sql/test/RateLimiterStoreSql.postgres.test.ts
   packages/sql/test/TenantScope.postgres.test.ts
   packages/sql/test/TenantScoped.test.ts
   packages/sql/test/SealedColumn.test.ts
+  packages/sql/test/SqlDdl.test.ts
   packages/sql/test/UnitOfWork.test.ts
+  packages/test/test/CoreSealedColumns.test.ts
   packages/test/test/StoreContract.sql.test.ts
+  packages/admin/test/Contract.test.ts
+  packages/api-key/test/Contract.test.ts
+  packages/device-authorization/test/Contract.test.ts
+  packages/jwt/test/Contract.test.ts
+  packages/organization/test/Contract.test.ts
+  packages/passkey/test/Contract.test.ts
+  packages/qadi/test/Contract.test.ts
+  packages/roles/test/Contract.test.ts
+  packages/saml/test/Contract.test.ts
+  packages/scim/test/Contract.test.ts
+  packages/two-factor/test/Contract.test.ts
+  packages/webhooks/test/Contract.test.ts
+  examples/plugin-template/test/Contract.test.ts
   packages/test/test/TestAuthRecords.test.ts
+  packages/test/test/TestAuthHost.test.ts
+  packages/test/test/TestSqlSchema.test.ts
   examples/plugin-template/test/Template.test.ts
   packages/admin/test/ImpersonationRecords.test.ts
   packages/api-key/test/ApiKey.test.ts
   packages/api-key/test/StoreOutage.test.ts
   packages/core/test/AuthEventsUnitOfWork.test.ts
+  packages/core/test/Migrations.test.ts
+  packages/core/test/FederatedIdentitySql.test.ts
   packages/core/test/SignUpSql.test.ts
   packages/core/test/Users.test.ts
   packages/core/test/UserFields.test.ts
@@ -53,6 +73,7 @@ suites=(
   packages/organization/test/TeamRecords.test.ts
   packages/organization/test/TenantMiddleware.test.ts
   packages/passkey/test/ChallengeStore.test.ts
+  packages/passkey/test/PasskeyCeremony.test.ts
   packages/passkey/test/PasskeyCredentials.test.ts
   packages/passkey/test/PasskeyUserHandle.test.ts
   packages/qadi/test/UserClaims.test.ts

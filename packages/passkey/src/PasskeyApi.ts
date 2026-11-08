@@ -54,7 +54,7 @@
 // credential to their own account — there is no identifier to enumerate —
 // so it reports the full, precise BEH-EA-136 taxonomy.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
 import { HookPoint, Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -447,10 +447,9 @@ export const PasskeyAuthenticateGroup = HttpApiGroup.make("passkey.authenticate"
         Api.RateLimited,
         HookPoint.HookAborted,
         Hooks.TwoFactorRequired,
-        // MNA-001: an unrecognised `X-Awthaq-Token-Delivery` value.
-        Api.InvalidTokenDelivery,
+        // MNA-001: an unrecognised `X-Awthaq-Token-Delivery` value is `SessionLifecycle.Mints`'s 400 (ADR-EA-045).
       ],
-    }),
+    }).middleware(SessionLifecycle.Mints),
   )
   // Public and anonymous by design (see this file's header), but still two
   // unsafe-method (POST) endpoints a browser client reaches — CSRF-worth
@@ -522,7 +521,7 @@ export const PasskeyReauthenticateGroup = HttpApiGroup.make("passkey.reauthentic
         PasskeyCredentialNotFound,
         PasskeyCounterAnomaly,
       ],
-    }),
+    }).middleware(SessionLifecycle.Refreshes),
   )
   // See `@awthaq/api`'s `Session.ts`: `CsrfProtection` declared last so it
   // runs first.

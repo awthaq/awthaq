@@ -7,7 +7,7 @@ import { Api } from "@awthaq/api";
 import { Auth } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
-import { TestAuth } from "@awthaq/test";
+import { CookieAssertions, TestAuth, type UserAgent } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -26,21 +26,20 @@ const testApp = TestAuth.app(AppLayer);
 
 const sentMail = () => testApp.run(Effect.flatMap(Mailer.Mailer, (mailer) => mailer.sent));
 
+/** One request, from `options.as` (a browser holding its cookies) or a fresh anonymous agent. */
 const call = (
   method: "GET" | "POST",
   path: string,
-  options?: { readonly body?: unknown; readonly cookie?: string },
+  options?: { readonly body?: unknown; readonly as?: UserAgent.UserAgent },
 ) =>
-  Effect.promise(() =>
-    testApp.request(method, path, {
-      ...(options?.cookie === undefined ? {} : { cookie: options.cookie }),
-      ...(options?.body === undefined ? {} : { json: options.body }),
-    }),
-  );
+  Effect.promise(() => {
+    const init = options?.body === undefined ? {} : { json: options.body };
+    return options?.as === undefined
+      ? testApp.request(method, path, init)
+      : options.as.request(method, path, init);
+  });
 
 const json = (response: Response) => Effect.promise(() => response.json());
-const cookieOf = (response: Response): string =>
-  (response.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
 
 const Enrollment = Schema.Struct({ secret: Schema.String, otpauthUri: Schema.String });
 const Codes = Schema.Struct({ recoveryCodes: Schema.Array(Schema.String) });
@@ -58,10 +57,14 @@ const Tagged = Schema.Struct({ _tag: Schema.String });
 
 const password = "correct horse battery staple";
 
-/** Signs up over HTTP and verifies the mailbox; returns the fresh session cookie. */
+/** Signs up over HTTP and verifies the mailbox; returns the browser now holding the fresh session. */
 const registerOverHttp = (email: string) =>
   Effect.gen(function* () {
-    const signUp = yield* call("POST", "/password/sign-up", { body: { email, password } });
+    const browser = yield* Effect.promise(() => testApp.agent());
+    const signUp = yield* call("POST", "/password/sign-up", {
+      as: browser,
+      body: { email, password },
+    });
     assert.strictEqual(signUp.status, 200);
     yield* letForkedFibersRun;
     const verifyMail = (yield* Effect.promise(sentMail)).findLast(
@@ -71,19 +74,19 @@ const registerOverHttp = (email: string) =>
       (yield* call("POST", "/verify-email", { body: { token: tokenOf(verifyMail) } })).status,
       204,
     );
-    return cookieOf(signUp);
+    return browser;
   });
 
 /** Enrols over HTTP and returns the secret and the recovery codes. */
-const enrolOverHttp = (cookie: string) =>
+const enrolOverHttp = (browser: UserAgent.UserAgent) =>
   Effect.gen(function* () {
     const enrollment = Schema.decodeUnknownSync(Enrollment)(
-      yield* json(yield* call("POST", "/two-factor/enable", { cookie })),
+      yield* json(yield* call("POST", "/two-factor/enable", { as: browser })),
     );
     const codes = Schema.decodeUnknownSync(Codes)(
       yield* json(
         yield* call("POST", "/two-factor/confirm", {
-          cookie,
+          as: browser,
           body: { code: yield* codeFor(enrollment.secret) },
         }),
       ),
@@ -96,16 +99,16 @@ describe("TwoFactor over HTTP", () => {
   it.live("enrol, then a password sign-in is diverted and /two-factor/verify completes it", () =>
     Effect.gen(function* () {
       const email = "ada@example.com";
-      const cookie = yield* registerOverHttp(email);
+      const browser = yield* registerOverHttp(email);
       // No session, no enrolment endpoints.
       assert.strictEqual((yield* call("POST", "/two-factor/enable")).status, 401);
 
-      const { enrollment, codes } = yield* enrolOverHttp(cookie);
+      const { enrollment, codes } = yield* enrolOverHttp(browser);
       assert.match(enrollment.otpauthUri, /^otpauth:\/\/totp\//);
       assert.strictEqual(codes.recoveryCodes.length, 10);
       assert.deepStrictEqual(
         Schema.decodeUnknownSync(Status)(
-          yield* json(yield* call("GET", "/two-factor/status", { cookie })),
+          yield* json(yield* call("GET", "/two-factor/status", { as: browser })),
         ),
         { enabled: true, remainingRecoveryCodes: 10 },
       );
@@ -129,7 +132,10 @@ describe("TwoFactor over HTTP", () => {
         body: { challengeId: retry.challengeId, code: yield* codeFor(enrollment.secret, 1) },
       });
       assert.strictEqual(verified.status, 200);
-      assert.include(verified.headers.get("set-cookie") ?? "", `${Api.SESSION_COOKIE_NAME}=`);
+      assert.strictEqual(
+        CookieAssertions.findSetCookie(verified, Api.SESSION_COOKIE_NAME).name,
+        Api.SESSION_COOKIE_NAME,
+      );
       const session = Schema.decodeUnknownSync(SessionBody)(yield* json(verified));
       assert.deepStrictEqual(session.amr, ["pwd", "otp", "mfa"]);
 
@@ -156,8 +162,7 @@ describe("TwoFactor over HTTP", () => {
     () =>
       Effect.gen(function* () {
         const email = "reset@example.com";
-        const cookie = yield* registerOverHttp(email);
-        yield* enrolOverHttp(cookie);
+        yield* enrolOverHttp(yield* registerOverHttp(email));
 
         yield* call("POST", "/password/request-reset", { body: { email } });
         yield* letForkedFibersRun;

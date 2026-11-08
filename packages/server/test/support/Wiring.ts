@@ -6,14 +6,14 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { createHmac, randomBytes } from "node:crypto";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as Authentication from "../../src/Authentication.ts";
+import * as Credentials from "../../src/Credentials.ts";
 import * as Csrf from "../../src/Csrf.ts";
 
 /** At least 32 bytes, as `Csrf.layerConfig` requires. */
 const TEST_CSRF_SECRET = "server-test-csrf-secret-padded-to-thirty-two-bytes";
 
 /** The resolver every suite here uses: `Sessions` -> `PrincipalResolver`, no user facts. */
-export const resolver = Authentication.PrincipalResolverLive;
+export const resolver = Credentials.PrincipalResolverLive;
 
 /** A fixed `CsrfConfig`; `allowedOrigins` is what the origin check (and `AuthHttp.cors`) reads. */
 export const csrfConfig = (

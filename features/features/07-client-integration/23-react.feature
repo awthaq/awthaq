@@ -33,11 +33,13 @@ Feature: React Bindings
   @BEH-EA-178
   Rule: Mutations invalidate the session reactivity key
 
+    # ADR-EA-045: sign-in declares `Mints` and sign-out `Ends` on the contract; the client half of the
+    # markers invalidates the session key, so the call site passes nothing.
     @REQ-EA-504
-    Scenario Outline: A mutation that changes the current session tags reactivityKeys with session
+    Scenario Outline: A mutation against a declared endpoint refetches the session with no reactivityKeys
       Given a signed-in user "alice"
       When "<mutation>" is performed
-      Then the mutation runs with "reactivityKeys: [\"session\"]"
+      Then the mutation runs with no reactivityKeys
       And "sessionAtom" refetches automatically, without application code calling a manual refetch
 
       Examples:
@@ -45,21 +47,22 @@ Feature: React Bindings
         | sign-in           |
         | sign-out          |
 
-    # @skip: plugin-owned mutations (role assignment, accepting an invite) need an organization/roles
-    # composition and their own makeReactClient atoms, and no such atoms ship in @awthaq/react; the
-    # mechanism is the same reactivityKeys wiring REQ-EA-504's wired rows prove.
+    # @skip: plugin-owned mutations (accepting an invite, switching the active organization) need an
+    # organization composition and their own makeReactClient atoms, and no such atoms ship in
+    # @awthaq/react; the mechanism is the same declared-endpoint invalidation REQ-EA-504's wired rows
+    # prove, and `organization/test/Contract.test.ts` pins that these endpoints declare `Refreshes`.
     @skip
     @REQ-EA-698
-    Scenario Outline: A plugin mutation that changes the current session tags reactivityKeys with session
+    Scenario Outline: A plugin mutation declared on the contract refetches the session
       Given a signed-in user "alice"
       When "<mutation>" is performed
-      Then the mutation runs with "reactivityKeys: [\"session\"]"
+      Then the mutation runs with no reactivityKeys
       And "sessionAtom" refetches automatically, without application code calling a manual refetch
 
       Examples:
-        | mutation            |
-        | role assignment     |
-        | accepting an invite |
+        | mutation                        |
+        | accepting an invite             |
+        | switching the active organization |
 
     @REQ-EA-505
     Scenario: sessionAtom is declared with the reactivityKeys that make automatic refetch possible

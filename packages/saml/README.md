@@ -32,7 +32,7 @@ Sso.Sso.layer; // POST /auth/sso/start
 - The **trust set** is the IdP's signing certificates: each parsed as X.509 (RSA, at least 2048 bits), stored with its SHA-256 fingerprint and its own validity window. To rotate the IdP's key, `update(id, { certificates: [old, next] })` before the IdP starts signing with the next, and `update(id, { certificates: [next] })` after; the old key's signatures stop at once.
 - The **SSO URL** is `https` only, no credentials, no private address (the browser is redirected there).
 - An **email domain** routes to exactly one connection (`discover({ email })`): home-realm discovery for an "Sign in with SSO" button.
-- **`trustsEmail`** (default off) is the connection's explicit linking policy (BEH-EA-245): a first sign-in may link to an existing local account with the asserted email only when that account's own address is already verified.
+- **`trustsEmail`** (default off) is the connection's explicit linking policy (BEH-EA-245): a first sign-in may link to an existing local account with the asserted email only when that account's own address is already verified **and** the address is in one of the connection's `emailDomains` (an empty list links nothing); the user such a connection creates has its address verified. Two concurrent first sign-ins for one NameID sign in as one user.
 
 Give the IdP administrator `GET /auth/saml/metadata?connection=<id>` (entity id `<baseUrl>/auth/saml/sp/<id>`, ACS `<baseUrl>/auth/saml/acs`, `WantAssertionsSigned="true"`).
 

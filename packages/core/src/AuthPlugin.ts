@@ -15,7 +15,7 @@ import type * as Record from "effect/Record";
 import type * as Scope from "effect/Scope";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
-import { TenantScoped } from "@awthaq/sql";
+import { type SealedColumn, TenantScoped } from "@awthaq/sql";
 import type * as HookPoint from "./HookPoint.ts";
 import type * as Hooks from "./Hooks.ts";
 import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
@@ -93,6 +93,12 @@ export interface Class<
   readonly tables: ReadonlyArray<`${Id}_${string}`>;
   /** Plan 05 (ADR-EA-018 decision 10): how each table in `tables` relates to the tenant, keyed by table name. */
   readonly tenancy: Readonly<Record<string, TenantScoped.TableDeclaration>>;
+  /**
+   * Plan 17 (ADR-EA-019 decision 6): the sealed columns of this plugin's tables, declared next to the records
+   * that seal them. `Auth.make` checks each names one of this plugin's own tables and exposes the whole
+   * composition's as `auth.sealedColumns`, the `also` of a post-rotation `SealedColumn.sweepDeployed`.
+   */
+  readonly sealedColumns: ReadonlyArray<SealedColumn.Sweepable>;
   readonly migrations: Migrations;
   readonly dependsOn: ReadonlyArray<Any>;
   /** PERS-003: the taps this plugin declared statically (`AuthPlugin.layer`'s `taps` option), readable without building any layer. */
@@ -337,6 +343,8 @@ export interface Any {
   readonly tables: ReadonlyArray<string>;
   /** Plan 05: optional so a hand-built plugin value (a test fixture) need not declare any; an absent entry reads as Global. */
   readonly tenancy?: Readonly<Record<string, TenantScoped.TableDeclaration>>;
+  /** Plan 17: optional so a hand-built plugin value (a test fixture) need not declare any. */
+  readonly sealedColumns?: ReadonlyArray<SealedColumn.Sweepable>;
   readonly migrations: Migrations;
   readonly dependsOn: ReadonlyArray<Any>;
   /** PERS-003: optional so a hand-built plugin value (a test fixture) need not declare any. */
@@ -446,6 +454,11 @@ export const Service = <Self, Shape>() => {
       readonly tables?: {
         readonly [T in `${NoInfer<Id>}_${string}`]: TenantScoped.TableDeclaration;
       };
+      /**
+       * Plan 17: the sealed columns (`SealedColumn.column`) of this plugin's tables. A column must name one of
+       * the plugin's own `tables` and appear once; both are checked by `Auth.make`.
+       */
+      readonly sealedColumns?: ReadonlyArray<SealedColumn.Sweepable>;
       readonly migrations?: Migrations;
       readonly readsTables?: ReadonlyArray<string>;
       /**
@@ -484,6 +497,7 @@ export const Service = <Self, Shape>() => {
       readonly apiVersion: 1;
       readonly contract: ContractData;
       readonly tables?: Readonly<Record<string, TenantScoped.TableDeclaration>>;
+      readonly sealedColumns?: ReadonlyArray<SealedColumn.Sweepable>;
       readonly migrations?: Migrations;
       readonly readsTables?: ReadonlyArray<string>;
       readonly rateLimitRules?: RateLimitModel.Table;
@@ -515,6 +529,7 @@ export const Service = <Self, Shape>() => {
       contract: options.contract,
       tables,
       tenancy,
+      sealedColumns: options.sealedColumns ?? [],
       migrations: options.migrations ?? [],
       readsTables: options.readsTables ?? [],
       rateLimits: RateLimitModel.declare(options.rateLimitRules ?? {}),

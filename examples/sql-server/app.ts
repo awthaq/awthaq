@@ -1,31 +1,28 @@
 // @awthaq/example-sql-server: the composition
 //
-// The app's layers, without starting anything: `index.ts` serves them on :3002 and
-// `test/smoke.test.ts` boots the very same `AppLayer` in-process over an in-memory SQLite
-// database, so the example cannot drift from what its test proves (a sign-up, the mailed
-// verification token, a sign-in, all persisted through the real repositories).
+// The app's layers, without starting anything: `index.ts` serves them on :3002 and `test/smoke.test.ts` boots the
+// very same `makeAppLayer` in-process over SQLite, so the example cannot drift from what its test proves (a sign-up,
+// the mailed verification token, a sign-in, an organization, all persisted through the real SQL store adapters).
 //
-// Password over SQL, end to end: a migration run, the encrypted-account repositories, the durable
-// audit log, a SQL-backed rate limiter, one SQL transaction domain. The backend is chosen at
-// startup: `DATABASE_URL` set means Postgres, otherwise a SQLite file (`SQLITE_FILE`, default
-// `./awthaq.sqlite`; `:memory:` works too). That is the one-layer substitution a deployment makes
-// when it outgrows the embedded database; nothing else below mentions a dialect.
+// Password and Organization over SQL, end to end, served by `AuthHost.layer` (ADR-EA-044): core's migrations and
+// then the composition's, the sealed provider tokens and OAuth client secrets, the durable audit log, a SQL-backed
+// rate limiter, one SQL transaction domain. The backend is chosen at startup: `DATABASE_URL` set means Postgres,
+// otherwise a SQLite file (`SQLITE_FILE`, default `./awthaq.sqlite`; `:memory:` works too). That is the one-layer
+// substitution a deployment makes when it outgrows the embedded database; nothing else below mentions a dialect.
 
 import { createServer } from "node:http";
+import { Auth, type Migrations } from "@awthaq/core";
 import {
-  Accounts,
-  AuditLog,
-  Auth,
-  AuthEvents,
-  DataExport,
-  Erasure,
-  Hooks,
-  Persistence,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
+  Organization,
+  type OrganizationActiveContext,
+  type OrganizationAuthority,
+  type OrganizationDeletion,
+  type OrganizationDirectory,
+  type OrganizationInvitations,
+  type OrganizationMembers,
+  type OrganizationRoles,
+  type OrganizationTeams,
+} from "@awthaq/organization";
 import { Password } from "@awthaq/password";
 import {
   ClientAddress,
@@ -35,36 +32,28 @@ import {
   PasswordHasher,
   RateLimiter,
 } from "@awthaq/ports";
-import { AuthHttp, BodyLimit, Csrf, RequestContext } from "@awthaq/server";
-import { CoreMigrations, RateLimiterStoreSql } from "@awthaq/sql";
+import { AuthHost, Csrf } from "@awthaq/server";
+import { RateLimiterStoreSql } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import * as Config from "effect/Config";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
-import * as Etag from "effect/http/Etag";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
-import * as HttpClient from "effect/http/HttpClient";
-import * as HttpPlatform from "effect/http/HttpPlatform";
+import type * as HttpClient from "effect/http/HttpClient";
 import * as HttpRouter from "effect/http/HttpRouter";
-import * as Migrator from "effect/sql/Migrator";
+import * as HttpServer from "effect/http/HttpServer";
 
-// 1. The plugin composition: `Auth.make` folds each plugin's HttpApi contract and Layer into one
-//    `api`/`layer` pair. Add more (`Organization`, `OAuth`, `Passkey`, ...) by listing them here
-//    and providing the ports and migrations each adds.
-const auth = Auth.make([Password.Password]);
+// 1. Password and Organization. Add more by listing them: `AuthHost` selects each plugin's SQL records, provides its
+//    hook points and runs its migrations; what is left for you is the ports it requires (the compiler lists them).
+const auth = Auth.make([Password.Password, Organization.Organization]);
 
-// 2. The database, chosen by configuration. Both branches provide the same `SqlClient`, which is
-//    all the repositories and the migrator ask for; the dialect is read from the client.
-const PostgresLive = PgClient.layerConfig({
-  url: Config.Redacted("DATABASE_URL"),
-});
+// 2. The database, chosen by configuration. Both branches provide the same `SqlClient`, which is all the store
+//    adapters and the migrator ask for; the dialect is read from the client.
+const PostgresLive = PgClient.layerConfig({ url: Config.Redacted("DATABASE_URL") });
 const SqliteLive = SqliteClient.layerConfig({
   filename: Config.String("SQLITE_FILE").pipe(Config.withDefault("./awthaq.sqlite")),
 });
@@ -73,17 +62,11 @@ const SqlLive = Layer.unwrap(
     Option.isSome(url) ? PostgresLive : SqliteLive,
   ),
 );
-// The forward-only core migrations, run once when the layer is built (the same set the package
-// contract tests run against SQLite and Postgres alike).
-const Migrated = Layer.effectDiscard(
-  Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
-).pipe(Layer.provide(SqlLive));
 
-// 3. Encryption keys. `KeyProvider.layerEnv` is the real path (`AWTHAQ_ENCRYPTION_KEYS`, or the
-//    single `AWTHAQ_ENCRYPTION_KEY`) and is used whenever a key is configured. With none, this
-//    *example* opts into `KeyProvider.layerEphemeral` (IC-010): a random key for this run,
-//    logged loudly, which a `NODE_ENV=production` process refuses. Password stores no provider
-//    tokens, so nothing here is lost on restart; an OAuth deployment must configure a real key.
+// 3. Encryption keys. `KeyProvider.layerEnv` is the real path (`AWTHAQ_ENCRYPTION_KEYS`, or the single
+//    `AWTHAQ_ENCRYPTION_KEY`) and is used whenever a key is configured. With none, this *example* opts into
+//    `KeyProvider.layerEphemeral` (IC-010): a random key for this run, logged loudly, which a `NODE_ENV=production`
+//    process refuses. Organization seals OAuth client secrets under it, so a real deployment configures a key.
 const KeysLive = Layer.unwrap(
   Effect.gen(function* () {
     const configured = yield* Config.option(Config.String("AWTHAQ_ENCRYPTION_KEY"));
@@ -93,111 +76,71 @@ const KeysLive = Layer.unwrap(
       : KeyProvider.layerEphemeral;
   }),
 );
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(KeysLive),
-  Layer.provide(NodeCrypto.layer),
-);
+const EncryptionLive = Encryption.layer.pipe(Layer.provide(KeysLive));
 
-// 4. The domain services over the SQL stores (`Persistence.sql()`); `AuthEvents` writes every
-//    event into the durable `AuditLog` table.
-const CoreLive = Layer.mergeAll(
-  Users.layer,
-  Accounts.layer,
-  Sessions.layer,
-  Verification.layer,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layer))),
-  Layer.provideMerge(Persistence.sql().pipe(Layer.provide(EncryptionLive))),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
-  Layer.provideMerge(NodeCrypto.layer),
-);
-
-// 5. The rate limiter enforces the rules the plugin registers, against a shared SQL store so the
-//    limits hold across replicas and restarts.
-const RateLimiterMigrated = Layer.effectDiscard(RateLimiterStoreSql.migrate).pipe(
-  Layer.provide(SqlLive),
-);
+// 4. The rate limiter enforces the rules the plugins register, against a shared SQL store (its own table and its
+//    own ledger, an adapter of the `RateLimiter` port) so the limits hold across replicas and restarts.
 const RateLimiterLive = RateLimiter.layer.pipe(
   Layer.provide(RateLimiterStoreSql.layerStoreSql),
-  Layer.provide(RateLimiterMigrated),
+  Layer.provide(Layer.effectDiscard(RateLimiterStoreSql.migrate).pipe(Layer.provide(SqlLive))),
   Layer.provide(SqlLive),
 );
 
-// 6. Cross-cutting services: erasure and export over the hook registries, one SQL transaction
-//    domain, the client-address resolver (`layerDirect` reads the socket peer; behind a proxy
-//    use `layerTrustedProxy`). The host middleware (`Authentication`, `CsrfProtection`) is derived from the
-//    groups the composed api declares: CSRF keyed by `AWTHAQ_CSRF_SECRET` (>= 32 bytes).
-const MiddlewareLive = AuthHttp.middlewareFor(auth.api, { csrf: Csrf.layerConfig });
-const ServicesLive = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-  Layer.provideMerge(ClientAddress.layerDirect),
-);
-
-// 7. Mount the composed api. The OpenAPI document and Scalar UI are unauthenticated, so they are
-//    off unless `AWTHAQ_EXPOSE_DOCS=true`.
+// `AWTHAQ_MIGRATE_ON_BOOT=false` when `awthaq migration apply` is your deploy step: the server then refuses to start
+// while anything is pending, and never migrates itself. The OpenAPI document and Scalar UI are unauthenticated, so
+// they are off unless `AWTHAQ_EXPOSE_DOCS=true`.
+const MigrateOnBoot = Config.Boolean("AWTHAQ_MIGRATE_ON_BOOT").pipe(Config.withDefault(true));
 const ExposeDocs = Config.Boolean("AWTHAQ_EXPOSE_DOCS").pipe(Config.withDefault(false));
-const RoutesLive = Layer.unwrap(
-  Effect.map(ExposeDocs, (expose) =>
-    AuthHttp.routes(auth.api, expose ? { openapiPath: "/openapi.json" } : {}).pipe(
-      Layer.provide(AuthHttp.coreHandlers),
-      Layer.provide(auth.layer),
-    ),
-  ),
-);
-const DocsLive = Layer.unwrap(
-  Effect.map(ExposeDocs, (expose) => (expose ? AuthHttp.docs(auth.api) : Layer.empty)),
-);
 
-// `Mailer.layerConsole` prints every message, verification token included, to the log so a run
-// needs no inbox. Never for production: a real deployment provides its own `Mailer`.
-const makeAppLayer = (httpClient: Layer.Layer<HttpClient.HttpClient>) =>
-  Layer.mergeAll(RoutesLive, DocsLive).pipe(
-    Layer.provide(MiddlewareLive),
-    Layer.provideMerge(ServicesLive),
-    Layer.provideMerge(CoreLive),
-    Layer.provideMerge(Hooks.HooksLive),
-    Layer.provideMerge(
-      Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerConsole, RateLimiterLive).pipe(
-        Layer.provideMerge(NodeCrypto.layer),
+// 5. The servable layer. `AuthHost` derives everything that is a function of the plugin tuple; this app provides
+//    the database, the CSRF secret (`AWTHAQ_CSRF_SECRET`, >= 32 bytes) and its ports. `Mailer.layerConsole` prints
+//    every message, verification token included, to the log so a run needs no inbox: never for production.
+export const makeAppLayer = (httpClient: Layer.Layer<HttpClient.HttpClient>) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const migrate = yield* MigrateOnBoot;
+      const expose = yield* ExposeDocs;
+      return AuthHost.layer(auth, {
+        persistence: { records: "sql", client: SqlLive, migrations: migrate ? "apply" : "verify" },
+        csrf: Csrf.layerConfig,
+        ...(expose ? { openapiPath: "/openapi.json", docsPath: "/docs" } : {}),
+      });
+    }),
+  ).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        PasswordHasher.layerArgon2id,
+        Mailer.layerConsole,
+        RateLimiterLive,
+        ClientAddress.layerDirect,
+        EncryptionLive,
+        httpClient,
       ),
     ),
-    Layer.provideMerge(RateLimits.layer),
-    Layer.provide(httpClient),
-    Layer.provideMerge(
-      Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-        Layer.provideMerge(FileSystem.layerNoop({})),
-      ),
-    ),
+    Layer.provideMerge(NodeCrypto.layer),
+    Layer.provideMerge(HttpServer.layerServices),
     Layer.provideMerge(HttpRouter.layer),
   );
 
-const AppLayer = makeAppLayer(FetchHttpClient.layer);
+/** Keeps Organization's exposed services (in `makeAppLayer`'s output) nameable for declaration emit. @public */
+export type OrganizationServices =
+  | OrganizationActiveContext.OrganizationActiveContext
+  | OrganizationAuthority.OrganizationAuthority
+  | OrganizationDeletion.OrganizationDeletion
+  | OrganizationDirectory.OrganizationDirectory
+  | OrganizationInvitations.OrganizationInvitations
+  | OrganizationMembers.OrganizationMembers
+  | OrganizationRoles.OrganizationRoles
+  | OrganizationTeams.OrganizationTeams;
 
-/**
- * Boots the app in-process (no socket) for tests: the web handler and a disposer that closes the
- * database. `env` replaces the process environment as the configuration source, `httpClient` is
- * the breach-check transport and `logger` replaces the default loggers (a test reads the mail
- * the console mailer prints through it).
- */
-export const buildApp = (
-  env: Record<string, string>,
-  httpClient: Layer.Layer<HttpClient.HttpClient> = FetchHttpClient.layer,
-  logger: Layer.Layer<never> = Layer.empty,
-) => {
-  const memoMap = Layer.makeMemoMapUnsafe();
-  const layer = makeAppLayer(httpClient).pipe(
-    Layer.provideMerge(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
-    Layer.provideMerge(logger),
-  );
-  const { handler, dispose } = HttpRouter.toWebHandler(layer, { memoMap });
-  return { handler, dispose };
-};
+/** What a boot can fail with besides configuration: a pending migration in verify mode, drift, a failed batch. @public */
+export type BootFailure = Migrations.OnBuildError;
 
-// 8. A real listening server. `BodyLimit.layer` bounds every request body (256 KiB by default); `RequestContext.layer` records the client address and user agent on the sessions and audit rows a request causes.
+// 6. A real listening server.
 const serverLayer = (port: number) =>
-  HttpRouter.serve(
-    Layer.mergeAll(BodyLimit.layer, RequestContext.layer).pipe(Layer.provideMerge(AppLayer)),
-  ).pipe(Layer.provide(NodeHttpServer.layer(createServer, { port })));
+  HttpRouter.serve(makeAppLayer(FetchHttpClient.layer)).pipe(
+    Layer.provide(NodeHttpServer.layer(createServer, { port })),
+  );
 
 /** Serve on `port` until interrupted. */
 export const main = (port: number) =>
@@ -205,7 +148,9 @@ export const main = (port: number) =>
     Layer.merge(
       serverLayer(port),
       Layer.effectDiscard(
-        Effect.logInfo(`awthaq example (SQL-backed, Password) listening on :${port}`),
+        Effect.logInfo(
+          `awthaq example (SQL-backed, Password + Organization) listening on :${port}`,
+        ),
       ),
     ),
   );

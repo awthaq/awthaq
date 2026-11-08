@@ -17,7 +17,7 @@
 // construction, and the request is bound to the browser that started it by a cookie plus a single-consume request id (the
 // ACS), or is a signed message that changes nothing but ending the sessions it names (the IdP's LogoutRequest).
 
-import { Api } from "@awthaq/api";
+import { Api, SessionLifecycle } from "@awthaq/api";
 import { HookPoint, Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -127,7 +127,7 @@ export const SamlGroup = HttpApiGroup.make("saml")
         HookPoint.HookAborted,
         Hooks.TwoFactorRequired,
       ],
-    }),
+    }).middleware(SessionLifecycle.Mints),
   )
   .add(
     // BEH-EA-315: the answer is a redirect (a LogoutResponse over the Redirect binding, or back to the app after our own
@@ -164,7 +164,7 @@ export const SamlAccountGroup = HttpApiGroup.make("saml.account")
       payload: LogoutPayload,
       success: HttpApiSchema.Empty(302),
       error: [Api.RateLimited, Api.StoreUnavailable],
-    }),
+    }).middleware(SessionLifecycle.Ends),
   )
   .middleware(Api.Authentication)
   .middleware(Api.CsrfProtection);

@@ -28,7 +28,7 @@
 // never an account's only factor, recorded as `sms` (not `otp`) so a policy can rank it lower, and
 // emitting a distinguishable audit event.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract, type SessionLifecycle } from "@awthaq/api";
 import {
   AuthEvents,
   AuthPlugin,
@@ -51,11 +51,13 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Headers from "effect/http/Headers";
 import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Channel from "./Channel.ts";
 import * as EmailOtpApi from "./EmailOtpApi.ts";
+
+/** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type EmailOtpLifecycle = SessionLifecycle.Mints;
 
 // ---- config -----------------------------------------------------------------------------------------
 
@@ -133,12 +135,6 @@ const identifierOf = (email: string): string => `email-otp:${email}`;
 /** The server-side payload a code carries: the address it was issued for (normalised). */
 const CodePayload = Schema.Struct({ email: Schema.String });
 
-/** What `verify` returns: the session and the raw token to deliver it (cookie or bearer, `SessionDelivery`). */
-export interface IssuedSession {
-  readonly session: Sessions.SessionView;
-  readonly token: Redacted.Redacted<string>;
-}
-
 export interface EmailOtpShape {
   /** BEH-EA-272: always resolves (or is rate limited) — never says whether an account exists or a code was mailed. */
   readonly requestCode: (input: {
@@ -154,7 +150,7 @@ export interface EmailOtpShape {
     },
     context?: { readonly userAgent?: string | undefined },
   ) => Effect.Effect<
-    IssuedSession,
+    Sessions.IssuedSession,
     | EmailOtpApi.InvalidEmailOtp
     | Api.RateLimited
     | HookPoint.HookAborted
@@ -163,19 +159,6 @@ export interface EmailOtpShape {
     | Errors.StoreUnavailable
   >;
 }
-
-/** The address (through the application-provided `ClientAddress` port, AGA-001/NHS-003) and user agent of a request. */
-const currentClient = Effect.fnUntraced(function* (
-  clientAddress: ClientAddress.ClientAddressShape,
-  request: HttpServerRequest.HttpServerRequest,
-) {
-  const resolved = yield* clientAddress.resolve(request);
-  const userAgent = Headers.get(request.headers, "user-agent");
-  return {
-    ip: Option.getOrUndefined(resolved),
-    context: Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
-  };
-});
 
 export const EmailOtpHandlers = HttpApiBuilder.group(
   EmailOtpApi.EmailOtpApi,
@@ -191,8 +174,8 @@ export const EmailOtpHandlers = HttpApiBuilder.group(
         payload: EmailOtpApi.RequestPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const client = yield* currentClient(clientAddress, request);
-        yield* emailOtp.requestCode({ email: payload.email, ip: client.ip });
+        const { ip } = yield* ClientAddress.address(clientAddress, request);
+        yield* emailOtp.requestCode({ email: payload.email, ip });
       }),
       verify: Effect.fnUntraced(function* ({
         payload,
@@ -203,12 +186,11 @@ export const EmailOtpHandlers = HttpApiBuilder.group(
       }) {
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          request,
           Effect.gen(function* () {
-            const client = yield* currentClient(clientAddress, request);
+            const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
             return yield* emailOtp.verify(
-              { email: payload.email, code: payload.code, ip: client.ip },
-              client.context,
+              { email: payload.email, code: payload.code, ip },
+              context,
             );
           }),
         );

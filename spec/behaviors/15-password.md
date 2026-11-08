@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-15 |
-> | Revision | 1.5 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.7 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-113's research citation to the precise Q48 finding it refers to (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): `POST /password/reauthenticate` answers 401 when the session ended mid-request (BEH-EA-319, plan 10 item 3) <br> 1.4 (2026-10-13): `POST /change-email` requires a fresh session (`PasswordReauthRequired`, `PasswordConfig.reauthMaxAge`, BEH-EA-320; plan 10 item 4) <br> 1.5 (2026-10-13): `confirmReset`, `verifyEmail` and `confirmEmailChange` redeem through `Verification.redeem`; BEH-EA-259 no longer says "(on SQL)" (ADR-EA-039, plan 07) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-113's research citation to the precise Q48 finding it refers to (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): `POST /password/reauthenticate` answers 401 when the session ended mid-request (BEH-EA-319, plan 10 item 3) <br> 1.4 (2026-10-13): `POST /change-email` requires a fresh session (`PasswordReauthRequired`, `PasswordConfig.reauthMaxAge`, BEH-EA-320; plan 10 item 4) <br> 1.5 (2026-10-13): `confirmReset`, `verifyEmail` and `confirmEmailChange` redeem through `Verification.redeem`; BEH-EA-259 no longer says "(on SQL)" (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): the three link endpoints redeem through `VerificationLink.redeemer` (ADR-EA-039 decision 9, plan 18): `confirmReset` is rate limited per source before the token is decoded (BEH-EA-117), a token whose row names no user is spent (BEH-EA-118) <br> 1.7 (2026-11-08): MNA-001 paragraph: the endpoints' `SessionLifecycle` declarations; a bearer `changePassword` carries `set-auth-token` (ADR-EA-045, architecture plan 21) |
 ---
 
 > Implemented in `@awthaq/password` (`packages/password/src`; tests `packages/password/test`, wired scenarios in `features/`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
@@ -26,7 +26,7 @@ REQUIREMENT: `password.signUp` MUST create the user and session in one
              blocking the response on delivery.
 ```
 
-MNA-001/WPS-004: `signUp`, `signIn` and `changePassword` deliver the session through `@awthaq/server`'s shared `SessionDelivery` — the session cookie by default, or, when the request carries `X-Awthaq-Token-Delivery: bearer`, the raw token in the response's optional `token` field with no cookie (an unrecognised value answers `400 InvalidTokenDelivery` before anything is minted; BEH-EA-066).
+MNA-001/WPS-004: `signUp`, `signIn` and `changePassword` deliver the session through `@awthaq/server`'s shared `SessionDelivery` — the session cookie by default, or, when the request carries `X-Awthaq-Token-Delivery: bearer`, the raw token in the response's optional `token` field with no cookie (an unrecognised value answers `400 InvalidTokenDelivery` before anything is minted; BEH-EA-066). `signUp`/`signIn` declare `SessionLifecycle.Mints`, `changePassword` `Rotates` and `reauthenticate` `Refreshes` ([ADR-EA-045](../decisions/045-session-lifecycle-on-the-contract.md)); a bearer delivery also names the token in `set-auth-token`, so a bearer `changePassword` hands the client its replacement token in a header its transport follows (presenting the superseded one again would be refresh-token reuse).
 
 CSD-003: every session the password plugin mints (`signUp`, `signIn`, and the rotated one `changePassword` returns) records the request's resolved client address (through the `ClientAddress` port) and its `User-Agent`, bounded to 512 characters, so the session device list (BEH-EA-054) has data; `@awthaq/oauth`'s callback and `@awthaq/passkey`'s `authenticateVerify` do the same.
 
@@ -115,7 +115,10 @@ REQUIREMENT: `password.requestReset` MUST respond identically for a known and
              transaction that sets the new password. `confirmReset` MUST
              evaluate the password policy before consuming the token (a weak
              password never burns it, and no breach-check network call runs
-             inside the transaction), MUST refuse a token of another purpose
+             inside the transaction), MUST be rate limited per source before
+             the token is decoded and per token (its public id) before the
+             policy is evaluated (APS-003: a flood of forged tokens never
+             reaches the breach check), MUST refuse a token of another purpose
              or for an account with no password credential as `TokenConsumed`
              (never a defect), and MUST mark the account's email verified —
              the mailed token proves the same mailbox control `verifyEmail`
@@ -138,7 +141,9 @@ yield* client.verification.confirm({ params: { token } })
 ```text
 REQUIREMENT: Confirming an already-consumed verification token MUST fail with
              `TokenConsumed` (410) and MUST publish `auth.token.replay`; it
-             MUST NOT silently succeed or silently no-op.
+             MUST NOT silently succeed or silently no-op. A token whose row
+             names no user (a row this plugin did not write) MUST be spent
+             and answered `TokenConsumed`.
 ```
 
 A replayed token is evidence worth keeping even though the action it would have performed must not repeat: it may indicate a token that leaked (forwarded email, shared clipboard, a proxy that retried a request). Publishing `auth.token.replay` on the shared `AuthEvents` bus (file 13) lets an application wire an alert without the password plugin itself knowing anything about alerting — the plugin's job stops at "this is a replay," recorded as a typed, observable fact.

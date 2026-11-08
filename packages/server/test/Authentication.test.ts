@@ -10,17 +10,14 @@ import {
   Sessions,
   Users,
 } from "@awthaq/core";
-import { Api } from "@awthaq/api";
+import { Api, SessionLifecycle } from "@awthaq/api";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
-import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as Cookies from "effect/http/Cookies";
 import * as HttpEffect from "effect/http/HttpEffect";
 import * as HttpRouter from "effect/http/HttpRouter";
-import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
@@ -43,7 +40,19 @@ import * as HttpPlatform from "effect/http/HttpPlatform";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Authentication from "../src/Authentication.ts";
+import * as Credentials from "../src/Credentials.ts";
+import * as SessionDelivery from "../src/SessionDelivery.ts";
+import * as SessionLifecycleLive from "../src/SessionLifecycle.ts";
 import * as Wiring from "./support/Wiring.ts";
+import {
+  headersFor,
+  layerFor,
+  none,
+  rows,
+  seed,
+  variantOf,
+  who,
+} from "./support/CredentialTable.ts";
 
 // `HttpApiTest.groups` needs these platform services regardless of which
 // middleware is under test — the same bundle effect's own HttpApiBuilder
@@ -150,79 +159,6 @@ const UnreliableSessions: Layer.Layer<Sessions.Sessions> = Layer.succeed(Session
 });
 
 describe("Authentication", () => {
-  it.effect("BEH-EA-067: fails Unauthenticated when neither cookie nor bearer resolves", () =>
-    Effect.gen(function* () {
-      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-      const failure = yield* client.required.whoAmI({ headers: {} }).pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "Unauthenticated");
-    }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect(
-    "BEH-EA-065: a valid session cookie resolves CurrentPrincipal as the session's own user",
-    () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const { token } = yield* sessions.issue({ userId });
-        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-        const result = yield* client.required.whoAmI({
-          headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
-        });
-        assert.strictEqual(result, userId);
-      }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect("BEH-EA-066: a valid bearer token resolves the same UserPrincipal a cookie would", () =>
-    Effect.gen(function* () {
-      const sessions = yield* Sessions.Sessions;
-      const { token } = yield* sessions.issue({ userId });
-      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-      const result = yield* client.required.whoAmI({
-        headers: { authorization: `Bearer ${Redacted.value(token)}` },
-      });
-      assert.strictEqual(result, userId);
-    }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect(
-    "BEH-EA-065/072: cookie is tried before bearer — an invalid bearer doesn't stop a valid cookie",
-    () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const { token } = yield* sessions.issue({ userId });
-        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-        const result = yield* client.required.whoAmI({
-          headers: {
-            cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
-            authorization: "Bearer garbage",
-          },
-        });
-        assert.strictEqual(result, userId);
-      }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect("BEH-EA-068/029: OptionalAuthentication resolves Anonymous instead of failing", () =>
-    Effect.gen(function* () {
-      const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-      const result = yield* client.optional.whoAmI({ headers: {} });
-      assert.strictEqual(result, "Anonymous");
-    }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect(
-    "BEH-EA-068: OptionalAuthentication still resolves a real principal from a valid bearer token",
-    () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const { token } = yield* sessions.issue({ userId });
-        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-        const result = yield* client.optional.whoAmI({
-          headers: { authorization: `Bearer ${Redacted.value(token)}` },
-        });
-        assert.strictEqual(result, userId);
-      }).pipe(Effect.provide(TestLayer)),
-  );
-
   it.effect(
     "BEH-EA-211: a session issued with actingAs resolves to a UserPrincipal carrying the identical actingAs",
     () =>
@@ -250,55 +186,6 @@ describe("Authentication", () => {
       });
       assert.strictEqual(result, null);
     }).pipe(Effect.provide(TestLayer)),
-  );
-
-  // APS-006: impersonation sessions travel under their own cookie so the
-  // admin's own `__Host-session` is never overwritten.
-  it.effect(
-    "APS-006: a session carrying actingAs authenticates from the __Host-impersonation cookie and shadows __Host-session",
-    () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const own = yield* sessions.issue({ userId: Users.UserId("admin-1") });
-        const impersonation = yield* sessions.issue({
-          userId,
-          actingAs: { type: "user", id: "admin-1" },
-        });
-        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-        const result = yield* client.required.whoAmI({
-          headers: {
-            cookie: `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(impersonation.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
-          },
-        });
-        assert.strictEqual(result, userId);
-      }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect(
-    "APS-006: an ordinary session planted in __Host-impersonation never authenticates and the chain falls through to __Host-session",
-    () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const own = yield* sessions.issue({ userId: Users.UserId("admin-1") });
-        const planted = yield* sessions.issue({ userId });
-        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-
-        const alone = yield* client.required
-          .whoAmI({
-            headers: {
-              cookie: `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(planted.token)}`,
-            },
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(alone._tag, "Unauthenticated");
-
-        const fallsThrough = yield* client.required.whoAmI({
-          headers: {
-            cookie: `${Sessions.IMPERSONATION_COOKIE_NAME}=${Redacted.value(planted.token)}; ${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(own.token)}`,
-          },
-        });
-        assert.strictEqual(fallsThrough, "admin-1");
-      }).pipe(Effect.provide(TestLayer)),
   );
 
   // .scratch/jwt/issues/16-automatic-response-mirroring.md: `PostAuthResponseHook`
@@ -384,7 +271,7 @@ describe("Authentication", () => {
 
   // Spec-fidelity fix: `.scratch/jwt/spec.md`'s own "Automatic response
   // mirroring" decision consults `PostAuthResponseHook` only "immediately
-  // after a successful `resolvePrincipal`" — the anonymous principal
+  // after a successful resolution" — the anonymous principal
   // `OptionalAuthenticationLive`'s `bearer` branch falls back to on a
   // missing/invalid credential is a *recovery* from failure, not a success,
   // and must never reach the hook (an unauthenticated caller must never be
@@ -421,30 +308,6 @@ describe("Authentication", () => {
       ),
     );
   });
-
-  // NHS-002/EEM-003: `resolveSession` used to blanket-map every `verify`
-  // failure — including a backing-store outage — to `Api.Unauthenticated`, so
-  // a database outage answered 401 on every request, indistinguishable from a
-  // bad credential. MA-004: the outage is the typed `StoreUnavailable`; it
-  // stays a typed failure (not `Unauthenticated`, not a defect), which the
-  // middleware declares and so answers 503.
-  it.effect(
-    "resolveSession fails StoreUnavailable (not Unauthenticated, not a defect) when the session store is unreachable",
-    () =>
-      Effect.gen(function* () {
-        const request = HttpServerRequest.fromWeb(new Request("http://localhost/whatever"));
-        const exit = yield* Authentication.resolveSession(
-          yield* Sessions.Sessions,
-          Redacted.make("some-id.some-secret"),
-          "cookie",
-        ).pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, request), Effect.exit);
-        assert.isTrue(Exit.isFailure(exit));
-        if (!Exit.isFailure(exit)) return;
-        assert.isFalse(Cause.hasDies(exit.cause));
-        const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail");
-        assert.strictEqual(failure?.error._tag, "StoreUnavailable");
-      }).pipe(Effect.provide(UnreliableSessions)),
-  );
 });
 
 // PIL-005/TS-003/NHS-006/MAPS-008: real serving path. Pre-response handlers
@@ -456,15 +319,21 @@ const RotationApi = HttpApi.make("rotation").add(
   HttpApiGroup.make("g")
     .add(HttpApiEndpoint.get("ok", "/ok", { success: Schema.String }))
     .add(HttpApiEndpoint.get("boom", "/boom", { success: Schema.String, error: Boom }))
+    // ADR-EA-045: an endpoint that ends the caller's session, behind the same rotating verify.
+    .add(HttpApiEndpoint.post("end", "/end").middleware(SessionLifecycle.Ends))
     .middleware(Api.Authentication),
 );
 
 const RotationHandlers = HttpApiBuilder.group(RotationApi, "g", (handlers) =>
-  handlers.handle("ok", () => Effect.succeed("ok")).handle("boom", () => Effect.fail(new Boom())),
+  handlers
+    .handle("ok", () => Effect.succeed("ok"))
+    .handle("boom", () => Effect.fail(new Boom()))
+    .handle("end", () => SessionDelivery.end),
 );
 
 const RotationLayer = HttpApiBuilder.layer(RotationApi).pipe(
   Layer.provide(RotationHandlers),
+  Layer.provide(SessionLifecycleLive.EndsLive),
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provide(Wiring.resolver),
   Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
@@ -478,6 +347,7 @@ const RotationLayer = HttpApiBuilder.layer(RotationApi).pipe(
 // MA-004: the same route served over a session store that is down.
 const OutageLayer = HttpApiBuilder.layer(RotationApi).pipe(
   Layer.provide(RotationHandlers),
+  Layer.provide(SessionLifecycleLive.EndsLive),
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provide(Wiring.resolver),
   Layer.provideMerge(UnreliableSessions),
@@ -485,7 +355,7 @@ const OutageLayer = HttpApiBuilder.layer(RotationApi).pipe(
   Layer.provideMerge(HttpRouter.layer),
 );
 
-const serve = (path: string, headers: Record<string, string>) =>
+const serve = (path: string, headers: Record<string, string>, method = "GET") =>
   Effect.gen(function* () {
     const router = yield* HttpRouter.HttpRouter;
     let written: HttpServerResponse.HttpServerResponse | undefined;
@@ -496,7 +366,7 @@ const serve = (path: string, headers: Record<string, string>) =>
     ).pipe(
       Effect.provideService(
         HttpServerRequest.HttpServerRequest,
-        HttpServerRequest.fromWeb(new Request(`http://localhost${path}`, { headers })),
+        HttpServerRequest.fromWeb(new Request(`http://localhost${path}`, { method, headers })),
       ),
     );
     if (written === undefined) return yield* Effect.die("no response was written");
@@ -511,6 +381,7 @@ const cookieOf = (response: HttpServerResponse.HttpServerResponse) =>
 const rotationLayerWith = (cookieConfig: Layer.Layer<never>) =>
   HttpApiBuilder.layer(RotationApi).pipe(
     Layer.provide(RotationHandlers),
+    Layer.provide(SessionLifecycleLive.EndsLive),
     Layer.provideMerge(Authentication.AuthenticationLive),
     Layer.provide(Wiring.resolver),
     Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
@@ -673,6 +544,31 @@ describe("Authentication rotation delivery (PIL-005)", () => {
     ).pipe(Effect.provide(RotationLayer)),
   );
 
+  // ADR-EA-045: a request whose verify rotated and which then ends the session must not hand the client the
+  // secret of the session it just revoked; it says the session ended instead.
+  it.effect(
+    "a bearer sign-out after a verify-time rotation drops set-auth-token and says the session ended",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { token } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.hours(2));
+          const response = yield* serve(
+            "/end",
+            {
+              authorization: `Bearer ${Redacted.value(token)}`,
+            },
+            "POST",
+          );
+          assert.strictEqual(response.status, 204);
+          assert.isUndefined(response.headers[Api.ROTATED_TOKEN_HEADER]);
+          assert.strictEqual(response.headers[Api.SESSION_ENDED_HEADER], "1");
+          assert.strictEqual(response.headers["cache-control"], "no-store");
+        }),
+      ).pipe(Effect.provide(RotationLayer)),
+  );
+
   it.effect("no rotation, no delivery: a fresh session's response is left untouched", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -688,109 +584,8 @@ describe("Authentication rotation delivery (PIL-005)", () => {
   );
 });
 
-describe("Authentication per-request cache (TS-003/NHS-006)", () => {
-  const countingSessions = (verifies: Ref.Ref<number>): Layer.Layer<Sessions.Sessions> =>
-    Layer.succeed(Sessions.Sessions, {
-      issue: () => Effect.die("not used in this test"),
-      verify: () =>
-        Ref.update(verifies, (n) => n + 1).pipe(
-          Effect.andThen(Effect.sleep(Duration.millis(10))),
-          Effect.andThen(
-            Effect.fail(new Sessions.SessionNotFound({ message: "awthaq: no such session" })),
-          ),
-        ),
-      revoke: () => Effect.die("not used in this test"),
-      revokeOwned: () => Effect.die("not used in this test"),
-      revokeOthers: () => Effect.die("not used in this test"),
-      revokeAll: () => Effect.die("not used in this test"),
-      list: () => Effect.die("not used in this test"),
-      findOwned: () => Effect.die("not used in this test"),
-      isLive: () => Effect.die("not used in this test"),
-      purgeExpired: () => Effect.die("not used in this test"),
-      reauthenticate: () => Effect.die("not used in this test"),
-      requireFresh: () => Effect.die("not used in this test"),
-    });
-
-  const sessionsWith = (verifies: Ref.Ref<number>) =>
-    Effect.gen(function* () {
-      return yield* Sessions.Sessions;
-    }).pipe(Effect.provide(countingSessions(verifies)));
-
-  it.effect("two concurrent resolveSession calls for one request call verify exactly once", () =>
-    Effect.gen(function* () {
-      const verifies = yield* Ref.make(0);
-      const sessions = yield* sessionsWith(verifies);
-      const request = HttpServerRequest.fromWeb(new Request("http://localhost/x"));
-      const credential = Redacted.make("some-id.some-secret");
-      const call = Authentication.resolveSession(sessions, credential, "cookie").pipe(Effect.flip);
-      const fiber = yield* Effect.all([call, call, call], { concurrency: "unbounded" }).pipe(
-        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
-        Effect.forkChild,
-      );
-      yield* TestClock.adjust(Duration.millis(20));
-      yield* Fiber.join(fiber);
-      assert.strictEqual(yield* Ref.get(verifies), 1);
-    }),
-  );
-
-  it.effect("a re-wrapped request (request.modify) shares the original's verification", () =>
-    Effect.gen(function* () {
-      const verifies = yield* Ref.make(0);
-      const sessions = yield* sessionsWith(verifies);
-      const request = HttpServerRequest.fromWeb(new Request("http://localhost/x"));
-      const prefixed = request.modify({ url: "/y" });
-      const credential = Redacted.make("some-id.some-secret");
-      const resolve = (r: HttpServerRequest.HttpServerRequest) =>
-        Authentication.resolveSession(sessions, credential, "cookie").pipe(
-          Effect.provideService(HttpServerRequest.HttpServerRequest, r),
-          Effect.flip,
-        );
-      const first = yield* resolve(request).pipe(Effect.forkChild);
-      yield* TestClock.adjust(Duration.millis(20));
-      yield* Fiber.join(first);
-      yield* resolve(prefixed);
-      assert.strictEqual(yield* Ref.get(verifies), 1);
-    }),
-  );
-
-  it.effect("an interrupted first resolver does not wedge a second caller", () =>
-    Effect.gen(function* () {
-      const verifies = yield* Ref.make(0);
-      const sessions = yield* sessionsWith(verifies);
-      const request = HttpServerRequest.fromWeb(new Request("http://localhost/x"));
-      const credential = Redacted.make("some-id.some-secret");
-      const resolve = Authentication.resolveSession(sessions, credential, "cookie").pipe(
-        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
-        Effect.flip,
-      );
-      const first = yield* resolve.pipe(Effect.forkChild);
-      yield* Effect.yieldNow;
-      yield* Fiber.interrupt(first);
-      const second = yield* resolve.pipe(Effect.forkChild);
-      yield* TestClock.adjust(Duration.millis(20));
-      const failure = yield* Fiber.join(second);
-      assert.strictEqual(failure._tag, "Unauthenticated");
-      assert.strictEqual(yield* Ref.get(verifies), 2);
-    }),
-  );
-});
-
 // EHA-006/NHS-010: the contract and the wire.
 describe("Authentication contract (EHA-006, NHS-010)", () => {
-  it("NHS-010: the security middlewares declare their keys in order impersonation, cookie, [apiKey,] bearer (APS-006, OCM-002)", () => {
-    const order = ["impersonation", "cookie", "bearer"];
-    assert.deepStrictEqual(Object.keys(Api.Authentication.security), order);
-    assert.deepStrictEqual(Object.keys(Api.AdminAuthentication.security), order);
-    assert.deepStrictEqual(Object.keys(Api.OptionalAuthentication.security), order);
-    // OCM-002: the machine tier alone adds `x-api-key`, ahead of `bearer`.
-    assert.deepStrictEqual(Object.keys(Api.MachineAuthentication.security), [
-      "impersonation",
-      "cookie",
-      "apiKey",
-      "bearer",
-    ]);
-  });
-
   it("EHA-006: the OpenAPI document lists a 401 for Authentication endpoints but none for OptionalAuthentication", () => {
     const spec = OpenApi.fromApi(TestApi);
     const required = spec.paths["/who-am-i"]?.get?.responses ?? {};
@@ -798,32 +593,6 @@ describe("Authentication contract (EHA-006, NHS-010)", () => {
     assert.property(required, "401");
     assert.notProperty(optional, "401");
   });
-
-  it.effect(
-    "EHA-006: OptionalAuthentication tries the cookie, then the bearer, then anonymous, in that order",
-    () =>
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        const { token } = yield* sessions.issue({ userId });
-        const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
-        // A garbage cookie does not stop a valid bearer.
-        const viaBearer = yield* client.optional.whoAmI({
-          headers: {
-            cookie: `${Sessions.SESSION_COOKIE_NAME}=garbage`,
-            authorization: `Bearer ${Redacted.value(token)}`,
-          },
-        });
-        assert.strictEqual(viaBearer, userId);
-        // Both invalid: anonymous, never a failure.
-        const anonymous = yield* client.optional.whoAmI({
-          headers: {
-            cookie: `${Sessions.SESSION_COOKIE_NAME}=garbage`,
-            authorization: "Bearer garbage",
-          },
-        });
-        assert.strictEqual(anonymous, "Anonymous");
-      }).pipe(Effect.provide(TestLayer)),
-  );
 });
 
 describe("Authentication challenges (JR-007)", () => {
@@ -895,7 +664,7 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
     () =>
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        const resolver = yield* Authentication.PrincipalResolver;
+        const resolver = yield* Credentials.PrincipalResolver;
         const { session } = yield* sessions.issue({ userId, amr: ["pwd", "otp"] });
         const principal = yield* resolver.resolve(session);
         assert.strictEqual(principal._tag, "User");
@@ -909,7 +678,7 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
     Effect.gen(function* () {
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
-      const resolver = yield* Authentication.PrincipalResolver;
+      const resolver = yield* Credentials.PrincipalResolver;
       const user = yield* users.create({
         identity: { _tag: "Email", email: "facts@example.com" },
         name: "Facts",
@@ -919,7 +688,7 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
       assert.strictEqual(principal._tag === "User" ? principal.emailVerified : undefined, false);
     }).pipe(
       Effect.provide(
-        Authentication.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
+        Credentials.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
       ),
     ),
   );
@@ -929,7 +698,7 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
     () =>
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        const resolver = yield* Authentication.PrincipalResolver;
+        const resolver = yield* Credentials.PrincipalResolver;
         const { session } = yield* sessions.issue({
           userId: Users.UserId("99999999-9999-9999-9999-999999999999"),
         });
@@ -937,7 +706,7 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
         assert.strictEqual(principal._tag === "User" ? principal.emailVerified : undefined, false);
       }).pipe(
         Effect.provide(
-          Authentication.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
+          Credentials.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
         ),
       ),
   );
@@ -1040,5 +809,123 @@ describe("Authentication observability", () => {
         assert.isFalse(allValues.some((value) => value.includes(secret)));
       }).pipe(Effect.provide(TestLayer.pipe(Layer.provideMerge(trace.layer))));
     },
+  );
+});
+
+// ADR-EA-042, group A: the same credential table `Credentials.test.ts` runs through `Credentials.resolve`, served here
+// through Path A's real middleware over `HttpApiTest` (one handler per declared scheme, Effect's security loop as the
+// chain). That the two agree row by row is the proof that the loop plus `step` equals `resolve`.
+describe("Path A parity with the credential table (group A)", () => {
+  const AllHeaders = {
+    cookie: Schema.optional(Schema.String),
+    authorization: Schema.optional(Schema.String),
+    "x-api-key": Schema.optional(Schema.String),
+  };
+  const endpointAt = (path: `/${string}`) =>
+    HttpApiEndpoint.get("who", path, { headers: AllHeaders, success: Schema.String });
+  const ParityApi = HttpApi.make("parity")
+    .add(HttpApiGroup.make("user").add(endpointAt("/who-user")).middleware(Api.Authentication))
+    .add(
+      HttpApiGroup.make("optional")
+        .add(endpointAt("/who-optional"))
+        .middleware(Api.OptionalAuthentication),
+    )
+    .add(
+      HttpApiGroup.make("machine")
+        .add(endpointAt("/who-machine"))
+        .middleware(Api.MachineAuthentication),
+    );
+
+  const whoHandler = () =>
+    Effect.gen(function* () {
+      const principal = yield* Api.CurrentPrincipal;
+      if (principal._tag === "Anonymous") return "anonymous";
+      const acting =
+        principal._tag === "User" && principal.actingAs !== undefined
+          ? `~${who(principal.actingAs.id)}`
+          : "";
+      return `${who(principal.ref.id)}${acting}`;
+    });
+
+  const Handlers = Layer.mergeAll(
+    HttpApiBuilder.group(ParityApi, "user", (handlers) => handlers.handle("who", whoHandler)),
+    HttpApiBuilder.group(ParityApi, "optional", (handlers) => handlers.handle("who", whoHandler)),
+    HttpApiBuilder.group(ParityApi, "machine", (handlers) => handlers.handle("who", whoHandler)),
+  );
+
+  const tiersServed = ["user", "machine", "optional"] as const;
+
+  const MachineChallengeLayer = HttpApiBuilder.layer(ParityApi).pipe(
+    Layer.provide(Handlers),
+    Layer.provideMerge(Authentication.AuthenticationLive),
+    Layer.provideMerge(Authentication.OptionalAuthenticationLive),
+    Layer.provideMerge(Authentication.MachineAuthenticationLive),
+    Layer.provide(Wiring.resolver),
+    Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provideMerge(AuthEvents.layer),
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provideMerge(TestServices),
+    Layer.provideMerge(HttpRouter.layer),
+  );
+
+  for (const row of rows) {
+    for (const tier of tiersServed) {
+      const expected = row[tier];
+      it.effect(`${row.id} ${tier} over Path A: ${expected}`, () => {
+        const carriers = Effect.runSync(Ref.make<ReadonlyArray<string>>([]));
+        const Hook = Layer.succeed(Authentication.PostAuthResponseHook, {
+          decorate: (_principal, response, context) =>
+            Ref.update(carriers, (seen) => [...seen, context.scheme]).pipe(Effect.as(response)),
+        });
+        return Effect.gen(function* () {
+          const tokens = yield* seed;
+          const client = yield* HttpApiTest.groups(ParityApi, ["user", "optional", "machine"]);
+          const outcome = yield* client[tier].who({ headers: headersFor(row, tokens) }).pipe(
+            Effect.map((principal) => principal),
+            Effect.catchTag("Unauthenticated", () => Effect.succeed(none)),
+          );
+          const scheme = (yield* Ref.get(carriers))[0];
+          const served =
+            outcome === none || outcome === "anonymous" ? none : `${outcome}@${scheme}`;
+          assert.strictEqual(served, expected);
+        }).pipe(
+          Effect.provide(
+            Handlers.pipe(
+              Layer.provideMerge(Authentication.AuthenticationLive),
+              Layer.provideMerge(Authentication.OptionalAuthenticationLive),
+              Layer.provideMerge(Authentication.MachineAuthenticationLive),
+              Layer.provide(Hook),
+              Layer.provideMerge(layerFor(variantOf(row))),
+              Layer.provideMerge(TestServices),
+            ),
+          ),
+        );
+      });
+    }
+  }
+
+  // The machine tier's last scheme is `bearer` too: its 401 carries the same JR-007 challenge.
+  it.effect("JR-007: the machine tier's 401 carries the same WWW-Authenticate challenge", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const challengeOf = (headers: Record<string, string>) =>
+          serve("/who-machine", headers).pipe(
+            Effect.map((response) => ({
+              status: response.status,
+              challenge: response.headers["www-authenticate"],
+            })),
+          );
+        const bare = yield* challengeOf({});
+        assert.strictEqual(bare.status, 401);
+        assert.strictEqual(bare.challenge, 'Bearer realm="awthaq"');
+        const invalid = yield* challengeOf({ authorization: "Bearer not-a-real-token" });
+        assert.strictEqual(invalid.status, 401);
+        assert.strictEqual(invalid.challenge, 'Bearer realm="awthaq", error="invalid_token"');
+        const keyOnly = yield* challengeOf({ "x-api-key": "nope" });
+        assert.strictEqual(keyOnly.status, 401);
+        assert.strictEqual(keyOnly.challenge, 'Bearer realm="awthaq"');
+      }),
+    ).pipe(Effect.provide(MachineChallengeLayer)),
   );
 });

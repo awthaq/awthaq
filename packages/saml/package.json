@@ -29,12 +29,12 @@
     "@awthaq/core": "workspace:*",
     "@awthaq/organization": "workspace:*",
     "@awthaq/ports": "workspace:*",
+    "@awthaq/server": "workspace:*",
     "@awthaq/sql": "workspace:*",
     "@xmldom/xmldom": "0.8.15",
     "xml-crypto": "6.3.2"
   },
   "devDependencies": {
-    "@awthaq/server": "workspace:*",
     "@awthaq/test": "workspace:*",
     "@effect/vitest": "catalog:",
     "@qadi/core": "catalog:",

@@ -1,6 +1,6 @@
 // The real, `@effect/sql-pg`-backed counterpart to `RateLimiterStoreSql.test.ts`
 // (RBS-004): same store, same migration, a real Postgres database. Skips (not
-// fails) without `AWTHAQ_POSTGRES_URL` set, like `Repositories.postgres.test.ts`.
+// fails) without `AWTHAQ_POSTGRES_URL` set, like `ReadRouting.postgres.test.ts`.
 import { RateLimiter } from "@awthaq/ports";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { assert, describe, it } from "@effect/vitest";

@@ -8,7 +8,7 @@
 //
 //  - `identity`: `Users`/`Accounts`/`Sessions`/`Verification`/`AuditLog` over a real in-memory
 //    SQLite database migrated by core's own migrations. Tenant *stamping* (BEH-EA-231) and the
-//    global identity directory (BEH-EA-232) are properties of the repositories and of the
+//    global identity directory (BEH-EA-232) are properties of the store adapters and of the
 //    schema's unique constraints, which the memory twins cannot show.
 //  - `organizations`: the Organization plugin over its memory records, plus `AdminTenants`
 //    (suspension, BEH-EA-237), the qadi `relationships` resolver and the application's
@@ -21,7 +21,7 @@
 // middleware, behind `HttpRouter.toWebHandler`.
 import { TestEncryption } from "@awthaq/test";
 import { Api } from "@awthaq/api";
-import { Admin, AdminTenants } from "@awthaq/admin";
+import { Admin, AdminAccounts, AdminTenants } from "@awthaq/admin";
 import {
   Accounts,
   AuditLog,
@@ -46,8 +46,15 @@ import {
 } from "@awthaq/organization";
 import { ConnectionRecords, DomainClaims, OrganizationRecords } from "@awthaq/organization/records";
 import { OAuth, OAuthConnections, OAuthProvider } from "@awthaq/oauth";
-import { Encryption, KeyProvider, SqlTransaction, Tenant } from "@awthaq/ports";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import {
+  AuditLogStore,
+  Encryption,
+  KeyProvider,
+  PasswordHasher,
+  SqlTransaction,
+  Tenant,
+} from "@awthaq/ports";
+import { AuditLogStoreSql, CoreMigrations } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { RelationshipResolver } from "@qadi/core";
@@ -104,7 +111,7 @@ export type IdentityServices =
   | Verification.Verification
   | AuthEvents.AuthEvents
   | AuditLog.AuditLog
-  | Repositories.UsersRepository
+  | AuditLogStore.AuditLogStore
   | SqlClient.SqlClient;
 
 const buildIdentityStack = () => {
@@ -114,21 +121,10 @@ const buildIdentityStack = () => {
   ).pipe(Layer.provide(SqlLive));
   const Stores = Layer.mergeAll(
     Users.layer.pipe(Layer.provide(SqlStores)),
-    Repositories.UsersRepositoryLive,
-    Accounts.layer
-      .pipe(Layer.provide(SqlStores))
-      .pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)))),
+    AuditLogStoreSql.layer,
+    Accounts.layer.pipe(Layer.provide(SqlStores)),
     Sessions.layer.pipe(Layer.provide(SqlStores)),
-    Verification.layer
-      .pipe(Layer.provide(SqlStores))
-      .pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            Repositories.VerificationRepositoryLive,
-            Repositories.VerificationReservationsRepositoryLive,
-          ),
-        ),
-      ),
+    Verification.layer.pipe(Layer.provide(SqlStores)),
     SqlTransaction.layerSql,
   );
   return Stores.pipe(
@@ -201,6 +197,45 @@ const buildOrganizationStack = () =>
           }),
         ),
         taps: RefuseBillingHold,
+      }),
+    ),
+  );
+
+// ---- the admin-accounts stack (BEH-EA-236, plan 13) ---------------------------------------
+
+/** The tenant "acme" keeps credential administration and requires a digit in a password, but configures no deletion. */
+export class AdminAccountsTenantConfig extends LayerMap.Service<AdminAccountsTenantConfig>()(
+  "features/TenancyWorld/AdminAccountsTenantConfig",
+  {
+    lookup: (tenantId: string) =>
+      Layer.merge(
+        Admin.config({
+          canManageCredentials: () => Effect.succeed(true),
+          passwordPolicy: (password) =>
+            Effect.succeed(/\d/.test(Redacted.value(password)) ? [] : ["must contain a digit"]),
+        }),
+        Tenant.configApplied(tenantId),
+      ),
+    idleTimeToLive: "1 minute",
+  },
+) {}
+
+export type AdminAccountsServices =
+  | AdminAccounts.AdminAccounts
+  | Users.Users
+  | Accounts.Accounts
+  | PasswordHasher.PasswordHasher
+  | AdminAccountsTenantConfig;
+
+/** Build-time: every administrator may delete users and manage credentials; tenants decide for themselves. */
+const buildAdminAccountsStack = () =>
+  AdminAccountsTenantConfig.layer.pipe(
+    Layer.provideMerge(
+      TestAuth.layer(Auth.make([Admin.Admin, AdminAccounts.AdminAccounts]), {
+        services: Admin.config({
+          canDeleteUsers: () => Effect.succeed(true),
+          canManageCredentials: () => Effect.succeed(true),
+        }),
       }),
     ),
   );
@@ -409,6 +444,7 @@ export interface WorldShape {
   readonly identity: Context.Context<IdentityServices>;
   readonly organizations: Context.Context<OrganizationServices>;
   readonly connections: Context.Context<ConnectionServices>;
+  readonly adminAccounts: Context.Context<AdminAccountsServices>;
   readonly gatewayProbe: GatewayProbe;
   readonly gatewayVariant: Ref.Ref<GatewayVariant | undefined>;
   readonly gateway: Ref.Ref<((request: Request) => Promise<Response>) | undefined>;
@@ -459,6 +495,7 @@ export const WorldLive = Layer.effect(
     const identity = yield* build(buildIdentityStack());
     const organizations = yield* build(buildOrganizationStack());
     const connections = yield* build(buildConnectionStack());
+    const adminAccounts = yield* build(buildAdminAccountsStack());
     const disposers: Array<() => Promise<void>> = [];
     yield* Effect.addFinalizer(() =>
       Effect.andThen(
@@ -500,6 +537,7 @@ export const WorldLive = Layer.effect(
       identity,
       organizations,
       connections,
+      adminAccounts,
       gatewayProbe,
       gatewayVariant,
       gateway,
@@ -550,6 +588,13 @@ export const organization = <A, E>(effect: Effect.Effect<A, E, OrganizationServi
   Effect.gen(function* () {
     const world = yield* World;
     return yield* Effect.provide(effect, world.organizations).pipe(Effect.orDie);
+  });
+
+/** Runs an admin-accounts-stack effect; a typed failure is a defect (use `outcomeTag` to observe one). */
+export const adminAccounts = <A, E>(effect: Effect.Effect<A, E, AdminAccountsServices>) =>
+  Effect.gen(function* () {
+    const world = yield* World;
+    return yield* Effect.provide(effect, world.adminAccounts).pipe(Effect.orDie);
   });
 
 /**

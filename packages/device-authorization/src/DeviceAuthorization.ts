@@ -25,7 +25,7 @@
 // listed and expired like every other session, and a second factor or a policy hook applies exactly as it does to a
 // password sign-in.
 
-import { Api } from "@awthaq/api";
+import { Api, type SessionLifecycle } from "@awthaq/api";
 import {
   Assurance,
   AuthEvents,
@@ -55,7 +55,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Headers from "effect/http/Headers";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -63,6 +62,9 @@ import * as DeviceAuthorizationApi from "./DeviceAuthorizationApi.ts";
 import * as DeviceClientRecords from "./DeviceClientRecords.ts";
 import * as DeviceGrantRecords from "./DeviceGrantRecords.ts";
 import * as UserCode from "./UserCode.ts";
+
+/** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type DeviceAuthorizationLifecycle = SessionLifecycle.Mints;
 
 // ---- config: a Context.Reference with a default (ADR-EA-011) ---------------------------------------------------------
 
@@ -464,19 +466,6 @@ export interface DeviceAuthorizationShape {
   readonly purgeExpired: (before?: DateTime.Utc) => Effect.Effect<number, Errors.StoreUnavailable>;
 }
 
-/** The address (through the application-provided `ClientAddress` port) and user agent of a request. */
-const currentClient = Effect.fnUntraced(function* (
-  clientAddress: ClientAddress.ClientAddressShape,
-  request: HttpServerRequest.HttpServerRequest,
-) {
-  const resolved = yield* clientAddress.resolve(request);
-  const userAgent = Headers.get(request.headers, "user-agent");
-  return {
-    ip: Option.getOrUndefined(resolved),
-    context: Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
-  };
-});
-
 const originOf = (request: HttpServerRequest.HttpServerRequest): string =>
   Option.match(HttpServerRequest.toURL(request), {
     onNone: () => "http://localhost",
@@ -532,9 +521,9 @@ export const DeviceAuthorizationHandlers = Layer.mergeAll(
           payload: DeviceAuthorizationApi.CodePayload;
           request: HttpServerRequest.HttpServerRequest;
         }) {
-          const client = yield* currentClient(clientAddress, request);
+          const { ip } = yield* ClientAddress.address(clientAddress, request);
           const issued = yield* deviceAuthorization.requestCode(
-            { clientId: payload.client_id, scope: scopesOf(payload.scope), ip: client.ip },
+            { clientId: payload.client_id, scope: scopesOf(payload.scope), ip },
             { verificationBase: settings.verificationUri ?? `${originOf(request)}/device` },
           );
           return new DeviceAuthorizationApi.CodeResponse({
@@ -559,17 +548,18 @@ export const DeviceAuthorizationHandlers = Layer.mergeAll(
           if (payload.device_code === "" || payload.client_id === "") {
             return yield* new DeviceAuthorizationApi.InvalidRequest();
           }
-          const client = yield* currentClient(clientAddress, request);
+          const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
           const redeemed = yield* deviceAuthorization.poll(
             {
               deviceCode: Redacted.make(payload.device_code),
               clientId: payload.client_id,
-              ip: client.ip,
+              ip,
             },
-            client.context,
+            context,
           );
-          // MNA-001: a device has no cookie jar — the session always travels as a bearer token, `no-store`.
-          const delivered = yield* SessionDelivery.deliver("bearer", redeemed);
+          // MNA-001/RFC 8628: a device has no cookie jar — the session always travels as a bearer token
+          // (`SessionLifecycle.Mints` makes the response `no-store`).
+          const delivered = yield* SessionDelivery.deliverBearer(redeemed);
           if (delivered.token === undefined) {
             return yield* Defects.invariantViolation(
               "DeviceTokenNotDelivered",
@@ -608,10 +598,10 @@ export const DeviceAuthorizationHandlers = Layer.mergeAll(
           payload: DeviceAuthorizationApi.UserCodePayload;
           request: HttpServerRequest.HttpServerRequest;
         }) {
-          const client = yield* currentClient(clientAddress, request);
+          const { ip } = yield* ClientAddress.address(clientAddress, request);
           const caller = yield* currentCaller;
           const view = yield* deviceAuthorization.verify(
-            { userCode: payload.user_code, ip: client.ip },
+            { userCode: payload.user_code, ip },
             // An impersonation session may look at a code's status but must not claim it.
             Option.filter(caller, (found) => !found.impersonated),
           );
@@ -647,13 +637,10 @@ export const DeviceAuthorizationHandlers = Layer.mergeAll(
           payload: DeviceAuthorizationApi.UserCodePayload;
           request: HttpServerRequest.HttpServerRequest;
         }) {
-          const client = yield* currentClient(clientAddress, request);
+          const { ip } = yield* ClientAddress.address(clientAddress, request);
           const caller = yield* decisionCaller;
           return toDecisionDto(
-            yield* deviceAuthorization.approve(
-              { userCode: payload.user_code, ip: client.ip },
-              caller,
-            ),
+            yield* deviceAuthorization.approve({ userCode: payload.user_code, ip }, caller),
           );
         }),
         deny: Effect.fnUntraced(function* ({
@@ -663,10 +650,10 @@ export const DeviceAuthorizationHandlers = Layer.mergeAll(
           payload: DeviceAuthorizationApi.UserCodePayload;
           request: HttpServerRequest.HttpServerRequest;
         }) {
-          const client = yield* currentClient(clientAddress, request);
+          const { ip } = yield* ClientAddress.address(clientAddress, request);
           const caller = yield* decisionCaller;
           return toDecisionDto(
-            yield* deviceAuthorization.deny({ userCode: payload.user_code, ip: client.ip }, caller),
+            yield* deviceAuthorization.deny({ userCode: payload.user_code, ip }, caller),
           );
         }),
       });

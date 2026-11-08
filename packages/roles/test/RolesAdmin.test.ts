@@ -10,7 +10,6 @@ import { RequirePermissionLive } from "@qadi/http";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Roles from "../src/Roles.ts";
 import * as RolesAdmin from "../src/RolesAdmin.ts";
 import * as RolesAdminApi from "../src/RolesAdminApi.ts";
@@ -47,23 +46,26 @@ const app = TestAuth.app(
 
 const withServices = app.run;
 
-/** A signed-in user holding `roleNames`, as its session cookie header. */
-const signIn = (userId: string, ...roleNames: ReadonlyArray<string>): Promise<string> =>
-  withServices(
+/** A browser signed in as `userId` holding `roleNames` (an agent holding the session's `Set-Cookie`). */
+const signIn = async (userId: string, ...roleNames: ReadonlyArray<string>) => {
+  const setCookie = await withServices(
     Effect.gen(function* () {
       const roles = yield* Roles.Roles;
       for (const name of roleNames) yield* roles.assign(Users.UserId(userId), name);
       const sessions = yield* Sessions.Sessions;
       const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
-      return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
+      return yield* TestAuth.sessionSetCookie(issued);
     }),
   );
+  const browser = await app.agent();
+  browser.cookies.receive(setCookie);
+  return browser;
+};
 
-const call = (method: string, path: string, cookie?: string, body?: unknown) =>
-  app.request(method, path, {
-    ...(cookie === undefined ? {} : { cookie }),
-    ...(body === undefined ? {} : { json: body }),
-  });
+type Browser = Awaited<ReturnType<typeof signIn>>;
+
+const call = (method: string, path: string, as?: Browser, body?: unknown) =>
+  (as ?? app).request(method, path, body === undefined ? {} : { json: body });
 
 const USER = "11111111-1111-4111-8111-111111111111";
 
@@ -133,14 +135,12 @@ describe("RolesAdmin (YL-009)", () => {
   });
 
   it("a state-changing call without a CSRF token is rejected before any permission work", async () => {
-    const cookie = await signIn("66666666-6666-4666-8666-666666666666", "platform:admin");
-    const res = await app.handler(
-      new Request(`${ORIGIN}/roles/users/${USER}/assignments`, {
-        method: "POST",
-        headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({ role: "editor" }),
-      }),
-    );
+    const admin = await signIn("66666666-6666-4666-8666-666666666666", "platform:admin");
+    // The browser's cookies travel; the CSRF header is blanked (a forged request).
+    const res = await admin.request("POST", `/roles/users/${USER}/assignments`, {
+      json: { role: "editor" },
+      headers: { "x-csrf-token": "" },
+    });
     assert.strictEqual(res.status, 403);
     const held = await withServices(
       Roles.Roles.use((roles) => roles.listRoleNames(Users.UserId(USER))),

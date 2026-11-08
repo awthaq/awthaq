@@ -215,6 +215,8 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
       // Plan 08: the plugin tuple as given, so a harness reads each plugin's `records` and `hookPoints`.
       "plugins",
       "publicApi",
+      // Plan 17: every plugin's sealed columns, the `also` of a post-rotation sweep.
+      "sealedColumns",
       // Plan 05: every plugin table's declared tenancy.
       "tenancy",
       // SAM-004: the typed user-field schema and the layer that registers it.

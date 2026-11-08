@@ -18,3 +18,6 @@ export * as RedactionGuard from "./RedactionGuard.ts";
 export * as SignInProbe from "./SignInProbe.ts";
 export * as StoreContract from "./StoreContract.ts";
 export * as TestSql from "./TestSql.ts";
+export * as Rendezvous from "./Rendezvous.ts";
+// The user agent `TestAuth.app` hands out (`@awthaq/web`), for a suite that only depends on `@awthaq/test`.
+export { UserAgent } from "@awthaq/web";

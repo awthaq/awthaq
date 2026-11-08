@@ -6,12 +6,11 @@
 // by `@awthaq/sql`'s own `CoreMigrations` — the schema is FK-less on purpose (SEA-001), so
 // this rollback is the only thing standing between a crash and a half-erased account.
 import * as TestEncryption from "../../test/src/TestEncryption.ts";
-import { Encryption, KeyProvider, SqlTransaction } from "@awthaq/ports";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { SqlTransaction } from "@awthaq/ports";
+import { CoreMigrations } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -34,21 +33,6 @@ import * as Verification from "../src/Verification.ts";
 
 /** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
 const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
-
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
 
 /** What a test wants to observe and steer, shared by both stacks. */
 interface Probe {
@@ -123,22 +107,9 @@ const sqlLayer = (
     Layer.provideMerge(
       Layer.mergeAll(
         Users.layer.pipe(Layer.provide(SqlStores)),
-        Accounts.layer
-          .pipe(Layer.provide(SqlStores))
-          .pipe(
-            Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive))),
-          ),
+        Accounts.layer.pipe(Layer.provide(SqlStores)),
         Sessions.layer.pipe(Layer.provide(SqlStores)),
-        Verification.layer
-          .pipe(Layer.provide(SqlStores))
-          .pipe(
-            Layer.provide(
-              Layer.mergeAll(
-                Repositories.VerificationRepositoryLive,
-                Repositories.VerificationReservationsRepositoryLive,
-              ),
-            ),
-          ),
+        Verification.layer.pipe(Layer.provide(SqlStores)),
         SqlTransaction.layerSql,
       ),
     ),
@@ -421,7 +392,7 @@ describe("AccountErasure over SQLite: atomicity", () => {
       const layer = sqlLayer(
         probe,
         Layer.mergeAll(
-          // Deletes the user's accounts, through the real repository, inside the transaction...
+          // Deletes the user's accounts, through the real store, inside the transaction...
           Erasure.contribute({
             id: "sweeps-accounts",
             order: 1,

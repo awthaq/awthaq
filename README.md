@@ -40,30 +40,16 @@ No package is published to npm yet (`packages/*/package.json` are all still `"pr
 This is a single, complete, copy-pasteable server — no separate example app. The code block below is compiled by `pnpm typecheck` (`packages/sql/test/fixtures/readme-quickstart.ts`, kept identical to it by `packages/sql/test/ReadmeQuickstart.test.ts`), so it cannot drift from the API. It composes:
 
 - the **Password** plugin (sign-up, sign-in) via `Auth.make`,
-- the core **Session**/**Account** HTTP surface (list/revoke sessions, update profile, delete account), which `Auth.make(...).api` always carries beside the plugins' groups (its handlers are `AuthHttp.coreHandlers` — see the note at the bottom of this section),
-- a real, migrated **Postgres** backend via `@effect/sql-pg`, its URL read through Effect's `Config` (`DATABASE_URL`),
-- the cross-cutting services the core flows need (hook points, account erasure and export, the audit log, CSRF protection, a client-address resolver, one SQL transaction domain),
+- served by **`AuthHost.layer`** (`@awthaq/server`), which derives everything that is a function of the plugin tuple: the core **Session**/**Account** HTTP surface (list/revoke sessions, update profile, delete account) that `Auth.make(...).api` always carries beside the plugins' groups, the core services and stores, each plugin's records and hook points, the registries, the derived middleware (CSRF protection included), the request context and the body cap,
+- a real, migrated **Postgres** backend via `@effect/sql-pg`, its URL read through Effect's `Config` (`DATABASE_URL`): `AuthHost` runs core's migrations and then the plugins' before serving,
+- your **ports** (hasher, mailer, rate limiter, client address, encryption keys, the breach-check transport), the only things left in the layer's requirements,
 - and a real listening HTTP server via `@effect/platform-node`.
 
 Save this as `server.ts` inside a clone of this repository (it imports workspace packages by name, so it needs to run where those resolve — see [Publishing status](#publishing-status)):
 
 ```ts
 import { createServer } from "node:http";
-import {
-  Accounts,
-  AuditLog,
-  Auth,
-  AuthEvents,
-  DataExport,
-  Erasure,
-  Hooks,
-  Persistence,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
-import { CoreMigrations, RateLimiterStoreSql } from "@awthaq/sql";
+import { Auth } from "@awthaq/core";
 import {
   ClientAddress,
   Encryption,
@@ -73,155 +59,76 @@ import {
   RateLimiter,
 } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
-import { Authentication, AuthHttp, BodyLimit, Csrf } from "@awthaq/server";
+import { AuthHost, Csrf } from "@awthaq/server";
+import { RateLimiterStoreSql } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
-import * as Etag from "effect/http/Etag";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
-import * as HttpPlatform from "effect/http/HttpPlatform";
 import * as HttpRouter from "effect/http/HttpRouter";
-import * as Migrator from "effect/sql/Migrator";
 
-// 1. Compose the Password plugin. `Auth.make` validates the plugin tuple at
-//    the type level (no duplicate ids, no missing `dependsOn`) and folds
-//    every plugin's own HttpApi contract and Layer into one `api`/`layer`
-//    pair — here that's just Password, but the same call takes more
-//    (`[Password, OAuth, Passkey, Organization, Roles, Admin, Jwt, ...]`) once
-//    you provide the ports and migrations each one adds (see "Plugins").
+// 1. Compose the Password plugin. `Auth.make` validates the plugin tuple at the type level (no duplicate ids, no
+//    missing `dependsOn`) and folds every plugin's HttpApi contract and Layer into one `api`/`layer` pair. Add more
+//    (`[Password, OAuth, Passkey, Organization, Roles, Admin, Jwt, ...]`) by listing them: `AuthHost` selects each
+//    plugin's SQL records, provides its hook points and runs its migrations; what is left for you is the ports it
+//    requires, which the compiler lists (see "Plugins").
 const auth = Auth.make([Password.Password]);
 
-// 2. A real Postgres connection and a real, forward-only migration run —
-//    the same `Migrator` and migration set `packages/sql`'s own contract
-//    tests run against SQLite and Postgres alike.
+// 2. A real Postgres connection. `AuthHost` runs core's migrations and then the plugins' on it before anything else
+//    is built over it (`migrations: "verify"` instead refuses to start while any is pending, for a deploy that runs
+//    `awthaq migration apply`).
 const SqlLive = PgClient.layerConfig({ url: Config.Redacted("DATABASE_URL") });
-const Migrated = Layer.effectDiscard(
-  Migrator.make({})({ loader: CoreMigrations.coreMigrations }),
-).pipe(Layer.provide(SqlLive));
 
-// 3. Provider tokens (OAuth access/refresh tokens) are encrypted at rest;
-//    `KeyProvider.layerEnv` reads the keyset from `AWTHAQ_ENCRYPTION_KEYS` /
-//    `AWTHAQ_ENCRYPTION_KEY_ID` (see "Encryption keys" below) even when no
-//    OAuth plugin is installed, since the `accounts` table's encryption
-//    columns are shared, core-owned schema.
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(KeyProvider.layerEnv),
-  Layer.provide(NodeCrypto.layer),
-);
+// 3. Provider tokens (OAuth access/refresh tokens) are encrypted at rest; `KeyProvider.layerEnv` reads the keyset
+//    from `AWTHAQ_ENCRYPTION_KEYS` / `AWTHAQ_ENCRYPTION_KEY_ID` (see "Encryption keys" below) even when no OAuth
+//    plugin is installed, since the `accounts` table's encryption columns are shared, core-owned schema.
+const EncryptionLive = Encryption.layer.pipe(Layer.provide(KeyProvider.layerEnv));
 
-// 4. The domain services, backed by the SQL stores (`Persistence.sql()`: users, accounts,
-//    sessions, verification and audit log over one `SqlClient`) instead of memory.
-//    `AuthEvents` publishes every event into the durable `AuditLog` table.
-const CoreLive = Layer.mergeAll(
-  Users.layer,
-  Accounts.layer,
-  Sessions.layer,
-  Verification.layer,
-).pipe(
-  Layer.provideMerge(AuthEvents.layer.pipe(Layer.provideMerge(AuditLog.layer))),
-  Layer.provideMerge(Persistence.sql().pipe(Layer.provide(EncryptionLive))),
-  Layer.provideMerge(SqlLive),
-  Layer.provideMerge(Migrated),
-  Layer.provideMerge(NodeCrypto.layer),
-);
-
-const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-  Layer.provide(Authentication.PrincipalResolverLive),
-);
-
-// 5. The rate limiter enforces the limits every plugin registers (the
-//    sign-in / sign-up / reset rules) against a shared SQL store, so the
-//    limits hold across replicas and restarts. `RateLimiter.layerPermissive`
-//    disables limiting: tests only, never production. If the store is
-//    unreachable, `RateLimiter.layer` fails open by default; see
-//    `RateLimiter.config`.
-const RateLimiterMigrated = Layer.effectDiscard(RateLimiterStoreSql.migrate).pipe(
-  Layer.provide(SqlLive),
-);
+// 4. The rate limiter enforces the limits every plugin registers against a shared SQL store (its own table and
+//    ledger), so the limits hold across replicas and restarts. `RateLimiter.layerPermissive` disables limiting:
+//    tests only. If the store is unreachable, `RateLimiter.layer` fails open by default; see `RateLimiter.config`.
 const RateLimiterLive = RateLimiter.layer.pipe(
   Layer.provide(RateLimiterStoreSql.layerStoreSql),
-  Layer.provide(RateLimiterMigrated),
+  Layer.provide(Layer.effectDiscard(RateLimiterStoreSql.migrate).pipe(Layer.provide(SqlLive))),
   Layer.provide(SqlLive),
 );
 
-//    Swap the remaining ports for your own: a real mailer
-//    (SMTP/SES/Resend/...) in place of `Mailer.layerConsole` — which logs every
-//    message with its token so a local run needs no inbox, and must never reach
-//    production — and, if you want to tune the password policy,
-//    `Password.config(...)`. Breach screening (HIBP, k-anonymity) is on by
-//    default and fails open; `Password.config({ breachCheck: false })` turns it off.
-//    A real adapter maps a provider error to `Mailer.MailDeliveryFailed` and never
-//    logs `to` or `data`: they carry the recipient and the verification or reset token.
-const consoleMailer = Mailer.layerConsole;
+// 5. Your ports. Swap `Mailer.layerConsole` (it logs every message with its token so a local run needs no inbox,
+//    and must never reach production) for a real mailer (SMTP/SES/Resend/...); a real adapter maps a provider error
+//    to `Mailer.MailDeliveryFailed` and never logs `to` or `data`. `ClientAddress.layerDirect` reads the socket peer
+//    (behind a proxy use `layerTrustedProxy`). `FetchHttpClient` is Password's breach-screening transport (HIBP,
+//    k-anonymity; on by default, fails open; `Password.config({ breachCheck: false })` turns it off).
+const Ports = Layer.mergeAll(
+  PasswordHasher.layerArgon2id,
+  Mailer.layerConsole,
+  RateLimiterLive,
+  ClientAddress.layerDirect,
+  EncryptionLive,
+  FetchHttpClient.layer,
+).pipe(Layer.provideMerge(NodeCrypto.layer));
 
-// 6. Cross-cutting services every core flow needs: the hook points (and the
-//    erasure/export registries plugins contribute to), account erasure and
-//    export over them, one SQL transaction domain, the client-address
-//    resolver (`layerDirect` reads the socket peer; behind a proxy use
-//    `layerTrustedProxy`), and CSRF protection keyed by `AWTHAQ_CSRF_SECRET`
-//    (at least 32 bytes; see "Configuration").
-const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-  Layer.provide(Csrf.layerConfig),
-  Layer.provide(NodeCrypto.layer),
-);
-const ServicesLive = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-  Layer.provideMerge(Layer.mergeAll(CsrfProtectionLive, ClientAddress.layerDirect)),
-);
+// 6. The servable layer (`@awthaq/server`'s `AuthHost`): the routes for `auth.api` (the plugins' groups plus core's
+//    Session/Account groups and their handlers), the SQL stores and core services, the plugins' records and hook
+//    points, the registries, the middleware the groups declare, CSRF protection keyed by `AWTHAQ_CSRF_SECRET` (at
+//    least 32 bytes; see "Configuration"), the request context and a 256 KiB body cap. The OpenAPI document and the
+//    Scalar UI are unauthenticated, so they are off unless `AWTHAQ_EXPOSE_DOCS=true`.
+const AppLayer = Layer.unwrap(
+  Effect.map(Config.Boolean("AWTHAQ_EXPOSE_DOCS").pipe(Config.withDefault(false)), (expose) =>
+    AuthHost.layer(auth, {
+      persistence: { records: "sql", client: SqlLive, migrations: "apply" },
+      csrf: Csrf.layerConfig,
+      ...(expose ? { openapiPath: "/openapi.json", docsPath: "/docs" } : {}),
+    }),
+  ),
+).pipe(Layer.provide(Ports));
 
-// 7. Mount the composed api onto the router — `AuthHttp.routes` registers
-//    with whatever `HttpRouter` is ambient (no gateway/adapter layer).
-//    `auth.api` is one document: the plugins' groups plus core's own
-//    Session/Account groups, whose handlers are `AuthHttp.coreHandlers`.
-//    The OpenAPI document and the Scalar UI are unauthenticated, so they are
-//    off unless `AWTHAQ_EXPOSE_DOCS=true` (`awthaq openapi` exports the
-//    document offline).
-const ExposeDocs = Config.Boolean("AWTHAQ_EXPOSE_DOCS").pipe(Config.withDefault(false));
-const RoutesLive = Layer.unwrap(
-  Effect.map(ExposeDocs, (expose) =>
-    AuthHttp.routes(auth.api, expose ? { openapiPath: "/openapi.json" } : {}).pipe(
-      Layer.provide(AuthHttp.coreHandlers),
-      Layer.provide(auth.layer),
-    ),
-  ),
-);
-const DocsLive = Layer.unwrap(
-  Effect.map(ExposeDocs, (expose) => (expose ? AuthHttp.docs(auth.api) : Layer.empty)),
-);
-const AppLayer = Layer.mergeAll(RoutesLive, DocsLive).pipe(
-  Layer.provideMerge(AuthenticationLive),
-  Layer.provideMerge(ServicesLive),
-  Layer.provideMerge(CoreLive),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(
-    Layer.mergeAll(PasswordHasher.layerArgon2id, consoleMailer, RateLimiterLive).pipe(
-      Layer.provideMerge(NodeCrypto.layer),
-    ),
-  ),
-  Layer.provideMerge(RateLimits.layer),
-  Layer.provide(FetchHttpClient.layer),
-  Layer.provideMerge(
-    Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-      Layer.provideMerge(FileSystem.layerNoop({})),
-    ),
-  ),
-  Layer.provideMerge(HttpRouter.layer),
-);
-
-// 8. `HttpRouter.serve` is the same real serving path `AuthHttp.ts`'s own
-//    header comment documents alongside `HttpRouter.toWebHandler` (used
-//    instead in tests, and in any Fetch-native runtime — Bun, Deno,
-//    Cloudflare Workers — since it returns a portable `(Request) =>
-//    Promise<Response>` handler rather than binding a Node socket).
-//    `BodyLimit.layer` bounds every request body (256 KiB by default, 413
-//    beyond it; `BodyLimit.config({ maxBytes })` overrides): Effect's server
-//    reads bodies with no cap unless one is set.
-const ServerLive = HttpRouter.serve(BodyLimit.layer.pipe(Layer.provideMerge(AppLayer))).pipe(
+// 7. `HttpRouter.serve` binds a Node socket; `HttpRouter.toWebHandler` instead returns a portable
+//    `(Request) => Promise<Response>` for tests and Fetch-native runtimes (Bun, Deno, Cloudflare Workers).
+const ServerLive = HttpRouter.serve(AppLayer).pipe(
   Layer.provide(NodeHttpServer.layer(createServer, { port: 3000 })),
 );
 
@@ -280,22 +187,22 @@ curl -i -X DELETE $BASE/user \
 
 The session cookie is `SameSite=Strict` (BEH-EA-055), so a browser does not send it on a cross-site top-level navigation. The provider's redirect back to the OAuth callback is exactly such a navigation, so the OAuth plugin correlates it with its own ten-minute `SameSite=Lax` `__Host-oauth-state` cookie (`packages/oauth/src/OAuth.ts`; an opaque correlation value, the flow state itself lives server-side) rather than with the session cookie.
 
-This exact composition was run end to end against an in-memory SQLite `SqlClient` while writing this section (sign-up, verify, sign-in, profile update, export and delete all answered as shown; with `AWTHAQ_EXPOSE_DOCS` unset, `/openapi.json` and `/docs` answered `404`). `packages/sql`'s domain layers are dialect-agnostic, so swapping `PgClient.layerConfig({ url })` for `SqliteClient.layer({ filename })` is the only change between the two; CI's `postgres:16` service (`.github/workflows/check.yml`) is the signal against Postgres itself, the same caveat `packages/sql/test/Repositories.postgres.test.ts` documents. Nothing here has been run against a real Postgres by hand.
+The same `AuthHost` composition over SQLite, with `Organization` added, is [`examples/sql-server`](examples/sql-server/README.md): its smoke test runs sign-up, the mailed token, verification, sign-in, an organization created over SQL, a restart on the same file that applies nothing, and a `migrations: "verify"` boot that refuses an unmigrated database (re-run for this revision). `packages/sql`'s store adapters are dialect-agnostic, so swapping `PgClient.layerConfig({ url })` for `SqliteClient.layer({ filename })` is the only change between the two; CI's `postgres:16` service (`.github/workflows/check.yml`) is the signal against Postgres itself, the same caveat `packages/sql/test/TenantScope.postgres.test.ts` documents. The block above is compiled by `pnpm typecheck`; it has not been run against a real Postgres by hand.
 
 ## Persistence
 
 `Users`, `Accounts`, `Sessions`, `Verification` and `AuditLog` are each written once, over a store port (`UserStore`, `AccountStore`, `SessionStore`, `VerificationStore`, `AuditLogStore` in `@awthaq/ports`), so you choose where state lives by providing one bundle from `@awthaq/core`, not by picking a layer per service:
 
 - `Persistence.memory`: the in-process `Ref` adapters plus `SqlTransaction.layerNoop`. For tests and a single process.
-- `Persistence.sql({ encryptPii? })`: the SQL adapters over the ambient `SqlClient`, the repositories they need, and `SqlTransaction.layerSql`. It requires `SqlClient` and `Encryption`; pass `encryptPii: true` to seal the PII columns.
+- `Persistence.sql({ encryptPii? })`: the SQL store adapters of `@awthaq/sql` (`CoreStoresSql.layer`, each adapter owning its statements) over the ambient `SqlClient`, and `SqlTransaction.layerSql`. It requires `SqlClient` and `Encryption`; pass `encryptPii: true` to seal the PII columns.
 
 Swapping one store (for example a Redis-backed `SessionStore`, ADR-EA-014) means providing your adapter in place of that one service; every adapter has to pass `StoreContract` from `@awthaq/test`. Mixing stores across bundles is allowed, but the swapped store is then outside the `SqlTransaction` the SQL bundle opens, so a multi-store operation (an account erasure, for example) is no longer atomic across it.
 
 ## Swapping in Postgres for real
 
-`packages/sql` ships one migration set (`CoreMigrations.coreMigrations`, in `@awthaq/sql`) that branches per dialect internally (`sql.onDialectOrElse`), so the same `Migrator.make({})({ loader: CoreMigrations.coreMigrations })` call in the quickstart above brings a fresh Postgres database to schema-equality with what `packages/sql/src/Models.ts` declares — no separate Postgres-specific schema file to maintain. See [`.scratch/shipping-gaps/issues/15-postgres-backend-migrations.md`](.scratch/shipping-gaps/issues/15-postgres-backend-migrations.md) for how this was proven (a dedicated contract-test suite runs against SQLite, then Postgres, with the same test bodies).
+`packages/sql` ships one migration set (`CoreMigrations.coreMigrations`, in `@awthaq/sql`) that branches per dialect internally (`sql.onDialectOrElse`), so the migration run `AuthHost` makes in the quickstart above brings a fresh Postgres database to schema-equality with what `packages/sql/src/Models.ts` declares — no separate Postgres-specific schema file to maintain. See [`.scratch/shipping-gaps/issues/15-postgres-backend-migrations.md`](.scratch/shipping-gaps/issues/15-postgres-backend-migrations.md) for how this was proven (a dedicated contract-test suite runs against SQLite, then Postgres, with the same test bodies).
 
-Plugin-specific tables (`Organization`, `Admin`, `Passkey`, `Jwt`, `ApiKey`, `Scim` each own their own schema in their own package) are not part of `CoreMigrations` — see each plugin's own package for its migrations.
+Plugin-specific tables (`Organization`, `Admin`, `Passkey`, `Jwt`, `ApiKey`, `Scim` each own their own schema in their own package) are not part of `CoreMigrations`: they are `auth.migrations`, in their own ledger. `AuthHost` runs them after core's, refusing a ledger that disagrees with the composition; `awthaq migration apply` runs the same set.
 
 ## Configuration
 
@@ -345,7 +252,7 @@ To rotate: add a new entry, point `AWTHAQ_ENCRYPTION_KEY_ID` at it, and keep the
 
 ### Running more than one replica
 
-Every `layerMemory` in this repository (`Users`, `Accounts`, `Sessions`, `Verification`, `AuditLog`, `RevocationStore`, `SigningKeyRecords`, `ChallengeStore`, `RateLimiter.layerMemory`) is one `Ref` per process, so a second instance behind a load balancer would see a different world. To run replicas, the following must be identical or shared across all of them:
+Every in-memory store in this repository (`Persistence.memory`, which holds the `Users`, `Accounts`, `Sessions`, `Verification` and `AuditLog` stores, plus `RevocationStore`, `SigningKeyRecords`, `ChallengeStore` and `RateLimiter.layerMemory`) is one `Ref` per process, so a second instance behind a load balancer would see a different world. To run replicas, the following must be identical or shared across all of them:
 
 | What | How to share it |
 |---|---|
@@ -360,12 +267,11 @@ Two things are deliberately per process: `AuthEvents` subscribers (the in-proces
 
 ### Cross-origin SPAs (CORS)
 
-awthaq ships no CORS by default: a browser on another origin cannot read any response (same-origin, default-deny). To serve a separate SPA origin, merge `AuthHttp.cors()` into the same layer list as `AuthHttp.routes(...)`. Its allowlist is `CsrfConfig.allowedOrigins`, the value CSRF's `Origin` check already uses, so the two cannot drift:
+awthaq ships no CORS by default: a browser on another origin cannot read any response (same-origin, default-deny). To serve a separate SPA origin, build `AuthHttp.cors()` beside the `AuthHost` layer, over its output. Its allowlist is `CsrfConfig.allowedOrigins`, the value CSRF's `Origin` check already uses, so the two cannot drift:
 
 ```ts
-const AppLayer = Layer.mergeAll(
-  AuthHttp.routes(auth.api, {}).pipe(Layer.provide(AuthHttp.coreHandlers), Layer.provide(auth.layer)),
-  AuthHttp.cors(), // reads CsrfConfig.allowedOrigins, e.g. ["https://app.example.com"]
+const AppLayer = AuthHttp.cors().pipe( // reads CsrfConfig.allowedOrigins, e.g. ["https://app.example.com"]
+  Layer.provideMerge(AuthHost.layer(auth, { persistence, csrf: Csrf.layerConfig })),
 );
 ```
 
@@ -387,7 +293,7 @@ awthaq reuses Effect's HTTP middleware and adds spans, a field vocabulary and me
 
 ### Delivering events to other services
 
-`AuthEvents` is an in-process, bounded, at-most-once bus: right for a subscriber in the same process (`AuthEvents.on([...tags], handler)` in your composition; the subscription is registered before the layer is up, so nothing published after it is lost), wrong for another service, since a burst can be dropped and nothing crosses a process boundary. For those, use the outbox: every event is already a durable `AuditLog` row, and `EventRelay.layer({ name: "billing" })` tails that table from a persisted position into an `EventTransport` you provide (Redis, Kafka, SQS, an HTTP call: `{ deliver: (events) => Effect }`). It advances only after `deliver` succeeds, so delivery is at-least-once (deduplicate on `eventId`), retried with backoff, and resumes after a restart; provide `EventRelay.layerCursorSql` for a durable position (core migration 27) or `layerCursorMemory` for tests. An event is relayed once it is `settleDelay` old (default 2 s) so a row committed late by another process is not skipped; give each consumer its own `name`. For HTTP receivers, the opt-in `@awthaq/webhooks` plugin is that consumer, built and signed for you: register endpoints through its admin API (secret shown once, stored sealed), compose `Webhooks.Webhooks.background()` with a `RelayCursorStore`, an `HttpClient`, a `HostResolver` and an `Encryption`, and every matching event is queued per endpoint and POSTed with Standard-Webhooks `webhook-id` / `-timestamp` / `-signature` headers (retry with backoff, dead-letter, a delivery log; `WebhookSignature.verify` for receivers). See [`packages/webhooks/README.md`](packages/webhooks/README.md) and `spec/decisions/030-event-delivery-outbox-relay.md`.
+`AuthEvents` is an in-process, bounded, at-most-once bus: right for a subscriber in the same process (`AuthEvents.on([...tags], handler)` in your composition; the subscription is registered before the layer is up, so nothing published after it is lost), wrong for another service, since a burst can be dropped and nothing crosses a process boundary. For those, use the outbox: every event is already a durable `AuditLog` row, and `EventRelay.layer({ name: "billing" })` tails that table from a persisted position into an `EventTransport` you provide (Redis, Kafka, SQS, an HTTP call: `{ deliver: (events) => Effect }`). It advances only after `deliver` succeeds, so delivery is at-least-once (deduplicate on `eventId`), retried with backoff, and resumes after a restart; the position is a `RelayCursorStore`, which `Persistence.sql()` (durable, core migration 27) and `Persistence.memory` (tests) already provide, and it only moves forward. An event is relayed once it is `settleDelay` old (default 2 s) so a row committed late by another process is not skipped; give each consumer its own `name`. For HTTP receivers, the opt-in `@awthaq/webhooks` plugin is that consumer, built and signed for you: register endpoints through its admin API (secret shown once, stored sealed), compose `Webhooks.Webhooks.background()` with the `Persistence` bundle (it carries the `RelayCursorStore`), an `HttpClient`, a `HostResolver` and an `Encryption`, and every matching event is queued per endpoint and POSTed with Standard-Webhooks `webhook-id` / `-timestamp` / `-signature` headers (retry with backoff, dead-letter, a delivery log; `WebhookSignature.verify` for receivers). See [`packages/webhooks/README.md`](packages/webhooks/README.md) and `spec/decisions/030-event-delivery-outbox-relay.md`.
 
 ### Detecting attacks
 

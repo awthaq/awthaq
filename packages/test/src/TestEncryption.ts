@@ -1,6 +1,6 @@
 // @awthaq/test — TestEncryption
 //
-// Plan 02 (ADR-EA-041): `Persistence.sql()` requires `Encryption` (the accounts repository seals a
+// Plan 02 (ADR-EA-041): `Persistence.sql()` requires `Encryption` (the accounts adapter seals a
 // federated provider's tokens at rest), so every SQL composition in a test needs one. This is the one a
 // test uses: a fixed key, read through a `ConfigProvider` rather than the process environment, so the
 // real `process.env` can neither leak in nor be touched.

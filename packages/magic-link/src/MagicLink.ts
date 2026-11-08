@@ -12,15 +12,15 @@
 //   under the purpose `magic-link` with a random public id — never the user id or address — and the
 //   address rides in the row's server-side `payload`, so a link for a not-yet-existing user still
 //   knows whom to create.
-// - **Verify** (`POST /magic-link/verify`): the only way to consume a link. Decode and purpose-check
-//   it, rate limit, then `Verification.redeem` (single use; an outage while completing leaves the
-//   link usable, ADR-EA-039) around `Channel.complete` — find or create the
+// - **Verify** (`POST /magic-link/verify`): the only way to consume a link. Decode, purpose-check,
+//   rate limit and redeem it through `VerificationLink.redeemer` (single use; an outage while
+//   completing leaves the link usable, ADR-EA-039) around `Channel.complete` — find or create the
 //   user, mark the mailbox verified, run the sign-in gate, veto and MFA divert, and mint a session
 //   recorded as `["email"]`. A 2FA-enrolled user is diverted to `TwoFactorRequired` (ARF-005 Fix A).
 // - **The link carries its token in the URL fragment** (`baseUrl`/`link` config), so it is never sent
 //   to a server, logged or put in a `Referer`, and **no GET route consumes it** — see `MagicLinkApi.ts`.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract, type SessionLifecycle } from "@awthaq/api";
 import {
   AuthEvents,
   AuthPlugin,
@@ -44,11 +44,13 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Headers from "effect/http/Headers";
 import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Channel from "./Channel.ts";
 import * as MagicLinkApi from "./MagicLinkApi.ts";
+
+/** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type MagicLinkLifecycle = SessionLifecycle.Mints;
 
 // ---- config -----------------------------------------------------------------------------------------
 
@@ -129,16 +131,15 @@ const rules = {
 
 // ---- the service -------------------------------------------------------------------------------------
 
-const PURPOSE = "magic-link";
-
-/** The server-side payload a link carries: the address it was issued for (normalised). */
-const LinkPayload = Schema.Struct({ email: Schema.String });
-
-/** What `verify` returns: the session and the raw token to deliver it (cookie or bearer, `SessionDelivery`). */
-export interface IssuedSession {
-  readonly session: Sessions.SessionView;
-  readonly token: Redacted.Redacted<string>;
-}
+/**
+ * The purpose of the link (BEH-EA-270): its row may name no user yet (a link to an address without an
+ * account signs up, BEH-EA-269), and always carries the address it was issued for (normalised) in the
+ * server-side payload.
+ */
+const MagicLinkPurpose = VerificationLink.forAddress({
+  name: "magic-link",
+  payload: Schema.Struct({ email: Schema.String }),
+});
 
 export interface MagicLinkShape {
   /** BEH-EA-268: always resolves (or is rate limited) — never says whether an account exists. */
@@ -151,7 +152,7 @@ export interface MagicLinkShape {
     input: { readonly token: Redacted.Redacted<string>; readonly ip?: string | undefined },
     context?: { readonly userAgent?: string | undefined },
   ) => Effect.Effect<
-    IssuedSession,
+    Sessions.IssuedSession,
     | MagicLinkApi.MagicLinkConsumed
     | Api.RateLimited
     | HookPoint.HookAborted
@@ -160,19 +161,6 @@ export interface MagicLinkShape {
     | Errors.StoreUnavailable
   >;
 }
-
-/** The address (through the application-provided `ClientAddress` port, AGA-001/NHS-003) and user agent of a request. */
-const currentClient = Effect.fnUntraced(function* (
-  clientAddress: ClientAddress.ClientAddressShape,
-  request: HttpServerRequest.HttpServerRequest,
-) {
-  const resolved = yield* clientAddress.resolve(request);
-  const userAgent = Headers.get(request.headers, "user-agent");
-  return {
-    ip: Option.getOrUndefined(resolved),
-    context: Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
-  };
-});
 
 export const MagicLinkHandlers = HttpApiBuilder.group(
   MagicLinkApi.MagicLinkApi,
@@ -188,8 +176,8 @@ export const MagicLinkHandlers = HttpApiBuilder.group(
         payload: MagicLinkApi.RequestPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const client = yield* currentClient(clientAddress, request);
-        yield* magicLink.requestLink({ email: payload.email, ip: client.ip });
+        const { ip } = yield* ClientAddress.address(clientAddress, request);
+        yield* magicLink.requestLink({ email: payload.email, ip });
       }),
       verify: Effect.fnUntraced(function* ({
         payload,
@@ -200,10 +188,9 @@ export const MagicLinkHandlers = HttpApiBuilder.group(
       }) {
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          request,
           Effect.gen(function* () {
-            const client = yield* currentClient(clientAddress, request);
-            return yield* magicLink.verify({ token: payload.token, ip: client.ip }, client.context);
+            const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
+            return yield* magicLink.verify({ token: payload.token, ip }, context);
           }),
         );
         return response;
@@ -244,7 +231,17 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
       const limits = yield* RateLimits.budget(MagicLink);
 
       const link = linkBuilder(settings);
-      const decodePayload = Schema.decodeUnknownOption(LinkPayload);
+
+      // APS-003/ADR-EA-039 decision 9: both budgets are declared where the link is bound. Rate limits
+      // stay before the claim (a limiter charge inside `use` would be refunded by a rollback).
+      const links = VerificationLink.redeemer(MagicLinkPurpose, {
+        verification,
+        budget: {
+          source: (ip) => limits.spend("verifyByIp", { ip }),
+          // Keyed on the token's public id (never its secret half): a flood of guesses at one link.
+          token: (publicId) => limits.spend("verifyByToken", { identifier: publicId }),
+        },
+      });
 
       const requestLink: MagicLinkShape["requestLink"] = Effect.fnUntraced(function* (input) {
         yield* limits.spend(["requestByIp", "requestByEmail"], input);
@@ -265,8 +262,8 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
             if (!fresh) return;
             const issued = yield* VerificationLink.issue(
               { verification, random },
+              MagicLinkPurpose,
               {
-                purpose: PURPOSE,
                 ttl: settings.ttl,
                 ...(Option.isSome(existing) ? { userId: existing.value.id } : {}),
                 payload: { email },
@@ -287,9 +284,6 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
       });
 
       const verify: MagicLinkShape["verify"] = Effect.fnUntraced(function* (input, context) {
-        yield* limits.spend("verifyByIp", { ip: input.ip });
-        // ARF-007-style purpose check before anything is rate limited or consumed.
-        const decoded = VerificationLink.decode(Redacted.value(input.token), PURPOSE);
         const refused = Effect.gen(function* () {
           yield* events.publish({
             _tag: "auth.user.signInFailed",
@@ -299,36 +293,30 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
           });
           return yield* Effect.fail(new MagicLinkApi.MagicLinkConsumed());
         });
-        if (Option.isNone(decoded)) return yield* refused;
-        yield* limits.spend("verifyByToken", { identifier: decoded.value.publicId });
         // ADR-EA-039: the link is redeemed, not merely consumed. The whole completion runs in the
         // transaction that claims it, so an outage or a defect while issuing the session gives the
         // link back; a refusal after a valid presentation (a veto, a suspension, the second-factor
-        // divert, no usable user) spends it, as `commitUnlessUnavailable` settles. Rate limits stay
-        // before `redeem` (a limiter charge inside `use` would be refunded by a rollback), and
-        // `refused` publishes after it, so a rolled-back attempt still leaves its audit row.
-        return yield* verification
-          .redeem({
-            identifier: decoded.value.identifier,
-            value: decoded.value.value,
-            use: (consumed) =>
-              channel.complete({
-                strategy: "magicLink",
-                amr: ["email"],
-                email: Option.map(decodePayload(consumed.payload), (payload) => payload.email),
-                userId: consumed.userId,
-                allowSignUp: settings.allowSignUp,
-                ip: input.ip,
-                userAgent: context?.userAgent,
-              }),
-            onFailure: Verification.commitUnlessUnavailable,
-          })
-          .pipe(
-            Effect.catchTag("Verification/TokenConsumed", () => refused),
-            Effect.catchTag("MagicLink/ChannelInvalid", (invalid) =>
-              Channel.logInvalid("magicLink", invalid).pipe(Effect.andThen(refused)),
-            ),
-          );
+        // divert, no usable user) spends it, as `commitUnlessUnavailable` settles. `refused`
+        // publishes after the redeem, so a rolled-back attempt still leaves its audit row.
+        return yield* links(
+          input,
+          ({ userId, payload }) =>
+            channel.complete({
+              strategy: "magicLink",
+              amr: ["email"],
+              email: Option.some(payload.email),
+              userId,
+              allowSignUp: settings.allowSignUp,
+              ip: input.ip,
+              userAgent: context?.userAgent,
+            }),
+          { onFailure: Verification.commitUnlessUnavailable },
+        ).pipe(
+          Effect.catchTag("VerificationLink/Refused", () => refused),
+          Effect.catchTag("MagicLink/ChannelInvalid", (invalid) =>
+            Channel.logInvalid("magicLink", invalid).pipe(Effect.andThen(refused)),
+          ),
+        );
       });
 
       return MagicLink.of({ requestLink, verify });

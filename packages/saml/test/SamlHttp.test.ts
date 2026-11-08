@@ -6,7 +6,7 @@ import { Organization } from "@awthaq/organization";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { inflateRawSync } from "node:zlib";
-import { TestAuth } from "@awthaq/test";
+import { CookieAssertions, TestAuth, UserAgent } from "@awthaq/test";
 import * as Saml from "../src/Saml.ts";
 import * as SamlApi from "../src/SamlApi.ts";
 import * as SamlConnections from "../src/SamlConnections.ts";
@@ -27,7 +27,7 @@ const around = () => ({
 });
 
 const buildApp = () => {
-  const app = TestAuth.app(SamlLive());
+  const app = TestAuth.app(SamlLive(), { baseUrl: BASE_URL });
   /** Runs `effect` against the very same service instances the web handler uses. */
   const inside = <A, E>(
     effect: Effect.Effect<
@@ -36,9 +36,12 @@ const buildApp = () => {
       Saml.Saml | SamlConnections.SamlConnectionStore | Organization.Organization
     >,
   ) => app.run(effect);
-  return { handler: app.handler, inside };
+  return { handler: app.handler, inside, agent: () => app.agent() };
 };
 
+const acsBody = (response: string) => ({ SAMLResponse: response, RelayState: "ignored" });
+
+/** A hand-built ACS post: unsolicited, or carrying a forged request cookie. */
 const acsForm = (response: string, cookie?: string) =>
   new Request(ACS_URL, {
     method: "POST",
@@ -46,11 +49,30 @@ const acsForm = (response: string, cookie?: string) =>
       "content-type": "application/x-www-form-urlencoded",
       ...(cookie === undefined ? {} : { cookie }),
     },
-    body: new URLSearchParams({ SAMLResponse: response, RelayState: "ignored" }).toString(),
+    body: new URLSearchParams(acsBody(response)).toString(),
   });
 
-const cookieHeaderOf = (response: Response, name: string): string | undefined =>
-  response.headers.getSetCookie().find((cookie) => cookie.startsWith(`${name}=`));
+/** The browser's leg back from the IdP: a cross-site form post to the ACS (the `SameSite=None` request cookie travels). */
+const postToAcs = (browser: UserAgent.UserAgent, response: string) =>
+  browser.request("POST", ACS_URL, {
+    form: acsBody(response),
+    site: "cross-site",
+    navigation: true,
+  });
+
+/** The request id of the AuthnRequest a login redirect carries. */
+const requestIdOf = (login: Response) =>
+  /ID="([^"]+)"/.exec(
+    inflateRawSync(
+      Buffer.from(
+        new URL(login.headers.get("location") ?? "").searchParams.get("SAMLRequest") ?? "",
+        "base64",
+      ),
+    ).toString("utf8"),
+  )?.[1];
+
+const hasSetCookie = (response: Response, name: string) =>
+  CookieAssertions.setCookiesOf(response).some((cookie) => cookie.name === name);
 
 describe("SAML over HTTP", () => {
   it.effect(
@@ -74,13 +96,12 @@ describe("SAML over HTTP", () => {
           Buffer.from(location.searchParams.get("SAMLRequest") ?? "", "base64"),
         ).toString("utf8");
         assert.include(request, `AssertionConsumerServiceURL="${ACS_URL}"`);
-        const cookie = cookieHeaderOf(response, Saml.REQUEST_COOKIE);
-        assert.isDefined(cookie);
-        assert.include(cookie ?? "", "HttpOnly");
-        assert.include(cookie ?? "", "Secure");
-        assert.include(cookie ?? "", "SameSite=None");
-        assert.include(cookie ?? "", "Path=/");
-        assert.notInclude(cookie ?? "", "Domain=");
+        const cookie = CookieAssertions.findSetCookie(response, Saml.REQUEST_COOKIE);
+        assert.isTrue(cookie.httpOnly);
+        assert.isTrue(cookie.secure);
+        assert.strictEqual(cookie.sameSite, "none");
+        assert.strictEqual(cookie.path, "/");
+        assert.isUndefined(cookie.domain);
       }),
   );
 
@@ -109,25 +130,16 @@ describe("SAML over HTTP", () => {
     "the ACS form post signs the browser in: 302 to the callback with a session cookie and the request cookie cleared",
     () =>
       Effect.gen(function* () {
-        const { handler, inside } = buildApp();
+        const { inside, agent } = buildApp();
         const { connection } = yield* Effect.promise(() => inside(seedConnection()));
+        const browser = yield* Effect.promise(agent);
         const login = yield* Effect.promise(() =>
-          handler(
-            new Request(
-              `${BASE_URL}/auth/saml/login?connection=${connection.id}&callbackURL=/dashboard`,
-            ),
+          browser.request(
+            "GET",
+            `/auth/saml/login?connection=${connection.id}&callbackURL=/dashboard`,
           ),
         );
-        const state =
-          (cookieHeaderOf(login, Saml.REQUEST_COOKIE) ?? "")
-            .split(";")[0]
-            ?.slice(Saml.REQUEST_COOKIE.length + 1) ?? "";
-        const location = new URL(login.headers.get("location") ?? "");
-        const requestId = /ID="([^"]+)"/.exec(
-          inflateRawSync(
-            Buffer.from(location.searchParams.get("SAMLRequest") ?? "", "base64"),
-          ).toString("utf8"),
-        )?.[1];
+        const requestId = requestIdOf(login);
         const samlResponse = Buffer.from(
           signedResponse(
             responseXml({
@@ -138,14 +150,16 @@ describe("SAML over HTTP", () => {
             }),
           ),
         ).toString("base64");
-        const response = yield* Effect.promise(() =>
-          handler(acsForm(samlResponse, `${Saml.REQUEST_COOKIE}=${state}`)),
-        );
+        const response = yield* Effect.promise(() => postToAcs(browser, samlResponse));
         assert.strictEqual(response.status, 302);
         assert.strictEqual(response.headers.get("location"), "/dashboard");
-        assert.isDefined(cookieHeaderOf(response, "__Host-session"));
+        assert.isTrue(hasSetCookie(response, "__Host-session"));
+        assert.isDefined(browser.cookies.get("__Host-session"));
         // Single-use: the request cookie is cleared on the way out.
-        assert.include(cookieHeaderOf(response, Saml.REQUEST_COOKIE) ?? "", "Max-Age=0");
+        CookieAssertions.assertExpiredCookie(
+          CookieAssertions.findSetCookie(response, Saml.REQUEST_COOKIE),
+        );
+        assert.isUndefined(browser.cookies.get(Saml.REQUEST_COOKIE));
       }),
   );
 
@@ -153,46 +167,41 @@ describe("SAML over HTTP", () => {
     "every refusal is the same 400 SamlAssertionRejected with no detail, and sets no session cookie",
     () =>
       Effect.gen(function* () {
-        const { handler, inside } = buildApp();
+        const { handler, inside, agent } = buildApp();
         const { connection } = yield* Effect.promise(() => inside(seedConnection()));
-        const login = yield* Effect.promise(() =>
-          handler(new Request(`${BASE_URL}/auth/saml/login?connection=${connection.id}`)),
+        const browser = yield* Effect.promise(agent);
+        yield* Effect.promise(() =>
+          browser.request("GET", `/auth/saml/login?connection=${connection.id}`),
         );
-        const state =
-          (cookieHeaderOf(login, Saml.REQUEST_COOKIE) ?? "")
-            .split(";")[0]
-            ?.slice(Saml.REQUEST_COOKIE.length + 1) ?? "";
         const bodies: Array<string> = [];
-        const attempts: ReadonlyArray<{
-          readonly response: string;
-          readonly cookie: string | undefined;
-        }> = [
-          { response: "AAAA", cookie: undefined }, // unsolicited
-          { response: "AAAA", cookie: `${Saml.REQUEST_COOKIE}=${state}` }, // garbage under a real state (consumes it)
-          {
-            response: Buffer.from(
-              signedResponse(
-                responseXml({
-                  audience: `${SP_ENTITY_ID_PREFIX}${connection.id}`,
-                  issuer: IDP_ENTITY_ID,
-                  ...around(),
-                }),
-                {
-                  who: attacker,
-                  signatureAlgorithm: ALGORITHM.rsaSha1,
-                  digestAlgorithm: ALGORITHM.sha1,
-                },
+        const attempts: ReadonlyArray<() => Promise<Response>> = [
+          () => handler(acsForm("AAAA")), // unsolicited
+          () => postToAcs(browser, "AAAA"), // garbage under a real state (consumes it)
+          () =>
+            handler(
+              acsForm(
+                Buffer.from(
+                  signedResponse(
+                    responseXml({
+                      audience: `${SP_ENTITY_ID_PREFIX}${connection.id}`,
+                      issuer: IDP_ENTITY_ID,
+                      ...around(),
+                    }),
+                    {
+                      who: attacker,
+                      signatureAlgorithm: ALGORITHM.rsaSha1,
+                      digestAlgorithm: ALGORITHM.sha1,
+                    },
+                  ),
+                ).toString("base64"),
+                `${Saml.REQUEST_COOKIE}=saml-request:x.y`, // a forged request cookie
               ),
-            ).toString("base64"),
-            cookie: `${Saml.REQUEST_COOKIE}=saml-request:x.y`,
-          },
+            ),
         ];
         for (const attempt of attempts) {
-          const response = yield* Effect.promise(() =>
-            handler(acsForm(attempt.response, attempt.cookie)),
-          );
+          const response = yield* Effect.promise(attempt);
           assert.strictEqual(response.status, 400);
-          assert.isUndefined(cookieHeaderOf(response, "__Host-session"));
+          assert.isFalse(hasSetCookie(response, "__Host-session"));
           bodies.push(yield* Effect.promise(() => response.text()));
         }
         // Indistinguishable: one body, naming the error and nothing else.

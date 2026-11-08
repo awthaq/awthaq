@@ -1,6 +1,6 @@
 // P20a/AH-003, decision 36 Tier 4: 01-contract-and-persistence/05-persistence-stratum.feature
 // (BEH-EA-033..036 here; pagination is in this file's sibling `PersistenceKeysetSteps.ts` and the
-// migration Rules BEH-EA-037..040 in `PersistenceMigrationSteps.ts`). Entities and repositories
+// migration Rules BEH-EA-037..040 in `PersistenceMigrationSteps.ts`). Entities and store adapters
 // run against a real in-memory SQLite database migrated by the framework `Migrator`
 // (`PersistenceStratumWorld.ts`). Scenarios whose behavior does not exist yet (INV-EA-016's
 // ownership validation) or needs another World (REQ-EA-092) stay `@skip` in the feature.
@@ -10,7 +10,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { Accounts, AuthEvents, Persistence, Users } from "@awthaq/core";
 import { AuthHttp } from "@awthaq/server";
-import { Repositories } from "@awthaq/sql";
+import { Ids, Sealed, SessionStore, UserStore, AccountStore } from "@awthaq/ports";
+import { SealedColumn, UserStoreSql } from "@awthaq/sql";
 import { RedactionGuard } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as DateTime from "effect/DateTime";
@@ -29,11 +30,12 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { cell, put, take, type World } from "./FoundationsWorld.ts";
 import {
   collectSpans,
-  insertSession,
+  insertAccount,
   insertUser,
   M,
   MemoryUsersLive,
-  RepositoriesLive,
+  StoresLive,
+  sealedStack,
   withDatabase,
 } from "./PersistenceStratumWorld.ts";
 import * as HttpServer from "effect/http/HttpServer";
@@ -161,22 +163,14 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
   When("the entity is encoded to its JSON variant", function* () {
     const encoded = yield* withDatabase(
       Effect.gen(function* () {
-        const users = yield* Repositories.UsersRepository;
-        const accounts = yield* Repositories.AccountsRepository;
-        const user = yield* users.insert(
-          yield* M.User.insert.makeEffect({ email: "sens@example.com", name: "Sens" }),
-        );
-        const account = yield* accounts.insert(
-          yield* M.Account.insert.makeEffect({
-            userId: user.id,
-            providerId: "password",
-            subject: user.id,
-            issuer: "",
-            passwordHash: "super-secret-hash",
-            accessToken: null,
-            refreshToken: null,
-          }),
-        );
+        const user = yield* insertUser("sens@example.com");
+        const account = yield* insertAccount({
+          userId: user.id,
+          providerId: "password",
+          subject: user.id,
+          passwordHash: "super-secret-hash",
+          accessToken: null,
+        });
         // The stored row does hold the hash: the JSON variant is what must hide it.
         assert.equal(account.passwordHash, "super-secret-hash");
         return yield* Schema.encodeUnknownEffect(M.Account.json)(account);
@@ -210,29 +204,21 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
     const Handlers = HttpApiBuilder.group(LeakApi, "leak", (handlers) =>
       handlers.handle("account", () =>
         Effect.gen(function* () {
-          const users = yield* Repositories.UsersRepository;
-          const accounts = yield* Repositories.AccountsRepository;
-          const user = yield* users.insert(
-            yield* M.User.insert.makeEffect({ email: "leak@example.com", name: "Leak" }),
-          );
+          const user = yield* insertUser("leak@example.com");
           // The whole entity — secrets included — is what the handler hands back.
-          return yield* accounts.insert(
-            yield* M.Account.insert.makeEffect({
-              userId: user.id,
-              providerId: "github",
-              subject: "gh-leak",
-              issuer: "",
-              passwordHash: "wire-secret-hash",
-              accessToken: "wire-secret-access",
-              refreshToken: "wire-secret-refresh",
-            }),
-          );
+          return yield* insertAccount({
+            userId: user.id,
+            providerId: "github",
+            subject: "gh-leak",
+            passwordHash: "wire-secret-hash",
+            accessToken: "wire-secret-access",
+          });
         }).pipe(Effect.orDie),
       ),
     );
     const appLayer = AuthHttp.routes(LeakApi).pipe(
       Layer.provide(Handlers),
-      Layer.provideMerge(RepositoriesLive),
+      Layer.provideMerge(StoresLive),
       Layer.provideMerge(HttpServer.layerServices),
       Layer.provideMerge(HttpRouter.layer),
     );
@@ -261,33 +247,22 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
   When("the entity passes through logging, tracing spans, and emitted events", function* () {
     const layer = Accounts.layer
       .pipe(Layer.provide(SqlStores))
-      .pipe(
-        Layer.provideMerge(
-          Layer.mergeAll(RepositoriesLive, RedactionGuard.layer, NodeCrypto.layer),
-        ),
-      );
+      .pipe(Layer.provideMerge(Layer.mergeAll(StoresLive, RedactionGuard.layer, NodeCrypto.layer)));
     const outcome = yield* Effect.gen(function* () {
       const guard = yield* RedactionGuard.RedactionGuard;
       yield* guard.watch("accessToken", CANARY);
-      const users = yield* Repositories.UsersRepository;
-      const accounts = yield* Repositories.AccountsRepository;
+      const accounts = yield* AccountStore.AccountStore;
       const domain = yield* Accounts.Accounts;
-      const user = yield* users.insert(
-        yield* M.User.insert.makeEffect({ email: "spans@example.com", name: "Spans" }),
-      );
-      // The repository entity, secret included, through its own (traced) methods...
-      const account = yield* accounts.insert(
-        yield* M.Account.insert.makeEffect({
-          userId: user.id,
-          providerId: "github",
-          subject: "gh-spans",
-          issuer: "",
-          passwordHash: null,
-          accessToken: CANARY,
-          refreshToken: null,
-        }),
-      );
-      yield* accounts.findById(account.id);
+      const user = yield* insertUser("spans@example.com");
+      // The stored entity, secret included, through the store's own (traced) primitives...
+      const account = yield* insertAccount({
+        userId: user.id,
+        providerId: "github",
+        subject: "gh-spans",
+        passwordHash: null,
+        accessToken: CANARY,
+      });
+      yield* accounts.readProviderTokens(account.id);
       yield* accounts.listByUser(user.id);
       // ...and the domain service a real sign-in reaches it through.
       yield* domain.link({
@@ -333,57 +308,79 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
     }
   });
 
-  // ---- BEH-EA-035: repositories over the ambient SqlClient ----
+  // ---- BEH-EA-035: store adapters over the ambient SqlClient ----
 
   Given(
-    "a {string} repository built with SqlModel.makeRepository against the ambient SqlClient",
+    "the {string} adapter built with SqlModel.makeRepository against the ambient SqlClient",
     function* (name: string) {
       yield* Effect.void; // an assertion-only step: nothing to await
-      assert.equal(name, "Users");
-      assert.match(source("../../packages/sql/src/Repositories.ts"), /SqlModel\.makeRepository\(/);
+      assert.equal(name, "UserStoreSql");
+      assert.match(source("../../packages/sql/src/UserStoreSql.ts"), /SqlModel\.makeRepository\(/);
     },
   );
 
-  When("the repository is resolved", function* () {
+  When("the adapter is resolved", function* () {
+    // The adapter's layer needs nothing but the ambient `SqlClient`: `withDatabase` provides only that.
     const key = yield* withDatabase(
-      Effect.map(Repositories.UsersRepository, () => Repositories.UsersRepository.key),
+      Effect.provide(
+        Effect.map(UserStore.UserStore, () => UserStore.UserStore.key),
+        UserStoreSql.layer,
+      ),
     );
     yield* put(strings, [key]);
   });
 
-  Then("it is provided as a Context.Service", function* () {
-    const [key] = yield* take(strings);
-    assert.equal(typeof key, "string");
-    // Resolved by `yield* Repository` from a Layer needing nothing but the ambient `SqlClient`.
-    assert.equal(key, Repositories.UsersRepository.key);
-  });
+  Then(
+    "it provides the {string} port from a layer that needs only the SqlClient",
+    function* (port: string) {
+      const [key] = yield* take(strings);
+      assert.equal(typeof key, "string");
+      // Resolved by `yield* UserStore` from a Layer needing nothing but the ambient `SqlClient`.
+      assert.equal(port, "UserStore");
+      assert.equal(key, UserStore.UserStore.key);
+    },
+  );
 
-  Given("a repository method that reads or writes a {string} row", function* (name: string) {
-    yield* Effect.void; // an assertion-only step: nothing to await
-    assert.equal(name, "User");
-  });
+  Given(
+    "store primitives that read or write a {string} row and an {string} row",
+    function* (first: string, second: string) {
+      yield* Effect.void; // an assertion-only step: nothing to await
+      assert.deepEqual([first, second], ["User", "Account"]);
+    },
+  );
 
-  When("the method executes", function* () {
+  When("the primitives execute", function* () {
     const transactionSpans = (spans: ReadonlyArray<{ readonly name: string }>) =>
       spans.filter((span) => span.name === "sql.transaction").length;
-    const plain = collectSpans();
+    const single = collectSpans();
+    const multi = collectSpans();
     const wrapped = collectSpans();
     yield* withDatabase(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        const users = yield* Repositories.UsersRepository;
-        const sessions = yield* Repositories.SessionsRepository;
+        const users = yield* UserStore.UserStore;
+        const accounts = yield* AccountStore.AccountStore;
+        const user = yield* insertUser("plain@example.com");
+        const account = yield* insertAccount({
+          userId: user.id,
+          providerId: "github",
+          subject: "plain-subject",
+          passwordHash: null,
+          accessToken: null,
+        });
+        // A single-statement primitive opens no transaction of its own...
         yield* Effect.provideService(
-          Effect.gen(function* () {
-            const user = yield* insertUser("plain@example.com");
-            yield* users.findByEmail("plain@example.com");
-            yield* insertSession(user.id, "h0", DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"));
-            yield* sessions.listByUser(user.id, DateTime.makeUnsafe("2025-01-01T00:00:00.000Z"));
-          }),
+          users.getByEmail("plain@example.com"),
           Tracer.Tracer,
-          plain.tracer,
+          single.tracer,
         );
-        // Control: the same kind of call inside an explicit transaction *does* open the span.
+        // ...a multi-statement one opens exactly one unit...
+        yield* Effect.provideService(
+          accounts.deleteUnlessLast(account.id, true),
+          Tracer.Tracer,
+          multi.tracer,
+        );
+        // ...and the control: the same kind of call inside an explicit transaction *does* open the span.
         yield* Effect.provideService(
           sql.withTransaction(insertUser("wrapped@example.com")),
           Tracer.Tracer,
@@ -392,16 +389,140 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
       }),
     );
     yield* put(numbers, [
-      transactionSpans(plain.spans),
+      transactionSpans(single.spans),
+      transactionSpans(multi.spans),
       transactionSpans(wrapped.spans),
-      plain.spans.filter((span) => /^(Users|Sessions)\./.test(span.name)).length,
+      single.spans.filter((span) => span.name.startsWith("Users.")).length,
     ]);
   });
 
-  Then("it does not call SqlClient.withTransaction itself", function* () {
-    const [ownTransactions, controlTransactions, repositorySpans] = yield* take(numbers);
-    assert.equal(ownTransactions, 0, "repository methods opened no transaction of their own");
-    assert.ok((controlTransactions ?? 0) > 0, "an explicit withTransaction is visible as a span");
-    assert.ok((repositorySpans ?? 0) > 0, "the repository methods really ran under the tracer");
+  Then(
+    "the single-statement one opens no transaction and the multi-statement one opens exactly one",
+    function* () {
+      const [singleTransactions, multiTransactions, controlTransactions, storeSpans] =
+        yield* take(numbers);
+      assert.equal(singleTransactions, 0, "a single-statement primitive opened no transaction");
+      assert.equal(multiTransactions, 1, "a multi-statement primitive opened exactly one unit");
+      assert.ok((controlTransactions ?? 0) > 0, "an explicit withTransaction is visible as a span");
+      assert.ok((storeSpans ?? 0) > 0, "the primitive really ran under the tracer");
+    },
+  );
+
+  // ---- BEH-EA-339: a composition's sealed columns are swept as one list (plan 17) ----
+
+  const rotation = cell(
+    "sealedRotation",
+    (value): value is { readonly opened: ReadonlyArray<boolean>; readonly secondPass: number } =>
+      typeof value === "object" && value !== null,
+  );
+
+  Given(
+    "a user with metadata, a session and a linked account, sealed under the key {string}",
+    function* (kid: string) {
+      yield* Effect.void; // an assertion-only step: the stack starts on "k1", the flow runs in the When
+      assert.equal(kid, "k1");
+    },
+  );
+
+  When(
+    "the key rotates to {string}, every deployed sealed column is swept and {string} is retired",
+    function* (next: string, old: string) {
+      const stack = sealedStack();
+      const at = DateTime.makeUnsafe(1_700_000_000_000);
+      const later = DateTime.makeUnsafe(1_700_003_600_000);
+      const userId = Schema.decodeUnknownSync(Ids.UserId)("rotation-user");
+      const sessionId = Schema.decodeUnknownSync(Ids.SessionId)("rotation-session");
+      const accountId = Schema.decodeUnknownSync(Ids.AccountId)("rotation-account");
+      const outcome = yield* Effect.gen(function* () {
+        const users = yield* UserStore.UserStore;
+        const sessions = yield* SessionStore.SessionStore;
+        const accounts = yield* AccountStore.AccountStore;
+        yield* users.insertOrHolder({
+          id: userId,
+          email: Option.some("rotation@example.com"),
+          emailVerified: false,
+          phone: Option.none(),
+          phoneVerified: false,
+          name: "Rotation",
+          image: Option.none(),
+          metadata: Option.some('{"plan":"pro"}'),
+          status: "active",
+          statusReason: Option.none(),
+          suspendedUntil: Option.none(),
+          createdAt: at,
+          updatedAt: at,
+        });
+        yield* sessions.insert({
+          session: {
+            id: sessionId,
+            userId,
+            secretHash: "rotation-hash",
+            at,
+            absoluteExpiresAt: later,
+            idleExpiresAt: later,
+            ipAddress: Option.some("203.0.113.9"),
+            userAgent: Option.some("Agent/1.0"),
+            actingAs: Option.none(),
+            amr: [],
+          },
+          supersedes: Option.none(),
+          maxLive: Option.none(),
+        });
+        yield* accounts.insertIfAbsent({
+          id: accountId,
+          userId,
+          providerId: "github",
+          subject: "rotation-subject",
+          issuer: "",
+          credentialHash: Option.none(),
+          tokens: Option.some({
+            accessToken: Redacted.make("access-secret"),
+            refreshToken: Option.some(Redacted.make("refresh-secret")),
+            idToken: Option.some(Redacted.make("id-secret")),
+            accessTokenExpiresAt: Option.none(),
+            refreshTokenExpiresAt: Option.none(),
+            scope: Option.none(),
+            tokenType: Option.none(),
+          }),
+          createdAt: at,
+          updatedAt: at,
+        });
+        stack.rotateTo(next);
+        yield* SealedColumn.sweepDeployed();
+        const secondPass = (yield* SealedColumn.sweepDeployed()).reduce(
+          (total, report) => total + report.resealed,
+          0,
+        );
+        stack.retire(old);
+        const user = Option.getOrThrow(yield* users.get(userId));
+        const session = Option.getOrThrow(yield* sessions.get(sessionId));
+        const tokens = Option.getOrThrow(
+          Option.getOrThrow(yield* accounts.readProviderTokens(accountId)),
+        );
+        const opened = [
+          Option.isSome(yield* Sealed.openOption(user.metadata)),
+          Option.isSome(yield* Sealed.openOption(session.ipAddress)),
+          Option.isSome(yield* Sealed.openOption(session.userAgent)),
+          Redacted.value(yield* tokens.accessToken.open) === "access-secret",
+          Option.isSome(yield* Sealed.openOption(tokens.refreshToken)),
+          Option.isSome(yield* Sealed.openOption(tokens.idToken)),
+        ];
+        return { opened, secondPass };
+      }).pipe(Effect.provide(stack.layer));
+      yield* put(rotation, outcome);
+    },
+  );
+
+  Then(
+    "the user's metadata, the session's device details and the account's tokens still open",
+    function* () {
+      const { opened } = yield* take(rotation);
+      assert.deepEqual(opened, [true, true, true, true, true, true]);
+    },
+  );
+
+  Then("a second sweep reports that nothing is left to re-seal", function* () {
+    const { secondPass } = yield* take(rotation);
+    assert.equal(secondPass, 0);
   });
 });

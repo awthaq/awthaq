@@ -8,8 +8,8 @@
 // backoff schedule, the rotation grace window, leases, retention) goes through the scenario's
 // `TestClock`. A second, HTTP-served composition is built only by the scenarios about the admin tier.
 import { Api } from "@awthaq/api";
-import { Auth, AuditLog, AuthEvents, DataExport, Erasure, EventRelay, Users } from "@awthaq/core";
-import { Encryption, HostResolver, RateLimiter, Tenant } from "@awthaq/ports";
+import { Auth, AuditLog, AuthEvents, DataExport, Erasure, Users } from "@awthaq/core";
+import { Encryption, HostResolver, RateLimiter, RelayCursorStore, Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import { WebhookDelivery, WebhookRecords, WebhookTransport, Webhooks } from "@awthaq/webhooks";
 import * as Context from "effect/Context";
@@ -31,7 +31,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as TestClock from "effect/testing/TestClock";
 import { makeNamedRegistry } from "./shared/Harness.ts";
 import { makeOutcomes } from "./shared/Outcomes.ts";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, type UserAgent } from "@awthaq/test";
 
 // ---- the receiver ---------------------------------------------------------------------------
 
@@ -198,7 +198,6 @@ const composition = (
       resolver.layer,
       Webhooks.config({ canManageWebhooks: gateFor(options.gate), ...options.config }),
       WebhookRecords.layerMemory,
-      EventRelay.layerCursorMemory,
     ),
   });
 
@@ -209,7 +208,7 @@ export type AppServices =
   | Encryption.Encryption
   | AuthEvents.AuthEvents
   | AuditLog.AuditLog
-  | EventRelay.RelayCursorStore
+  | RelayCursorStore.RelayCursorStore
   | SecureRandom.SecureRandom
   | Digest.Digest
   | Mac.Mac
@@ -241,13 +240,16 @@ const buildApp = (options: Options, scope: Scope.Scope) =>
 const ORIGIN = "http://localhost:3000";
 
 export interface HttpApp {
-  readonly sessionCookie: () => Promise<string>;
+  /** A browser signed in as the administrator (it keeps its cookies and echoes CSRF). */
+  readonly signIn: () => Promise<UserAgent.UserAgent>;
   readonly call: (
     method: string,
     path: string,
     options?: {
-      readonly cookie?: string;
+      /** The browser making the call; a fresh anonymous one otherwise. */
+      readonly as?: UserAgent.UserAgent;
       readonly body?: unknown;
+      /** `false`: the browser sends its cookies but no `x-csrf-token` echo. */
       readonly csrf?: boolean;
     },
   ) => Promise<{ readonly status: number; readonly tag: string | undefined }>;
@@ -258,24 +260,13 @@ const buildHttpApp = (options: Options): HttpApp => {
   // The web handler runs on the real clock, so the session it authenticates is issued on the real clock too, against
   // the very services the handler runs on (`TestAuth.app` serves and reads one memo map).
   const http = TestAuth.app(composition(options, receiver, makeResolver()), { baseUrl: ORIGIN });
-  const sessionCookie = async () => (await http.signIn("admin-1@example.com")).cookieHeader;
+  const signIn = () => http.signIn("admin-1@example.com");
   const call: HttpApp["call"] = async (method, path, callOptions = {}) => {
-    const response =
-      callOptions.csrf === false
-        ? await http.handler(
-            new Request(`${ORIGIN}${path}`, {
-              method,
-              headers: {
-                ...(callOptions.body === undefined ? {} : { "content-type": "application/json" }),
-                ...(callOptions.cookie === undefined ? {} : { cookie: callOptions.cookie }),
-              },
-              ...(callOptions.body === undefined ? {} : { body: JSON.stringify(callOptions.body) }),
-            }),
-          )
-        : await http.request(method, path, {
-            ...(callOptions.cookie === undefined ? {} : { cookie: callOptions.cookie }),
-            ...(callOptions.body === undefined ? {} : { json: callOptions.body }),
-          });
+    const browser = callOptions.as ?? (await http.agent());
+    const response = await browser.request(method, path, {
+      ...(callOptions.body === undefined ? {} : { json: callOptions.body }),
+      ...(callOptions.csrf === false ? { headers: { [Api.CSRF_HEADER_NAME]: "" } } : {}),
+    });
     const parsed: unknown = await response.json().catch(() => undefined);
     const tag =
       typeof parsed === "object" &&
@@ -286,7 +277,7 @@ const buildHttpApp = (options: Options): HttpApp => {
         : undefined;
     return { status: response.status, tag };
   };
-  return { sessionCookie, call };
+  return { signIn, call };
 };
 
 // ---- the World ---------------------------------------------------------------------------

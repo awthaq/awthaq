@@ -4,7 +4,7 @@ A runnable example, additional to (never a replacement for) the
 [repository README's own quickstart](../../README.md#quickstart). Where that
 one shows a single plugin (Password) over a real, migrated Postgres backend,
 this one shows a **multi-plugin composition** — `Password` + `Organization`
-together — over the in-memory persistence bundle (`Persistence.memory` and each plugin's `records.memory`).
+together — served by `AuthHost.layer` over the in-memory persistence bundle (`persistence: { records: "memory" }`: `Persistence.memory` and each plugin's `records.memory`).
 
 No `DATABASE_URL`, no migration run, no `AWTHAQ_ENCRYPTION_KEY`. Just:
 
@@ -70,6 +70,8 @@ boots this exact composition in-process and asserts both, plus the walkthrough a
 (sign-up, token from the console mail, verify, sign-in) and the `429` (`pnpm test`).
 
 See `app.ts`'s own comments for what each composition step is doing and
-why (`index.ts` only starts it). It uses nothing from `@awthaq/test`: the host middleware is derived from the composed api
-(`AuthHttp.middlewareFor`), each plugin's stores come from its own `records.memory` bundle, and
-the same composition over Postgres swaps `Persistence.sql()` and `records.sql` in.
+why (`index.ts` only starts it). The production module uses nothing from `@awthaq/test` (the smoke test serves it
+through `TestAuth.app`): `AuthHost.layer` derives the routes, the middleware, each plugin's `records.memory` and hook
+points, the core services, the user fields, `RequestContext` and `BodyLimit`, and `app.ts` provides only its ports,
+its guard, its sign-up tap and the CSRF secret. The same composition over Postgres is `persistence: { records: "sql",
+client, migrations: "apply" }` (see `examples/sql-server`).

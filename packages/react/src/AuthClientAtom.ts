@@ -30,7 +30,7 @@
 // `subjectAtom` is the one derivation Providers feeds qadi: `sessionAtom` is
 // the gate, and the DTO only counts once the session is a settled, real one.
 import { AuthCore, SubjectContract } from "@awthaq/api";
-import type { AccountContract, Api, SessionContract } from "@awthaq/api";
+import type { AccountContract, Api, SessionContract, SessionLifecycle } from "@awthaq/api";
 import * as Data from "effect/Data";
 import type * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
@@ -55,7 +55,7 @@ import { toSubject } from "./Subject.ts";
 export interface AuthCoreTypes {
   readonly session: SessionContract.SessionDto;
   readonly account: AccountContract.AccountDto;
-  readonly middleware: Api.Authentication | Api.CsrfProtection;
+  readonly middleware: Api.Authentication | Api.CsrfProtection | SessionLifecycle.Ends;
   readonly errors: Api.Unauthenticated | Api.CsrfRejected | SessionContract.SessionNotFound;
 }
 

@@ -24,7 +24,7 @@
 //   private to this module, and `finalizeSignIn` — the one place this plugin calls `Sessions.issue`
 //   — accepts nothing else, so "a session minted without a verified second factor" does not type-check.
 
-import { Hooks, Sessions, Users } from "@awthaq/core";
+import { Hooks, Sessions, Users, VerificationLink } from "@awthaq/core";
 import { Defects } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Effect from "effect/Effect";
@@ -47,6 +47,17 @@ export const ChallengePayload = Schema.Struct({
   handoff: Schema.optionalKey(Hooks.Handoff),
 });
 export type ChallengePayload = typeof ChallengePayload.Type;
+
+/**
+ * The challenge as a link purpose (BEH-EA-262, ADR-EA-039 decision 9): user-keyed, so its public id is
+ * the user id and issuing a fresh one supersedes the account's live challenge (ADR-EA-016), and a row
+ * whose user is not its public id is refused.
+ */
+export const ChallengeLink = VerificationLink.forUser({
+  name: CHALLENGE_PURPOSE,
+  keyedBy: "user",
+  payload: ChallengePayload,
+});
 
 /** A live challenge that has just been spent. Its user has still proven only one factor. */
 export interface ConsumedChallenge {

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-005 |
-> | Revision | 1.3 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.4 |
+> | Effective Date | 2026-11-08 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Strengthened "Alternatives considered" with OSGi's dynamic service registry as a real, grounded competing precedent (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced "Not yet implemented" with a pointer to ADR-EA-018 (EP-001) <br> 1.3 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Strengthened "Alternatives considered" with OSGi's dynamic service registry as a real, grounded competing precedent (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced "Not yet implemented" with a pointer to ADR-EA-018 (EP-001) <br> 1.3 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) <br> 1.4 (2026-11-08): Consequences: `AuthHost.layer` is a pure function of the static tuple and the host's options (ADR-EA-044, architecture plan 15) |
 
 ---
 
@@ -30,7 +30,7 @@ A genuinely dynamic alternative *does* exist in the wider plugin-platform litera
 
 ## Consequences
 
-**Positive**: Every guarantee `Auth.make`'s `Validate<P>` and `Layer.launch` provide (ADR-EA-002) is available specifically because the plugin tuple never changes after composition — a missing dependency, a slot conflict, or an unsatisfied port is caught before the process starts serving traffic, not discovered mid-flight after a runtime registration call. The merged `HttpApi` contract, and therefore every derived client, is stable for the lifetime of the process.
+**Positive**: Every guarantee `Auth.make`'s `Validate<P>` and `Layer.launch` provide (ADR-EA-002) is available specifically because the plugin tuple never changes after composition — a missing dependency, a slot conflict, or an unsatisfied port is caught before the process starts serving traffic, not discovered mid-flight after a runtime registration call. The merged `HttpApi` contract, and therefore every derived client, is stable for the lifetime of the process. `AuthHost.layer` is a pure function of the static tuple and the host's options; the tuple's migrations are run or verified before the layer serves ([ADR-EA-044](044-host-composition.md)).
 
 **Negative**: Use cases that genuinely want to toggle a sign-in method or plugin's *presence* at runtime (as opposed to its configuration) — e.g. an operator wanting to disable OAuth without redeploying — are not supported directly; the closest approximation is a plugin-internal `Config`-backed feature flag that makes an installed plugin's endpoints return a typed "disabled" error, which is a configuration-layer workaround, not true uninstallation.
 

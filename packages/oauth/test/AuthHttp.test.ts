@@ -78,34 +78,44 @@ const AppLayer = buildAppLayer({});
 const ThrottledAppLayer = buildAppLayer({ enforcing: true });
 
 /**
+ * One browser starts a flow against `layer`: `GET /oauth/acme/authorize<query>` stores the state cookie in
+ * the agent, and `callback(query)` is the provider's redirect back: a cross-site top-level navigation, on
+ * which the `SameSite=Lax` state cookie travels (and a `Strict` one would not).
+ */
+const startFlow = (layer: typeof AppLayer, authorizeQuery = "") =>
+  Effect.gen(function* () {
+    const app = TestAuth.app(layer);
+    const browser = yield* Effect.promise(() => app.agent());
+    const authorize = yield* Effect.promise(() =>
+      browser.request("GET", `/oauth/acme/authorize${authorizeQuery}`),
+    );
+    const location = authorize.headers.get("location");
+    if (location === null || browser.cookies.get("__Host-oauth-state") === undefined) {
+      throw new Error("expected authorize to redirect with a state cookie");
+    }
+    const state = encodeURIComponent(new URL(location).searchParams.get("state") ?? "");
+    const callback = (query: string) =>
+      Effect.promise(() =>
+        browser.request("GET", `/oauth/acme/callback?${query}`, {
+          site: "cross-site",
+          navigation: true,
+        }),
+      );
+    return { app, browser, authorize, state, callback };
+  });
+
+/**
  * Runs authorize then callback against `layer`, returning the callback
  * response. `query` builds the callback's query string from the flow's
- * `state` (default: a normal `code` redirect); `handler` lets a test send
- * several callbacks against the one router.
+ * `state` (default: a normal `code` redirect).
  */
 const runCallback = (
   layer: typeof AppLayer,
   query: (state: string) => string = (state) => `code=auth-code&state=${state}`,
 ) =>
   Effect.gen(function* () {
-    const { handler } = TestAuth.app(layer);
-    const authorizeResponse = yield* Effect.promise(() =>
-      handler(new Request("http://localhost/oauth/acme/authorize")),
-    );
-    const location = authorizeResponse.headers.get("location");
-    const stateCookie = authorizeResponse.headers.get("set-cookie");
-    if (location === null || stateCookie === null) {
-      throw new Error("expected authorize to redirect with a state cookie");
-    }
-    const state = new URL(location).searchParams.get("state");
-    return yield* Effect.promise(() =>
-      handler(
-        new Request(
-          `http://localhost/oauth/acme/callback?${query(encodeURIComponent(state ?? ""))}`,
-          { headers: { cookie: stateCookie.split(";")[0] ?? "" } },
-        ),
-      ),
-    );
+    const flow = yield* startFlow(layer);
+    return yield* flow.callback(query(flow.state));
   });
 
 describe("AuthHttp + OAuth (real HTTP)", () => {
@@ -121,15 +131,13 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
         const location = response.headers.get("location");
         assert.isString(location);
         assert.include(location ?? "", "code_challenge_method=S256");
-        const cookie = response.headers.get("set-cookie");
-        assert.isString(cookie);
-        assert.match(cookie ?? "", /^__Host-oauth-state=/);
+        const cookie = CookieAssertions.findSetCookie(response, "__Host-oauth-state");
         // CSS-001: the `__Host-` prefix requires Secure, no Domain, and
         // Path=/ exactly — a narrower path silently voids the prefix and
         // real browsers drop the cookie.
-        assert.match(cookie ?? "", /;\s*Path=\/(;|$)/i);
-        assert.match(cookie ?? "", /;\s*Secure/i);
-        assert.notMatch(cookie ?? "", /;\s*Domain=/i);
+        assert.strictEqual(cookie.path, "/");
+        assert.isTrue(cookie.secure);
+        assert.isUndefined(cookie.domain);
       }),
   );
 
@@ -137,30 +145,12 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
     "BEH-EA-113-adjacent/083: callback answers the same-site interstitial (200) and sets the session cookie on success",
     () =>
       Effect.gen(function* () {
-        const { handler } = TestAuth.app(AppLayer);
-        const authorizeResponse = yield* Effect.promise(() =>
-          handler(new Request("http://localhost/oauth/acme/authorize")),
-        );
-        const location = authorizeResponse.headers.get("location");
-        const stateCookie = authorizeResponse.headers.get("set-cookie");
-        if (location === null || stateCookie === null) {
-          throw new Error("expected authorize to redirect with a state cookie");
-        }
-        const state = new URL(location).searchParams.get("state");
-        const cookieValue = stateCookie.split(";")[0];
-
-        const callbackResponse = yield* Effect.promise(() =>
-          handler(
-            new Request(
-              `http://localhost/oauth/acme/callback?code=auth-code&state=${encodeURIComponent(state ?? "")}`,
-              { headers: { cookie: cookieValue ?? "" } },
-            ),
-          ),
-        );
+        const flow = yield* startFlow(AppLayer);
+        const callbackResponse = yield* flow.callback(`code=auth-code&state=${flow.state}`);
         assert.strictEqual(callbackResponse.status, 200);
-        const sessionCookie = callbackResponse.headers.get("set-cookie");
-        assert.isString(sessionCookie);
-        assert.match(sessionCookie ?? "", /^__Host-session=/);
+        // Found by name, not by header order (the response also expires `__Host-oauth-state`).
+        assert.isNotEmpty(CookieAssertions.findSetCookie(callbackResponse, "__Host-session").value);
+        assert.isDefined(flow.browser.cookies.get("__Host-session"));
       }),
   );
 
@@ -174,31 +164,23 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
     "MNA-003: a native flow redirects to the deep link with a code, sets no session cookie, and POST /oauth/token redeems it once",
     () =>
       Effect.gen(function* () {
-        const { handler } = TestAuth.app(NativeLayer);
-        const authorize = yield* Effect.promise(() =>
-          handler(
-            new Request(
-              "http://localhost/oauth/acme/authorize?mode=native&callbackURL=" +
-                encodeURIComponent("myapp://oauth/callback"),
-            ),
-          ),
+        const flow = yield* startFlow(
+          NativeLayer,
+          `?mode=native&callbackURL=${encodeURIComponent("myapp://oauth/callback")}`,
         );
-        assert.strictEqual(authorize.status, 302);
-        const state = new URL(authorize.headers.get("location") ?? "").searchParams.get("state");
-        const stateCookie = (authorize.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
-        const callback = yield* Effect.promise(() =>
-          handler(
-            new Request(
-              `http://localhost/oauth/acme/callback?code=auth-code&state=${encodeURIComponent(state ?? "")}`,
-              { headers: { cookie: stateCookie } },
-            ),
-          ),
-        );
+        assert.strictEqual(flow.authorize.status, 302);
+        const { handler } = flow.app;
+        const callback = yield* flow.callback(`code=auth-code&state=${flow.state}`);
         assert.strictEqual(callback.status, 302);
         const location = callback.headers.get("location") ?? "";
         assert.match(location, /^myapp:\/\/oauth\/callback\?code=/);
         // Only the (expiry of the) state cookie: no session cookie reaches the browser jar.
-        assert.isFalse((callback.headers.get("set-cookie") ?? "").includes("__Host-session"));
+        assert.isFalse(
+          CookieAssertions.setCookiesOf(callback).some(
+            (cookie) => cookie.name === "__Host-session",
+          ),
+        );
+        assert.isUndefined(flow.browser.cookies.get("__Host-session"));
 
         const code = URL.parse(location)?.searchParams.get("code") ?? "";
         const redeem = () =>
@@ -364,40 +346,23 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
   const LANDING = "/oauth/acme/authorize?link=true";
 
   /**
-   * A browser model for the redirect chain the provider started cross-site. A `SameSite=Strict` cookie
-   * is withheld from every request of that chain (a plain 302 lands inside it), but a request the
-   * document served by this site initiates (a meta refresh) is same-site and carries it.
+   * The redirect chain the provider started cross-site, through one agent. A plain 302 lands inside that
+   * chain (a cross-site navigation, so the agent withholds the `SameSite=Strict` session cookie), but a
+   * request the document served by this site initiates (a meta refresh) is same-origin and carries it.
    */
-  const browserLanding = (layer: typeof AppLayer) =>
+  const landingChain = (layer: typeof AppLayer) =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(layer);
-      const authorize = yield* Effect.promise(() =>
-        handler(
-          new Request(
-            `http://localhost/oauth/acme/authorize?callbackURL=${encodeURIComponent(LANDING)}`,
-          ),
-        ),
-      );
-      const state = new URL(authorize.headers.get("location") ?? "").searchParams.get("state");
-      const stateCookie = (authorize.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
-      const callback = yield* Effect.promise(() =>
-        handler(
-          new Request(
-            `http://localhost/oauth/acme/callback?code=auth-code&state=${encodeURIComponent(state ?? "")}`,
-            { headers: { cookie: stateCookie } },
-          ),
-        ),
-      );
-      const session = CookieAssertions.findSetCookie(callback, "__Host-session");
+      const flow = yield* startFlow(layer, `?callbackURL=${encodeURIComponent(LANDING)}`);
+      const callback = yield* flow.callback(`code=auth-code&state=${flow.state}`);
       const body = yield* Effect.promise(() => callback.clone().text());
       const refresh = /http-equiv="refresh" content="0;url=([^"]*)"/.exec(body)?.[1];
-      const next = callback.status === 200 ? refresh : (callback.headers.get("location") ?? "");
-      const sameSiteInitiated = callback.status === 200;
+      const interstitial = callback.status === 200;
+      const next = interstitial ? (refresh ?? "") : (callback.headers.get("location") ?? "");
       const landing = yield* Effect.promise(() =>
-        handler(
-          new Request(new URL(next ?? "", "http://localhost"), {
-            headers: sameSiteInitiated ? { cookie: `${session.name}=${session.value}` } : {},
-          }),
+        flow.browser.request(
+          "GET",
+          next,
+          interstitial ? { site: "same-origin" } : { site: "cross-site", navigation: true },
         ),
       );
       return { callback, body, landing };
@@ -407,7 +372,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
     "PV-016: the default callback answers a same-site interstitial, and the first landing request carries the session",
     () =>
       Effect.gen(function* () {
-        const { callback, body, landing } = yield* browserLanding(AppLayer);
+        const { callback, body, landing } = yield* landingChain(AppLayer);
         assert.strictEqual(callback.status, 200);
         assert.match(callback.headers.get("content-type") ?? "", /^text\/html/);
         assert.isNull(callback.headers.get("location"));
@@ -427,7 +392,7 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
     "PV-016: with bounce: false the callback is a plain 302 and the Strict cookie is withheld from the landing request",
     () =>
       Effect.gen(function* () {
-        const { callback, landing } = yield* browserLanding(
+        const { callback, landing } = yield* landingChain(
           buildAppLayer({ config: { baseUrl, bounce: false } }),
         );
         assert.strictEqual(callback.status, 302);
@@ -438,25 +403,8 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
 
   it.effect("PV-016: the landing URL is HTML-escaped into the interstitial", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(AppLayer);
-      const authorize = yield* Effect.promise(() =>
-        handler(
-          new Request(
-            `http://localhost/oauth/acme/authorize?callbackURL=${encodeURIComponent("/a?x=1&y=2")}`,
-          ),
-        ),
-      );
-      const state = new URL(authorize.headers.get("location") ?? "").searchParams.get("state");
-      const callback = yield* Effect.promise(() =>
-        handler(
-          new Request(
-            `http://localhost/oauth/acme/callback?code=auth-code&state=${encodeURIComponent(state ?? "")}`,
-            {
-              headers: { cookie: (authorize.headers.get("set-cookie") ?? "").split(";")[0] ?? "" },
-            },
-          ),
-        ),
-      );
+      const flow = yield* startFlow(AppLayer, `?callbackURL=${encodeURIComponent("/a?x=1&y=2")}`);
+      const callback = yield* flow.callback(`code=auth-code&state=${flow.state}`);
       const body = yield* Effect.promise(() => callback.text());
       assert.include(body, "/a?x=1&amp;y=2");
       assert.notInclude(body, "x=1&y=2");
@@ -596,22 +544,20 @@ describe("AuthHttp + OAuth (real HTTP)", () => {
 
   it.effect("AP-005: a denial consumes the flow, so a replay carrying a code fails", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(AppLayer);
-      const authorizeResponse = yield* Effect.promise(() =>
-        handler(new Request("http://localhost/oauth/acme/authorize")),
-      );
-      const location = authorizeResponse.headers.get("location") ?? "";
-      const cookie = (authorizeResponse.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
-      const state = encodeURIComponent(new URL(location).searchParams.get("state") ?? "");
-      const call = (query: string) =>
-        Effect.promise(() =>
-          handler(
-            new Request(`http://localhost/oauth/acme/callback?${query}`, { headers: { cookie } }),
-          ),
-        );
-      const denied = yield* call(`error=access_denied&state=${state}`);
+      const flow = yield* startFlow(AppLayer);
+      // The state cookie the browser held when the flow started, presented again on the replay (the
+      // denial's response expired it in the agent; a replaying attacker keeps the copy).
+      const held = flow.browser.cookies.get("__Host-oauth-state")?.value ?? "";
+      const { state } = flow;
+      const denied = yield* flow.callback(`error=access_denied&state=${state}`);
       assert.strictEqual(denied.status, 400);
-      const replay = yield* call(`code=auth-code&state=${state}`);
+      const replay = yield* Effect.promise(() =>
+        flow.browser.request("GET", `/oauth/acme/callback?code=auth-code&state=${state}`, {
+          site: "cross-site",
+          navigation: true,
+          extraCookies: { "__Host-oauth-state": held },
+        }),
+      );
       assert.strictEqual(replay.status, 400);
       assert.deepStrictEqual(yield* Effect.promise(() => replay.json()), {
         _tag: "OAuthCallbackFailed",

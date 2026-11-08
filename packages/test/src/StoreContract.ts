@@ -14,14 +14,16 @@
 // runner. A "concurrent" case runs `CONCURRENCY` calls under `Effect.all(..., { concurrency:
 // "unbounded" })` and asserts exact counts.
 //
-// Each port's cases are added with its adapters: `auditLog`, `verification`, `accounts`, `users` and
-// `sessions`.
+// Each port's cases are added with its adapters: `auditLog`, `verification`, `accounts`, `users`,
+// `sessions` and `relayCursor`.
 
 import assert from "node:assert/strict";
 import {
   AccountStore,
   AuditLogStore,
   Ids,
+  RelayCursorStore,
+  Sealed,
   SessionStore,
   SqlTransaction,
   Tenant,
@@ -74,6 +76,10 @@ export const run = <R>(framework: TestFramework, config: RunConfig<R>): void => 
 // ---- auditLog -------------------------------------------------------------------------------
 
 type AuditCase = Case<AuditLogStore.AuditLogStore>;
+
+/** A sealed optional cell opened to its plaintext (plan 17: the sealed columns cross the ports unopened). */
+const opened = (value: Option.Option<Sealed.Sealed<string>>) =>
+  Effect.map(Sealed.openOption(value), Option.map(Redacted.value));
 
 const at = (minutes: number) => DateTime.makeUnsafe(1_700_000_000_000 + minutes * 60_000);
 
@@ -676,6 +682,14 @@ const sampleTokens: AccountStore.ProviderTokens = {
   tokenType: Option.some("Bearer"),
 };
 
+/** The stored token set opened to plaintext tokens (plan 17: `readProviderTokens` hands them over sealed). */
+const openTokens = (sealed: AccountStore.SealedProviderTokens) =>
+  Effect.all({
+    accessToken: sealed.accessToken.open,
+    refreshToken: Sealed.openOption(sealed.refreshToken),
+    idToken: Sealed.openOption(sealed.idToken),
+  }).pipe(Effect.map((opened) => ({ ...sealed, ...opened })));
+
 const accountIds = (rows: ReadonlyArray<AccountStore.AccountIdentity>) => rows.map((row) => row.id);
 
 /** The `AccountStore` contract (plan 02, ADR-EA-041; BEH-EA-043 to 045, BEH-EA-125, BE-002, SMS-002). */
@@ -696,6 +710,21 @@ export const accounts: ReadonlyArray<AccountCase> = [
       assert.equal(identity.issuer, "https://iss");
       assert.deepEqual(identity.tenantId, Option.some("tenant-a"));
       assert.deepEqual(identity.createdAt, at(0));
+    }),
+  },
+  {
+    name: "getByKey and listByUser are global across tenants (the directory is not narrowed by the ambient tenant)",
+    run: Effect.gen(function* () {
+      const store = yield* AccountStore.AccountStore;
+      yield* Tenant.withTenant("tenant-a")(
+        store.insertIfAbsent(newAccount("a1", "u1", { providerId: "github", subject: "global" })),
+      );
+      // DRS-005: the same provider subject resolves from another tenant's request, and with none.
+      const fromB = yield* Tenant.withTenant("tenant-b")(store.getByKey("github", "global", ""));
+      assert.equal(Option.isSome(fromB), true);
+      assert.equal(Option.isSome(yield* store.getByKey("github", "global", "")), true);
+      const listedB = yield* Tenant.withTenant("tenant-b")(store.listByUser(makeUserId("u1")));
+      assert.deepEqual(accountIds(listedB), ["a1"]);
     }),
   },
   {
@@ -785,19 +814,16 @@ export const accounts: ReadonlyArray<AccountCase> = [
       yield* store.insertIfAbsent(newAccount("without", "u1"));
       assert.equal(Option.isNone(yield* store.readProviderTokens(makeAccountId("missing"))), true);
       const empty = Option.getOrThrow(yield* store.readProviderTokens(makeAccountId("without")));
-      assert.deepEqual(empty, { _tag: "Tokens", tokens: Option.none() });
+      assert.deepEqual(empty, Option.none());
       const read = Option.getOrThrow(yield* store.readProviderTokens(makeAccountId("with")));
-      assert.equal(read._tag, "Tokens");
-      if (read._tag === "Tokens") {
-        const tokens = Option.getOrThrow(read.tokens);
-        assert.equal(Redacted.value(tokens.accessToken), "access-1");
-        assert.equal(Redacted.value(Option.getOrThrow(tokens.refreshToken)), "refresh-1");
-        assert.equal(Redacted.value(Option.getOrThrow(tokens.idToken)), "id-1");
-        assert.deepEqual(tokens.accessTokenExpiresAt, Option.some(at(60)));
-        assert.deepEqual(tokens.refreshTokenExpiresAt, Option.some(at(600)));
-        assert.deepEqual(tokens.scope, Option.some("openid email"));
-        assert.deepEqual(tokens.tokenType, Option.some("Bearer"));
-      }
+      const tokens = yield* openTokens(Option.getOrThrow(read));
+      assert.equal(Redacted.value(tokens.accessToken), "access-1");
+      assert.equal(Redacted.value(Option.getOrThrow(tokens.refreshToken)), "refresh-1");
+      assert.equal(Redacted.value(Option.getOrThrow(tokens.idToken)), "id-1");
+      assert.deepEqual(tokens.accessTokenExpiresAt, Option.some(at(60)));
+      assert.deepEqual(tokens.refreshTokenExpiresAt, Option.some(at(600)));
+      assert.deepEqual(tokens.scope, Option.some("openid email"));
+      assert.deepEqual(tokens.tokenType, Option.some("Bearer"));
     }),
   },
   {
@@ -825,11 +851,9 @@ export const accounts: ReadonlyArray<AccountCase> = [
         true,
       );
       const read = Option.getOrThrow(yield* store.readProviderTokens(makeAccountId("a")));
-      if (read._tag === "Tokens") {
-        const tokens = Option.getOrThrow(read.tokens);
-        assert.equal(Redacted.value(tokens.accessToken), "rotated");
-        assert.equal(Option.isNone(tokens.refreshToken), true);
-      }
+      const tokens = yield* openTokens(Option.getOrThrow(read));
+      assert.equal(Redacted.value(tokens.accessToken), "rotated");
+      assert.equal(Option.isNone(tokens.refreshToken), true);
       const identity = Option.getOrThrow(yield* store.get(makeAccountId("a")));
       assert.deepEqual(identity.updatedAt, at(20));
       assert.deepEqual(identity.createdAt, at(0));
@@ -1158,7 +1182,7 @@ export const users: ReadonlyArray<UserCase> = [
       const afterSet = Option.getOrThrow(set);
       assert.equal(afterSet.name, "Renamed");
       assert.deepEqual(afterSet.image, Option.some("https://img"));
-      assert.deepEqual(afterSet.metadata, Option.some("{}"));
+      assert.deepEqual(yield* opened(afterSet.metadata), Option.some("{}"));
       assert.deepEqual(afterSet.updatedAt, at(3));
       assert.deepEqual(afterSet.email, Option.some("a@example.com"));
       const kept = Option.getOrThrow(
@@ -1171,7 +1195,7 @@ export const users: ReadonlyArray<UserCase> = [
         }),
       );
       assert.deepEqual(kept.image, Option.some("https://img"));
-      assert.deepEqual(kept.metadata, Option.some("{}"));
+      assert.deepEqual(yield* opened(kept.metadata), Option.some("{}"));
       const cleared = Option.getOrThrow(
         yield* store.updateProfile({
           id: makeUserId("u1"),
@@ -1195,6 +1219,60 @@ export const users: ReadonlyArray<UserCase> = [
         ),
         true,
       );
+    }),
+  },
+  {
+    name: "updateProfile never writes the status, and setStatus is the only writer of it (SCP-001)",
+    run: Effect.gen(function* () {
+      const store = yield* UserStore.UserStore;
+      yield* store.insertOrHolder(newUser("u1", { email: "a@example.com" }));
+      yield* store.setStatus({
+        id: makeUserId("u1"),
+        status: "suspended",
+        reason: Option.some("spam"),
+        until: Option.some(at(100)),
+        at: at(2),
+      });
+      const renamed = Option.getOrThrow(
+        yield* store.updateProfile({
+          id: makeUserId("u1"),
+          name: "Renamed",
+          image: { _tag: "Keep" },
+          metadata: { _tag: "Keep" },
+          at: at(3),
+        }),
+      );
+      assert.equal(renamed.name, "Renamed");
+      assert.equal(renamed.status, "suspended");
+      assert.deepEqual(renamed.statusReason, Option.some("spam"));
+      assert.deepEqual(renamed.suspendedUntil, Option.some(at(100)));
+    }),
+  },
+  {
+    name: "the directory is global: a user stamped under tenant A is found by id, email and phone under tenant B and with no tenant (DRS-005)",
+    run: Effect.gen(function* () {
+      const store = yield* UserStore.UserStore;
+      yield* Tenant.withTenant("tenant-a")(
+        store.insertOrHolder(newUser("u1", { email: "global@example.com", phone: "+15550142" })),
+      );
+      const id = makeUserId("u1");
+      const phone = makeE164("+15550142");
+      const lookups = [
+        store.get(id),
+        store.getByEmail("global@example.com"),
+        store.getByPhone(phone),
+      ];
+      for (const lookup of lookups) {
+        const fromB = yield* Tenant.withTenant("tenant-b")(lookup);
+        assert.deepEqual(
+          Option.map(fromB, (user) => user.id),
+          Option.some("u1"),
+        );
+        assert.deepEqual(
+          Option.map(yield* lookup, (user) => user.id),
+          Option.some("u1"),
+        );
+      }
     }),
   },
   {
@@ -1467,8 +1545,8 @@ export const sessions: ReadonlyArray<SessionCase> = [
       assert.deepEqual(row.tenantId, Option.some("tenant-a"));
       assert.deepEqual(row.amr, ["pwd", "otp"]);
       assert.deepEqual(row.actingAs, Option.some({ type: "user", id: "admin-1" }));
-      assert.deepEqual(row.ipAddress, Option.some("203.0.113.9"));
-      assert.deepEqual(row.userAgent, Option.some("agent/1.0"));
+      assert.deepEqual(yield* opened(row.ipAddress), Option.some("203.0.113.9"));
+      assert.deepEqual(yield* opened(row.userAgent), Option.some("agent/1.0"));
       assert.deepEqual(row.createdAt, at(0));
       assert.deepEqual(row.authenticatedAt, at(0));
       assert.deepEqual(row.lastActiveAt, at(0));
@@ -1896,6 +1974,80 @@ export const sessions: ReadonlyArray<SessionCase> = [
         assert.equal(Option.isSome(yield* store.get(makeSessionId(id))), true, id);
       }
       assert.equal(yield* store.purgeExpired(at(20)), 0);
+    }),
+  },
+];
+
+// ---- relayCursor ----------------------------------------------------------------------------
+
+type RelayCursorCase = Case<RelayCursorStore.RelayCursorStore>;
+
+/** The `RelayCursorStore` contract (plan 23, ADR-EA-030 decision 4, ADR-EA-041): a monotonic, per-name position. */
+export const relayCursor: ReadonlyArray<RelayCursorCase> = [
+  {
+    name: "get is None for a name that was never advanced",
+    run: Effect.gen(function* () {
+      const store = yield* RelayCursorStore.RelayCursorStore;
+      assert.equal(Option.isNone(yield* store.get("relay")), true);
+    }),
+  },
+  {
+    name: "advance stores the first position, and a later id replaces it",
+    run: Effect.gen(function* () {
+      const store = yield* RelayCursorStore.RelayCursorStore;
+      yield* store.advance({ name: "relay", lastEventId: "event-1", at: at(0) });
+      assert.deepEqual(yield* store.get("relay"), Option.some("event-1"));
+      yield* store.advance({ name: "relay", lastEventId: "event-2", at: at(1) });
+      assert.deepEqual(yield* store.get("relay"), Option.some("event-2"));
+    }),
+  },
+  {
+    name: "names are independent: advancing one leaves another untouched",
+    run: Effect.gen(function* () {
+      const store = yield* RelayCursorStore.RelayCursorStore;
+      yield* store.advance({ name: "a", lastEventId: "event-5", at: at(0) });
+      yield* store.advance({ name: "b", lastEventId: "event-1", at: at(0) });
+      assert.deepEqual(yield* store.get("a"), Option.some("event-5"));
+      assert.deepEqual(yield* store.get("b"), Option.some("event-1"));
+      assert.equal(Option.isNone(yield* store.get("c")), true);
+    }),
+  },
+  {
+    name: "advance never moves a position backwards: an earlier id, or the same id again, changes nothing",
+    run: Effect.gen(function* () {
+      const store = yield* RelayCursorStore.RelayCursorStore;
+      yield* store.advance({ name: "relay", lastEventId: "event-5", at: at(0) });
+      yield* store.advance({ name: "relay", lastEventId: "event-3", at: at(1) });
+      assert.deepEqual(yield* store.get("relay"), Option.some("event-5"));
+      yield* store.advance({ name: "relay", lastEventId: "event-5", at: at(2) });
+      assert.deepEqual(yield* store.get("relay"), Option.some("event-5"));
+    }),
+  },
+  {
+    name: "advance compares ids as bytes: of two uuidv7-shaped ids differing only in a later hex digit, the larger wins whatever the arrival order",
+    run: Effect.gen(function* () {
+      const store = yield* RelayCursorStore.RelayCursorStore;
+      const low = "01930b5e-7a3c-7d2e-8f41-0123456789ab";
+      const high = "01930b5e-7a3c-7d2e-8f41-0123456789ac";
+      yield* store.advance({ name: "up", lastEventId: low, at: at(0) });
+      yield* store.advance({ name: "up", lastEventId: high, at: at(1) });
+      yield* store.advance({ name: "down", lastEventId: high, at: at(0) });
+      yield* store.advance({ name: "down", lastEventId: low, at: at(1) });
+      assert.deepEqual(yield* store.get("up"), Option.some(high));
+      assert.deepEqual(yield* store.get("down"), Option.some(high));
+    }),
+  },
+  {
+    name: "advance under concurrency: 8 racing advances of one name leave the largest id",
+    run: Effect.gen(function* () {
+      const store = yield* RelayCursorStore.RelayCursorStore;
+      yield* Effect.all(
+        Array.from({ length: CONCURRENCY }, (_, i) =>
+          store.advance({ name: "relay", lastEventId: `e-${i + 1}`, at: at(i) }),
+        ),
+        { concurrency: "unbounded" },
+      );
+      assert.deepEqual(yield* store.get("relay"), Option.some(`e-${CONCURRENCY}`));
     }),
   },
 ];

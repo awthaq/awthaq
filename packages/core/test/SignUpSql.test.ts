@@ -3,11 +3,10 @@
 // failed first session all leave nothing behind) run here over SQLite, and over Postgres under
 // `pnpm test:pg` (`packages/test/src/TestSql.ts`).
 import * as TestEncryption from "../../test/src/TestEncryption.ts";
-import { Encryption, KeyProvider, SqlTransaction } from "@awthaq/ports";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { SqlTransaction } from "@awthaq/ports";
+import { CoreMigrations } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -27,21 +26,6 @@ import * as TestSql from "../../test/src/TestSql.ts";
 
 /** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
 const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
-
-const EncryptionLive = Encryption.layer.pipe(
-  Layer.provide(
-    KeyProvider.layerEnv.pipe(
-      Layer.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: { AWTHAQ_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64") },
-          }),
-        ),
-      ),
-    ),
-  ),
-  Layer.provide(NodeCrypto.layer),
-);
 
 const SqlLive = TestSql.layer("core_SignUpSql");
 const Migrated = Layer.effectDiscard(
@@ -66,9 +50,7 @@ const SessionsOutage = Layer.effect(
 const envFor = (behaviour: Behaviour = {}) => {
   const base = Layer.mergeAll(
     Users.layer.pipe(Layer.provide(SqlStores)),
-    Accounts.layer
-      .pipe(Layer.provide(SqlStores))
-      .pipe(Layer.provide(Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)))),
+    Accounts.layer.pipe(Layer.provide(SqlStores)),
     Sessions.layer.pipe(Layer.provide(SqlStores)),
     SqlTransaction.layerSql,
   ).pipe(

@@ -22,7 +22,7 @@ import {
   DeviceGrantRecords,
 } from "@awthaq/device-authorization";
 import { ClientAddress, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import { Account, Authentication, AuthHttp, Csrf, Session } from "@awthaq/server";
+import { Account, Authentication, Credentials, AuthHttp, Csrf, Session } from "@awthaq/server";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -48,10 +48,10 @@ const Base = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
 );
 
 const Middleware = Layer.mergeAll(
-  Authentication.AuthenticationLive.pipe(Layer.provide(Authentication.PrincipalResolverLive)),
-  Authentication.OptionalAuthenticationLive.pipe(
-    Layer.provide(Authentication.PrincipalResolverLive),
-  ),
+  // ADR-EA-045: the session-lifecycle markers core's groups (and the device token) declare.
+  AuthHttp.sessionLifecycle,
+  Authentication.AuthenticationLive.pipe(Layer.provide(Credentials.PrincipalResolverLive)),
+  Authentication.OptionalAuthenticationLive.pipe(Layer.provide(Credentials.PrincipalResolverLive)),
   Csrf.CsrfProtectionLive.pipe(
     Layer.provide(
       Layer.succeed(Csrf.CsrfConfig, {

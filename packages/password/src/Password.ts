@@ -7,8 +7,9 @@
 // transport) filled in and documented at each site rather than left to
 // silently die or guessed at without a comment explaining the choice.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
 import {
+  CurrentUser,
   Accounts,
   AuthEvents,
   AuthPlugin,
@@ -46,7 +47,6 @@ import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Headers from "effect/http/Headers";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
@@ -218,6 +218,15 @@ const rules = {
     limit: 5,
     window: minutes15,
   }),
+  // Plan 18 / APS-003: bounds one source driving the breach check and the claim across many
+  // distinct, unrelated forged tokens. The numbers of `verifyEmailByIp`.
+  confirmResetByIp: RateLimits.rule({
+    group: "password",
+    endpoint: "confirmReset",
+    key: RateLimits.Key.ip,
+    limit: 30,
+    window: minutes15,
+  }),
   // Shipping-gap map (.scratch/shipping-gaps), ticket 14. Keyed on the authenticated caller's user
   // id, mirroring its own posture.
   changePassword: RateLimits.rule({
@@ -333,11 +342,6 @@ export const PasswordConfig: Context.Reference<PasswordConfigShape> = Context.Re
 export const config = (partial: Partial<PasswordConfigShape>): Layer.Layer<never> =>
   Layer.succeed(PasswordConfig, { ...defaultPasswordConfig, ...partial });
 
-export interface IssuedSession {
-  readonly session: Sessions.SessionView;
-  readonly token: Redacted.Redacted<string>;
-}
-
 export interface PasswordShape {
   /** BEH-EA-113: creates the user, links a password credential, issues a session, and dispatches (never awaits) a verification mail. */
   readonly signUp: (input: {
@@ -352,7 +356,7 @@ export interface PasswordShape {
     /** CSD-003: recorded on the issued session (device list, forensics); capped by `Sessions.issue`. */
     readonly userAgent?: string;
   }) => Effect.Effect<
-    IssuedSession,
+    Sessions.IssuedSession,
     | PasswordApi.WeakPassword
     | PasswordApi.EmailAlreadyExists
     | Api.RateLimited
@@ -402,7 +406,7 @@ export interface PasswordShape {
     /** CSD-003: recorded on the issued session; see `signUp`'s own `userAgent`. */
     readonly userAgent?: string;
   }) => Effect.Effect<
-    IssuedSession,
+    Sessions.IssuedSession,
     | Api.InvalidCredentials
     | PasswordApi.EmailNotVerified
     | Users.UserSuspended
@@ -433,6 +437,8 @@ export interface PasswordShape {
     readonly password: Redacted.Redacted<string>;
     /** ARF-005: a TOTP or recovery code — needed only when a `BeforeCredentialReset` tap (the two-factor plugin) demands one. */
     readonly secondFactorCode?: Redacted.Redacted<string>;
+    /** APS-003: resolved via `ClientAddress`, like `verifyEmail`'s: the per-source budget is spent before the token is decoded. */
+    readonly ip?: string;
   }) => Effect.Effect<
     void,
     | PasswordApi.TokenConsumed
@@ -515,7 +521,7 @@ export interface PasswordShape {
     readonly ip?: string;
     readonly userAgent?: string;
   }) => Effect.Effect<
-    IssuedSession,
+    Sessions.IssuedSession,
     PasswordApi.WrongPassword | PasswordApi.WeakPassword | Api.RateLimited | Errors.StoreUnavailable
   >;
   /**
@@ -540,8 +546,8 @@ const { toHex } = Hmac;
 
 // MLO-009: the mailed token's codec is `VerificationLink`'s, shared with every
 // plugin that mails a `Verification` token; these are this plugin's purposes.
-const RESET_PURPOSE = "reset-password";
-const VERIFY_PURPOSE = "verify-email";
+const ResetLink = VerificationLink.forUser({ name: "reset-password" });
+const VerifyLink = VerificationLink.forUser({ name: "verify-email" });
 const VERIFY_TTL = Duration.hours(24);
 
 /** PHS-004: internal only — routed to `onUnavailable` by `isBreached`, never surfaced. */
@@ -630,13 +636,6 @@ const sessionRequest = (input: { readonly ip?: string; readonly userAgent?: stri
   ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
 });
 
-/** CSD-003: the caller's `User-Agent` header, when present. */
-const requestUserAgent = (request: HttpServerRequest.HttpServerRequest) =>
-  Option.match(Headers.get(request.headers, "user-agent"), {
-    onNone: () => ({}),
-    onSome: (userAgent) => ({ userAgent }),
-  });
-
 /**
  * Resolves `Password` once here, in the group-builder generator itself —
  * not inside each handler body — the same `HttpApiBuilder.group` pattern
@@ -668,24 +667,21 @@ export const PasswordHandlers = HttpApiBuilder.group(
         request: HttpServerRequest.HttpServerRequest;
       }) {
         const signUpInput = Effect.gen(function* () {
-          const resolvedAddress = yield* clientAddress.resolve(request);
+          const facts = yield* ClientAddress.facts(clientAddress, request);
           return {
             ...payload,
-            ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
-            ...requestUserAgent(request),
+            ...facts,
           };
         });
         // TMS-005: `conceal` answers 202 with no session for a fresh and an
-        // existing address alike (ADR-EA-026). It mints nothing, so it is the one
-        // endpoint outside `respond`; MNA-001's validation still runs first.
+        // existing address alike (ADR-EA-026). It mints nothing, so it declines the
+        // `Mints` declaration; the marker validated the delivery header before this ran.
         if ((yield* configNow).signUpEnumeration === "conceal") {
-          yield* SessionDelivery.mode(request);
+          yield* SessionDelivery.decline(SessionLifecycle.MintGrant);
           return yield* password.signUpConcealed(yield* signUpInput);
         }
-        // MNA-001: the delivery is validated before anything is minted.
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          request,
           Effect.flatMap(signUpInput, password.signUp),
         );
         return response;
@@ -700,17 +696,15 @@ export const PasswordHandlers = HttpApiBuilder.group(
       }) {
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          request,
           Effect.gen(function* () {
             // AGA-001/NHS-003: resolved through the application-provided
             // `ClientAddress` port rather than `request.remoteAddress`
             // directly, so a trusted-proxy-aware composition gets a real
             // client IP here too, not just for `OAuth`'s own callback.
-            const resolvedAddress = yield* clientAddress.resolve(request);
+            const facts = yield* ClientAddress.facts(clientAddress, request);
             return yield* password.signIn({
               ...payload,
-              ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
-              ...requestUserAgent(request),
+              ...facts,
             });
           }),
         );
@@ -724,10 +718,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.RequestResetPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const resolvedAddress = yield* clientAddress.resolve(request);
+        const address = yield* ClientAddress.address(clientAddress, request);
         yield* password.requestReset({
           ...payload,
-          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...address,
         });
       }),
 
@@ -738,19 +732,25 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.ResendVerificationPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const resolvedAddress = yield* clientAddress.resolve(request);
+        const address = yield* ClientAddress.address(clientAddress, request);
         yield* password.resendVerification({
           ...payload,
-          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...address,
         });
       }),
 
       confirmReset: Effect.fnUntraced(function* ({
         payload,
+        request,
       }: {
         payload: PasswordApi.ConfirmResetPayload;
+        request: HttpServerRequest.HttpServerRequest;
       }) {
-        yield* password.confirmReset(payload);
+        const address = yield* ClientAddress.address(clientAddress, request);
+        yield* password.confirmReset({
+          ...payload,
+          ...address,
+        });
       }),
 
       verifyEmail: Effect.fnUntraced(function* ({
@@ -760,10 +760,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.VerifyEmailPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const resolvedAddress = yield* clientAddress.resolve(request);
+        const address = yield* ClientAddress.address(clientAddress, request);
         yield* password.verifyEmail({
           ...payload,
-          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...address,
         });
       }),
 
@@ -774,10 +774,10 @@ export const PasswordHandlers = HttpApiBuilder.group(
         payload: PasswordApi.ConfirmEmailChangePayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const resolvedAddress = yield* clientAddress.resolve(request);
+        const address = yield* ClientAddress.address(clientAddress, request);
         yield* password.confirmEmailChange({
           ...payload,
-          ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
+          ...address,
         });
       }),
     });
@@ -804,29 +804,17 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
         payload: PasswordApi.ChangePasswordPayload;
         request: HttpServerRequest.HttpServerRequest;
       }) {
-        const principal = yield* Api.CurrentPrincipal;
-        // `changePassword`'s own `Authentication` middleware already
-        // refused an unauthenticated request; a non-`User` principal
-        // reaching it is a wiring defect, mirroring `Session.ts`'s own
-        // `currentUserPrincipal` guard.
-        if (principal._tag !== "User") {
-          return yield* Defects.invariantViolation(
-            "NonUserPrincipal",
-            `awthaq: change-password reached with a non-User principal: ${principal._tag}`,
-          );
-        }
+        const { principal } = yield* CurrentUser.current;
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          request,
           Effect.gen(function* () {
-            const resolvedAddress = yield* clientAddress.resolve(request);
+            const facts = yield* ClientAddress.facts(clientAddress, request);
             return yield* password.changePassword({
               userId: Users.UserId(principal.ref.id),
               currentSessionId: Sessions.SessionId(principal.sessionId),
               currentPassword: payload.currentPassword,
               newPassword: payload.newPassword,
-              ...(Option.isSome(resolvedAddress) ? { ip: resolvedAddress.value } : {}),
-              ...requestUserAgent(request),
+              ...facts,
             });
           }),
         );
@@ -838,13 +826,7 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
       }: {
         payload: PasswordApi.ChangeEmailPayload;
       }) {
-        const principal = yield* Api.CurrentPrincipal;
-        if (principal._tag !== "User") {
-          return yield* Defects.invariantViolation(
-            "NonUserPrincipal",
-            `awthaq: change-email reached with a non-User principal: ${principal._tag}`,
-          );
-        }
+        const { principal } = yield* CurrentUser.current;
         yield* password.requestEmailChange({
           userId: Users.UserId(principal.ref.id),
           currentSessionId: Sessions.SessionId(principal.sessionId),
@@ -857,13 +839,7 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
       }: {
         payload: PasswordApi.ReauthenticatePayload;
       }) {
-        const principal = yield* Api.CurrentPrincipal;
-        if (principal._tag !== "User") {
-          return yield* Defects.invariantViolation(
-            "NonUserPrincipal",
-            `awthaq: reauthenticate reached with a non-User principal: ${principal._tag}`,
-          );
-        }
+        const { principal } = yield* CurrentUser.current;
         yield* password.reauthenticate({
           userId: Users.UserId(principal.ref.id),
           currentSessionId: Sessions.SessionId(principal.sessionId),
@@ -1079,10 +1055,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         return yield* mailDispatcher.dispatch(
           { template: "verify-email", userId: user.id },
           Effect.gen(function* () {
-            const issued = yield* VerificationLink.issue(
-              { verification, random },
-              { purpose: VERIFY_PURPOSE, ttl: VERIFY_TTL, userId: user.id },
-            );
+            const issued = yield* VerificationLink.issue({ verification, random }, VerifyLink, {
+              ttl: VERIFY_TTL,
+              userId: user.id,
+            });
             // FAMS-002: only an Email identity has an address to mail.
             const to = Users.emailOf(user);
             if (Option.isNone(to)) return;
@@ -1330,10 +1306,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                 yield* mailer.send({ to: to.value, template: "reset-password-unavailable" });
                 return;
               }
-              const issued = yield* VerificationLink.issue(
-                { verification, random },
-                { purpose: RESET_PURPOSE, ttl: config.resetTtl, userId: user.id },
-              );
+              const issued = yield* VerificationLink.issue({ verification, random }, ResetLink, {
+                ttl: config.resetTtl,
+                userId: user.id,
+              });
               yield* mailer.send({
                 to: to.value,
                 template: "reset-password",
@@ -1366,195 +1342,142 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         },
       );
 
+      // ADR-EA-039 decision 9: each link purpose is bound once, with both budgets declared. The
+      // source budget is spent before the token is decoded (APS-003: a flood of garbage tokens
+      // never reaches the store, nor `confirmReset`'s breach-check network call); the token budget is
+      // keyed on the public id, which names no user (ARF-009).
+      const resetLinks = VerificationLink.redeemer(ResetLink, {
+        verification,
+        budget: {
+          source: (ip) => limits.spend("confirmResetByIp", { ip }),
+          token: (publicId) => limits.spend("confirmReset", { identifier: publicId }),
+        },
+      });
+      const verifyLinks = VerificationLink.redeemer(VerifyLink, {
+        verification,
+        budget: {
+          source: (ip) => limits.spend("verifyEmailByIp", { ip }),
+          token: (publicId) => limits.spend("verifyEmail", { identifier: publicId }),
+        },
+      });
+      const emailChangeLinks = VerificationLink.redeemer(EmailChange.Link, {
+        verification,
+        budget: {
+          source: (ip) => limits.spend("confirmEmailChangeByIp", { ip }),
+          token: (publicId) => limits.spend("confirmEmailChange", { identifier: publicId }),
+        },
+      });
+
+      /** ARF-008/FAMS-002: the link proved the mailbox; a missing user is an invariant, an identity mismatch a defect. */
+      const proveMailbox = (userId: Users.UserId, invariant: string) =>
+        users.verifyEmail(userId).pipe(
+          Effect.catchTags({
+            UserNotFound: () => Defects.invariantViolation(invariant, `awthaq: ${invariant}`),
+            IdentityMismatch: Effect.die,
+          }),
+        );
+
+      const refusedToken = () => Effect.fail(new PasswordApi.TokenConsumed());
+
       const confirmReset: PasswordShape["confirmReset"] = Effect.fnUntraced(function* (input) {
         const config = yield* configNow;
-        // ARF-007: a token of another purpose (a verify-email token) or a
-        // malformed one is refused before it is rate-limited or consumed.
-        const decoded = VerificationLink.decode(Redacted.value(input.token), RESET_PURPOSE);
-        if (Option.isNone(decoded)) {
-          return yield* Effect.fail(new PasswordApi.TokenConsumed());
-        }
-        const { identifier, publicId, value } = decoded.value;
-        // Keyed on the token's own public id rather than email — already
-        // available for free at this point, and ties the limit to the
-        // specific token without a second lookup (ARF-009: it names no user).
-        yield* limits.spend("confirmReset", { identifier: publicId });
-
-        // ARF-002: the policy (including the breach check's network call)
-        // is decided before the token is touched, so a weak password never
-        // burns the single-use token under any `Verification` store — and
-        // no network I/O happens while the transaction below is open.
-        const hints = yield* checkPolicy(httpClient, digest, input.password, config);
-        if (hints.length > 0) {
-          return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
-        }
-
-        // ARF-001: BEH-EA-058/117 require consuming the token, setting the
-        // new password, and revoking every other session to commit as one
-        // unit — three independent commits previously left a crash-window
-        // where the token was burned but the old password still live, or
-        // the new password live while an attacker's pre-reset sessions
-        // survived. `Verification.redeem` owns that transaction (ADR-EA-039): a
-        // refusal inside `use` (a veto, `SecondFactorRequired`, a crash) gives the token back
-        // over SQL and in memory alike, and an outage of the transaction itself is the typed
-        // `StoreUnavailable` (ADR-EA-028), never a defect.
-        const userId = yield* verification
-          .redeem({
-            identifier,
-            value,
-            use: (consumed) =>
-              Effect.gen(function* () {
-                // ARF-009: the user comes from the consumed row, never from the
-                // token; a row with none is no reset token this plugin issued.
-                if (Option.isNone(consumed.userId)) {
-                  return yield* Effect.fail(new PasswordApi.TokenConsumed());
-                }
-                const userId = consumed.userId.value;
-
-                // ARF-005 (BEH-EA-259): mailbox possession alone must not rewrite the credential of
-                // an account a second factor protects. The veto runs inside this transaction, after
-                // the token is consumed and before anything is changed, so a refusal rolls the
-                // consume back (SQL) and nothing is written. `TWO_FACTOR_REQUIRED` gets its own typed
-                // error clients can branch on; any other code is the generic `HookAborted`.
-                yield* beforeCredentialReset
-                  .run({
-                    userId,
-                    ...(input.secondFactorCode === undefined
-                      ? {}
-                      : { secondFactorCode: input.secondFactorCode }),
-                  })
-                  .pipe(
-                    Effect.catchTag("HookAbort", (abort) =>
-                      Effect.fail(
-                        abort.code === "TWO_FACTOR_REQUIRED"
-                          ? new PasswordApi.SecondFactorRequired()
-                          : new HookPoint.HookAborted({
-                              point: Hooks.BeforeCredentialReset.id,
-                              code: abort.code,
-                              message: abort.message,
-                            }),
-                      ),
+        // ARF-001: BEH-EA-058/117 require consuming the token, setting the new password, and
+        // revoking every other session to commit as one unit. `Verification.redeem` owns that
+        // transaction (ADR-EA-039) and `resetLinks` the order around it: source budget, purpose
+        // check, token budget, then the policy below, then the claim. A refusal inside `use` (a
+        // veto, `SecondFactorRequired`, a crash) gives the token back; an outage of the
+        // transaction itself is the typed `StoreUnavailable` (ADR-EA-028), never a defect.
+        const userId = yield* resetLinks(
+          { token: input.token, ip: input.ip },
+          ({ userId }) =>
+            Effect.gen(function* () {
+              // ARF-005 (BEH-EA-259): mailbox possession alone must not rewrite the credential of
+              // an account a second factor protects. The veto runs inside this transaction, after
+              // the token is consumed and before anything is changed, so a refusal rolls the
+              // consume back (SQL) and nothing is written. `TWO_FACTOR_REQUIRED` gets its own typed
+              // error clients can branch on; any other code is the generic `HookAborted`.
+              yield* beforeCredentialReset
+                .run({
+                  userId,
+                  ...(input.secondFactorCode === undefined
+                    ? {}
+                    : { secondFactorCode: input.secondFactorCode }),
+                })
+                .pipe(
+                  Effect.catchTag("HookAbort", (abort) =>
+                    Effect.fail(
+                      abort.code === "TWO_FACTOR_REQUIRED"
+                        ? new PasswordApi.SecondFactorRequired()
+                        : new HookPoint.HookAborted({
+                            point: Hooks.BeforeCredentialReset.id,
+                            code: abort.code,
+                            message: abort.message,
+                          }),
                     ),
-                  );
-
-                const account = yield* accounts
-                  .findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, userId)
-                  .pipe(
-                    Effect.flatMap(
-                      Option.match({
-                        // ARF-004: `requestReset` no longer mints a token for a
-                        // credential-less account, but one issued before that
-                        // fix (or a credential unlinked since) can still land
-                        // here — a dead token, not a defect.
-                        onNone: () => Effect.fail(new PasswordApi.TokenConsumed()),
-                        onSome: Effect.succeed,
-                      }),
-                    ),
-                  );
-                const hash = yield* hasher.hash(input.password);
-                yield* accounts
-                  .updateCredentialHash(account.id, Redacted.make(hash))
-                  .pipe(Effect.orDie);
-
-                // ARF-008: consuming a token mailed to the address proves the
-                // same mailbox control `verifyEmail` demands — otherwise a
-                // user who resets is still refused at `signIn`. Idempotent.
-                yield* users.verifyEmail(userId).pipe(
-                  Effect.catchTags({
-                    UserNotFound: () =>
-                      Defects.invariantViolation(
-                        "ResetTokenUserMissing",
-                        "awthaq: reset token's own user missing",
-                      ),
-                    // FAMS-002: a password account's owner has an email identity.
-                    IdentityMismatch: Effect.die,
-                  }),
+                  ),
                 );
 
-                // BEH-EA-117: every session, no exceptions — the caller
-                // isn't authenticated at all here, so there is no "current"
-                // session to keep. Upstream-hardening ticket 02: the real
-                // `revokeAll` primitive, retiring the empty-string-id
-                // `revokeOthers` trick this call site used to stand in for
-                // it.
-                // ESA-006/TIR-008: `Sessions.revokeAll` itself publishes the
-                // `auth.session.revoked` (reason `passwordReset`): its audit row joins
-                // this transaction, and its bus copy is released only when it commits
-                // (ADR-EA-037).
-                yield* sessions.revokeAll(userId, "passwordReset");
-                return userId;
-              }),
-          })
-          .pipe(
-            Effect.catchTag("Verification/TokenConsumed", () =>
-              Effect.fail(new PasswordApi.TokenConsumed()),
+              const account = yield* accounts
+                .findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, userId)
+                .pipe(
+                  Effect.flatMap(
+                    Option.match({
+                      // ARF-004: `requestReset` no longer mints a token for a
+                      // credential-less account, but one issued before that
+                      // fix (or a credential unlinked since) can still land
+                      // here — a dead token, not a defect.
+                      onNone: () => Effect.fail(new PasswordApi.TokenConsumed()),
+                      onSome: Effect.succeed,
+                    }),
+                  ),
+                );
+              const hash = yield* hasher.hash(input.password);
+              yield* accounts
+                .updateCredentialHash(account.id, Redacted.make(hash))
+                .pipe(Effect.orDie);
+
+              // ARF-008: consuming a token mailed to the address proves the same mailbox control
+              // `verifyEmail` demands: otherwise a user who resets is still refused at `signIn`.
+              yield* proveMailbox(userId, "ResetTokenUserMissing");
+
+              // BEH-EA-117: every session, no exceptions — the caller
+              // isn't authenticated at all here, so there is no "current"
+              // session to keep. Upstream-hardening ticket 02: the real
+              // `revokeAll` primitive, retiring the empty-string-id
+              // `revokeOthers` trick this call site used to stand in for
+              // it.
+              // ESA-006/TIR-008: `Sessions.revokeAll` itself publishes the
+              // `auth.session.revoked` (reason `passwordReset`): its audit row joins
+              // this transaction, and its bus copy is released only when it commits
+              // (ADR-EA-037).
+              yield* sessions.revokeAll(userId, "passwordReset");
+              return userId;
+            }),
+          {
+            // ARF-002: the policy (including the breach check's network call) is decided before
+            // the token is touched, so a weak password never burns the single-use token under any
+            // `Verification` store, and no network I/O happens while the transaction is open.
+            beforeClaim: checkPolicy(httpClient, digest, input.password, config).pipe(
+              Effect.flatMap((hints) =>
+                hints.length > 0
+                  ? Effect.fail(new PasswordApi.WeakPassword({ hints }))
+                  : Effect.void,
+              ),
             ),
-          );
-        // ALF-004: published only after the transaction above has actually
-        // committed — mirroring `signUp`'s own `auth.user.created`
-        // placement, never inside the transaction itself.
+          },
+        ).pipe(Effect.catchTag("VerificationLink/Refused", refusedToken));
+        // ALF-004: published only after the transaction above has actually committed, mirroring
+        // `signUp`'s own `auth.user.created` placement, never inside the transaction itself.
         yield* events.publish({ _tag: "auth.password.resetCompleted", userId });
       });
 
       const verifyEmail: PasswordShape["verifyEmail"] = Effect.fnUntraced(function* (input) {
-        // APS-003: per-IP first — guards against a flood of garbage
-        // tokens before even attempting to decode one, mirroring
-        // `signIn`/`requestReset`'s own IP-then-identity ordering.
-        yield* limits.spend("verifyEmailByIp", input);
-        // ARF-007: mirror of `confirmReset`'s purpose check.
-        const decoded = VerificationLink.decode(Redacted.value(input.token), VERIFY_PURPOSE);
-        if (Option.isNone(decoded)) {
-          return yield* Effect.fail(new PasswordApi.TokenConsumed());
-        }
-        const { identifier, publicId, value } = decoded.value;
-        // Keyed on the token's own public id, mirroring `confirmReset`.
-        yield* limits.spend("verifyEmail", { identifier: publicId });
-
-        // RRC-002: same class of bug `ARF-001` closes for `confirmReset` —
-        // a crash between `consume` and `verifyEmail` previously burned
-        // the token without ever flipping `emailVerified`, permanently
-        // stranding the account unverified with no usable token left to
-        // retry. `resendVerification` mints a fresh token, so it isn't
-        // fatal, but it's still the identical consume-then-apply
-        // atomicity gap; `Verification.redeem` closes it (ADR-EA-039).
-        const verifiedUserId = yield* verification
-          .redeem({
-            identifier,
-            value,
-            use: (consumed) =>
-              Effect.gen(function* () {
-                // ARF-009: the user comes from the consumed row, not the token.
-                if (Option.isNone(consumed.userId)) {
-                  return yield* Effect.fail(new PasswordApi.TokenConsumed());
-                }
-                const userId = consumed.userId.value;
-
-                // Mirrors `confirmReset`'s own posture on the analogous
-                // case: this token was only ever issued right after
-                // `signUp` created this exact user (BEH-EA-113), so a
-                // missing user here is a defect, not a request-level
-                // condition the caller can act on — never re-surfaced as
-                // `TokenConsumed`, which would misleadingly imply a
-                // bad/replayed token rather than a genuine invariant
-                // violation.
-                yield* users.verifyEmail(userId).pipe(
-                  Effect.catchTags({
-                    UserNotFound: () =>
-                      Defects.invariantViolation(
-                        "VerifyEmailTokenUserMissing",
-                        "awthaq: verify-email token's own user missing",
-                      ),
-                    IdentityMismatch: Effect.die,
-                  }),
-                );
-                return userId;
-              }),
-          })
-          .pipe(
-            Effect.catchTag("Verification/TokenConsumed", () =>
-              Effect.fail(new PasswordApi.TokenConsumed()),
-            ),
-          );
+        // RRC-002: `Verification.redeem` closes the consume-then-apply atomicity gap (ADR-EA-039).
+        // A missing user is a defect, not a request-level condition: this token was only ever
+        // issued right after `signUp` created this exact user (BEH-EA-113).
+        const verifiedUserId = yield* verifyLinks(input, ({ userId }) =>
+          proveMailbox(userId, "VerifyEmailTokenUserMissing").pipe(Effect.as(userId)),
+        ).pipe(Effect.catchTag("VerificationLink/Refused", refusedToken));
         // ARF-006: after the commit, like `resetCompleted`.
         yield* events.publish({ _tag: "auth.user.emailVerified", userId: verifiedUserId });
       });
@@ -1601,64 +1524,31 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
 
       const confirmEmailChange: PasswordShape["confirmEmailChange"] = Effect.fnUntraced(
         function* (input) {
-          // Same order as `verifyEmail`: source first, then the well-formedness check, then the
-          // token's own budget (keyed on its public id, which names no user).
-          yield* limits.spend("confirmEmailChangeByIp", input);
-          const decoded = VerificationLink.decode(Redacted.value(input.token), EmailChange.PURPOSE);
-          if (Option.isNone(decoded)) {
-            return yield* Effect.fail(new PasswordApi.TokenConsumed());
-          }
-          const { identifier, publicId, value } = decoded.value;
-          yield* limits.spend("confirmEmailChange", { identifier: publicId });
-
           // BEH-EA-058: the token's consumption, the address replacement and its verification
-          // commit together — a conflict on the new address rolls the consumption back too.
-          const changed = yield* verification
-            .redeem({
-              identifier,
-              value,
-              use: (consumed) =>
-                Effect.gen(function* () {
-                  const newEmail = EmailChange.newEmailOf(consumed.payload);
-                  if (Option.isNone(consumed.userId) || Option.isNone(newEmail)) {
-                    return yield* Effect.fail(new PasswordApi.TokenConsumed());
-                  }
-                  const userId = consumed.userId.value;
-                  // An account deleted (or turned phone-only) since the token was issued: a dead token.
-                  const before = yield* users
-                    .findById(userId)
-                    .pipe(Effect.catchTag("UserNotFound", () => new PasswordApi.TokenConsumed()));
-                  yield* users.changeEmail(userId, newEmail.value).pipe(
-                    Effect.catchTags({
-                      UserNotFound: () => new PasswordApi.TokenConsumed(),
-                      IdentityMismatch: () => new PasswordApi.TokenConsumed(),
-                      "Users/EmailAlreadyExists": () => new PasswordApi.EmailAlreadyExists(),
-                    }),
-                  );
-                  // Delivery to the new mailbox is the proof `verifyEmail` demands.
-                  yield* users.verifyEmail(userId).pipe(
-                    Effect.catchTags({
-                      UserNotFound: () =>
-                        Defects.invariantViolation(
-                          "ChangeEmailUserMissing",
-                          "awthaq: change-email token's own user missing",
-                        ),
-                      IdentityMismatch: Effect.die,
-                    }),
-                  );
-                  // BEH-EA-053: an email change is a privilege change. The confirming request is the
-                  // mailed link — possibly opened in another browser, with no session of its own — so
-                  // there is no caller session to rotate: every session of the account ends, in the
-                  // same transaction, and the owner signs in afresh under the new address.
-                  yield* sessions.revokeAll(userId, "emailChanged");
-                  return { userId, previous: Users.emailOf(before) };
+          // commit together: a conflict on the new address rolls the consumption back too.
+          const changed = yield* emailChangeLinks(input, ({ userId, payload }) =>
+            Effect.gen(function* () {
+              // An account deleted (or turned phone-only) since the token was issued: a dead token.
+              const before = yield* users
+                .findById(userId)
+                .pipe(Effect.catchTag("UserNotFound", () => new PasswordApi.TokenConsumed()));
+              yield* users.changeEmail(userId, payload.newEmail).pipe(
+                Effect.catchTags({
+                  UserNotFound: () => new PasswordApi.TokenConsumed(),
+                  IdentityMismatch: () => new PasswordApi.TokenConsumed(),
+                  "Users/EmailAlreadyExists": () => new PasswordApi.EmailAlreadyExists(),
                 }),
-            })
-            .pipe(
-              Effect.catchTag("Verification/TokenConsumed", () =>
-                Effect.fail(new PasswordApi.TokenConsumed()),
-              ),
-            );
+              );
+              // Delivery to the new mailbox is the proof `verifyEmail` demands.
+              yield* proveMailbox(userId, "ChangeEmailUserMissing");
+              // BEH-EA-053: an email change is a privilege change. The confirming request is the
+              // mailed link — possibly opened in another browser, with no session of its own — so
+              // there is no caller session to rotate: every session of the account ends, in the
+              // same transaction, and the owner signs in afresh under the new address.
+              yield* sessions.revokeAll(userId, "emailChanged");
+              return { userId, previous: Users.emailOf(before) };
+            }),
+          ).pipe(Effect.catchTag("VerificationLink/Refused", refusedToken));
           yield* events.publish({ _tag: "auth.user.emailChanged", userId: changed.userId });
           // The previous address learns of the change (a takeover signal) — dispatched, never
           // awaited, and carrying nothing but the template.

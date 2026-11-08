@@ -42,7 +42,7 @@ export interface ImportCredential {
   readonly credentialHash?: Redacted.Redacted<PasswordHasher.PhcHash>;
   /**
    * BAM-008: a federated provider's tokens carried over from the source (better-auth's `account` row),
-   * encrypted at rest by the accounts repository. Omitted for a password credential and for a source
+   * encrypted at rest by the accounts adapter. Omitted for a password credential and for a source
    * that exports none.
    */
   readonly tokens?: Accounts.ProviderTokenSet;

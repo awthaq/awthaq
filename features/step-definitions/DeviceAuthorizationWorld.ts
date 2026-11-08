@@ -29,7 +29,7 @@ import {
   DeviceGrantRecords,
 } from "@awthaq/device-authorization";
 import { SecondFactor, Totp, TwoFactor } from "@awthaq/two-factor";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, type UserAgent } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Mac from "effect/crypto/Mac";
 import * as Digest from "effect/crypto/Digest";
@@ -42,7 +42,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
-import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_TEST_COOKIE_VALUE } from "./shared/Csrf.ts";
+import { agentOver } from "./shared/Csrf.ts";
 import { makeNamedRegistry } from "./shared/Harness.ts";
 import { makeOutcomes } from "./shared/Outcomes.ts";
 import { snapshot, type Snapshot } from "./shared/WireJson.ts";
@@ -199,32 +199,27 @@ export const directExit = <A, E>(effect: Effect.Effect<A, E, DeviceServices>) =>
     return yield* Effect.exit(Effect.provide(effect, ctx));
   });
 
-/** A `POST` playing the client it is: a device (form-encoded, no cookie, no CSRF) or a person's browser (JSON, cookie, double-submit). */
+/**
+ * A `POST` playing the client it is: a device (form-encoded, no cookie, no CSRF), or a person's browser
+ * (`as`, or a fresh one: JSON, its own cookies, the CSRF echo).
+ */
 export const request = Effect.fn("features.deviceAuthorization.request")(function* (
   path: string,
   init:
     | { readonly form: Readonly<Record<string, string>> }
-    | { readonly json: unknown; readonly cookie?: string },
+    | { readonly json: unknown; readonly as?: UserAgent.UserAgent },
 ) {
   const { handler } = yield* appOf();
   const response = yield* Effect.promise(() =>
-    handler(
-      new Request(`http://localhost${path}`, {
-        method: "POST",
-        headers:
-          "form" in init
-            ? { "content-type": "application/x-www-form-urlencoded" }
-            : {
-                "content-type": "application/json",
-                cookie: [init.cookie, `${CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`]
-                  .filter((part) => part !== undefined)
-                  .join("; "),
-                [CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
-              },
-        body:
-          "form" in init ? new URLSearchParams(init.form).toString() : JSON.stringify(init.json),
-      }),
-    ),
+    "form" in init
+      ? handler(
+          new Request(`http://localhost${path}`, {
+            method: "POST",
+            headers: { "content-type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams(init.form).toString(),
+          }),
+        )
+      : (init.as ?? agentOver(handler)).request("POST", path, { json: init.json }),
   );
   return yield* snapshot(response);
 });

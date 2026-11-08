@@ -25,6 +25,7 @@
 
 import { Api } from "@awthaq/api";
 import {
+  CurrentUser,
   AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
@@ -361,18 +362,6 @@ export const webhooksExport = DataExport.contribute({
 
 // ---- the plugin ---------------------------------------------------------------------------------
 
-/** Same forward-reference pattern `@awthaq/admin` documents: a handler reached without a `User` principal is a wiring defect. */
-const currentUserPrincipal = Effect.gen(function* () {
-  const principal = yield* Api.CurrentPrincipal;
-  if (principal._tag !== "User") {
-    return yield* Defects.invariantViolation(
-      "NonUserPrincipal",
-      `awthaq: webhooks admin group reached with a non-User principal: ${principal._tag}`,
-    );
-  }
-  return principal;
-});
-
 /**
  * BEH-EA-105/107/111: the administrator's own rate limit on the admin group, past the gate, declared once
  * (it used to be enforced without being declared or registered). A group-wide rule: the breach event reports
@@ -402,6 +391,12 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
     webhooks_endpoint: AuthPlugin.Table.partitioned("tenantId"),
     webhooks_delivery: AuthPlugin.Table.derived("webhooks_endpoint", "endpointId"),
   },
+  // Plan 17: the sealed columns, declared beside the records that seal them.
+  sealedColumns: [
+    WebhookRecords.secretColumn,
+    WebhookRecords.previousSecretColumn,
+    WebhookRecords.headersColumn,
+  ],
   migrations: webhooksMigrations,
   // Plan 08 (BEH-EA-T4): the endpoint and delivery store, memory and SQL, matched.
   records: WebhookRecords.records,
@@ -420,17 +415,20 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           }: {
             payload: WebhooksApi.CreateEndpointPayload;
           }) {
-            return yield* webhooks.createEndpoint(yield* currentUserPrincipal, payload);
+            return yield* webhooks.createEndpoint((yield* CurrentUser.current).principal, payload);
           }),
           listEndpoints: Effect.fnUntraced(function* () {
-            return yield* webhooks.listEndpoints(yield* currentUserPrincipal);
+            return yield* webhooks.listEndpoints((yield* CurrentUser.current).principal);
           }),
           getEndpoint: Effect.fnUntraced(function* ({
             params,
           }: {
             params: WebhooksApi.EndpointIdParams;
           }) {
-            return yield* webhooks.getEndpoint(yield* currentUserPrincipal, params.endpointId);
+            return yield* webhooks.getEndpoint(
+              (yield* CurrentUser.current).principal,
+              params.endpointId,
+            );
           }),
           updateEndpoint: Effect.fnUntraced(function* ({
             params,
@@ -440,7 +438,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             payload: WebhooksApi.UpdateEndpointPayload;
           }) {
             return yield* webhooks.updateEndpoint(
-              yield* currentUserPrincipal,
+              (yield* CurrentUser.current).principal,
               params.endpointId,
               payload,
             );
@@ -450,14 +448,20 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           }: {
             params: WebhooksApi.EndpointIdParams;
           }) {
-            yield* webhooks.deleteEndpoint(yield* currentUserPrincipal, params.endpointId);
+            yield* webhooks.deleteEndpoint(
+              (yield* CurrentUser.current).principal,
+              params.endpointId,
+            );
           }),
           rotateSecret: Effect.fnUntraced(function* ({
             params,
           }: {
             params: WebhooksApi.EndpointIdParams;
           }) {
-            return yield* webhooks.rotateSecret(yield* currentUserPrincipal, params.endpointId);
+            return yield* webhooks.rotateSecret(
+              (yield* CurrentUser.current).principal,
+              params.endpointId,
+            );
           }),
           listDeliveries: Effect.fnUntraced(function* ({
             params,
@@ -467,7 +471,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             query: WebhooksApi.ListDeliveriesQuery;
           }) {
             return yield* webhooks.listDeliveries(
-              yield* currentUserPrincipal,
+              (yield* CurrentUser.current).principal,
               params.endpointId,
               query,
             );
@@ -477,14 +481,20 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           }: {
             params: WebhooksApi.DeliveryIdParams;
           }) {
-            return yield* webhooks.retryDelivery(yield* currentUserPrincipal, params.deliveryId);
+            return yield* webhooks.retryDelivery(
+              (yield* CurrentUser.current).principal,
+              params.deliveryId,
+            );
           }),
           testEndpoint: Effect.fnUntraced(function* ({
             params,
           }: {
             params: WebhooksApi.EndpointIdParams;
           }) {
-            return yield* webhooks.testEndpoint(yield* currentUserPrincipal, params.endpointId);
+            return yield* webhooks.testEndpoint(
+              (yield* CurrentUser.current).principal,
+              params.endpointId,
+            );
           }),
         });
       }),
@@ -850,7 +860,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
 
   /**
    * Opt-in delivery machinery: the relay that tails the audit log into the delivery queue, and the worker
-   * that sends what is queued. Requires `AuditLog`, a `RelayCursorStore`, the records, `Encryption`,
+   * that sends what is queued. Requires `AuditLog`, a `RelayCursorStore` (both `Persistence` bundles provide one), the records, `Encryption`,
    * `RateLimiter`, `HostResolver`, a `WebhookTransport` (`WebhookTransport.layerNodePinned` connects to the
    * address the host was pinned to; `layerHttpClient` wraps any `HttpClient` and cannot pin), `SecureRandom` and `Mac`;
    * run one per deployment.

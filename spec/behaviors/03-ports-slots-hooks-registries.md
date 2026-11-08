@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-03 |
-> | Revision | 1.4 |
-> | Effective Date | 2026-10-14 |
+> | Revision | 1.5 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-006, previously uncited by any behavior file (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-024 rate-limit example uses a `rateLimitRules` table and `RateLimits.budget` (plan 06)  <br> 1.4 (2026-10-14): BEH-EA-335: a plugin declares the hook points it owns (architecture plan 08) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-006, previously uncited by any behavior file (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-024 rate-limit example uses a `rateLimitRules` table and `RateLimits.budget` (plan 06)  <br> 1.4 (2026-10-14): BEH-EA-335: a plugin declares the hook points it owns (architecture plan 08) <br> 1.5 (2026-11-08): BEH-EA-335: `AuthHost.layer` provides every declared point once, beneath the host's `taps`, in production as in the harness (reverses plan 08 Q5; ADR-EA-044, architecture plan 15) |
 
 ---
 
@@ -217,5 +217,7 @@ REQUIREMENT: A plugin declares the default (no-tap) layers of the hook points
 ```
 
 The point's tap registry lives in the point's own built layer (BEH-EA-024), so one composition must build each point exactly once; a plugin that owns 46 points (`Organization`) used to rely on every host remembering `OrganizationHooksLive`. Declaring them makes the requirement checkable and printable without making `Auth.make` provide them in production: a tap provided outside would otherwise bind a second instance and never run, so the host still builds the one instance its taps register into.
+
+*As shipped (ADR-EA-044):* `AuthHost.layer` provides every declared point once, beneath the host's `taps`, in production as in the harness, so an application tap registers on the instance the plugin runs.
 
 _Previous: [BEH-EA-024](03-ports-slots-hooks-registries.md#beh-ea-024-tapping-a-hook-point-nobody-defines-is-a-compile-error-and-registries-aggregate-through-layereffectdiscard-ordered-and-frozen-at-first-read) | Next: [BEH-EA-025](04-contract-stratum.md#beh-ea-025-a-principal-is-a-tagged-union-carrying-a-zanzibar-shaped-reference)_

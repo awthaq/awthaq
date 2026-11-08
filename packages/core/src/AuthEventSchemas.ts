@@ -63,6 +63,25 @@ export const UserCreatedEvent = defineEvent(
 );
 export type UserCreatedEvent = typeof UserCreatedEvent.Type;
 
+/**
+ * Published by core's `FederatedIdentity` when it joins an external identity to an existing account:
+ * `emailMatch` (a trusted party's verified address matched a verified local user) or `explicit` (a signed-in
+ * user linked a provider). No subject and no address: a SAML NameID is often an email (ADR-EA-029).
+ */
+export const AccountLinkedEvent = defineEvent(
+  "auth.account.linked",
+  {
+    userId: UserIdSchema,
+    providerId: Schema.String,
+    via: Schema.Literals(["emailMatch", "explicit"]),
+  },
+  {
+    actor: Actor.field("userId"),
+    pii: [],
+  },
+);
+export type AccountLinkedEvent = typeof AccountLinkedEvent.Type;
+
 /** Published by core's `SignIn` once a sign-in has completed (including a sign-up's first session). */
 export const UserSignedInEvent = defineEvent(
   "auth.user.signedIn",
@@ -460,17 +479,23 @@ export const AdminImpersonationDeniedEvent = defineEvent(
 export type AdminImpersonationDeniedEvent = typeof AdminImpersonationDeniedEvent.Type;
 
 /**
- * BAM-005: published by `@awthaq/admin` when an admin capability other than
- * impersonation (`AdminConfig.canManageUsers`) resolves `false` — the same
+ * BAM-005: published by `@awthaq/admin` when a user- or tenant-administration
+ * predicate (`canManageUsers`, `canBanUsers`, `canDeleteUsers`,
+ * `canManageCredentials`, `canAdministerTenants`) resolves `false` — the same
  * "genuine authorization rejection, never input-validation noise" signal
  * `auth.admin.impersonationDenied` is for impersonation. `action` names the
- * endpoint (`"listUsers"`, `"updateUser"`, ...).
+ * endpoint (`"listUsers"`, `"updateUser"`, ...). Like IDS-006, `targetUserId`
+ * (user administration) or `organizationId` (tenant administration) is carried
+ * when the call named one. `@awthaq/saml` and `@awthaq/webhooks` publish it too
+ * (with a prefixed `action`), without either key.
  */
 export const AdminActionDeniedEvent = defineEvent(
   "auth.admin.actionDenied",
   {
     adminUserId: UserIdSchema,
     action: Schema.String,
+    targetUserId: Schema.optionalKey(UserIdSchema),
+    organizationId: Schema.optionalKey(Schema.String),
   },
   {
     actor: Actor.field("adminUserId"),
@@ -1708,6 +1733,7 @@ export type DeviceAuthorizationDeniedEvent = typeof DeviceAuthorizationDeniedEve
 const Registry = registry([
   TokenReplayEvent,
   UserCreatedEvent,
+  AccountLinkedEvent,
   UserSignedInEvent,
   UserSignInFailedEvent,
   UserEmailVerifiedEvent,

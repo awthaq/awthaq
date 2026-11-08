@@ -853,3 +853,18 @@ const sealedSuites = <Extra>(storage: Storage<WebhookRecords.WebhookRecords | Ex
 
 sealedSuites(memoryStorage);
 sealedSuites(sqlStorage);
+
+// Plan 17: the plugin declares its sealed columns, so `auth.sealedColumns` (the `also` of a rotation sweep) lists them.
+describe("WebhookRecords sealed column declarations", () => {
+  it("the plugin declares secret, previousSecret and headers", () => {
+    assert.deepStrictEqual(
+      Webhooks.Webhooks.sealedColumns.map((declared) => `${declared.table}.${declared.column}`),
+      ["webhooks_endpoint.secret", "webhooks_endpoint.previousSecret", "webhooks_endpoint.headers"],
+    );
+    assert.deepStrictEqual(Webhooks.Webhooks.sealedColumns, [
+      WebhookRecords.secretColumn,
+      WebhookRecords.previousSecretColumn,
+      WebhookRecords.headersColumn,
+    ]);
+  });
+});

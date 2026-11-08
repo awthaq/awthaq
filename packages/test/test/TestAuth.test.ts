@@ -30,6 +30,7 @@ import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
+import { parseSetCookie } from "@awthaq/web/cookies";
 import * as TestAuth from "../src/TestAuth.ts";
 
 class Whoami extends Schema.Class<Whoami>("Whoami")({ userId: Schema.String }) {}
@@ -69,6 +70,12 @@ const built = Auth.make([WhoamiPlugin]);
 // declares `Api.Authentication`: `TestAuth.layer` derives the host middleware itself, so no `services` at all.
 const TestLayer = TestAuth.layer(built);
 
+/** The `Cookie` pair a browser sends back for the minted session (its `Set-Cookie`, read by the one parser). */
+const sessionPair = (signedIn: TestAuth.SignedInSession) => {
+  const { name, rawValue } = parseSetCookie(signedIn.setCookie);
+  return `${name}=${rawValue}`;
+};
+
 const dispatch = (request: Request) =>
   Effect.gen(function* () {
     const router = yield* HttpRouter.HttpRouter;
@@ -88,7 +95,7 @@ layer(TestLayer)("TestAuth.layer (BEH-EA-193)", (it) => {
       const signedIn = yield* TestAuth.signInAs({ email: "member@example.com" });
       const response = yield* dispatch(
         new Request("http://localhost/whoami", {
-          headers: { cookie: signedIn.cookieHeader },
+          headers: { cookie: sessionPair(signedIn) },
         }),
       );
       assert.strictEqual(response.status, 200);
@@ -103,7 +110,7 @@ layer(TestLayer)("TestAuth.layer (BEH-EA-193)", (it) => {
       Effect.gen(function* () {
         const signedIn = yield* TestAuth.signInAs({ email: "session-reader@example.com" });
         const response = yield* dispatch(
-          new Request("http://localhost/session", { headers: { cookie: signedIn.cookieHeader } }),
+          new Request("http://localhost/session", { headers: { cookie: sessionPair(signedIn) } }),
         );
         assert.strictEqual(response.status, 200);
         const anonymous = yield* dispatch(new Request("http://localhost/session"));

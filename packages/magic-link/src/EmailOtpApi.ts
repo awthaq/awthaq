@@ -7,7 +7,7 @@
 // never issued — is the one `InvalidEmailOtp` (401): the response cannot be used to tell whether an
 // account exists or how many guesses a code has left.
 
-import { Api, EmailContract, SessionContract } from "@awthaq/api";
+import { Api, EmailContract, SessionContract, SessionLifecycle } from "@awthaq/api";
 import { HookPoint, Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -49,9 +49,8 @@ export const EmailOtpGroup = HttpApiGroup.make("emailOtp")
         HookPoint.HookAborted,
         Hooks.TwoFactorRequired,
         Users.UserSuspended,
-        Api.InvalidTokenDelivery,
       ],
-    }),
+    }).middleware(SessionLifecycle.Mints),
   )
   .middleware(Api.CsrfProtection);
 

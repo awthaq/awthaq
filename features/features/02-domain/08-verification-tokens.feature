@@ -28,6 +28,12 @@ Feature: Verification Tokens
       When a password-reset token is also issued for "alice"
       Then both tokens coexist as structurally distinct VerificationToken rows
 
+    # Compile-time: proven by the `// type-gate:` block in step-definitions/CompileTimeGates.ts.
+    @REQ-EA-1317
+    Scenario: A link of one purpose cannot be minted with another's payload or redeemed as another's
+      When a caller mints a link without its user or with another purpose's payload, or hands a minted token to another purpose's redeemer
+      Then the compiler rejects each
+
   # BEH-EA-058 — spec/behaviors/08-verification-tokens.md; see also INV-EA-009
   @BEH-EA-058
   Rule: A verification token's consumption and the state change it authorizes commit in one transaction

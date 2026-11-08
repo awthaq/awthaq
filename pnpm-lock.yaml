@@ -214,6 +214,9 @@ importers:
       '@awthaq/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@awthaq/organization':
+        specifier: workspace:*
+        version: link:../../packages/organization
       '@awthaq/password':
         specifier: workspace:*
         version: link:../../packages/password
@@ -326,6 +329,9 @@ importers:
       '@awthaq/two-factor':
         specifier: workspace:*
         version: link:../packages/two-factor
+      '@awthaq/web':
+        specifier: workspace:*
+        version: link:../packages/web
       '@awthaq/webhooks':
         specifier: workspace:*
         version: link:../packages/webhooks
@@ -499,9 +505,6 @@ importers:
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
-      '@awthaq/sql':
-        specifier: workspace:*
-        version: link:../sql
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.1.2(effect@4.1.2)(redis@6.2.1)
@@ -518,6 +521,9 @@ importers:
       '@awthaq/password':
         specifier: workspace:*
         version: link:../password
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../sql
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
@@ -1159,6 +1165,9 @@ importers:
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
+      '@awthaq/server':
+        specifier: workspace:*
+        version: link:../server
       '@awthaq/sql':
         specifier: workspace:*
         version: link:../sql
@@ -1169,9 +1178,6 @@ importers:
         specifier: 6.3.2
         version: 6.3.2
     devDependencies:
-      '@awthaq/server':
-        specifier: workspace:*
-        version: link:../server
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
@@ -1236,10 +1242,16 @@ importers:
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../sql
     devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.1.2(effect@4.1.2)(redis@6.2.1)
+      '@effect/sql-sqlite-node':
+        specifier: 'catalog:'
+        version: 4.1.2(effect@4.1.2)
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.1.2(effect@4.1.2)(vitest@5.0.2)
@@ -1265,9 +1277,6 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.1.2(effect@4.1.2)(redis@6.2.1)
-      '@effect/sql-libsql':
-        specifier: 'catalog:'
-        version: 4.1.2(effect@4.1.2)
       '@effect/sql-pg':
         specifier: 'catalog:'
         version: 4.1.2(effect@4.1.2)
@@ -1304,6 +1313,9 @@ importers:
       '@awthaq/sql':
         specifier: workspace:*
         version: link:../sql
+      '@awthaq/web':
+        specifier: workspace:*
+        version: link:../web
     devDependencies:
       '@awthaq/password':
         specifier: workspace:*
@@ -1311,6 +1323,9 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.1.2(effect@4.1.2)(redis@6.2.1)
+      '@effect/sql-libsql':
+        specifier: 'catalog:'
+        version: 4.1.2(effect@4.1.2)
       '@effect/sql-pg':
         specifier: 'catalog:'
         version: 4.1.2(effect@4.1.2)
@@ -2783,9 +2798,6 @@ packages:
   '@types/whatwg-mimetype@3.0.2':
     resolution: {integrity: sha512-c2AKvDT8ToxLIOUlN51gTiHXflsfIFisS4pO7pDPoKouJCESkhZnEy623gwP9laCy5lnLDAw1vAzu2vM2YLOrA==}
 
-  '@types/ws@8.18.1':
-    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
-
   '@types/ws@8.18.2':
     resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
 
@@ -4157,18 +4169,6 @@ packages:
     resolution: {integrity: sha512-YVGIj2kamLSTxw6NsZjoBxfSwsn0ycdesmc4p+Q21c5zPuZ1pl+NfxVdxPtdHvmNVOQ6XSYG4AUtyt/Fi7D16Q==}
     engines: {node: '>=10'}
 
-  ws@8.21.3:
-    resolution: {integrity: sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==}
-    engines: {node: '>=10.0.0'}
-    peerDependencies:
-      bufferutil: ^4.0.1
-      utf-8-validate: '>=5.0.2'
-    peerDependenciesMeta:
-      bufferutil:
-        optional: true
-      utf-8-validate:
-        optional: true
-
   ws@8.22.1:
     resolution: {integrity: sha512-oyL6OPYme/CmiFvNuGzeoxCJ4nOrZE2O1FwM9MWM1AsGri6nLXB2pg+lNA8aLeXMSav0J6eIVS1j6vUPzUtK9g==}
     engines: {node: '>=10.0.0'}
@@ -4667,8 +4667,8 @@ snapshots:
 
   '@libsql/isomorphic-ws@0.1.5':
     dependencies:
-      '@types/ws': 8.18.1
-      ws: 8.21.3
+      '@types/ws': 8.18.2
+      ws: 8.22.1
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -5278,10 +5278,6 @@ snapshots:
       csstype: 3.2.3
 
   '@types/whatwg-mimetype@3.0.2': {}
-
-  '@types/ws@8.18.1':
-    dependencies:
-      '@types/node': 22.20.4
 
   '@types/ws@8.18.2':
     dependencies:
@@ -6600,8 +6596,6 @@ snapshots:
       ansi-styles: 4.3.0
       string-width: 4.2.3
       strip-ansi: 6.0.1
-
-  ws@8.21.3: {}
 
   ws@8.22.1: {}
 

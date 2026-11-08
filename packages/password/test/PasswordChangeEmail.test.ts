@@ -171,19 +171,6 @@ describe("BAM-009: confirm", () => {
     }).pipe(Effect.scoped, Effect.provide(makeTestLayer())),
   );
 
-  it.effect("the token is single-use", () =>
-    Effect.gen(function* () {
-      const password = yield* Password.Password;
-      const mailer = yield* Mailer.Mailer;
-      const user = yield* signedUpUser();
-      yield* requestChange(user.id, newEmail);
-      const token = Redacted.make(tokenOf(changeEmailMail(yield* mailer.sent)[0]));
-      yield* password.confirmEmailChange({ token });
-      const replay = yield* password.confirmEmailChange({ token }).pipe(Effect.flip);
-      assert.strictEqual(replay._tag, "TokenConsumed");
-    }).pipe(Effect.provide(makeTestLayer())),
-  );
-
   it.effect("an address taken in the meantime is EmailAlreadyExists and the address stays", () =>
     Effect.gen(function* () {
       const password = yield* Password.Password;
@@ -197,32 +184,6 @@ describe("BAM-009: confirm", () => {
       assert.strictEqual(failure._tag, "EmailAlreadyExists");
       assert.strictEqual(Option.getOrThrow(Users.emailOf(yield* users.findById(user.id))), email);
     }).pipe(Effect.provide(makeTestLayer())),
-  );
-
-  it.effect(
-    "a token of another purpose is refused, and a change-email token cannot verify an address",
-    () =>
-      Effect.gen(function* () {
-        const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
-        const user = yield* signedUpUser();
-        const verifyMail = (yield* mailer.sent).find((mail) => mail.template === "verify-email");
-        const crossed = yield* password
-          .confirmEmailChange({ token: Redacted.make(tokenOf(verifyMail)) })
-          .pipe(Effect.flip);
-        assert.strictEqual(crossed._tag, "TokenConsumed");
-        yield* requestChange(user.id, newEmail);
-        const changeMail = changeEmailMail(yield* mailer.sent)[0];
-        const other = yield* password
-          .verifyEmail({ token: Redacted.make(tokenOf(changeMail)) })
-          .pipe(Effect.flip);
-        assert.strictEqual(other._tag, "TokenConsumed");
-        // Malformed input is a dead token, not a defect.
-        const junk = yield* password
-          .confirmEmailChange({ token: Redacted.make("not-a-token") })
-          .pipe(Effect.flip);
-        assert.strictEqual(junk._tag, "TokenConsumed");
-      }).pipe(Effect.provide(makeTestLayer())),
   );
 });
 

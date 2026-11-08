@@ -58,6 +58,8 @@ export const registrationPayload = (input: {
   readonly crossOrigin?: boolean;
   readonly topOrigin?: string;
   readonly transports?: ReadonlyArray<"usb" | "nfc" | "internal">;
+  /** Replaces the built `clientDataJSON` (for an unreadable one). */
+  readonly clientDataJSON?: string;
 }) => {
   const id = input.id ?? "cred-mock-1";
   return {
@@ -67,13 +69,15 @@ export const registrationPayload = (input: {
       rawId: id,
       type: "public-key" as const,
       response: {
-        clientDataJSON: buildClientDataJSON({
-          type: "webauthn.create",
-          challenge: extractChallenge(input.options),
-          origin: input.origin ?? ORIGIN,
-          ...(input.crossOrigin === undefined ? {} : { crossOrigin: input.crossOrigin }),
-          ...(input.topOrigin === undefined ? {} : { topOrigin: input.topOrigin }),
-        }),
+        clientDataJSON:
+          input.clientDataJSON ??
+          buildClientDataJSON({
+            type: "webauthn.create",
+            challenge: extractChallenge(input.options),
+            origin: input.origin ?? ORIGIN,
+            ...(input.crossOrigin === undefined ? {} : { crossOrigin: input.crossOrigin }),
+            ...(input.topOrigin === undefined ? {} : { topOrigin: input.topOrigin }),
+          }),
         attestationObject: "",
         ...(input.transports === undefined ? {} : { transports: input.transports }),
       },
@@ -89,6 +93,8 @@ export const assertionCredential = (input: {
   readonly userHandle?: string;
   readonly crossOrigin?: boolean;
   readonly topOrigin?: string;
+  /** Replaces the built `clientDataJSON` (for an unreadable one). */
+  readonly clientDataJSON?: string;
 }) => {
   const id = input.id ?? "cred-mock-1";
   return {
@@ -96,13 +102,15 @@ export const assertionCredential = (input: {
     rawId: id,
     type: "public-key" as const,
     response: {
-      clientDataJSON: buildClientDataJSON({
-        type: "webauthn.get",
-        challenge: extractChallenge(input.options),
-        origin: input.origin ?? ORIGIN,
-        ...(input.crossOrigin === undefined ? {} : { crossOrigin: input.crossOrigin }),
-        ...(input.topOrigin === undefined ? {} : { topOrigin: input.topOrigin }),
-      }),
+      clientDataJSON:
+        input.clientDataJSON ??
+        buildClientDataJSON({
+          type: "webauthn.get",
+          challenge: extractChallenge(input.options),
+          origin: input.origin ?? ORIGIN,
+          ...(input.crossOrigin === undefined ? {} : { crossOrigin: input.crossOrigin }),
+          ...(input.topOrigin === undefined ? {} : { topOrigin: input.topOrigin }),
+        }),
       authenticatorData: "",
       signature: "",
       ...(input.userHandle === undefined ? {} : { userHandle: input.userHandle }),
@@ -113,6 +121,8 @@ export const assertionCredential = (input: {
 export const mockWebAuthn = (overrides?: {
   readonly registrationVerified?: Partial<WebAuthn.VerifiedRegistration>;
   readonly authenticationVerified?: Partial<WebAuthn.VerifiedAuthentication>;
+  /** Makes the matching `verify*` fail `PasskeyVerificationFailed`, as the wrapped library does for a bad signature. */
+  readonly fail?: { readonly registration?: boolean; readonly authentication?: boolean };
   /** Observes every call the plugin makes to the port, so a test can assert what was (or was not) asked of it. */
   readonly spy?: {
     readonly registrationOptions?: Array<WebAuthn.RegistrationOptionsInput>;
@@ -146,6 +156,11 @@ export const mockWebAuthn = (overrides?: {
     },
     verifyRegistration: (input) => {
       overrides?.spy?.verifyRegistration?.push(input);
+      if (overrides?.fail?.registration === true) {
+        return Effect.fail(
+          new WebAuthn.PasskeyVerificationFailed({ message: "mocked: bad response" }),
+        );
+      }
       const verified = {
         // The credential id the browser reported, like a real authenticator's —
         // so a test can register several distinct credentials (WPS-003/WPS-010).
@@ -183,6 +198,11 @@ export const mockWebAuthn = (overrides?: {
     },
     verifyAuthentication: (input) => {
       overrides?.spy?.verifyAuthentication?.push(input);
+      if (overrides?.fail?.authentication === true) {
+        return Effect.fail(
+          new WebAuthn.PasskeyVerificationFailed({ message: "mocked: bad signature" }),
+        );
+      }
       return Effect.succeed({
         credentialId: input.response.id,
         newCounter: 1,

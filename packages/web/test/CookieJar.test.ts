@@ -14,24 +14,15 @@
 // (`Users.rename`, `Sessions.issue` called directly) returns plain data, not
 // a `Response` — the type system already makes that misuse impossible to
 // even attempt, a stronger guarantee than a runtime assertion could give.
-import { Api } from "@awthaq/api";
-import {
-  AuditLog,
-  AuthEvents,
-  Hooks,
-  Persistence,
-  SessionCookie,
-  Sessions,
-  Users,
-} from "@awthaq/core";
-import { AuthHttp } from "@awthaq/server";
+import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
+import { AuthHttp, SessionDelivery } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
 import * as Etag from "effect/http/Etag";
 import * as HttpPlatform from "effect/http/HttpPlatform";
 import * as HttpRouter from "effect/http/HttpRouter";
@@ -39,7 +30,7 @@ import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
-import { applyResponseCookies } from "../src/CookieJar.ts";
+import { applyResponseCookies, parseSetCookie } from "../src/CookieJar.ts";
 import type { CookieJarLike, CookieSetOptions } from "../src/CookieJar.ts";
 
 type Recorded = readonly [name: string, value: string, options: CookieSetOptions | undefined];
@@ -183,6 +174,38 @@ interface AstroCookies {
   ) => void;
 }
 
+describe("parseSetCookie — the one Set-Cookie parser (BEH-EA-344)", () => {
+  it("reads the name, the decoded and raw values and every attribute, Partitioned included", () => {
+    const parsed = parseSetCookie(
+      "__Host-session=a%20b=c; Path=/; Secure; HttpOnly; SameSite=None; Partitioned; Max-Age=60; Domain=example.com",
+    );
+    assert.strictEqual(parsed.name, "__Host-session");
+    assert.strictEqual(parsed.value, "a b=c");
+    assert.strictEqual(parsed.rawValue, "a%20b=c");
+    assert.deepStrictEqual(parsed.options, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "none",
+      partitioned: true,
+      maxAge: 60,
+      domain: "example.com",
+    });
+  });
+
+  it("a bare pair has no attributes, and a pair without `=` is a name with an empty value", () => {
+    assert.deepStrictEqual(parseSetCookie("a=b"), {
+      name: "a",
+      value: "b",
+      rawValue: "b",
+      options: {},
+    });
+    const bare = parseSetCookie("flag");
+    assert.strictEqual(bare.name, "flag");
+    assert.strictEqual(bare.rawValue, "");
+  });
+});
+
 describe("CookieJarLike — second-adapter fit (BO-010)", () => {
   it("a SvelteKit-shaped jar (path required) is accepted, and every cookie arrives with a path", () => {
     const written: Array<readonly [string, string, string]> = [];
@@ -212,7 +235,9 @@ describe("CookieJarLike — second-adapter fit (BO-010)", () => {
 
 describe("applyResponseCookies — a real HTTP response (BEH-EA-189)", () => {
   const LoginGroup = HttpApiGroup.make("login").add(
-    HttpApiEndpoint.post("login", "/login", { success: Schema.Void }),
+    HttpApiEndpoint.post("login", "/login", { success: SessionContract.SessionDto }).middleware(
+      SessionLifecycle.Mints,
+    ),
   );
   const LoginApi = HttpApi.make("with-next-cookies-test-login").add(LoginGroup);
 
@@ -228,7 +253,7 @@ describe("applyResponseCookies — a real HTTP response (BEH-EA-189)", () => {
           })
           .pipe(Effect.orDie);
         const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
-        yield* SessionCookie.set(session, token);
+        return yield* SessionDelivery.respond(Effect.succeed({ session, token }));
       }),
     }),
   );
@@ -247,6 +272,7 @@ describe("applyResponseCookies — a real HTTP response (BEH-EA-189)", () => {
   );
   const AppLayer = AuthHttp.routes(LoginApi, {}).pipe(
     Layer.provide(LoginHandlers),
+    Layer.provide(AuthHttp.sessionLifecycle),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),

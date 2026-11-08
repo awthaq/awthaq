@@ -81,7 +81,6 @@ const signedInPage = (email: string) =>
     registry.mount(AuthClientAtom.sessionAtom);
     registry.set(signIn, {
       payload: { email, password: yield* redacted() },
-      reactivityKeys: [ReactClient.SESSION_KEY],
     });
     yield* until(
       "sign-in to succeed",
@@ -202,12 +201,12 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
     const { outcomes } = yield* World;
     const registry = yield* outcomes.getAs("registry", isRegistry);
     yield* outcomes.set("fetchesBefore", yield* sessionCount());
-    const keys = [ReactClient.SESSION_KEY];
-    yield* outcomes.set("keys", keys);
+    // ADR-EA-045: the contract declares both endpoints, so the call site passes no keys at all.
+    yield* outcomes.set("keys", []);
     if (mutation === "sign-out") {
       const signOut = AuthClientAtomSignOut;
       registry.mount(signOut);
-      registry.set(signOut, { reactivityKeys: keys });
+      registry.set(signOut, {});
       yield* until(
         "sign-out to succeed",
         () => registry.get(signOut),
@@ -218,7 +217,6 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
       registry.mount(signIn);
       registry.set(signIn, {
         payload: { email: "alice@example.com", password: yield* redacted() },
-        reactivityKeys: keys,
       });
       yield* until(
         "sign-in to succeed",
@@ -228,9 +226,9 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
     }
   });
 
-  Then("the mutation runs with {string}", function* (_keys: string) {
+  Then("the mutation runs with no reactivityKeys", function* () {
     const { outcomes } = yield* World;
-    assert.deepEqual(yield* outcomes.getAs("keys", isStringArray), ["session"]);
+    assert.deepEqual(yield* outcomes.getAs("keys", isStringArray), []);
     assert.equal(ReactClient.SESSION_KEY, "session");
   });
 
@@ -346,7 +344,7 @@ export const reactSteps = defineSteps<World>(({ Given, When, Then }) => {
       const registry = yield* outcomes.getAs("registry", isRegistry);
       const signOut = AuthClientAtomSignOut;
       registry.mount(signOut);
-      registry.set(signOut, { reactivityKeys: [ReactClient.SESSION_KEY] });
+      registry.set(signOut, {});
       yield* until(
         "the session to read as signed out",
         () => registry.get(AuthClientAtom.sessionAtom),

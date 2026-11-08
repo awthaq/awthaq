@@ -19,6 +19,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import {
+  browserWith,
   configureApp,
   currentApp,
   lastResponse,
@@ -379,23 +380,21 @@ export const organizationSteps = defineSteps<World>(({ Given, When, Then }) => {
       expectStatus(created, 200, `${who} creating "${slug}"`);
       yield* world.organizations.set(slug, stringField(objectOf(created), "id"));
     }
-    const started = yield* sendAs(
-      "admin",
+    // The impersonating browser holds the admin's own session; the impersonation cookie the
+    // response sets rides beside it in that browser's store.
+    const impersonating = yield* browserWith(admin.setCookie);
+    const started = yield* send(
+      impersonating,
       "POST",
       `/admin/impersonate/${(yield* world.users.get(target)).userId}`,
       { reason: "support ticket" },
     );
     expectStatus(started, 200, "the admin starting the impersonation");
-    const pair = started.headers
-      .getSetCookie()
-      .map((raw) => raw.split(";")[0] ?? "")
-      .find((cookie) => cookie.startsWith("__Host-"));
-    assert.ok(pair !== undefined, "the impersonation set no cookie");
-    // The admin's own session is still there; the impersonation cookie rides beside it.
-    yield* world.users.set("admin (impersonating)", {
-      ...admin,
-      cookie: `${admin.cookie}; ${pair}`,
-    });
+    assert.ok(
+      impersonating.cookies.get("__Host-impersonation") !== undefined,
+      "the impersonation set no cookie",
+    );
+    yield* world.users.set("admin (impersonating)", { ...admin, agent: impersonating });
   });
 
   When("the admin lists organizations", function* () {

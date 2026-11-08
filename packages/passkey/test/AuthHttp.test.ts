@@ -9,13 +9,12 @@
 // `WebAuthn` is still mocked (`Layer.mock`, BEH-EA-195) — this proves the
 // wire contract, not the cryptography (ticket 02's own job).
 import { Api, SessionContract } from "@awthaq/api";
-import { Auth, Sessions, Users } from "@awthaq/core";
+import { Auth } from "@awthaq/core";
 import type { WebAuthn } from "@awthaq/ports";
-import { TestAuth } from "@awthaq/test";
+import { CookieAssertions, TestAuth, type UserAgent } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyApi from "../src/PasskeyApi.ts";
@@ -26,20 +25,6 @@ import {
   extractChallenge,
   mockWebAuthn,
 } from "./passkeyTestFixtures.ts";
-
-/**
- * `PasskeyGroup`, `PasskeyAuthenticateGroup` (public/anonymous, BEH-EA-131) and `PasskeyCredentialsGroup` all
- * carry `.middleware(Api.CsrfProtection)`, and this file calls the composed app's real HTTP handler directly,
- * never through `@awthaq/client`'s `CsrfClientLive`, so every unsafe-method request below (including the
- * anonymous authenticate-ceremony ones) plays the double-submit role a browser client would, with a pair minted
- * against the harness's own `CsrfConfig` (the handler runs on the real clock, so it is stamped now).
- */
-const CSRF_TEST_COOKIE_VALUE: string = TestAuth.csrfToken(TestAuth.TestCsrfConfig.secret);
-
-const withCsrfCookie = (cookie?: string): string =>
-  cookie
-    ? `${cookie}; ${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`
-    : `${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`;
 
 const buildApp = (
   webAuthn: Layer.Layer<WebAuthn.WebAuthn>,
@@ -61,85 +46,51 @@ const buildApp = (
 const app = buildApp(mockWebAuthn());
 const { handler } = app;
 
-const post = (
-  handler: (request: Request) => Promise<Response>,
+/**
+ * Every group here carries `.middleware(Api.CsrfProtection)`: each request comes from an agent of the app, which
+ * holds a `__Host-csrf` minted against the harness's own `CsrfConfig` and echoes it on unsafe methods, as a
+ * browser's script would. `as` is a signed-in browser (`app.signIn`, a session issued directly against
+ * `Sessions`: passkey registration needs one and this plugin has no sign-up), or a fresh anonymous agent.
+ */
+const post = async (
+  as: UserAgent.UserAgent | undefined,
   path: string,
   body: unknown,
   headers?: Record<string, string>,
 ): Promise<Response> =>
-  handler(
-    new Request(`${ORIGIN}${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...headers,
-        cookie: withCsrfCookie(headers?.["cookie"]),
-        [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
-      },
-      body: JSON.stringify(body),
-    }),
-  );
-
-const cookieFrom = (response: Response): string => {
-  const raw = response.headers.get("set-cookie");
-  if (raw === null) throw new Error("expected a set-cookie header");
-  return raw.split(";")[0] ?? raw;
-};
-
-/**
- * Passkey registration always requires an existing session (no
- * passkey-first sign-up — `spec.md`'s own Out of Scope), and this plugin
- * has no sign-up endpoint of its own to bootstrap one — so this issues a
- * real session directly against `Sessions` (reaching into the same running
- * services `handler` itself uses, via the shared `memoMap` above) and
- * formats it as the same `__Host-session` cookie header the browser would
- * carry, the same `Sessions.SESSION_COOKIE_NAME`-keyed pattern
- * `@awthaq/test`'s own `signInAs` documents using.
- */
-const issueSessionCookieHeader = (email: string): Promise<string> =>
-  app.run(
-    Effect.gen(function* () {
-      const users = yield* Users.Users;
-      const sessions = yield* Sessions.Sessions;
-      const user = yield* users.create({ identity: { _tag: "Email", email }, name: email });
-      const issued = yield* sessions.issue({ userId: user.id });
-      return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
-    }),
-  );
+  (as ?? (await app.agent())).request("POST", path, {
+    json: body,
+    ...(headers === undefined ? {} : { headers }),
+  });
 
 describe("AuthHttp + Passkey (real HTTP)", () => {
   it.effect("BEH-EA-130: a full registration ceremony persists a credential and answers 200", () =>
     Effect.gen(function* () {
-      const cookie = yield* Effect.promise(() => issueSessionCookieHeader("register@example.com"));
+      const browser = yield* Effect.promise(() => app.signIn("register@example.com"));
 
       const optionsResponse = yield* Effect.promise(() =>
-        post(handler, "/passkey/register/options", {}, { cookie }),
+        post(browser, "/passkey/register/options", {}),
       );
       assert.strictEqual(optionsResponse.status, 200);
       const options = yield* Effect.promise(() => optionsResponse.json());
       const challenge = extractChallenge(options);
 
       const verifyResponse = yield* Effect.promise(() =>
-        post(
-          handler,
-          "/passkey/register/verify",
-          {
-            credential: {
-              id: "cred-mock-1",
-              rawId: "cred-mock-1",
-              type: "public-key",
-              response: {
-                clientDataJSON: buildClientDataJSON({
-                  type: "webauthn.create",
-                  challenge,
-                  origin: ORIGIN,
-                }),
-                attestationObject: "",
-              },
+        post(browser, "/passkey/register/verify", {
+          credential: {
+            id: "cred-mock-1",
+            rawId: "cred-mock-1",
+            type: "public-key",
+            response: {
+              clientDataJSON: buildClientDataJSON({
+                type: "webauthn.create",
+                challenge,
+                origin: ORIGIN,
+              }),
+              attestationObject: "",
             },
           },
-          { cookie },
-        ),
+        }),
       );
       assert.strictEqual(verifyResponse.status, 200);
       const body = Schema.decodeUnknownSync(PasskeyApi.PasskeyCredentialDto)(
@@ -151,7 +102,9 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
 
   it.effect("register/options is unreachable without a session cookie", () =>
     Effect.gen(function* () {
-      const response = yield* Effect.promise(() => post(handler, "/passkey/register/options", {}));
+      const response = yield* Effect.promise(() =>
+        post(undefined, "/passkey/register/options", {}),
+      );
       assert.strictEqual(response.status, 401);
     }),
   );
@@ -161,15 +114,13 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const anonymous = yield* Effect.promise(() =>
-          post(handler, "/passkey/register/options/conditional", {}),
+          post(undefined, "/passkey/register/options/conditional", {}),
         );
         assert.strictEqual(anonymous.status, 401);
 
-        const cookie = yield* Effect.promise(() =>
-          issueSessionCookieHeader("conditional@example.com"),
-        );
+        const browser = yield* Effect.promise(() => app.signIn("conditional@example.com"));
         const authenticated = yield* Effect.promise(() =>
-          post(handler, "/passkey/register/options/conditional", {}, { cookie }),
+          post(browser, "/passkey/register/options/conditional", {}),
         );
         assert.strictEqual(authenticated.status, 200);
       }),
@@ -179,41 +130,34 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     "BEH-EA-131: a full authentication ceremony sets a real session cookie on success",
     () =>
       Effect.gen(function* () {
-        const cookie = yield* Effect.promise(() =>
-          issueSessionCookieHeader("authuser@example.com"),
-        );
+        const browser = yield* Effect.promise(() => app.signIn("authuser@example.com"));
 
         const registerOptionsResponse = yield* Effect.promise(() =>
-          post(handler, "/passkey/register/options", {}, { cookie }),
+          post(browser, "/passkey/register/options", {}),
         );
         const registerChallenge = extractChallenge(
           yield* Effect.promise(() => registerOptionsResponse.json()),
         );
         yield* Effect.promise(() =>
-          post(
-            handler,
-            "/passkey/register/verify",
-            {
-              credential: {
-                id: "cred-mock-1",
-                rawId: "cred-mock-1",
-                type: "public-key",
-                response: {
-                  clientDataJSON: buildClientDataJSON({
-                    type: "webauthn.create",
-                    challenge: registerChallenge,
-                    origin: ORIGIN,
-                  }),
-                  attestationObject: "",
-                },
+          post(browser, "/passkey/register/verify", {
+            credential: {
+              id: "cred-mock-1",
+              rawId: "cred-mock-1",
+              type: "public-key",
+              response: {
+                clientDataJSON: buildClientDataJSON({
+                  type: "webauthn.create",
+                  challenge: registerChallenge,
+                  origin: ORIGIN,
+                }),
+                attestationObject: "",
               },
             },
-            { cookie },
-          ),
+          }),
         );
 
         const authOptionsResponse = yield* Effect.promise(() =>
-          post(handler, "/passkey/authenticate/options", {}),
+          post(undefined, "/passkey/authenticate/options", {}),
         );
         assert.strictEqual(authOptionsResponse.status, 200);
         const { ceremonyId, options } = Schema.decodeUnknownSync(
@@ -222,7 +166,7 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         const authChallenge = extractChallenge(options);
 
         const verifyResponse = yield* Effect.promise(() =>
-          post(handler, "/passkey/authenticate/verify", {
+          post(undefined, "/passkey/authenticate/verify", {
             ceremonyId,
             credential: {
               id: "cred-mock-1",
@@ -241,7 +185,10 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
           }),
         );
         assert.strictEqual(verifyResponse.status, 200);
-        assert.match(cookieFrom(verifyResponse), /^__Host-session=/);
+        assert.strictEqual(
+          CookieAssertions.findSetCookie(verifyResponse, Api.SESSION_COOKIE_NAME).name,
+          Api.SESSION_COOKIE_NAME,
+        );
       }),
   );
 
@@ -251,39 +198,32 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     "WPS-004: authenticate/verify with X-Awthaq-Token-Delivery: bearer returns the token and sets no cookie",
     () =>
       Effect.gen(function* () {
-        const cookie = yield* Effect.promise(() =>
-          issueSessionCookieHeader("bearerpasskey@example.com"),
-        );
+        const browser = yield* Effect.promise(() => app.signIn("bearerpasskey@example.com"));
         const registerOptionsResponse = yield* Effect.promise(() =>
-          post(handler, "/passkey/register/options", {}, { cookie }),
+          post(browser, "/passkey/register/options", {}),
         );
         const registerChallenge = extractChallenge(
           yield* Effect.promise(() => registerOptionsResponse.json()),
         );
         yield* Effect.promise(() =>
-          post(
-            handler,
-            "/passkey/register/verify",
-            {
-              credential: {
-                id: "cred-mock-bearer",
-                rawId: "cred-mock-bearer",
-                type: "public-key",
-                response: {
-                  clientDataJSON: buildClientDataJSON({
-                    type: "webauthn.create",
-                    challenge: registerChallenge,
-                    origin: ORIGIN,
-                  }),
-                  attestationObject: "",
-                },
+          post(browser, "/passkey/register/verify", {
+            credential: {
+              id: "cred-mock-bearer",
+              rawId: "cred-mock-bearer",
+              type: "public-key",
+              response: {
+                clientDataJSON: buildClientDataJSON({
+                  type: "webauthn.create",
+                  challenge: registerChallenge,
+                  origin: ORIGIN,
+                }),
+                attestationObject: "",
               },
             },
-            { cookie },
-          ),
+          }),
         );
         const authOptionsResponse = yield* Effect.promise(() =>
-          post(handler, "/passkey/authenticate/options", {}),
+          post(undefined, "/passkey/authenticate/options", {}),
         );
         const { ceremonyId, options } = Schema.decodeUnknownSync(
           PasskeyApi.AuthenticateOptionsResult,
@@ -304,7 +244,7 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         };
         const bad = yield* Effect.promise(() =>
           post(
-            handler,
+            undefined,
             "/passkey/authenticate/verify",
             { ceremonyId, credential },
             { [Api.TOKEN_DELIVERY_HEADER]: "nope" },
@@ -313,7 +253,7 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         assert.strictEqual(bad.status, 400);
         const verifyResponse = yield* Effect.promise(() =>
           post(
-            handler,
+            undefined,
             "/passkey/authenticate/verify",
             { ceremonyId, credential },
             { [Api.TOKEN_DELIVERY_HEADER]: "bearer" },
@@ -333,13 +273,13 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const optionsResponse = yield* Effect.promise(() =>
-          post(handler, "/passkey/authenticate/options", {}),
+          post(undefined, "/passkey/authenticate/options", {}),
         );
         const { ceremonyId, options } = Schema.decodeUnknownSync(
           PasskeyApi.AuthenticateOptionsResult,
         )(yield* Effect.promise(() => optionsResponse.json()));
         const response = yield* Effect.promise(() =>
-          post(handler, "/passkey/authenticate/verify", {
+          post(undefined, "/passkey/authenticate/verify", {
             ceremonyId,
             credential: {
               id: "no-such-credential",
@@ -365,39 +305,34 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     "credentials list/rename/delete work over real HTTP, including last-credential refusal",
     () =>
       Effect.gen(function* () {
-        const cookie = yield* Effect.promise(() => issueSessionCookieHeader("manage@example.com"));
+        const browser = yield* Effect.promise(() => app.signIn("manage@example.com"));
 
         // WPS-010: a credential id is globally unique, and the earlier tests in
         // this file share this app's stores — so this test registers its own id.
         const optionsResponse = yield* Effect.promise(() =>
-          post(handler, "/passkey/register/options", {}, { cookie }),
+          post(browser, "/passkey/register/options", {}),
         );
         const challenge = extractChallenge(yield* Effect.promise(() => optionsResponse.json()));
         yield* Effect.promise(() =>
-          post(
-            handler,
-            "/passkey/register/verify",
-            {
-              credential: {
-                id: "cred-manage-1",
-                rawId: "cred-manage-1",
-                type: "public-key",
-                response: {
-                  clientDataJSON: buildClientDataJSON({
-                    type: "webauthn.create",
-                    challenge,
-                    origin: ORIGIN,
-                  }),
-                  attestationObject: "",
-                },
+          post(browser, "/passkey/register/verify", {
+            credential: {
+              id: "cred-manage-1",
+              rawId: "cred-manage-1",
+              type: "public-key",
+              response: {
+                clientDataJSON: buildClientDataJSON({
+                  type: "webauthn.create",
+                  challenge,
+                  origin: ORIGIN,
+                }),
+                attestationObject: "",
               },
             },
-            { cookie },
-          ),
+          }),
         );
 
         const listResponse = yield* Effect.promise(() =>
-          handler(new Request(`${ORIGIN}/passkey/credentials`, { headers: { cookie } })),
+          browser.request("GET", "/passkey/credentials"),
         );
         assert.strictEqual(listResponse.status, 200);
         const listed = Schema.decodeUnknownSync(Schema.Array(PasskeyApi.PasskeyCredentialDto))(
@@ -406,43 +341,19 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         assert.strictEqual(listed.length, 1);
 
         const renameResponse = yield* Effect.promise(() =>
-          handler(
-            new Request(`${ORIGIN}/passkey/credentials/cred-manage-1`, {
-              method: "PATCH",
-              headers: {
-                "content-type": "application/json",
-                cookie: withCsrfCookie(cookie),
-                [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
-              },
-              body: JSON.stringify({ name: "My Renamed Passkey" }),
-            }),
-          ),
+          browser.request("PATCH", "/passkey/credentials/cred-manage-1", {
+            json: { name: "My Renamed Passkey" },
+          }),
         );
         assert.strictEqual(renameResponse.status, 200);
 
         const removeResponse = yield* Effect.promise(() =>
-          handler(
-            new Request(`${ORIGIN}/passkey/credentials/cred-manage-1`, {
-              method: "DELETE",
-              headers: {
-                cookie: withCsrfCookie(cookie),
-                [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
-              },
-            }),
-          ),
+          browser.request("DELETE", "/passkey/credentials/cred-manage-1"),
         );
         assert.strictEqual(removeResponse.status, 409);
 
         const unknownResponse = yield* Effect.promise(() =>
-          handler(
-            new Request(`${ORIGIN}/passkey/credentials/does-not-exist`, {
-              method: "DELETE",
-              headers: {
-                cookie: withCsrfCookie(cookie),
-                [Api.CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
-              },
-            }),
-          ),
+          browser.request("DELETE", "/passkey/credentials/does-not-exist"),
         );
         assert.strictEqual(unknownResponse.status, 404);
       }),
@@ -485,37 +396,30 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         );
         assert.strictEqual(anonymous.status, 401);
 
-        const cookie = yield* Effect.promise(() => issueSessionCookieHeader("signals@example.com"));
+        const browser = yield* Effect.promise(() => app.signIn("signals@example.com"));
         const optionsResponse = yield* Effect.promise(() =>
-          post(handler, "/passkey/register/options", {}, { cookie }),
+          post(browser, "/passkey/register/options", {}),
         );
         const options = yield* Effect.promise(() => optionsResponse.json());
         yield* Effect.promise(() =>
-          post(
-            handler,
-            "/passkey/register/verify",
-            {
-              credential: {
-                id: "cred-signals-1",
-                rawId: "cred-signals-1",
-                type: "public-key",
-                response: {
-                  clientDataJSON: buildClientDataJSON({
-                    type: "webauthn.create",
-                    challenge: extractChallenge(options),
-                    origin: ORIGIN,
-                  }),
-                  attestationObject: "",
-                },
+          post(browser, "/passkey/register/verify", {
+            credential: {
+              id: "cred-signals-1",
+              rawId: "cred-signals-1",
+              type: "public-key",
+              response: {
+                clientDataJSON: buildClientDataJSON({
+                  type: "webauthn.create",
+                  challenge: extractChallenge(options),
+                  origin: ORIGIN,
+                }),
+                attestationObject: "",
               },
             },
-            { cookie },
-          ),
+          }),
         );
 
-        const response = yield* Effect.promise(() =>
-          handler(new Request(`${ORIGIN}/passkey/signals`, { headers: { cookie } })),
-        );
+        const response = yield* Effect.promise(() => browser.request("GET", "/passkey/signals"));
         assert.strictEqual(response.status, 200);
         const body = Schema.decodeUnknownSync(PasskeyApi.PasskeySignalsDto)(
           yield* Effect.promise(() => response.json()),
@@ -534,32 +438,27 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     Effect.gen(function* () {
       const register = (email: string, id: string) =>
         Effect.gen(function* () {
-          const cookie = yield* Effect.promise(() => issueSessionCookieHeader(email));
+          const browser = yield* Effect.promise(() => app.signIn(email));
           const optionsResponse = yield* Effect.promise(() =>
-            post(handler, "/passkey/register/options", {}, { cookie }),
+            post(browser, "/passkey/register/options", {}),
           );
           const options = yield* Effect.promise(() => optionsResponse.json());
           return yield* Effect.promise(() =>
-            post(
-              handler,
-              "/passkey/register/verify",
-              {
-                credential: {
-                  id,
-                  rawId: id,
-                  type: "public-key",
-                  response: {
-                    clientDataJSON: buildClientDataJSON({
-                      type: "webauthn.create",
-                      challenge: extractChallenge(options),
-                      origin: ORIGIN,
-                    }),
-                    attestationObject: "",
-                  },
+            post(browser, "/passkey/register/verify", {
+              credential: {
+                id,
+                rawId: id,
+                type: "public-key",
+                response: {
+                  clientDataJSON: buildClientDataJSON({
+                    type: "webauthn.create",
+                    challenge: extractChallenge(options),
+                    origin: ORIGIN,
+                  }),
+                  attestationObject: "",
                 },
               },
-              { cookie },
-            ),
+            }),
           );
         });
       assert.strictEqual((yield* register("dup-a@example.com", "cred-dup-http")).status, 200);

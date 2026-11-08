@@ -2,9 +2,9 @@
 //
 // RRC-001 (wayfinder ticket 28): opt-in, default-off read-replica routing.
 //
-// Repositories run over one ambient `SqlClient` (BEH-EA-035), and
+// Store adapters run over one ambient `SqlClient` (BEH-EA-035), and
 // `SqlModel.makeRepository` pulls it with a bare `yield* SqlClient`, so a
-// repository cannot be handed "the right client for this query" per call.
+// store cannot be handed "the right client for this query" per call.
 // Routing is therefore a second, optional ambient service plus a per-fiber
 // causal token, not an argument threaded through every call:
 //
@@ -48,7 +48,7 @@ import * as SqlSchema from "effect/sql/SqlSchema";
  */
 export type Consistency = Store.Consistency;
 
-/** Per-call read classification accepted by replica-eligible repository methods. */
+/** Per-call read classification accepted by replica-eligible store primitives. */
 export type ReadOptions = Store.ReadOptions;
 
 // ---- the replica client -----------------------------------------------------------

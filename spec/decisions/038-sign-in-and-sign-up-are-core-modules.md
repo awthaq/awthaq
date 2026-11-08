@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-038 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-10-13 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-13): Initial release (architecture plan 01) <br> 1.1 (2026-10-13): every sign-in and sign-up site is migrated and guarded; status Accepted — implemented |
+> | Change History | 1.0 (2026-10-13): Initial release (architecture plan 01) <br> 1.1 (2026-10-13): every sign-in and sign-up site is migrated and guarded; status Accepted — implemented <br> 1.2 (2026-10-18): a federated sign-in reaches `SignUp` through `FederatedIdentity` (ADR-EA-043) |
 
 ---
 
@@ -26,7 +26,7 @@ The suspension gate was deliberately a plain call and not a hook ([BEH-EA-046](.
 
 **2. A divert carries a handoff.** The divert context gains `handoff { tenantId?, continuation? }`: the ambient tenant when the first factor cleared, and an optional typed *continuation* (work the first factor owes once its session exists: SAML's Single Logout record and role mapping). A divert owner that later completes the sign-in itself (`@awthaq/two-factor`) stores the handoff with its challenge and returns it to `SignIn.resume`, which re-runs the gate only, restores the tenant, and `issue` runs the continuation. Continuations are an aggregating registry (ADR-EA-012) carried by `Hooks.HooksLive`; `SignIn.continuation({ id, kind, payload, make })` is the typed front door.
 
-**3. `SignUp` is the one implementation of user creation for every sign-up.** `SignUp.vet(application)` runs `BeforeSignUp` and returns a branded `Vetted`; `create`, `createWith` and `createSignedIn` accept nothing else. They own the transaction (create, verify and link are one unit, built on `Users.createWith` so a backend without transactions abandons the half-made user too), one `IdentityTaken` error, and the after-commit announcements (`auth.user.created`, `AfterSignUp`). A sign-up is any flow in which a person or a directory causes an account to exist: password, OAuth first login, SAML first login, magic link, email OTP and SCIM. Operator migrations (`UserImport.importUser`, `awthaq seed admin`) are not sign-ups and are exempt: a million-row import must not fire a million welcome mails or be vetoed by an application's sign-up policy.
+**3. `SignUp` is the one implementation of user creation for every sign-up.** `SignUp.vet(application)` runs `BeforeSignUp` and returns a branded `Vetted`; `create`, `createWith` and `createSignedIn` accept nothing else. They own the transaction (create, verify and link are one unit, built on `Users.createWith` so a backend without transactions abandons the half-made user too), one `IdentityTaken` error, and the after-commit announcements (`auth.user.created`, `AfterSignUp`). A sign-up is any flow in which a person or a directory causes an account to exist: password, OAuth first login, SAML first login, magic link, email OTP and SCIM. A federated first login (OAuth, SAML) reaches `SignUp` through `FederatedIdentity` ([ADR-EA-043](043-federated-identity-resolution.md)), which owns the decision between linking and creating; linking itself is not a sign-up. Operator migrations (`UserImport.importUser`, `awthaq seed admin`) are not sign-ups and are exempt: a million-row import must not fire a million welcome mails or be vetoed by an application's sign-up policy.
 
 **4. Uniform policies, decided once.** A user who vanished between proof and issue is a refusal (`SignIn/UserGone`) that each flow maps onto its own uniform answer, never a defect. A suspended refusal publishes `auth.user.signInFailed { reason: "suspended" }` for every strategy and for `resume`. A session minted at sign-up is a cleared sign-in (gate, veto, divert, `auth.user.signedIn`, `AfterSignIn`); password's reveal sign-up keeps "user and session in one transaction" ([BEH-EA-113](../behaviors/15-password.md)) through `createSignedIn`. A host's `BeforeSignUp` taps see SCIM provisioning under the strategy `scim:<organizationId>:<connectionId>`, and a veto answers 403. Neither module dies on `StoreUnavailable` (ADR-EA-028).
 
@@ -48,4 +48,4 @@ The suspension gate was deliberately a plain call and not a hook ([BEH-EA-046](.
 
 ## Related
 
-[ADR-EA-033](033-hook-registries-per-composition.md) (Decision 5 is made true by this ADR), [ADR-EA-028](028-infrastructure-error-policy.md) (no `orDie` on sign-in or sign-up), [ADR-EA-037](037-unit-of-work-releases-events-on-commit.md) (events follow the commit), [ADR-EA-031](031-erasure-registry-and-retention.md), [ADR-EA-012](012-slots-exclusive-registries-aggregate.md) (continuations aggregate).
+[ADR-EA-033](033-hook-registries-per-composition.md) (Decision 5 is made true by this ADR), [ADR-EA-028](028-infrastructure-error-policy.md) (no `orDie` on sign-in or sign-up), [ADR-EA-037](037-unit-of-work-releases-events-on-commit.md) (events follow the commit), [ADR-EA-031](031-erasure-registry-and-retention.md), [ADR-EA-012](012-slots-exclusive-registries-aggregate.md) (continuations aggregate), [ADR-EA-043](043-federated-identity-resolution.md) (federated resolution sits above `SignUp`).

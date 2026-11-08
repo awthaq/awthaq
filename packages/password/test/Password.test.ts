@@ -879,42 +879,6 @@ describe("Password", () => {
   );
 
   it.effect(
-    "BEH-EA-059/118: replaying an already-consumed reset token fails with TokenConsumed",
-    () =>
-      Effect.gen(function* () {
-        const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
-        yield* password.signUp({ email, password: strongPassword });
-        yield* password.requestReset({ email });
-        yield* letForkedFibersRun;
-        const sent = yield* mailer.sent;
-        const resetMail = sent.find((m) => m.template === "reset-password");
-        const mailedToken = Redacted.make(tokenOf(resetMail));
-
-        yield* password.confirmReset({
-          token: mailedToken,
-          password: Redacted.make("first new password!"),
-        });
-        const replay = yield* password
-          .confirmReset({ token: mailedToken, password: Redacted.make("second new password!") })
-          .pipe(Effect.flip);
-        assert.strictEqual(replay._tag, "TokenConsumed");
-      }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect(
-    "confirmReset rejects a malformed token (no embedded identifier) with TokenConsumed",
-    () =>
-      Effect.gen(function* () {
-        const password = yield* Password.Password;
-        const failure = yield* password
-          .confirmReset({ token: Redacted.make("not-a-real-token"), password: strongPassword })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "TokenConsumed");
-      }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect(
     "BEH-EA-119: a breached password is rejected with WeakPassword when breachCheck is on",
     () => {
       const breached = Redacted.make("pwned-password-123");
@@ -1458,6 +1422,67 @@ describe("Password", () => {
           }),
         ),
       ),
+  );
+
+  it.effect(
+    "APS-003: confirmReset is throttled per source IP across distinct, unrelated tokens, before the breach check",
+    () => {
+      let breachRequests = 0;
+      const CountingHttpClient = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) => {
+          breachRequests += 1;
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(`${"F".repeat(35)}:1`, { status: 200 }),
+            ),
+          );
+        }),
+      );
+      return Effect.gen(function* () {
+        const password = yield* Password.Password;
+        // `RATE_LIMITS.confirmResetByIp` is `{ limit: 30, window: 15 minutes }`: 31 forged,
+        // well-formed tokens with distinct public ids (so no per-token bucket trips first).
+        for (let i = 0; i < 30; i++) {
+          const attempt = yield* password
+            .confirmReset({
+              token: Redacted.make(`reset-password:forged-public-id-${i}.wrong`),
+              password: strongPassword,
+              ip: "203.0.113.9",
+            })
+            .pipe(Effect.flip);
+          assert.strictEqual(attempt._tag, "TokenConsumed");
+        }
+        const throttled = yield* password
+          .confirmReset({
+            token: Redacted.make("reset-password:forged-public-id-30.wrong"),
+            password: strongPassword,
+            ip: "203.0.113.9",
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(throttled._tag, "RateLimited");
+        assert.isAtMost(breachRequests, 30);
+
+        // Another source is untouched by the first one's exhausted budget.
+        const untouched = yield* password
+          .confirmReset({
+            token: Redacted.make("reset-password:forged-public-id-31.wrong"),
+            password: strongPassword,
+            ip: "198.51.100.4",
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(untouched._tag, "TokenConsumed");
+      }).pipe(
+        Effect.provide(
+          makeTestLayer({
+            httpClient: CountingHttpClient,
+            config: { breachCheck: true },
+            limiter: RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
+          }),
+        ),
+      );
+    },
   );
 
   it.effect(

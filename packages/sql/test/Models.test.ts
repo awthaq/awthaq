@@ -3,7 +3,7 @@
 // server — they feed each dialect's model the row shape its driver actually
 // returns (`@effect/sql-pg`: JS `boolean`/`Date`; `node:sqlite`: `0 | 1` and
 // ISO strings) — so the Postgres field variants are exercised even where
-// `AWTHAQ_POSTGRES_URL` is unset. `Repositories.postgres.test.ts` is the
+// `AWTHAQ_POSTGRES_URL` is unset. `StoreContract.sql.test.ts` is the
 // real-server counterpart.
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -221,6 +221,39 @@ describe("Models.makeModels (TS-001)", () => {
       assert.strictEqual(yield* Schema.encodeEffect(p.boolean)(true), true);
       assert.strictEqual(yield* Schema.encodeEffect(s.boolean)(true), 1);
       assert.strictEqual(yield* Schema.decodeUnknownEffect(p.nullableDateTime)(null), null);
+    }),
+  );
+});
+
+// BEH-EA-034 (moved from the repository contract, plan 16): a model property, so no database.
+describe("Models sensitive fields (BEH-EA-034)", () => {
+  it.effect("passwordHash and the token columns never appear in the Account JSON variant", () =>
+    Effect.gen(function* () {
+      const account = yield* Schema.decodeUnknownEffect(sqlite.Account)({
+        id: "a1",
+        userId: "u1",
+        providerId: "password",
+        subject: "u1",
+        issuer: "",
+        tenantId: null,
+        passwordHash: "super-secret-hash",
+        accessToken: "access-ciphertext",
+        refreshToken: "refresh-ciphertext",
+        idToken: "id-ciphertext",
+        accessTokenExpiresAt: null,
+        refreshTokenExpiresAt: null,
+        scope: null,
+        tokenType: null,
+        createdAt: iso,
+        updatedAt: iso,
+      });
+      // The stored row does hold the hash: the JSON variant is what must hide it.
+      assert.strictEqual(account.passwordHash, "super-secret-hash");
+      const json = yield* Schema.encodeUnknownEffect(sqlite.Account.json)(account);
+      for (const field of ["passwordHash", "accessToken", "refreshToken", "idToken"]) {
+        assert.notProperty(json, field);
+      }
+      assert.strictEqual(json.providerId, "password");
     }),
   );
 });

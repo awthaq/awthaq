@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-11 |
-> | Revision | 1.3 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.4 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-013 (error taxonomy and HTTP status mapping) (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): *Implementation* note on BEH-EA-088: every sign-in completion answers 503 on a session-store outage (plan 10 item 2) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-013 (error taxonomy and HTTP status mapping) (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): *Implementation* note on BEH-EA-088: every sign-in completion answers 503 on a session-store outage (plan 10 item 2) <br> 1.4 (2026-11-08): BEH-EA-083/085 *As shipped*: a host serves `AuthHost.layer(...)` through either path (ADR-EA-044, architecture plan 15) |
 
 ---
 
@@ -69,6 +69,8 @@ REQUIREMENT: `AuthHttp.routes` MUST accept the `auth.api` value produced by
 
 `archive/design/usage-examples-v4.md` §1.1 and §3.1 both show `AuthHttp.routes(AuthApi)` composed with an application's own `HttpApiBuilder.layer(AppApi)` under one `Layer.mergeAll`, then provided `AuthLive` as a single dependency — registering awthaq's routes alongside an application's own is designed to require no more ceremony than merging one more Layer into the same list.
 
+*As shipped (ADR-EA-044):* a host serves `AuthHost.layer(auth, {...})`, which registers `auth.api` (or the selected tier) with `AuthHttp.coreHandlers` and every derived layer; `AuthHttp.routes` stays the primitive `AuthHost` and the middleware suites use.
+
 ## BEH-EA-084: `AuthHttp.docs` serves generated OpenAPI/Scalar documentation from the same contract
 
 ```ts
@@ -108,6 +110,8 @@ REQUIREMENT: The same composed `Routes` Layer MUST be servable through
 `archive/design/usage-examples-v4.md` §3.1–§3.3 demonstrate both paths against the identical `Routes` value: a standalone Node server via `HttpRouter.serve`, and a Next.js route handler or Hono catch-all route via `HttpRouter.toWebHandler` — the plugin composition, the contract, and the handlers are unaffected by which of the two a deployment chooses.
 
 Both serving paths are **bounded by default** (NHS-004). Effect's server reads request bodies with no cap unless `HttpIncomingMessage.MaxBodySize` is set, so an unauthenticated caller could otherwise make the process buffer an arbitrarily large body before any handler, CSRF check or rate limit ran. `@awthaq/server`'s `BodyLimit.layer` is a global `HttpRouter` middleware, merged into the same layer list as `AuthHttp.routes(...)`, that provides `MaxBodySize` (default 256 KiB; `BodyLimit.config({ maxBytes })` overrides it per deployment) and answers `413` `PayloadTooLarge` (`{ "_tag": "PayloadTooLarge", "message": ... }`) to any request whose declared `content-length` exceeds the cap, before the handler runs. On a Node server the body reader also cuts off a chunked body with no `content-length` at the cap, by dropping the connection (no 413 can be written to a destroyed socket). On `HttpRouter.toWebHandler` the runtime does not consult `MaxBodySize`, so the `content-length` check is the bound there; a chunked body without `content-length` is left to the host's own limits.
+
+*As shipped (ADR-EA-044):* `AuthHost.layer(...)` requires `HttpRouter` rather than providing it, so it is served through either path unchanged.
 
 ## BEH-EA-086: Error responses are enumeration-safe uniformly across the HTTP surface
 

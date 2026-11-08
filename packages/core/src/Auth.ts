@@ -9,15 +9,16 @@
 // always checked (BEH-EA-012, MA-005), and the runtime cycle detection and
 // migration ordering (BEH-EA-016) — all exercised by `test/AuthPlugin.test.ts`.
 
-import { AuthCore } from "@awthaq/api";
-import type * as SecureRandom from "effect/crypto/SecureRandom";
+import { AuthCore, SessionLifecycle } from "@awthaq/api";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as Layer from "effect/Layer";
 import type * as Types from "effect/Types";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as OpenApi from "effect/http-api/OpenApi";
 import type * as SqlClient from "effect/sql/SqlClient";
-import { TenantScope, type TenantScoped } from "@awthaq/sql";
+import { type SealedColumn, TenantScope, type TenantScoped } from "@awthaq/sql";
 import * as AuthPlugin from "./AuthPlugin.ts";
 import * as HookPoint from "./HookPoint.ts";
 import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
@@ -107,6 +108,34 @@ export class TenancyDeclarationInvalid extends Data.TaggedError("Auth/TenancyDec
   readonly pluginId: string;
   readonly table: string;
   readonly cause: "Identifier" | "UnknownParent" | "GlobalParent" | "Cycle";
+  readonly message: string;
+}> {}
+
+/**
+ * Plan 17 (ADR-EA-019 decision 6): a plugin's `sealedColumns` declaration is malformed: a column on a table the
+ * plugin does not own (a typo, or another plugin's column), or the same `table.column` declared twice in the
+ * composition. Found at link time, so an operator's `sweepDeployed({ also: auth.sealedColumns })` cannot be
+ * handed a column that is not the plugin's.
+ */
+export class SealedColumnDeclarationInvalid extends Data.TaggedError(
+  "Auth/SealedColumnDeclarationInvalid",
+)<{
+  readonly pluginId: string;
+  readonly table: string;
+  readonly column: string;
+  readonly cause: "UnknownTable" | "Duplicate";
+  readonly message: string;
+}> {}
+
+/**
+ * Plan 22 (BEH-EA-038): a plugin declares one migration name twice. A migration's name and position are its
+ * identity in both ledgers and in `awthaq migration status`, so a repeat could later collide silently.
+ */
+export class MigrationDeclarationInvalid extends Data.TaggedError(
+  "Auth/MigrationDeclarationInvalid",
+)<{
+  readonly pluginId: string;
+  readonly migration: string;
   readonly message: string;
 }> {}
 
@@ -548,6 +577,12 @@ export interface Built<
    */
   readonly tenancy: ReadonlyArray<TenantScope.DeclaredTable>;
   /**
+   * Plan 17: every sealed column the plugins declare, in plugin order. Hand it to the post-rotation sweep so it
+   * cannot forget one (a TOTP secret is `orDie` once its key is dropped):
+   * `SealedColumn.sweepDeployed({ also: auth.sealedColumns })`.
+   */
+  readonly sealedColumns: ReadonlyArray<SealedColumn.Sweepable>;
+  /**
    * SAM-004 (BEH-EA-040/048): every plugin-declared user field of this composition, keyed `<plugin id>_<field>`
    * with the field's own schema. Pass it to `UserFields.layer` (so `Users` validates and gates writes) and to
    * `Users.typedFields` (typed reads and writes); `TestAuth.layer` provides the registry for you.
@@ -657,6 +692,51 @@ const declaredTenancy = (
       tenancy: declaration.tenancy,
     })),
   );
+
+/** Plan 17: every plugin's sealed columns, in plugin order. */
+const declaredSealedColumns = (
+  order: ReadonlyArray<AuthPlugin.Any>,
+): ReadonlyArray<SealedColumn.Sweepable> => order.flatMap((plugin) => plugin.sealedColumns ?? []);
+
+/** Plan 17: refuses a sealed column on a table its plugin does not own, and one declared twice. */
+const checkSealedColumns = (order: ReadonlyArray<AuthPlugin.Any>): void => {
+  const seen = new Set<string>();
+  for (const plugin of order) {
+    for (const declared of plugin.sealedColumns ?? []) {
+      const invalid = (cause: SealedColumnDeclarationInvalid["cause"], detail: string) =>
+        new SealedColumnDeclarationInvalid({
+          pluginId: plugin.id,
+          table: declared.table,
+          column: declared.column,
+          cause,
+          message: `awthaq: plugin "${plugin.id}" sealed column "${declared.table}.${declared.column}": ${detail}`,
+        });
+      if (!plugin.tables.includes(declared.table)) {
+        throw invalid("UnknownTable", `"${declared.table}" is not one of the plugin's own tables`);
+      }
+      const name = `${declared.table}.${declared.column}`;
+      if (seen.has(name)) throw invalid("Duplicate", "it is declared more than once");
+      seen.add(name);
+    }
+  }
+};
+
+/** Plan 22 (BEH-EA-038): refuses a plugin that declares one migration name twice. */
+const checkMigrationNames = (order: ReadonlyArray<AuthPlugin.Any>): void => {
+  for (const plugin of order) {
+    const seen = new Set<string>();
+    for (const migration of plugin.migrations) {
+      if (seen.has(migration.name)) {
+        throw new MigrationDeclarationInvalid({
+          pluginId: plugin.id,
+          migration: migration.name,
+          message: `awthaq: plugin "${plugin.id}" declares migration "${migration.name}" twice`,
+        });
+      }
+      seen.add(migration.name);
+    }
+  }
+};
 
 /** BEH-EA-328: refuses a malformed tenancy declaration. */
 const checkTenancy = (order: ReadonlyArray<AuthPlugin.Any>): void => {
@@ -894,6 +974,17 @@ const contributionsOf = (
 ];
 
 /**
+ * ADR-EA-045: validates the composed contract's session-lifecycle declarations (`inventory` throws, at
+ * composition time, on an endpoint declaring two kinds, like a duplicate route) and documents them in the
+ * OpenAPI document (`x-awthaq-session`, `no-store`, `set-auth-token`, `x-awthaq-session-ended`). An
+ * application that sets its own api-level `OpenApi.Transform` replaces this one; compose the two by calling
+ * `SessionLifecycle.openApi(SessionLifecycle.inventory(api))` inside its own.
+ */
+const lifecycleDocumented = <Groups extends HttpApiGroup.Constraint>(
+  api: HttpApi.HttpApi<"auth", Groups>,
+) => api.annotate(OpenApi.Transform, SessionLifecycle.openApi(SessionLifecycle.inventory(api)));
+
+/**
  * Every contributed group, added in one call —
  * `HttpApiGroup.Constraint` values, read straight off each `HttpApi`, prove
  * `.add`'s non-empty-tuple parameter through the `firstGroup === undefined`
@@ -954,7 +1045,7 @@ const composeApi = (
   if (firstGroup === undefined) {
     throw new EmptyPluginTuple({ message: "awthaq: Auth.make requires at least one plugin" });
   }
-  return HttpApi.make("auth").add(firstGroup, ...restGroups);
+  return lifecycleDocumented(HttpApi.make("auth").add(firstGroup, ...restGroups));
 };
 
 /**
@@ -975,7 +1066,7 @@ const composeTier = (
   const [firstGroup, ...restGroups] = groups;
   return firstGroup === undefined
     ? HttpApi.make("auth")
-    : HttpApi.make("auth").add(firstGroup, ...restGroups);
+    : lifecycleDocumented(HttpApi.make("auth").add(firstGroup, ...restGroups));
 };
 
 /**
@@ -1063,6 +1154,8 @@ export function make(
   const order = linkPlugins(plugins);
   checkTableDependencies(order);
   checkTenancy(order);
+  checkSealedColumns(order);
+  checkMigrationNames(order);
   const extraGroups = options?.extraGroups ?? [];
   return {
     plugins,
@@ -1073,6 +1166,7 @@ export function make(
     migrations: renumberMigrations(order),
     manifest: buildManifest(order),
     tenancy: declaredTenancy(order),
+    sealedColumns: declaredSealedColumns(order),
     userFields: composeUserFields(order),
     userFieldsLayer: UserFields.layer(composeUserFields(order)),
   };

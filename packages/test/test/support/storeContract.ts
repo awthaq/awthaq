@@ -8,21 +8,15 @@ import {
   AuditLogStore,
   Encryption,
   KeyProvider,
+  RelayCursorStore,
   SessionStore,
   SqlTransaction,
   UserStore,
   VerificationStore,
 } from "@awthaq/ports";
-import {
-  AccountStoreSql,
-  AuditLogStoreSql,
-  CoreMigrations,
-  Repositories,
-  SessionStoreSql,
-  UserStoreSql,
-  VerificationStoreSql,
-} from "@awthaq/sql";
+import { CoreMigrations, CoreStoresSql } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as LibsqlClient from "@effect/sql-libsql/LibsqlClient";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -82,24 +76,8 @@ const sqlStores = <E>(client: Layer.Layer<SqlClient.SqlClient, E>) => {
       yield* addUserFieldColumns;
     }),
   ).pipe(Layer.provide(client));
-  return Layer.mergeAll(
-    AccountStoreSql.layer,
-    AuditLogStoreSql.layer,
-    SessionStoreSql.layer,
-    UserStoreSql.layer,
-    VerificationStoreSql.layer,
-    SqlTransaction.layerSql,
-  ).pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Repositories.AccountsRepositoryLive.pipe(Layer.provide(EncryptionLive)),
-        Repositories.AuditLogRepositoryLive,
-        Repositories.SessionsRepositoryLive,
-        Repositories.UsersRepositoryLive,
-        Repositories.VerificationRepositoryLive,
-        Repositories.VerificationReservationsRepositoryLive,
-      ),
-    ),
+  return CoreStoresSql.layer().pipe(
+    Layer.provide(EncryptionLive),
     Layer.provideMerge(client),
     Layer.provideMerge(migrated),
   );
@@ -113,6 +91,20 @@ export const walFileClient = Layer.unwrap(
       (dir) => Effect.sync(() => rmSync(dir, { recursive: true, force: true })),
     ),
     (dir) => SqliteClient.layer({ filename: join(dir, "auth.db") }),
+  ),
+);
+
+/**
+ * A fresh libSQL database file per layer build (a `file:` URL, so no server), removed when the layer's
+ * scope closes: a driver that is not `node:sqlite`, proving the sqlite-dialect branches (ERAS-006).
+ */
+export const libsqlFileClient = Layer.unwrap(
+  Effect.map(
+    Effect.acquireRelease(
+      Effect.sync(() => mkdtempSync(join(tmpdir(), "awthaq-store-contract-libsql-"))),
+      (dir) => Effect.sync(() => rmSync(dir, { recursive: true, force: true })),
+    ),
+    (dir) => LibsqlClient.layer({ url: `file:${join(dir, "auth.db")}` }),
   ),
 );
 
@@ -143,6 +135,11 @@ export const runOnMemory = (): void => {
     layer: Layer.mergeAll(UserStore.layerMemory, SqlTransaction.layerNoop),
     cases: StoreContract.users,
   });
+  StoreContract.run(framework, {
+    adapter: "RelayCursorStore (Ref)",
+    layer: RelayCursorStore.layerMemory,
+    cases: StoreContract.relayCursor,
+  });
 };
 
 /** Runs the contract of every port on the SQL adapters over `client`. */
@@ -171,5 +168,10 @@ export const runOnSql = <E>(label: string, client: Layer.Layer<SqlClient.SqlClie
     adapter: `UserStore (${label})`,
     layer: sqlStores(client),
     cases: StoreContract.users,
+  });
+  StoreContract.run(framework, {
+    adapter: `RelayCursorStore (${label})`,
+    layer: sqlStores(client),
+    cases: StoreContract.relayCursor,
   });
 };

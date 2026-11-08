@@ -27,7 +27,7 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import { TestAuth } from "@awthaq/test";
+import { Rendezvous, TestAuth } from "@awthaq/test";
 
 // ---- fake HttpClient: routes by URL substring ----
 
@@ -130,6 +130,8 @@ export interface BuildOptions {
   readonly baseUrl?: string;
   /** MNA-004: private-use-scheme deep links a native-mode flow may return to. */
   readonly nativeRedirectURLs?: ReadonlyArray<string>;
+  /** ADR-EA-043: the first `n` account lookups finish together, so `n` concurrent callbacks all read before any writes. */
+  readonly concurrentLookups?: number;
 }
 
 const buildLayer = (options: BuildOptions) =>
@@ -147,6 +149,9 @@ const buildLayer = (options: BuildOptions) =>
       }),
     ),
     rateLimiter: "permissive",
+    ...(options.concurrentLookups === undefined
+      ? {}
+      : { decorate: Rendezvous.anchorReadsMeet(options.concurrentLookups) }),
   });
 
 export interface WorldShape {

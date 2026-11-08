@@ -5,7 +5,7 @@ import { Auth } from "@awthaq/core";
 import { OAuth } from "@awthaq/oauth";
 import { PasswordApi, Password } from "@awthaq/password";
 import { TwoFactor } from "@awthaq/two-factor";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, UserAgent } from "@awthaq/test";
 import { defineSteps } from "@effect-cucumber/vitest";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -23,7 +23,7 @@ import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as OpenApi from "effect/http-api/OpenApi";
 import * as NetAddress from "effect/net/NetAddress";
-import { CSRF_TEST_COOKIE_VALUE, withCsrfCookie } from "./shared/Csrf.ts";
+import { agentOver } from "./shared/Csrf.ts";
 import {
   DOCS_PATH,
   InvitePlugin,
@@ -143,16 +143,32 @@ const PROBES: ReadonlyArray<{
   },
 ];
 
-const requestFor = (baseUrl: string, probe: (typeof PROBES)[number]) =>
-  new Request(`${baseUrl}${probe.path}`, {
-    method: probe.method,
-    headers: {
-      ...(probe.body === undefined ? {} : { "content-type": "application/json" }),
-      ...(probe.csrf ? { cookie: withCsrfCookie(), "x-csrf-token": CSRF_TEST_COOKIE_VALUE } : {}),
-      ...(probe.staleCookie === true ? { cookie: "__Host-session=stale.secret" } : {}),
-    },
+const never = () => Promise.reject(new Error("a probe request is recorded, never dispatched"));
+
+/**
+ * The request a browser page sends for `probe`: recorded from an agent that never dispatches (`hold`), so
+ * the same headers can travel over a socket, a handler or a web handler. A CSRF probe's agent holds a
+ * `__Host-csrf` (sent and echoed); a stale-cookie probe's carries only a dead session cookie.
+ */
+const requestFor = (baseUrl: string, probe: (typeof PROBES)[number]) => {
+  const options = { origin: baseUrl, hold: () => true };
+  const agent = probe.csrf
+    ? agentOver(never, options)
+    : UserAgent.make({ ...options, handler: never });
+  void agent.request(probe.method, probe.path, {
+    ...(probe.body === undefined ? {} : { json: probe.body }),
+    ...(probe.staleCookie === true
+      ? { extraCookies: { [Api.SESSION_COOKIE_NAME]: "stale.secret" } }
+      : {}),
+  });
+  const [sent] = agent.sent;
+  if (sent === undefined) throw new Error("the probe agent recorded no request");
+  return new Request(sent.url, {
+    method: sent.method,
+    headers: sent.headers,
     ...(probe.body === undefined ? {} : { body: JSON.stringify(probe.body) }),
   });
+};
 
 /**
  * Runs `use` against the password composition served by `HttpRouter.serve` on a real Node socket.
@@ -768,7 +784,7 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
         }).pipe(Effect.orDie),
       );
       yield* register("apikey", app);
-      yield* setOutcome("ownerCookie", owner.cookieHeader);
+      yield* setOutcome("ownerSetCookie", owner.setCookie);
       yield* setOutcome("foreignKeyId", foreignKey.view.id);
     },
   );
@@ -777,16 +793,13 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
     "the endpoint is requested once for a target that does not exist and once for a target that exists but is otherwise invalid",
     function* () {
       const handler = yield* handlerOf("apikey");
-      const cookie = String(yield* getOutcome("ownerCookie"));
+      // The owner's browser: it holds the minted session and a CSRF cookie, and echoes the token.
+      const owner = agentOver(handler);
+      owner.cookies.receive(String(yield* getOutcome("ownerSetCookie")));
       const revoke = (id: string) =>
-        Effect.promise(() =>
-          handler(
-            new Request(`http://localhost/api-key/${id}`, {
-              method: "DELETE",
-              headers: { cookie: withCsrfCookie(cookie), "x-csrf-token": CSRF_TEST_COOKIE_VALUE },
-            }),
-          ),
-        ).pipe(Effect.flatMap(answerOf));
+        Effect.promise(() => owner.request("DELETE", `/api-key/${id}`)).pipe(
+          Effect.flatMap(answerOf),
+        );
       yield* setOutcome("missing", yield* revoke("ak_does-not-exist"));
       yield* setOutcome("foreign", yield* revoke(String(yield* getOutcome("foreignKeyId"))));
     },
@@ -822,18 +835,16 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
     const signedIn = yield* Effect.promise(() =>
       runtime.runPromise(TestAuth.signInAs({ email: "imperative@example.com" })),
     );
-    yield* setOutcome(
-      "view",
-      yield* Effect.promise(() => imperativeMe(runtime, signedIn.cookieHeader)),
-    );
+    // A browser holding the minted session: its request to the routed composition, and the very
+    // `Cookie` header it sent handed to the imperative route as a Hono handler would receive it.
+    const browser = UserAgent.make({ handler: routed });
+    browser.cookies.receive(signedIn.setCookie);
     yield* setOutcome(
       "routedView",
-      yield* Effect.promise(() =>
-        routed(
-          new Request("http://localhost/session", { headers: { cookie: signedIn.cookieHeader } }),
-        ),
-      ),
+      yield* Effect.promise(() => browser.request("GET", "/session")),
     );
+    const cookie = browser.sent[0]?.headers.get("cookie") ?? "";
+    yield* setOutcome("view", yield* Effect.promise(() => imperativeMe(runtime, cookie)));
     yield* setOutcome("userId", signedIn.userId);
   });
 
@@ -868,7 +879,7 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
     "no domain logic is duplicated between this path and the HttpRouter-based serving paths",
     function* () {
       // Same store, same answer: the routed path rejects exactly what the imperative one did, and
-      // the imperative program is `Authentication.resolvePrincipal` — the middleware's own function.
+      // the imperative program is `Credentials` (via `resolveCredential`) — the middleware's own module.
       const routed = yield* getOutcome("routedView");
       assert.ok(routed instanceof Response);
       assert.equal(routed.status, 401);

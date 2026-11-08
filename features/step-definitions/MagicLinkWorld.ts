@@ -40,7 +40,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
-import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_TEST_COOKIE_VALUE } from "./shared/Csrf.ts";
+import { agentOver } from "./shared/Csrf.ts";
 import { mailedToken } from "./MailedToken.ts";
 import { makeCapturingMailer, makeNamedRegistry } from "./shared/Harness.ts";
 import { makeOutcomes } from "./shared/Outcomes.ts";
@@ -275,25 +275,19 @@ export const secretOf = (mail: Mailer.MailMessage, field: string): string => {
   throw new Error(`expected a redacted "${field}" in the "${mail.template}" mail`);
 };
 
-/** An unsafe JSON `POST` playing the double-submit role a real client would; `query` is appended to the path verbatim. */
+/** An unsafe JSON `POST` from a browser, which echoes CSRF as a real client would; `query` is appended to the path verbatim. */
 export const request = Effect.fn("features.magicLink.request")(function* (
   method: string,
   path: string,
   body?: unknown,
 ) {
   const { handler } = yield* appOf();
+  // A fresh browser per request: its own cookies (a CSRF cookie already held), the CSRF echo.
   const response = yield* Effect.promise(() =>
-    handler(
-      new Request(`http://localhost${path}`, {
-        method,
-        headers: {
-          "content-type": "application/json",
-          cookie: `${CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`,
-          [CSRF_HEADER_NAME]: CSRF_TEST_COOKIE_VALUE,
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      }),
-    ),
+    agentOver(handler).request(method, path, {
+      headers: { "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
   );
   return yield* snapshot(response);
 });

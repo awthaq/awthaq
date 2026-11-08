@@ -14,7 +14,7 @@ import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
 import * as AuthHttp from "../src/AuthHttp.ts";
-import * as Authentication from "../src/Authentication.ts";
+import * as Credentials from "../src/Credentials.ts";
 import * as Csrf from "../src/Csrf.ts";
 
 class PluginOwned extends HttpApiMiddleware.Service<PluginOwned>()("test/PluginOwned") {}
@@ -120,7 +120,7 @@ describe("AuthHttp.middlewareFor (BEH-EA-T1)", () => {
         const context = yield* Layer.build(
           AuthHttp.middlewareFor(HttpApi.make("auth").add(authn), {
             csrf,
-            principalResolver: Authentication.PrincipalResolverWithUserFactsLive,
+            principalResolver: Credentials.PrincipalResolverWithUserFactsLive,
           }).pipe(Layer.provide(Foundation)),
         );
         assert.isTrue(present(context).authentication);

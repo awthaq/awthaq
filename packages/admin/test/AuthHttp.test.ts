@@ -6,25 +6,13 @@
 // `HttpRouter.toWebHandler` — real HTTP requests/responses, real status
 // codes, a real session cookie — mirroring `@awthaq/passkey`'s own
 // `AuthHttp.test.ts`.
-import { Api } from "@awthaq/api";
 import { Auth, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { TestAuth } from "@awthaq/test";
+import { CookieAssertions, TestAuth, type UserAgent } from "@awthaq/test";
 import * as Admin from "../src/Admin.ts";
 import * as AdminApi from "../src/AdminApi.ts";
-
-// CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `admin` carries `.middleware(Api.CsrfProtection)`, so this file's
-// real HTTP requests play the double-submit role a browser client would: a pair minted against the harness's own
-// `CsrfConfig` (`TestAuth.csrfToken`; the handler under test runs on the real clock, so it is stamped now).
-const CSRF_TEST_COOKIE_VALUE: string = TestAuth.csrfToken(TestAuth.TestCsrfConfig.secret);
-
-const withCsrfCookie = (cookie?: string): string =>
-  cookie
-    ? `${cookie}; ${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`
-    : `${Api.CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`;
 
 const buildAppLayer = (config: Partial<Admin.AdminConfigShape>) =>
   TestAuth.layer(Auth.make([Admin.Admin]), {
@@ -50,17 +38,27 @@ const buildHandler = (
   const { handler } = app;
 
   /**
-   * Issues a real session directly against the same running `Sessions` instance the handler itself uses,
-   * formatted as the `__Host-session` cookie header a browser would carry.
+   * Issues a real session directly against the same running `Sessions` instance the handler itself uses, and
+   * renders the `Set-Cookie` the server would have answered for it (under the composition's cookie config).
    */
-  const issueSessionCookieHeader = (userId: string): Promise<string> =>
+  const issueSession = (userId: string): Promise<string> =>
     app.run(
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
-        return `__Host-session=${encodeURIComponent(Redacted.value(issued.token))}`;
+        return yield* TestAuth.sessionSetCookie(issued);
       }),
     );
+
+  /** A fresh browser (its own cookie store, a seeded CSRF cookie) holding the session `setCookie` renders. */
+  const browserWith = async (setCookie: string) => {
+    const browser = await app.agent();
+    assert.strictEqual(browser.cookies.receive(setCookie)._tag, "Stored");
+    return browser;
+  };
+
+  /** A browser signed in as `userId` (which need not be a `Users` row: the admin gate is the predicate). */
+  const signInAs = async (userId: string) => browserWith(await issueSession(userId));
 
   /**
    * IDS-003: `impersonate` now refuses a nonexistent target, so a target must be
@@ -78,99 +76,41 @@ const buildHandler = (
       }),
     );
 
-  return { handler, issueSessionCookieHeader, seedUser };
+  return { handler, issueSession, browserWith, signInAs, seedUser };
 };
 
-const post = (
-  handler: (request: Request) => Promise<Response>,
-  path: string,
-  body: unknown,
-  headers?: Record<string, string>,
-): Promise<Response> =>
-  handler(
-    new Request(`${ORIGIN}${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...headers,
-        cookie: withCsrfCookie(headers?.["cookie"]),
-        "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
-      },
-      body: JSON.stringify(body),
-    }),
-  );
+type Browser = UserAgent.UserAgent;
 
-const cookieFrom = (response: Response): string => {
-  const raw = response.headers.get("set-cookie");
-  if (raw === null) throw new Error("expected a set-cookie header");
-  return raw.split(";")[0] ?? raw;
-};
-
-/**
- * APS-006: a real browser's cookie jar — one value per cookie name, every
- * `Set-Cookie` applied (an expired one deletes) — so the flow is tested with
- * browser semantics rather than by keeping the admin's raw cookie string aside.
- */
-const makeJar = () => {
-  const cookies = new Map<string, string>();
-  return {
-    /** Adds a raw `name=value` pair (a `Cookie`-header style entry). */
-    set: (pair: string) => {
-      const eq = pair.indexOf("=");
-      cookies.set(pair.slice(0, eq), pair.slice(eq + 1));
-    },
-    has: (name: string) => cookies.has(name),
-    apply: (response: Response) => {
-      for (const line of response.headers.getSetCookie()) {
-        const [pair = "", ...attributes] = line.split(";");
-        const eq = pair.indexOf("=");
-        const name = pair.slice(0, eq).trim();
-        const value = pair.slice(eq + 1).trim();
-        const expired =
-          value === "" || attributes.some((attribute) => /^\s*max-age=0\s*$/i.test(attribute));
-        if (expired) cookies.delete(name);
-        else cookies.set(name, value);
-      }
-    },
-    header: () => [...cookies].map(([name, value]) => `${name}=${value}`).join("; "),
-  };
-};
+/** A JSON POST from `browser`, which sends its own cookies and echoes its CSRF cookie. */
+const post = (browser: Browser, path: string, body: unknown): Promise<Response> =>
+  browser.request("POST", path, { json: body });
 
 describe("AuthHttp + Admin (real HTTP)", () => {
   it.effect(
     "BEH-EA-213: a full impersonate call answers 200 with a session cookie for the target",
     () =>
       Effect.gen(function* () {
-        const { handler, issueSessionCookieHeader, seedUser } = buildHandler(allow);
-        const cookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+        const { signInAs, seedUser } = buildHandler(allow);
+        const admin = yield* Effect.promise(() => signInAs("admin-1"));
         const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
         const response = yield* Effect.promise(() =>
-          post(
-            handler,
-            `/admin/impersonate/${targetId}`,
-            { reason: "reproducing a bug" },
-            { cookie },
-          ),
+          post(admin, `/admin/impersonate/${targetId}`, { reason: "reproducing a bug" }),
         );
         assert.strictEqual(response.status, 200);
-        assert.match(cookieFrom(response), /^__Host-impersonation=/);
+        CookieAssertions.findSetCookie(response, "__Host-impersonation");
+        assert.isDefined(admin.cookies.get("__Host-impersonation"));
       }),
   );
 
   it.effect("BEH-EA-212/218: a denied gate answers 403", () =>
     Effect.gen(function* () {
-      const { handler, issueSessionCookieHeader, seedUser } = buildHandler(deny);
-      const cookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+      const { signInAs, seedUser } = buildHandler(deny);
+      const admin = yield* Effect.promise(() => signInAs("admin-1"));
       const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
       const response = yield* Effect.promise(() =>
-        post(
-          handler,
-          `/admin/impersonate/${targetId}`,
-          { reason: "reproducing a bug" },
-          { cookie },
-        ),
+        post(admin, `/admin/impersonate/${targetId}`, { reason: "reproducing a bug" }),
       );
       assert.strictEqual(response.status, 403);
     }),
@@ -178,12 +118,12 @@ describe("AuthHttp + Admin (real HTTP)", () => {
 
   it.effect("BEH-EA-213: an empty reason answers 400", () =>
     Effect.gen(function* () {
-      const { handler, issueSessionCookieHeader, seedUser } = buildHandler(allow);
-      const cookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+      const { signInAs, seedUser } = buildHandler(allow);
+      const admin = yield* Effect.promise(() => signInAs("admin-1"));
       const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
       const response = yield* Effect.promise(() =>
-        post(handler, `/admin/impersonate/${targetId}`, { reason: "   " }, { cookie }),
+        post(admin, `/admin/impersonate/${targetId}`, { reason: "   " }),
       );
       assert.strictEqual(response.status, 400);
     }),
@@ -191,11 +131,11 @@ describe("AuthHttp + Admin (real HTTP)", () => {
 
   it.effect("BEH-EA-214: self-impersonation answers 400", () =>
     Effect.gen(function* () {
-      const { handler, issueSessionCookieHeader } = buildHandler(allow);
-      const cookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+      const { signInAs } = buildHandler(allow);
+      const admin = yield* Effect.promise(() => signInAs("admin-1"));
 
       const response = yield* Effect.promise(() =>
-        post(handler, "/admin/impersonate/admin-1", { reason: "test" }, { cookie }),
+        post(admin, "/admin/impersonate/admin-1", { reason: "test" }),
       );
       assert.strictEqual(response.status, 400);
     }),
@@ -203,22 +143,18 @@ describe("AuthHttp + Admin (real HTTP)", () => {
 
   it.effect("BEH-EA-214: nested impersonation answers 409", () =>
     Effect.gen(function* () {
-      const { handler, issueSessionCookieHeader, seedUser } = buildHandler(allow);
-      const cookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+      const { signInAs, seedUser } = buildHandler(allow);
+      const admin = yield* Effect.promise(() => signInAs("admin-1"));
       const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
       const first = yield* Effect.promise(() =>
-        post(handler, `/admin/impersonate/${targetId}`, { reason: "first" }, { cookie }),
+        post(admin, `/admin/impersonate/${targetId}`, { reason: "first" }),
       );
-      const impersonatingCookie = cookieFrom(first);
+      assert.strictEqual(first.status, 200);
+      // The browser now presents the impersonation cookie, which shadows the admin's own session.
 
       const nested = yield* Effect.promise(() =>
-        post(
-          handler,
-          "/admin/impersonate/target-2",
-          { reason: "nested" },
-          { cookie: impersonatingCookie },
-        ),
+        post(admin, "/admin/impersonate/target-2", { reason: "nested" }),
       );
       assert.strictEqual(nested.status, 409);
     }),
@@ -228,47 +164,42 @@ describe("AuthHttp + Admin (real HTTP)", () => {
     "BEH-EA-216/217: stopImpersonating and forceStop both answer 204; forceStop answers 404 once ended",
     () =>
       Effect.gen(function* () {
-        const { handler, issueSessionCookieHeader, seedUser } = buildHandler(allow);
-        const adminCookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+        const { issueSession, browserWith, seedUser } = buildHandler(allow);
+        // One admin session in two browsers: `operator` impersonates (and so presents the impersonation
+        // cookie afterwards), `admin` stays the admin's own console.
+        const adminSession = yield* Effect.promise(() => issueSession("admin-1"));
+        const admin = yield* Effect.promise(() => browserWith(adminSession));
+        const operator = yield* Effect.promise(() => browserWith(adminSession));
         const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
         const started = yield* Effect.promise(() =>
-          post(
-            handler,
-            `/admin/impersonate/${targetId}`,
-            { reason: "test" },
-            { cookie: adminCookie },
-          ),
+          post(operator, `/admin/impersonate/${targetId}`, { reason: "test" }),
         );
-        const impersonatingCookie = cookieFrom(started);
+        assert.strictEqual(started.status, 200);
 
         const stopped = yield* Effect.promise(() =>
-          post(handler, "/admin/stop-impersonating", {}, { cookie: impersonatingCookie }),
+          post(operator, "/admin/stop-impersonating", {}),
         );
         assert.strictEqual(stopped.status, 204);
 
         const startedAgain = yield* Effect.promise(() =>
-          post(
-            handler,
-            `/admin/impersonate/${targetId}`,
-            { reason: "test2" },
-            { cookie: adminCookie },
-          ),
+          post(operator, `/admin/impersonate/${targetId}`, { reason: "test2" }),
         );
-        const sessionId = cookieFrom(startedAgain).split("=")[1]?.split(".")[0];
+        assert.strictEqual(startedAgain.status, 200);
+        const sessionId = operator.cookies.get("__Host-impersonation")?.value.split(".")[0];
 
         const forced = yield* Effect.promise(() =>
-          post(handler, `/admin/force-stop/${sessionId}`, {}, { cookie: adminCookie }),
+          post(admin, `/admin/force-stop/${sessionId}`, {}),
         );
         assert.strictEqual(forced.status, 204);
 
         const forcedAgain = yield* Effect.promise(() =>
-          post(handler, `/admin/force-stop/${sessionId}`, {}, { cookie: adminCookie }),
+          post(admin, `/admin/force-stop/${sessionId}`, {}),
         );
         assert.strictEqual(forcedAgain.status, 404);
 
         const unknown = yield* Effect.promise(() =>
-          post(handler, "/admin/force-stop/does-not-exist", {}, { cookie: adminCookie }),
+          post(admin, "/admin/force-stop/does-not-exist", {}),
         );
         assert.strictEqual(unknown.status, 404);
       }),
@@ -278,34 +209,22 @@ describe("AuthHttp + Admin (real HTTP)", () => {
     "BEH-EA-219: list answers the audit rows over real HTTP, unfiltered and with ?active=true",
     () =>
       Effect.gen(function* () {
-        const { handler, issueSessionCookieHeader, seedUser } = buildHandler(allow);
-        const adminCookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+        const { issueSession, browserWith, seedUser } = buildHandler(allow);
+        const adminSession = yield* Effect.promise(() => issueSession("admin-1"));
+        const admin = yield* Effect.promise(() => browserWith(adminSession));
+        const operator = yield* Effect.promise(() => browserWith(adminSession));
         const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
         const started = yield* Effect.promise(() =>
-          post(
-            handler,
-            `/admin/impersonate/${targetId}`,
-            { reason: "test" },
-            { cookie: adminCookie },
-          ),
+          post(operator, `/admin/impersonate/${targetId}`, { reason: "test" }),
         );
-        const impersonatingCookie = cookieFrom(started);
+        assert.strictEqual(started.status, 200);
+        yield* Effect.promise(() => post(operator, "/admin/stop-impersonating", {}));
         yield* Effect.promise(() =>
-          post(handler, "/admin/stop-impersonating", {}, { cookie: impersonatingCookie }),
-        );
-        yield* Effect.promise(() =>
-          post(
-            handler,
-            `/admin/impersonate/${targetId}`,
-            { reason: "test2" },
-            { cookie: adminCookie },
-          ),
+          post(operator, `/admin/impersonate/${targetId}`, { reason: "test2" }),
         );
 
-        const all = yield* Effect.promise(() =>
-          handler(new Request(`${ORIGIN}/admin`, { headers: { cookie: adminCookie } })),
-        );
+        const all = yield* Effect.promise(() => admin.request("GET", `/admin`));
         assert.strictEqual(all.status, 200);
         const allPage = Schema.decodeUnknownSync(AdminApi.ImpersonationPageDto)(
           yield* Effect.promise(() => all.json()),
@@ -313,9 +232,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         assert.strictEqual(allPage.items.length, 2);
         assert.isNull(allPage.nextCursor);
 
-        const active = yield* Effect.promise(() =>
-          handler(new Request(`${ORIGIN}/admin?active=true`, { headers: { cookie: adminCookie } })),
-        );
+        const active = yield* Effect.promise(() => admin.request("GET", `/admin?active=true`));
         assert.strictEqual(active.status, 200);
         const activePage = Schema.decodeUnknownSync(AdminApi.ImpersonationPageDto)(
           yield* Effect.promise(() => active.json()),
@@ -323,10 +240,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         assert.strictEqual(activePage.items.length, 1);
 
         // ESS-006: keyset paging on the wire — newest first, opaque cursor, bounded limit.
-        const get = (query: string) =>
-          Effect.promise(() =>
-            handler(new Request(`${ORIGIN}/admin${query}`, { headers: { cookie: adminCookie } })),
-          );
+        const get = (query: string) => Effect.promise(() => admin.request("GET", `/admin${query}`));
         const first = yield* get("?limit=1");
         assert.strictEqual(first.status, 200);
         const firstPage = Schema.decodeUnknownSync(AdminApi.ImpersonationPageDto)(
@@ -363,7 +277,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         // `canManageEpisode` is the one place a request's resolved caller is observable
         // over this API — `list` evaluates it once per row as the authenticated caller.
         const callers: Array<string> = [];
-        const { handler, issueSessionCookieHeader, seedUser } = buildHandler({
+        const { signInAs, seedUser } = buildHandler({
           canImpersonate: allow,
           canManageEpisode: ({ admin }) => {
             callers.push(admin.id);
@@ -371,39 +285,26 @@ describe("AuthHttp + Admin (real HTTP)", () => {
           },
         });
         const targetId = yield* Effect.promise(() => seedUser("target-1"));
-        const jar = makeJar();
-        jar.set(yield* Effect.promise(() => issueSessionCookieHeader("admin-1")));
+        const admin = yield* Effect.promise(() => signInAs("admin-1"));
 
         const started = yield* Effect.promise(() =>
-          post(
-            handler,
-            `/admin/impersonate/${targetId}`,
-            { reason: "test" },
-            { cookie: jar.header() },
-          ),
+          post(admin, `/admin/impersonate/${targetId}`, { reason: "test" }),
         );
         assert.strictEqual(started.status, 200);
-        jar.apply(started);
         // The impersonation token is a separate cookie; the admin's own is untouched.
-        assert.match(started.headers.get("set-cookie") ?? "", /^__Host-impersonation=/);
-        assert.isTrue(jar.has("__Host-session"));
+        CookieAssertions.findSetCookie(started, "__Host-impersonation");
+        assert.isDefined(admin.cookies.get("__Host-impersonation"));
+        assert.isDefined(admin.cookies.get("__Host-session"));
 
-        const asTarget = yield* Effect.promise(() =>
-          handler(new Request(`${ORIGIN}/admin`, { headers: { cookie: jar.header() } })),
-        );
+        const asTarget = yield* Effect.promise(() => admin.request("GET", "/admin"));
         assert.strictEqual(asTarget.status, 200);
         assert.strictEqual(callers.at(-1), targetId);
 
-        const stopped = yield* Effect.promise(() =>
-          post(handler, "/admin/stop-impersonating", {}, { cookie: jar.header() }),
-        );
+        const stopped = yield* Effect.promise(() => post(admin, "/admin/stop-impersonating", {}));
         assert.strictEqual(stopped.status, 204);
-        jar.apply(stopped);
-        assert.isFalse(jar.has("__Host-impersonation"));
+        assert.isUndefined(admin.cookies.get("__Host-impersonation"));
 
-        const asAdmin = yield* Effect.promise(() =>
-          handler(new Request(`${ORIGIN}/admin`, { headers: { cookie: jar.header() } })),
-        );
+        const asAdmin = yield* Effect.promise(() => admin.request("GET", "/admin"));
         assert.strictEqual(asAdmin.status, 200);
         assert.strictEqual(callers.at(-1), "admin-1");
       }),
@@ -414,21 +315,13 @@ describe("AuthHttp + Admin (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const denied = buildHandler({});
-        const deniedCookie = yield* Effect.promise(() =>
-          denied.issueSessionCookieHeader("admin-1"),
-        );
-        const forbidden = yield* Effect.promise(() =>
-          denied.handler(
-            new Request(`${ORIGIN}/admin/config`, { headers: { cookie: deniedCookie } }),
-          ),
-        );
+        const deniedAdmin = yield* Effect.promise(() => denied.signInAs("admin-1"));
+        const forbidden = yield* Effect.promise(() => deniedAdmin.request("GET", `/admin/config`));
         assert.strictEqual(forbidden.status, 403);
 
         const allowed = buildHandler({ canManageUsers: () => Effect.succeed(true) });
-        const cookie = yield* Effect.promise(() => allowed.issueSessionCookieHeader("admin-1"));
-        const response = yield* Effect.promise(() =>
-          allowed.handler(new Request(`${ORIGIN}/admin/config`, { headers: { cookie } })),
-        );
+        const admin = yield* Effect.promise(() => allowed.signInAs("admin-1"));
+        const response = yield* Effect.promise(() => admin.request("GET", `/admin/config`));
         assert.strictEqual(response.status, 200);
         const body = Schema.decodeUnknownSync(Schema.Array(AdminApi.ConfigItemDto))(
           yield* Effect.promise(() => response.json()),
@@ -448,35 +341,19 @@ describe("AuthHttp + Admin (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const denied = buildHandler({});
-        const deniedCookie = yield* Effect.promise(() =>
-          denied.issueSessionCookieHeader("admin-1"),
-        );
-        const forbidden = yield* Effect.promise(() =>
-          denied.handler(
-            new Request(`${ORIGIN}/admin/users`, { headers: { cookie: deniedCookie } }),
-          ),
-        );
+        const deniedAdmin = yield* Effect.promise(() => denied.signInAs("admin-1"));
+        const forbidden = yield* Effect.promise(() => deniedAdmin.request("GET", `/admin/users`));
         assert.strictEqual(forbidden.status, 403);
 
-        const { handler, issueSessionCookieHeader, seedUser } = buildHandler({
+        const { signInAs, seedUser } = buildHandler({
           canManageUsers: () => Effect.succeed(true),
         });
-        const adminCookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+        const admin = yield* Effect.promise(() => signInAs("admin-1"));
         const targetId = yield* Effect.promise(() => seedUser("target-1"));
         yield* Effect.promise(() => seedUser("target-2"));
         const send = (method: string, path: string, body?: unknown) =>
           Effect.promise(() =>
-            handler(
-              new Request(`${ORIGIN}${path}`, {
-                method,
-                headers: {
-                  cookie: withCsrfCookie(adminCookie),
-                  "x-csrf-token": CSRF_TEST_COOKIE_VALUE,
-                  ...(body === undefined ? {} : { "content-type": "application/json" }),
-                },
-                ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-              }),
-            ),
+            admin.request(method, path, body === undefined ? {} : { json: body }),
           );
 
         // Keyset paging on the wire.
@@ -536,47 +413,35 @@ describe("AuthHttp + Admin (real HTTP)", () => {
       Effect.gen(function* () {
         // `canManageUsers` alone does not grant banning.
         const manageOnly = buildHandler({ canManageUsers: allow });
-        const manageOnlyCookie = yield* Effect.promise(() =>
-          manageOnly.issueSessionCookieHeader("admin-1"),
-        );
+        const manageOnlyAdmin = yield* Effect.promise(() => manageOnly.signInAs("admin-1"));
         const someone = yield* Effect.promise(() => manageOnly.seedUser("someone"));
         const refused = yield* Effect.promise(() =>
-          post(manageOnly.handler, `/admin/users/${someone}/ban`, {}, { cookie: manageOnlyCookie }),
+          post(manageOnlyAdmin, `/admin/users/${someone}/ban`, {}),
         );
         assert.strictEqual(refused.status, 403);
 
-        const { handler, issueSessionCookieHeader, seedUser } = buildHandler({
+        const { signInAs, seedUser } = buildHandler({
           canManageUsers: allow,
           canBanUsers: allow,
         });
-        const adminCookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+        const admin = yield* Effect.promise(() => signInAs("admin-1"));
         const targetId = yield* Effect.promise(() => seedUser("target-1"));
-        const targetCookie = yield* Effect.promise(() => issueSessionCookieHeader(targetId));
-        const asTarget = () =>
-          Effect.promise(() =>
-            handler(new Request(`${ORIGIN}/admin/users`, { headers: { cookie: targetCookie } })),
-          );
+        const targetUser = yield* Effect.promise(() => signInAs(targetId));
+        const asTarget = () => Effect.promise(() => targetUser.request("GET", `/admin/users`));
         assert.strictEqual((yield* asTarget()).status, 200);
 
         // A malformed expiry is refused before anything happens.
         const badUntil = yield* Effect.promise(() =>
-          post(
-            handler,
-            `/admin/users/${targetId}/ban`,
-            { until: "tomorrow" },
-            { cookie: adminCookie },
-          ),
+          post(admin, `/admin/users/${targetId}/ban`, { until: "tomorrow" }),
         );
         assert.strictEqual(badUntil.status, 400);
         assert.strictEqual((yield* asTarget()).status, 200);
 
         const banned = yield* Effect.promise(() =>
-          post(
-            handler,
-            `/admin/users/${targetId}/ban`,
-            { reason: "abuse", until: "2999-01-01T00:00:00.000Z" },
-            { cookie: adminCookie },
-          ),
+          post(admin, `/admin/users/${targetId}/ban`, {
+            reason: "abuse",
+            until: "2999-01-01T00:00:00.000Z",
+          }),
         );
         assert.strictEqual(banned.status, 200);
         const bannedBody = Schema.decodeUnknownSync(AdminApi.UserDto)(
@@ -591,13 +456,11 @@ describe("AuthHttp + Admin (real HTTP)", () => {
 
         // The admin still resolves the banned user and reactivates them.
         const stillThere = yield* Effect.promise(() =>
-          handler(
-            new Request(`${ORIGIN}/admin/users/${targetId}`, { headers: { cookie: adminCookie } }),
-          ),
+          admin.request("GET", `/admin/users/${targetId}`),
         );
         assert.strictEqual(stillThere.status, 200);
         const unbanned = yield* Effect.promise(() =>
-          post(handler, `/admin/users/${targetId}/unban`, {}, { cookie: adminCookie }),
+          post(admin, `/admin/users/${targetId}/unban`, {}),
         );
         assert.strictEqual(unbanned.status, 200);
         assert.strictEqual(
@@ -607,13 +470,9 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         );
 
         // An administrator cannot ban themselves; an unknown id is a 404 past the gate.
-        const self = yield* Effect.promise(() =>
-          post(handler, "/admin/users/admin-1/ban", {}, { cookie: adminCookie }),
-        );
+        const self = yield* Effect.promise(() => post(admin, "/admin/users/admin-1/ban", {}));
         assert.strictEqual(self.status, 400);
-        const ghost = yield* Effect.promise(() =>
-          post(handler, "/admin/users/ghost/ban", {}, { cookie: adminCookie }),
-        );
+        const ghost = yield* Effect.promise(() => post(admin, "/admin/users/ghost/ban", {}));
         assert.strictEqual(ghost.status, 404);
       }),
   );
@@ -621,26 +480,16 @@ describe("AuthHttp + Admin (real HTTP)", () => {
   it.effect("IDS-003: an unknown target answers 404 for a gate-passing admin, 403 otherwise", () =>
     Effect.gen(function* () {
       const allowed = buildHandler(allow);
-      const adminCookie = yield* Effect.promise(() => allowed.issueSessionCookieHeader("admin-1"));
+      const admin = yield* Effect.promise(() => allowed.signInAs("admin-1"));
       const missing = yield* Effect.promise(() =>
-        post(
-          allowed.handler,
-          "/admin/impersonate/does-not-exist",
-          { reason: "x" },
-          { cookie: adminCookie },
-        ),
+        post(admin, "/admin/impersonate/does-not-exist", { reason: "x" }),
       );
       assert.strictEqual(missing.status, 404);
 
       const denied = buildHandler(deny);
-      const deniedCookie = yield* Effect.promise(() => denied.issueSessionCookieHeader("admin-1"));
+      const deniedAdmin = yield* Effect.promise(() => denied.signInAs("admin-1"));
       const oracle = yield* Effect.promise(() =>
-        post(
-          denied.handler,
-          "/admin/impersonate/does-not-exist",
-          { reason: "x" },
-          { cookie: deniedCookie },
-        ),
+        post(deniedAdmin, "/admin/impersonate/does-not-exist", { reason: "x" }),
       );
       assert.strictEqual(oracle.status, 403);
     }),
@@ -651,10 +500,10 @@ describe("AuthHttp + Admin (real HTTP)", () => {
   // never processed".
   it.effect("IDS-003/APS-009: an over-long path id is refused with a 4xx", () =>
     Effect.gen(function* () {
-      const { handler, issueSessionCookieHeader } = buildHandler(allow);
-      const cookie = yield* Effect.promise(() => issueSessionCookieHeader("admin-1"));
+      const { signInAs } = buildHandler(allow);
+      const admin = yield* Effect.promise(() => signInAs("admin-1"));
       const response = yield* Effect.promise(() =>
-        post(handler, `/admin/impersonate/${"x".repeat(256)}`, { reason: "x" }, { cookie }),
+        post(admin, `/admin/impersonate/${"x".repeat(256)}`, { reason: "x" }),
       );
       assert.isTrue(response.status === 400 || response.status === 404);
     }),

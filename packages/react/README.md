@@ -48,8 +48,11 @@ is a settled, real one **and** the subject query has settled (BEH-EA-179):
 
 - sign-out makes it `undefined` in the same registry batch — no render shows
   "signed out" while the old user's grants are still live;
-- a session-changing mutation refetches both queries at once
-  (`reactivityKeys: [SESSION_KEY]`) and the gate stays closed until both settle;
+- a session-changing mutation refetches both queries at once and the gate stays
+  closed until both settle. A mutation against an endpoint the contract declares
+  with a `SessionLifecycle` marker (sign-in, sign-out, a password change,
+  switching the active organization, ...) does this on its own (ADR-EA-045); a
+  mutation of your own outside the contract passes `reactivityKeys: [SESSION_KEY]`;
 - an anonymous visitor gets `undefined`, not the anonymous DTO the endpoint would
   answer.
 
@@ -92,15 +95,14 @@ class AppClient extends ReactClient.makeReactClient<AppClient>()("app/Client", {
   baseUrl: "/api/auth", // where the auth routes are mounted; default: same origin
 }) {}
 
-// An organization switcher: one query, one mutation that invalidates the session.
+// An organization switcher: one query, one mutation. `setActive` declares `SessionLifecycle.Refreshes`
+// on the contract, so it refetches the session (and the subject) with no reactivityKeys.
 export function ActiveOrganization() {
   const active = useAtomValue(AppClient.query("organization", "getActive", {}));
   const setActive = useAtomSet(AppClient.mutation("organization", "setActive"));
   return (
     <button
-      onClick={() =>
-        setActive({ payload: { organizationId: "org_1" }, reactivityKeys: [ReactClient.SESSION_KEY] })
-      }
+      onClick={() => setActive({ payload: { organizationId: "org_1" } })}
     >
       {active._tag}
     </button>
@@ -115,7 +117,7 @@ test double, extra client middleware).
 
 | Export | Owner |
 | --- | --- |
-| `Providers`, `useAuthStatus`, `AuthClientAtom.*` (`sessionAtom`, `subjectDtoAtom`, `subjectAtom`, `authStatusAtom`, `ReactAuthClient`, `ReactSubjectClient`), `Subject.toSubject`, `ReactClient.*` (`makeReactClient`, `SESSION_KEY`) | `@awthaq/react` |
+| `Providers`, `useAuthStatus`, `AuthClientAtom.*` (`sessionAtom`, `subjectDtoAtom`, `subjectAtom`, `authStatusAtom`, `ReactAuthClient`, `ReactSubjectClient`), `Subject.toSubject`, `ReactClient.*` (`makeReactClient`, `SESSION_KEY`, `sessionInvalidation`) | `@awthaq/react` |
 | `Can`, `Cannot`, `useCan`, `useSubject`, `useDecision`, `useInvalidate`, `useProjected`, `makeQadiAtoms`, `dehydrateDecisions`, `hydrateDecisions`, `QadiProvider`, ... | passthrough of `@qadi/react` (BEH-EA-184: no awthaq wrapper around evaluation) |
 
 `@qadi/react`, `@qadi/core` and `@effect/atom-react` are peer dependencies, so an

@@ -18,7 +18,7 @@
 // `_tag`, so a stock OAuth 2.0 client library reads it without knowing this contract (the pattern
 // `apikey.token` uses for RFC 6749 §5.2).
 
-import { Api } from "@awthaq/api";
+import { Api, SessionLifecycle } from "@awthaq/api";
 import { HookPoint, Users } from "@awthaq/core";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -228,7 +228,7 @@ export const DeviceGroup = HttpApiGroup.make("device_authorization")
         // MA-004: this group has no middleware that declares it, and the session store can be down.
         Api.StoreUnavailable,
       ],
-    }),
+    }).middleware(SessionLifecycle.Mints),
   )
   // BEH-EA-201: no cookie in, none out, and a device has none to double-submit: `awthaq doctor` skips its CSRF check.
   .annotate(Api.BackChannel, true);

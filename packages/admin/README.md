@@ -23,7 +23,9 @@ Admin.config({
 });
 ```
 
-Every predicate defaults to "deny", and every one **sees the target** (and, for `canImpersonate`/`canManageUsers`, the request's ambient `tenantId`) — so a host can refuse to impersonate or administer a more privileged account (or another tenant's). Subjects are identity-only (`{ id }`); a predicate that needs roles or tenant looks them up itself by id. `list` filters impersonation episodes through `canManageEpisode` row by row, so a caller who may manage none sees an empty history.
+Every predicate defaults to "deny", and every one **sees the target** (and, for every user-administration predicate and `canImpersonate`, the request's ambient `tenantId`) — so a host can refuse to impersonate or administer a more privileged account (or another tenant's). Subjects are identity-only (`{ id }`); a predicate that needs roles or tenant looks them up itself by id. `list` filters impersonation episodes through `canManageEpisode` row by row, so a caller who may manage none sees an empty history.
+
+**Per-tenant configuration (ADR-EA-018 D8).** Every `AdminConfig` field (the seven predicates, `maxDuration`, `passwordPolicy`, `links`) is read per operation. `Admin.config(...)` in a `TenantConfig` lookup governs that tenant's requests, and a tenant's layer fills the fields it does not name with the deny-all defaults, so name every capability the tenant keeps.
 
 **Tenant scoping (IDS-002, ADR-EA-018).** Each episode records the ambient `TenantContext` it started under, and `list`/`forceStop` are confined to the request's own tenant: another tenant's episode is `AdminImpersonationNotFound`, exactly like an unknown id. `canAdministerTenants` is the one predicate that lifts the confinement (a platform superadmin sees and ends every tenant's episodes, still subject to `canManageEpisode`). In a single-tenant deployment nothing provides a tenant, every episode is untenanted, and behavior is unchanged.
 

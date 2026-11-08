@@ -1,7 +1,7 @@
 // RSC-005/NF-11-4: what a Server Component hands to `<Providers>` must survive
 // React's server -> client serialization — plain JSON, no class instances.
 import { Api } from "@awthaq/api";
-import { Sessions, Users } from "@awthaq/core";
+import { SessionCookie, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
@@ -27,7 +27,10 @@ const view: Sessions.SessionView = {
 };
 
 const session = (): Session => ({
-  principal: Api.anonymousPrincipal,
+  principal: new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id: "user-1" }),
+    sessionId: "session-1",
+  }),
   user: {
     id: Users.UserId("user-1"),
     identity: { _tag: "Email", email: "user@example.com", emailVerified: true },
@@ -42,7 +45,15 @@ const session = (): Session => ({
     updatedAt: at("2024-01-01T00:00:00.000Z"),
   },
   session: view,
-  rotated: Redacted.make("secret-must-never-leak"),
+  rotated: {
+    token: Redacted.make("secret-must-never-leak"),
+    cookie: SessionCookie.renderAt(
+      SessionCookie.SessionCookieConfig.defaultValue(),
+      "secret-must-never-leak",
+      view.absoluteExpiresAt,
+      view.createdAt,
+    ),
+  },
 });
 
 /** True when React's serializer would accept the value: JSON scalars, arrays and *plain* objects only. */

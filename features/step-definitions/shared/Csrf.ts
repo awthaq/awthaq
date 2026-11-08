@@ -14,8 +14,7 @@
 // `Csrf.ts`'s own implementation), so a passing scenario run exercises RFC
 // 2104 compatibility, not just self-consistency with the code under test.
 
-import { TestAuth } from "@awthaq/test";
-import * as Redacted from "effect/Redacted";
+import { TestAuth, UserAgent } from "@awthaq/test";
 
 /**
  * The `CsrfConfig` every world's `CsrfProtectionLive` is built against: `TestAuth`'s own default, so a world
@@ -27,18 +26,15 @@ export const CSRF_COOKIE_NAME = "__Host-csrf";
 export const CSRF_HEADER_NAME = "x-csrf-token";
 
 /**
- * One signed double-submit token, valid against `CsrfConfigForTests`'s
- * secret for the lifetime of the test process — `CsrfProtectionLive` never
- * rotates a cookie it already considers valid, so a single fixed value
- * reused across every request in every scenario is exactly what a real
- * client that bootstrapped the cookie once would also do.
+ * Plan 20: a user agent over a hand-wired World's handler, already holding a `__Host-csrf` minted against
+ * `CsrfConfigForTests` (as `TestAuth.app`'s agents do), so it keeps its own cookies (the session a sign-in
+ * sets, a rotation, an expiry) and echoes the CSRF token on an unsafe `request` like a page script.
  */
-export const CSRF_TEST_COOKIE_VALUE: string = TestAuth.csrfToken(
-  Redacted.value(CsrfConfigForTests.secret),
-);
-
-/** Appends the double-submit CSRF cookie to an existing `cookie` header value, if any. */
-export const withCsrfCookie = (cookie?: string): string =>
-  cookie
-    ? `${cookie}; ${CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`
-    : `${CSRF_COOKIE_NAME}=${CSRF_TEST_COOKIE_VALUE}`;
+export const agentOver = (
+  handler: (request: Request) => Promise<Response>,
+  options: Omit<UserAgent.UserAgentOptions, "handler"> = {},
+) => {
+  const agent = UserAgent.make({ ...options, handler });
+  agent.cookies.receive(TestAuth.csrfSetCookie(CsrfConfigForTests.secret));
+  return agent;
+};

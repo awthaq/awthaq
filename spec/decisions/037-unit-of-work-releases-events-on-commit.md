@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-037 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-10-13 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-10-18 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-13): Initial release (plan 10 item 5) |
+> | Change History | 1.0 (2026-10-13): Initial release (plan 10 item 5) <br> 1.1 (2026-10-18): decision 7 names `AuditLogStoreSql.append` (plan 16) |
 
 ---
 
@@ -39,7 +39,7 @@ The same placement also erased the wrong thing. An event that records an *attemp
 
 **6. Raw `sql.withTransaction` in library source fails `pnpm check`.** `SqlClient` is effect's own type, so the compiler cannot ban the call; `scripts/check-transactions.mjs` (`pnpm check:transactions`) fails on any `sql.withTransaction(` in `packages/*/src` outside `packages/ports/src/SqlTransaction.ts`.
 
-**7. The in-transaction audit insert runs in a savepoint.** On Postgres a failed statement aborts the whole transaction, so without one the `"bestEffort"` audit-write policy ([ADR-EA-028](028-infrastructure-error-policy.md)) did not hold inside a transaction: a failed audit `INSERT` took the operation down with it. `AuditLogRepository.insert` opens a savepoint when (and only when) a transaction is open.
+**7. The in-transaction audit insert runs in a savepoint.** On Postgres a failed statement aborts the whole transaction, so without one the `"bestEffort"` audit-write policy ([ADR-EA-028](028-infrastructure-error-policy.md)) did not hold inside a transaction: a failed audit `INSERT` took the operation down with it. `AuditLogStoreSql.append` opens a savepoint when (and only when) a transaction is open.
 
 ## Consequences
 

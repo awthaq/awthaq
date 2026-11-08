@@ -1,0 +1,731 @@
+{
+  "migrations": [
+    "create_organization_org",
+    "create_organization_membership",
+    "create_organization_membership_indexes",
+    "create_organization_invitation",
+    "create_organization_invitation_indexes",
+    "create_organization_team",
+    "create_organization_team_organization_id_index",
+    "create_organization_team_membership",
+    "create_organization_team_membership_team_id_index",
+    "create_organization_role",
+    "create_organization_active_context",
+    "organization_membership_unique_user_org",
+    "organization_active_context_user_id",
+    "organization_invitation_token_hash",
+    "organization_team_membership_unique_team_user",
+    "organization_team_membership_role",
+    "organization_team_hierarchy",
+    "organization_org_home_region",
+    "organization_oauth_connection",
+    "organization_org_suspended_at",
+    "create_organization_domain_claim"
+  ],
+  "schema": {
+    "tables": {
+      "organization_active_context": [
+        {
+          "name": "sessionId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "activeOrganizationId",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "activeTeamId",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "updatedAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "userId",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "organization_domain_claim": [
+        {
+          "name": "domain",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "connectionId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "protocol",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "organizationId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "organization_domain_owner": [
+        {
+          "name": "domain",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "organizationId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "organization_invitation": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "inviterId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "organizationId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "teamId",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "role",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "expiresAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "tokenHash",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "organization_membership": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "userId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "organizationId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "role",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "organization_oauth_connection": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "organizationId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "issuer",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "discoveryUrl",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "authorizationEndpoint",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "tokenEndpoint",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "jwksUri",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "userinfoEndpoint",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "clientId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "clientSecret",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "scopes",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "updatedAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "organization_oauth_connection_domain": [
+        {
+          "name": "domain",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "connectionId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "organizationId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "organization_org": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "logo",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "metadata",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "homeRegion",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "suspendedAt",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "organization_role": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "organizationId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "role",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "permission",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "updatedAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "organization_team": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "organizationId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "memberCount",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "updatedAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "parentId",
+          "type": "text",
+          "notNull": false,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "organization_team_closure": [
+        {
+          "name": "ancestorId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "descendantId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "depth",
+          "type": "integer",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        }
+      ],
+      "organization_team_membership": [
+        {
+          "name": "id",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": true
+        },
+        {
+          "name": "teamId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "userId",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "createdAt",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": false,
+          "primaryKey": false
+        },
+        {
+          "name": "role",
+          "type": "text",
+          "notNull": true,
+          "hasDefault": true,
+          "primaryKey": false
+        }
+      ]
+    },
+    "indexes": [
+      {
+        "name": "organization_active_context_user_id",
+        "table": "organization_active_context",
+        "columns": [
+          "userId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "organization_domain_claim_connection_id",
+        "table": "organization_domain_claim",
+        "columns": [
+          "connectionId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "organization_domain_claim_organization_id",
+        "table": "organization_domain_claim",
+        "columns": [
+          "organizationId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "organization_domain_owner_organization_id",
+        "table": "organization_domain_owner",
+        "columns": [
+          "organizationId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "organization_invitation_email",
+        "table": "organization_invitation",
+        "columns": [
+          "email"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "organization_invitation_inviter_id",
+        "table": "organization_invitation",
+        "columns": [
+          "inviterId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "organization_invitation_organization_id",
+        "table": "organization_invitation",
+        "columns": [
+          "organizationId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "organization_invitation_token_hash",
+        "table": "organization_invitation",
+        "columns": [
+          "tokenHash"
+        ],
+        "unique": true,
+        "partial": false
+      },
+      {
+        "name": "organization_membership_organization_id",
+        "table": "organization_membership",
+        "columns": [
+          "organizationId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "organization_membership_user_id",
+        "table": "organization_membership",
+        "columns": [
+          "userId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "organization_membership_user_org",
+        "table": "organization_membership",
+        "columns": [
+          "userId",
+          "organizationId"
+        ],
+        "unique": true,
+        "partial": false
+      },
+      {
+        "name": "organization_oauth_connection_domain_connection_id",
+        "table": "organization_oauth_connection_domain",
+        "columns": [
+          "connectionId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "organization_oauth_connection_organization_id",
+        "table": "organization_oauth_connection",
+        "columns": [
+          "organizationId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "organization_team_closure_descendant_id",
+        "table": "organization_team_closure",
+        "columns": [
+          "descendantId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "organization_team_membership_team_id",
+        "table": "organization_team_membership",
+        "columns": [
+          "teamId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "organization_team_membership_team_user",
+        "table": "organization_team_membership",
+        "columns": [
+          "teamId",
+          "userId"
+        ],
+        "unique": true,
+        "partial": false
+      },
+      {
+        "name": "organization_team_organization_id",
+        "table": "organization_team",
+        "columns": [
+          "organizationId"
+        ],
+        "unique": false,
+        "partial": false
+      },
+      {
+        "name": "organization_team_parent_id",
+        "table": "organization_team",
+        "columns": [
+          "parentId"
+        ],
+        "unique": false,
+        "partial": false
+      }
+    ],
+    "triggers": []
+  }
+}

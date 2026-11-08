@@ -25,13 +25,19 @@ Feature: Qadi Bridge — Path B (Declared Permissions)
       Then both apply the identical hash-comparison and absolute/idle-expiry logic over Sessions
       And SubjectExtractor's resolution and Authentication's resolution agree on whether the session is valid
 
-    # A source tripwire (the property is structural): SubjectExtractor.ts must resolve every credential through Authentication.resolvePrincipal and carry no comparison or expiry logic of its own. The observable half is REQ-EA-429.
+    # A source tripwire (the property is structural): SubjectExtractor.ts must resolve every credential through the one credential module (Credentials.resolve) and read no cookie or header itself. The observable half is REQ-EA-429.
     @REQ-EA-430
     Scenario: SubjectExtractor must not hand-write its own independent hash-comparison or expiry check
       Given a SubjectExtractor implementation
       When its session-validity logic is inspected
       Then it contains no hash-comparison or expiry check distinct from the one Authentication's middleware uses
       And there is only one place a session-validity bug could be fixed, not two
+
+    @REQ-EA-1315
+    Scenario: A stale session cookie beside a valid bearer token resolves the same subject on both paths
+      Given a signed-in user "alice" whose browser also presents a stale session cookie
+      When "alice" sends the stale cookie and her bearer token to a Path-A-gated endpoint and to a Path-B-gated endpoint
+      Then both paths resolve "alice" as the subject, not anonymous on Path B
 
   # BEH-EA-154 — spec/behaviors/20-qadi-bridge-path-b.md. qadi's own policy
   # evaluation is a black box throughout this file: "qadi's evaluator would

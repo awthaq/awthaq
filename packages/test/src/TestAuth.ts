@@ -64,35 +64,26 @@
 import type { TestFramework } from "./TestFramework.ts";
 import { Api } from "@awthaq/api";
 import {
-  Accounts,
   AuditChain,
   AuditLog,
   Auth,
   AuthEvents,
   AuthPlugin,
-  DataExport,
-  Erasure,
+  type DataExport,
+  type Erasure,
   HookPoint,
   Hooks,
   Migrations,
   Persistence,
-  RateLimits,
   type Retention,
+  SessionCookie,
   Sessions,
-  Slots,
   Users,
-  Verification,
 } from "@awthaq/core";
-import {
-  ClientAddress,
-  type Encryption,
-  Mailer,
-  PasswordHasher,
-  RateLimiter,
-  SqlTransaction,
-} from "@awthaq/ports";
-import { AuthHttp, Authentication, Csrf, RequestContext } from "@awthaq/server";
+import { ClientAddress, type Encryption, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { AuthHost, Credentials, Csrf } from "@awthaq/server";
 import { CoreMigrations } from "@awthaq/sql";
+import { UserAgent } from "@awthaq/web";
 import * as RedactionGuard from "./RedactionGuard.ts";
 import * as TestEncryption from "./TestEncryption.ts";
 import * as TestSql from "./TestSql.ts";
@@ -112,6 +103,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
+import * as Cookies from "effect/http/Cookies";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -140,6 +132,11 @@ const TestHasher = PasswordHasher.layerArgon2id.pipe(
 
 /** Named so the foundations' inferred types can be emitted (declaration emit needs the namespace in scope). */
 export type RetentionRegistryService = Retention.RetentionRegistry;
+/** Named for the same reason: the registries `Hooks.HooksLive` provides, and the test ports' fixed key. */
+export type FoundationServices =
+  | DataExport.DataExportRegistry
+  | Erasure.ErasureRegistry
+  | Encryption.Encryption;
 
 /**
  * ELC-004: what every memory layer (`Users`/`Accounts`/`Sessions`/`Verification`, each plugin's
@@ -165,98 +162,23 @@ export const memoryFoundation = AuthEvents.layer.pipe(
   Layer.provideMerge(NodeCrypto.layer),
 );
 
-/** Plan 02's SQL stores over the ambient `SqlClient`, sealing provider tokens with the test `Encryption`. */
-const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
-
-/** The same foundation over a SQL audit log (`sqlBase`): `AuthEvents` writes through the one `SqlClient`. */
-const sqlFoundation = AuthEvents.layer.pipe(
-  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(AuditChain.layer),
-  Layer.provideMerge(NodeCrypto.layer),
-);
-
 /**
- * The ports and registries both bases carry. `rateLimiter` is `RateLimiter.layerPermissive` (BEH-EA-112,
- * a test that signs in fifty times in a loop should not fail for a reason unrelated to what it tests)
- * unless a suite asks for `"enforcing"`: the real limiter over the in-memory store, so lockout and
- * throttle behaviour is the production behaviour. `RateLimits.layer` (the per-plugin rule registry),
- * `Slots.layer` and the credential-resolver registry are not ports but every composition needs them.
+ * The test ports: a cheap real hasher, a capturing mailer, a permissive (or the real) limiter, the socket peer, a fixed
+ * key, and the platform crypto services. `rateLimiter` is `RateLimiter.layerPermissive` (BEH-EA-112: a test that signs
+ * in fifty times in a loop should not fail for a reason unrelated to what it tests) unless a suite asks for
+ * `"enforcing"`: the real limiter over the in-memory store, so lockout and throttle behaviour is the production one.
+ * The registries (`RateLimits.layer`, `Slots.layer`, the credential-resolver registry) are not ports: `AuthHost`
+ * provides them.
  */
 const testPorts = (rateLimiter: "permissive" | "enforcing" | undefined) =>
   Layer.mergeAll(
     TestHasher,
     Mailer.layerMemory,
     rateLimiter === "enforcing" ? RateLimiter.layerMemory : RateLimiter.layerPermissive,
-    RateLimits.layer,
-    // MA-005: `Auth.make` provides its own `SlotsRegistry`; this one is for a plugin layer a
-    // test composes standalone (outside `Auth.make`), whose `Slots.override` requires one.
-    Slots.layer,
     // AGA-001/NHS-003: the raw-`remoteAddress` passthrough every zero-config app gets by default.
     ClientAddress.layerDirect,
-    // ADR-EA-012: the one registry plugins contribute credential resolvers to and `Authentication` reads.
-    Authentication.CredentialResolversLive,
     TestEncryption.layer,
-  );
-
-/** `Users`, `Accounts`, `Sessions` and `Verification`, written once over whichever stores sit beneath them. */
-const coreServices = Layer.mergeAll(
-  Users.layer,
-  Accounts.layer,
-  Sessions.layer,
-  // ETVS-004/MW-002: what every password-style composition needs beyond the core stores
-  // (also `AuthHttp.coreHandlers`' always-served `account` group).
-  Verification.layer,
-);
-
-/**
- * BEH-EA-193: the whole base over memory: plan 02's `Persistence.memory` bundle (the five stores and the
- * no-op transaction), the core services over it, the test ports, and CSG-001's `AccountErasure` /
- * `AccountExport` built over those same stores and over the registries `Hooks.HooksLive` provides (the ones
- * every plugin's erasure contribution registers into), so a plugin installed in a composition is erased like
- * any other.
- */
-const memoryBase = (rateLimiter: "permissive" | "enforcing" | undefined) =>
-  Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-    Layer.provideMerge(
-      Layer.mergeAll(coreServices, testPorts(rateLimiter), SqlTransaction.layerNoop).pipe(
-        Layer.provide(Persistence.memory),
-      ),
-    ),
-    // RRS-003: `Sessions.layer` also needs `AuthEvents`.
-    Layer.provideMerge(memoryFoundation),
-  );
-
-/**
- * BEH-EA-T2: the same services over a database migrated with core's migrations and then the composition's
- * (`built.migrations`): SQLite `:memory:` by default, a per-suite Postgres schema under `AWTHAQ_POSTGRES_URL`
- * (`TestSql.layer(suite)`). The migrations run before anything is built over the client, because everything
- * is provided through the one `Ready` layer.
- */
-const sqlBase = (
-  rateLimiter: "permissive" | "enforcing" | undefined,
-  migrations: Auth.Built<ReadonlyArray<AuthPlugin.Any>>["migrations"],
-  suite: string,
-) => {
-  const Ready = Layer.effectDiscard(
-    Effect.gen(function* () {
-      yield* Migrator.make({})({
-        loader: CoreMigrations.coreMigrations,
-        table: "effect_sql_migrations",
-      });
-      yield* Migrations.run(migrations);
-    }),
-  ).pipe(Layer.provideMerge(TestSql.layer(suite)));
-  return Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-    Layer.provideMerge(
-      Layer.mergeAll(coreServices, testPorts(rateLimiter), SqlTransaction.layerSql).pipe(
-        Layer.provide(SqlStores),
-      ),
-    ),
-    Layer.provideMerge(sqlFoundation),
-    Layer.provideMerge(Ready),
-  );
-};
+  ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 const GuardLive = RedactionGuard.layerEvents.pipe(Layer.provideMerge(RedactionGuard.layer));
 
@@ -274,7 +196,7 @@ export const TestCsrfConfig: Csrf.CsrfConfigShape = {
 export const recordModes: readonly ["memory", "sql"] = ["memory", "sql"];
 
 /** Options every mode shares. */
-export interface CommonOptions<S, SE, SR, D, DR> {
+export interface CommonOptions<S, SE, SR, D, DR, T = never> {
   /**
    * What is genuinely the test's own: plugin configuration (`Plugin.config(...)`), adapters (`XmlSignature`,
    * `WebAuthn`, `HttpClient`, a fake fetcher, a transport), and doubles. It is **merged into the output**, so
@@ -290,13 +212,16 @@ export interface CommonOptions<S, SE, SR, D, DR> {
    * the base service for the plugins and for the test alike.
    */
   readonly decorate?: Layer.Layer<D, never, DR>;
-  /** Application taps. They receive the same point instances the plugins run (core's and the declared `hookPoints`). */
-  readonly taps?: Layer.Layer<never, never, unknown>;
+  /**
+   * Application taps. They receive the same point instances the plugins run (core's and the declared `hookPoints`); a
+   * tap on a point no composed plugin declares stays in `RIn` and does not compile (INV-EA-005).
+   */
+  readonly taps?: Layer.Layer<never, never, T>;
   /** Overrides fields of `TestCsrfConfig`. */
   readonly csrf?: Partial<Csrf.CsrfConfigShape>;
-  /** Defaults to `Authentication.PrincipalResolverLive`; `PrincipalResolverWithUserFactsLive` opts into `emailVerified`. */
+  /** Defaults to `Credentials.PrincipalResolverLive`; `PrincipalResolverWithUserFactsLive` opts into `emailVerified`. */
   readonly principalResolver?: Layer.Layer<
-    Authentication.PrincipalResolver,
+    Credentials.PrincipalResolver,
     never,
     Users.Users | Sessions.Sessions
   >;
@@ -306,100 +231,94 @@ export interface CommonOptions<S, SE, SR, D, DR> {
   readonly openapiPath?: `/${string}`;
   /** P20a (BEH-EA-084): serve the Scalar docs page at this path. */
   readonly docsPath?: `/${string}`;
+  /** AR-003: the groups this composition serves (`AuthHost`'s `tier`). Default `"all"`. */
+  readonly tier?: "all" | "public" | "admin";
 }
 
 /** BEH-EA-T2: `records: "sql"` needs a `suite` (one distinct name per test file; it names the Postgres schema). */
 export type SqlMode = { readonly records: "sql"; readonly suite: string };
 export type MemoryMode = { readonly records?: "memory" };
 
-/** Named so the bases' inferred types can be emitted (TS2883 needs the `Encryption` namespace in scope). */
-export type BaseEncryption = Encryption.Encryption;
-type MemoryBaseOut = Layer.Success<ReturnType<typeof memoryBase>>;
-type SqlBaseOut = Layer.Success<ReturnType<typeof sqlBase>>;
-type BaseOut<M extends "memory" | "sql"> = M extends "memory" ? MemoryBaseOut : SqlBaseOut;
+/** What `TestAuth` adds beneath `AuthHost.layer`: the test ports and the HTTP platform. */
+type TestProvided =
+  | Layer.Success<ReturnType<typeof testPorts>>
+  | Layer.Success<typeof HttpServer.layerServices>
+  | Layer.Success<typeof HttpRouter.layer>;
+
+/** The recording guard rides in `AuthHost`'s `decorate` slot (above the base, beneath the records). */
+type Guarded<D> = D | Layer.Success<typeof GuardLive>;
+type GuardIn<DR> = DR | Layer.Services<typeof GuardLive>;
 
 /** Everything a composition provides beneath its plugins, besides the middleware it derives. */
 type Provided<P extends ReadonlyArray<AuthPlugin.Any>, M extends "memory" | "sql", S, D> =
-  | BaseOut<M>
-  | Layer.Success<typeof GuardLive>
-  | Layer.Success<typeof HttpServer.layerServices>
-  | Layer.Success<typeof HttpRouter.layer>
-  | Csrf.CsrfConfig
-  | Authentication.PrincipalResolver
-  | AuthPlugin.RecordsOut<P[number]>
-  | AuthPlugin.HookPointsOut<P[number]>
-  | S
-  | D;
+  | AuthHost.Provided<P, M, S, Guarded<D>>
+  | TestProvided;
+
+/** What a composition still requires: `AuthHost`'s host-owned remainder minus the test ports and the platform. */
+type Requires<
+  P extends ReadonlyArray<AuthPlugin.Any>,
+  Extra extends HttpApiGroup.Constraint,
+  M extends "memory" | "sql",
+  S,
+  SR,
+  T,
+  D,
+  DR,
+> = Exclude<
+  AuthHost.Requires<P, Extra, M, S, SR, T, Guarded<D>, GuardIn<DR>, never, never, never>,
+  TestProvided
+>;
 
 /**
  * The one implementation behind every `layer` overload, over the widest shapes. Contract tests use it directly
- * (`runPluginContractTests`' `build` check), where the plugin tuple is only known as `AuthPlugin.Any`.
+ * (`runPluginContractTests`' `build` check), where the plugin tuple is only known as `AuthPlugin.Any`. BEH-EA-342:
+ * it is `AuthHost.layer` over the test ports, the redaction guard and the HTTP platform, nothing else.
  */
 const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpApiGroup.Constraint>(
   built: Auth.Built<P, Extra>,
-  options: CommonOptions<never, unknown, unknown, never, unknown> & (MemoryMode | SqlMode) = {},
+  options: CommonOptions<never, unknown, unknown, never, unknown, unknown> &
+    (MemoryMode | SqlMode) = {},
 ): Layer.Layer<never, unknown, unknown> => {
-  const sqlSuite = options.records === "sql" && "suite" in options ? options.suite : undefined;
-  const select = (plugin: AuthPlugin.Any) =>
-    sqlSuite === undefined ? plugin.records?.memory : plugin.records?.sql;
-  const records = built.plugins.reduce<Layer.Layer<never, unknown, unknown>>((acc, plugin) => {
-    const bundle = select(plugin);
-    return bundle === undefined ? acc : Layer.merge(acc, bundle);
-  }, Layer.empty);
-  const points = built.plugins.reduce<Layer.Layer<never, unknown, unknown>>(
-    (acc, plugin) => (plugin.hookPoints === undefined ? acc : Layer.merge(acc, plugin.hookPoints)),
-    Layer.empty,
-  );
-  // The one `CsrfConfig` layer: the derived `CsrfProtection` reads it, and it is also merged into the
-  // output so `TestAuth.app` can mint a token against the very secret the composition checks.
-  const csrf = Layer.succeed(Csrf.CsrfConfig, { ...TestCsrfConfig, ...options.csrf });
-  const middleware = AuthHttp.middlewareFor(built.api, {
-    csrf,
+  const shared = {
+    // The one `CsrfConfig` layer: the derived `CsrfProtection` reads it, and it is merged into the output so
+    // `TestAuth.app` can mint a token against the very secret the composition checks.
+    csrf: Layer.succeed(Csrf.CsrfConfig, { ...TestCsrfConfig, ...options.csrf }),
     ...(options.principalResolver === undefined
       ? {}
       : { principalResolver: options.principalResolver }),
-  });
-  const base =
-    sqlSuite === undefined
-      ? memoryBase(options.rateLimiter)
-      : sqlBase(options.rateLimiter, built.migrations, sqlSuite);
-  // MW-002: `built.api` always carries core's session/account groups, so their handlers are part of every
-  // test pipeline. BEH-EA-084: the docs page (when asked for) is mounted on the same router, over the same api.
-  const docs =
-    options.docsPath === undefined
-      ? Layer.empty
-      : AuthHttp.docs(built.api, { path: options.docsPath });
-  return Layer.merge(AuthHttp.routes(built.api, { openapiPath: options.openapiPath }), docs).pipe(
-    // The in-process harness deliberately serves without `RequestContext.layer` (E1), so `coreHandlers`' build-time
-    // warning that it is absent would fire on every test app.
-    Layer.provide(
-      AuthHttp.coreHandlers.pipe(
-        Layer.provide(Layer.succeed(RequestContext.warnWhenAbsent, false)),
-      ),
-    ),
-    // The plugins' own services stay in the output (`provideMerge`), so a test can
-    // `yield* Password.Password` from the same composition it serves over HTTP.
-    Layer.provideMerge(built.layer),
-    // `services` sit closest to the plugins, so they override the derived middleware and the base for the
-    // plugins, and are *merged*, so the output holds the very instances the plugins used.
-    Layer.provideMerge(options.services ?? Layer.empty),
-    Layer.provide(middleware),
-    // The resolver the derived middleware uses is part of the output too, so a test that calls
-    // `Authentication.resolvePrincipal` directly reads it instead of hand-building `PrincipalResolverLive`.
-    Layer.provideMerge(options.principalResolver ?? Authentication.PrincipalResolverLive),
-    Layer.provideMerge(csrf),
-    Layer.provideMerge((options.taps ?? Layer.empty).pipe(Layer.provideMerge(points))),
-    Layer.provideMerge(records),
-    Layer.provideMerge(options.decorate ?? Layer.empty),
-    // EOTS-002: the recording tracer/logger (and the `AuthEvents` inspector) are part of every
-    // `TestAuth` composition; they only record, `assertNoLeaks` is what fails.
-    Layer.provideMerge(GuardLive),
-    Layer.provideMerge(base),
-    Layer.provideMerge(HttpServer.layerServices),
-    Layer.provideMerge(HttpRouter.layer),
-    // SAM-004: the composition's declared user fields, last so `Users` and the account handler both see it.
-    Layer.provideMerge(built.userFieldsLayer),
-  );
+    services: options.services ?? Layer.empty,
+    taps: options.taps ?? Layer.empty,
+    // EOTS-002: the recording tracer/logger (and the `AuthEvents` inspector) ride in the decorate slot, above the
+    // base and beneath the records, where they always sat; they only record, `assertNoLeaks` is what fails.
+    decorate: (options.decorate ?? Layer.empty).pipe(Layer.provideMerge(GuardLive)),
+    tier: options.tier ?? "all",
+    // The in-process harness serves without both on purpose, as it always has (`RequestContext` E1; `BodyLimit`
+    // has its own suite), and so `coreHandlers`' warning that `RequestContext.layer` is absent stays silent.
+    requestContext: false,
+    bodyLimit: false,
+    openapiPath: options.openapiPath,
+    docsPath: options.docsPath,
+  };
+  const platform = <A, E, R>(host: Layer.Layer<A, E, R>) =>
+    host.pipe(
+      Layer.provideMerge(testPorts(options.rateLimiter)),
+      Layer.provideMerge(HttpServer.layerServices),
+      Layer.provideMerge(HttpRouter.layer),
+    );
+  // BEH-EA-T2: SQLite `:memory:` by default, a per-suite Postgres schema under `AWTHAQ_POSTGRES_URL`, migrated with
+  // core's migrations and then the composition's before anything is built over the client (`Migrations.apply`).
+  return options.records === "sql" && "suite" in options
+    ? platform(
+        AuthHost.layer(built, {
+          ...shared,
+          persistence: {
+            records: "sql",
+            client: TestSql.layer(options.suite),
+            migrations: "apply",
+          },
+        }),
+      )
+    : platform(AuthHost.layer(built, { ...shared, persistence: { records: "memory" } }));
 };
 
 /**
@@ -413,14 +332,13 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
  * is a plain interface, so ordinary generic inference works and the caller gets `Validate<P>`'s real
  * compile-time checking exactly where they call `Auth.make`.
  *
- * What it builds, so a test does not:
- * - the host middleware the composed groups declare (`AuthHttp.middlewareFor`): `Authentication`,
- *   `OptionalAuthentication`, `MachineAuthentication`, `AdminAuthentication`, `CsrfProtection` over
- *   `TestCsrfConfig` (BEH-EA-T1);
- * - every composed plugin's `records` bundle for the chosen mode and its declared `hookPoints` (BEH-EA-T4/T5);
- * - the core services over `Persistence.memory` / `Persistence.sql()`, the test ports (a cheap argon2id hasher,
- *   `Mailer.layerMemory`, a permissive `RateLimiter`, `Encryption` over a fixed key, `ClientAddress`), the
- *   erasure and export services, and the recording `RedactionGuard` (EOTS-002).
+ * What it builds, so a test does not (BEH-EA-342): `AuthHost.layer` plus the test ports, the redaction guard and the
+ * HTTP platform. `AuthHost` derives the host middleware the composed groups declare (`CsrfProtection` over
+ * `TestCsrfConfig`, BEH-EA-T1), every composed plugin's `records` bundle for the chosen mode and its declared
+ * `hookPoints` (BEH-EA-T4/T5), the core services over `Persistence.memory` / `Persistence.sql()` with the
+ * migrations applied, the registries, erasure and export; `TestAuth` adds a cheap argon2id hasher,
+ * `Mailer.layerMemory`, a permissive `RateLimiter`, `Encryption` over a fixed key, `ClientAddress`, the platform
+ * crypto services and the recording `RedactionGuard` (EOTS-002). `RequestContext.layer` and `BodyLimit.layer` are off.
  * Its `RIn` is `never` exactly when the composition is complete, and every service in its `ROut` is present
  * at runtime (including everything `services` provides).
  *
@@ -435,20 +353,14 @@ export function layer<
   SR = never,
   D = never,
   DR = never,
+  T = never,
 >(
   built: Auth.Built<P, Extra>,
-  options?: CommonOptions<S, SE, SR, D, DR> & MemoryMode,
+  options?: CommonOptions<S, SE, SR, D, DR, T> & MemoryMode,
 ): Layer.Layer<
   Provided<P, "memory", S, D> | Layer.Success<Auth.Built<P, Extra>["layer"]>,
   SE,
-  Exclude<
-    | Layer.Services<Auth.Built<P, Extra>["layer"]>
-    | Layer.Services<typeof AuthHttp.coreHandlers>
-    | AuthPlugin.RecordsIn<P[number], "memory">
-    | SR
-    | DR,
-    Provided<P, "memory", S, D> | AuthHttp.DeclaredMiddleware<Auth.AllGroups<P, Extra>>
-  >
+  Requires<P, Extra, "memory", S, SR, T, D, DR>
 >;
 export function layer<
   P extends ReadonlyArray<AuthPlugin.Any>,
@@ -458,24 +370,19 @@ export function layer<
   SR = never,
   D = never,
   DR = never,
+  T = never,
 >(
   built: Auth.Built<P, Extra>,
-  options: CommonOptions<S, SE, SR, D, DR> & SqlMode,
+  options: CommonOptions<S, SE, SR, D, DR, T> & SqlMode,
 ): Layer.Layer<
   Provided<P, "sql", S, D> | Layer.Success<Auth.Built<P, Extra>["layer"]>,
   SE,
-  Exclude<
-    | Layer.Services<Auth.Built<P, Extra>["layer"]>
-    | Layer.Services<typeof AuthHttp.coreHandlers>
-    | AuthPlugin.RecordsIn<P[number], "sql">
-    | SR
-    | DR,
-    Provided<P, "sql", S, D> | AuthHttp.DeclaredMiddleware<Auth.AllGroups<P, Extra>>
-  >
+  Requires<P, Extra, "sql", S, SR, T, D, DR>
 >;
 export function layer(
   built: Auth.Built<ReadonlyArray<AuthPlugin.Any>, HttpApiGroup.Constraint>,
-  options: CommonOptions<never, unknown, unknown, never, unknown> & (MemoryMode | SqlMode) = {},
+  options: CommonOptions<never, unknown, unknown, never, unknown, unknown> &
+    (MemoryMode | SqlMode) = {},
 ): Layer.Layer<never, unknown, unknown> {
   return makeLayer(built, options);
 }
@@ -483,16 +390,38 @@ export function layer(
 export interface SignedInSession {
   readonly userId: Users.UserId;
   readonly token: Redacted.Redacted<string>;
-  /** Ready to drop straight into `new Request(url, { headers: { cookie } })`. */
-  readonly cookieHeader: string;
+  /**
+   * The session's `Set-Cookie`, rendered under the composition's own `SessionCookieConfig` (name, `Domain`,
+   * `SameSite`, `Max-Age`): hand it to an agent with `agent.cookies.receive(setCookie)`.
+   */
+  readonly setCookie: string;
 }
+
+/** Serialises a cookie Effect's `Cookies` accepts; a value it refuses is a defect of the fixture. */
+const serialize = (name: string, value: string, options: Cookies.Cookie["options"]) =>
+  Effect.fromResult(Cookies.makeCookie(name, value, options)).pipe(
+    Effect.map(Cookies.serializeCookie),
+    Effect.orDie,
+  );
+
+/**
+ * The `Set-Cookie` the server would answer for `issued`, rendered under the ambient `SessionCookieConfig` (the
+ * composition's, inside `app.run`): for a session issued straight against `Sessions` (an existing user, a second
+ * session of one user), handed to an agent with `agent.cookies.receive(...)`.
+ */
+export const sessionSetCookie = (issued: Sessions.IssuedSession) =>
+  Effect.gen(function* () {
+    const rendered = yield* SessionCookie.render(issued.session, issued.token);
+    return yield* serialize(rendered.name, rendered.value, rendered.options);
+  });
 
 /**
  * BEH-EA-197: mints a real user and a real session directly against
  * `Users`/`Sessions` — no password, no HTTP round trip — so an
  * authorization test's setup cost is independent of whichever credential
  * plugin (if any) is installed, matching this behavior's own point: testing
- * *authorization*, not sign-up.
+ * *authorization*, not sign-up. The cookie is rendered under the ambient
+ * `SessionCookieConfig`, the one the composition's server reads.
  */
 export const signInAs = (input: {
   readonly email: string;
@@ -510,14 +439,10 @@ export const signInAs = (input: {
     if (input.onSignedUp !== undefined) {
       yield* input.onSignedUp(user.id);
     }
-    const { token } = yield* sessions
+    const issued = yield* sessions
       .issue({ userId: user.id, ...(input.amr === undefined ? {} : { amr: input.amr }) })
       .pipe(Effect.orDie);
-    return {
-      userId: user.id,
-      token,
-      cookieHeader: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}`,
-    };
+    return { userId: user.id, token: issued.token, setCookie: yield* sessionSetCookie(issued) };
   });
 
 /**
@@ -537,16 +462,60 @@ export const csrfToken = (
   return `${signed}.${createHmac("sha256", key).update(signed).digest("hex")}`;
 };
 
-/** What a request through `TestAuth.app` may carry. */
-export interface RequestInit {
-  /** An existing `cookie` header value (a session cookie); the CSRF cookie is appended. */
-  readonly cookie?: string;
-  /** A JSON body (sets `content-type: application/json`). */
-  readonly json?: unknown;
-  /** A form body (sets `content-type: application/x-www-form-urlencoded`). */
-  readonly form?: Readonly<Record<string, string>>;
-  /** Extra headers; they win over the ones `request` sets. */
-  readonly headers?: Readonly<Record<string, string>>;
+/**
+ * The `Set-Cookie` of a freshly minted `__Host-csrf` (see `csrfToken`), for seeding an agent over a hand-wired
+ * handler the way `TestAuth.app` seeds its own: `agent.cookies.receive(TestAuth.csrfSetCookie(secret))`.
+ * `sameSite`/`partitioned` follow `SessionCookie.csrfCookieOptions` (default `Strict`).
+ */
+export const csrfSetCookie = (
+  secret: Redacted.Redacted<string> | string,
+  options?: {
+    readonly issuedAt?: number;
+    readonly sameSite?: "strict" | "none";
+    readonly partitioned?: true;
+  },
+): string =>
+  Effect.runSync(
+    serialize(
+      Api.CSRF_COOKIE_NAME,
+      csrfToken(
+        secret,
+        options?.issuedAt === undefined ? undefined : { issuedAt: options.issuedAt },
+      ),
+      {
+        path: "/",
+        secure: true,
+        httpOnly: false,
+        sameSite: options?.sameSite ?? "strict",
+        ...(options?.partitioned === undefined ? {} : { partitioned: options.partitioned }),
+      },
+    ),
+  );
+
+/** What a request through `TestAuth.app` may carry: an agent's `RequestInit`. */
+export type RequestInit = UserAgent.RequestInit;
+
+/** How an agent of a `TestAuth.app` behaves. */
+export interface AgentOptions {
+  /** `bearer`: a native client (no cookies; the delivery header and `Authorization`). Default `cookie`. */
+  readonly delivery?: "cookie" | "bearer";
+  /** `throw` (default): a `Set-Cookie` a browser would refuse fails the request. `record`: kept in `refused`. */
+  readonly onRefused?: "throw" | "record";
+  /** Requests to these URLs never complete. */
+  readonly hold?: (url: URL) => boolean;
+}
+
+/** What `signIn` takes beside the email. */
+export interface SignInOptions {
+  readonly name?: string;
+  readonly amr?: ReadonlyArray<Sessions.AuthMethod>;
+  readonly onSignedUp?: (userId: Users.UserId) => Effect.Effect<void>;
+}
+
+/** An agent already holding a session minted straight against `Users`/`Sessions`. */
+export interface SignedInAgent extends UserAgent.UserAgent {
+  readonly userId: Users.UserId;
+  readonly token: Redacted.Redacted<string>;
 }
 
 /**
@@ -559,19 +528,21 @@ export interface App<A, E = never> {
   /** Runs an effect against the composition's own context (the instances the plugins use). */
   readonly run: <X, XE, XR extends A>(effect: Effect.Effect<X, XE, XR>) => Promise<X>;
   /**
-   * A request with the CSRF double-submit pair a browser client would send, minted from the composition's
-   * own `CsrfConfig` (read once through `run`).
+   * BEH-EA-333: a fresh browser (or native client) over this composition: its own cookie store, the
+   * composition's clock, and a `__Host-csrf` cookie already held (minted from the composition's own
+   * `CsrfConfig`, independently of `Csrf.ts`), so its first unsafe request echoes it like a page script.
    */
-  readonly request: (method: string, path: string, init?: RequestInit) => Promise<Response>;
-  /** Mints a user and a session straight against `Users`/`Sessions` (see `signInAs`). */
+  readonly agent: (options?: AgentOptions) => Promise<UserAgent.UserAgent>;
+  /**
+   * Mints a user and a session (as `signInAs`) and returns an agent holding it: the session cookie rendered
+   * under the composition's `SessionCookieConfig`, or the bearer token with `delivery: "bearer"`.
+   */
   readonly signIn: (
     email: string,
-    options?: {
-      readonly name?: string;
-      readonly amr?: ReadonlyArray<Sessions.AuthMethod>;
-      readonly onSignedUp?: (userId: Users.UserId) => Effect.Effect<void>;
-    },
-  ) => Promise<SignedInSession>;
+    options?: SignInOptions & AgentOptions,
+  ) => Promise<SignedInAgent>;
+  /** One request from a fresh anonymous agent (nothing leaks between unrelated requests). */
+  readonly request: (method: string, path: string, init?: RequestInit) => Promise<Response>;
   /**
    * The composition's context, built once on the real clock: for a World that runs effects *directly* on its own fiber
    * (under a step's `TestClock`) against the very instances `handler` serves from. A service that reads the clock when
@@ -590,9 +561,10 @@ export interface App<A, E = never> {
    */
   readonly runtime: ManagedRuntime.ManagedRuntime<A, E>;
   /**
-   * Moves the composition's clock forward: with `testClock: true` the handler, `run` and `runtime` all read one
-   * `TestClock`, so a session expires, a window resets, a token lapses when the test says so. Without the option
-   * there is no `TestClock` to move and the promise rejects.
+   * Moves the composition's clock forward: with `testClock: true` the handler, `run`, `runtime` and every agent's
+   * cookie store all read one `TestClock`, so a session expires, a window resets, a token lapses (and a cookie's
+   * `Max-Age` with it) when the test says so. Without the option there is no `TestClock` to move and the promise
+   * rejects.
    */
   readonly advance: (by: Duration.Input) => Promise<void>;
   /** Releases everything the composition built. */
@@ -603,18 +575,22 @@ export interface App<A, E = never> {
 export type AppNeeds = Csrf.CsrfConfig | Users.Users | Sessions.Sessions;
 
 /**
- * BEH-EA-T3: serves `appLayer` (normally `TestAuth.layer(Auth.make([...]), ...)`) and returns the handle a
- * wire-level suite uses. It replaces the hand-rolled `Layer.makeMemoMapUnsafe` + `HttpRouter.toWebHandler`
- * + `buildWithMemoMap` blocks and the per-suite CSRF token mint.
+ * BEH-EA-T3/BEH-EA-333: serves `appLayer` (normally `TestAuth.layer(Auth.make([...]), ...)`) and returns the
+ * handle a wire-level suite uses: agents that keep cookies, echo CSRF and follow rotations. It replaces the
+ * hand-rolled `Layer.makeMemoMapUnsafe` + `HttpRouter.toWebHandler` + `buildWithMemoMap` blocks, the per-suite
+ * CSRF token mint and the hand-threaded cookies.
  */
 export const app = <A, E>(
   composition: Layer.Layer<A | AppNeeds, E>,
   options: {
-    /** The origin `request` addresses (default `http://localhost`): a plugin that derives a URL from the request's host sees it. */
+    /**
+     * The origin agents address (default `http://localhost`, a secure context): a plugin that derives a URL from
+     * the request's host sees it, and an agent applies a browser's `Domain`/`Secure` rules against it.
+     */
     readonly baseUrl?: string;
     /**
-     * Serve the composition over one `TestClock` (time starts at the epoch): `advance` moves it for the handler and
-     * for `run` alike, and `request` stamps its CSRF pair with the clock's current reading.
+     * Serve the composition over one `TestClock` (time starts at the epoch): `advance` moves it for the handler,
+     * for `run` and for every agent's cookie store alike.
      */
     readonly testClock?: boolean;
     /** An existing memo map to build into, so several apps (or a hand-made router) share the instances they have in common. */
@@ -637,58 +613,88 @@ export const app = <A, E>(
   const run: App<A | AppNeeds, E>["run"] = (effect) =>
     built().then((services) => Effect.runPromiseWith(services)(effect));
   const runtime = ManagedRuntime.make(appLayer, { memoMap });
-  let token: Promise<string> | undefined;
-  const csrf = () => {
-    if (options.testClock === true) {
-      return run(
-        Effect.gen(function* () {
-          const config = yield* Csrf.CsrfConfig;
-          const now = yield* Clock.currentTimeMillis;
-          return csrfToken(config.secret, { issuedAt: Math.floor(now / 1000) });
-        }),
-      );
-    }
-    token ??= run(
-      Effect.map(Effect.service(Csrf.CsrfConfig), (config) => csrfToken(config.secret)),
-    );
-    return token;
+  const handler = (request: Request) => web.handler(request);
+
+  // The agents' clock: the composition's `TestClock` (re-read whenever an agent is made or the clock moves),
+  // or the wall clock.
+  let clockMs = 0;
+  const syncClock = async () => {
+    if (options.testClock === true) clockMs = await run(Clock.currentTimeMillis);
   };
+  const now = options.testClock === true ? () => clockMs : Date.now;
+
+  // The CSRF cookie every agent starts with, minted from the composition's own config.
+  let csrfConfig:
+    | Promise<{
+        readonly secret: Redacted.Redacted<string>;
+        readonly cookie: ReturnType<typeof SessionCookie.csrfCookieOptions>;
+      }>
+    | undefined;
+  const csrfCookie = async () => {
+    csrfConfig ??= run(
+      Effect.gen(function* () {
+        const config = yield* Csrf.CsrfConfig;
+        const cookieConfig = yield* SessionCookie.SessionCookieConfig;
+        return { secret: config.secret, cookie: SessionCookie.csrfCookieOptions(cookieConfig) };
+      }),
+    );
+    const { secret, cookie } = await csrfConfig;
+    return csrfSetCookie(secret, { issuedAt: Math.floor(now() / 1000), ...cookie });
+  };
+
+  const agent = async (agentOptions: AgentOptions = {}) => {
+    await syncClock();
+    const made = UserAgent.make({
+      handler,
+      origin: baseUrl,
+      now,
+      ...(agentOptions.delivery === undefined ? {} : { delivery: agentOptions.delivery }),
+      ...(agentOptions.onRefused === undefined ? {} : { onRefused: agentOptions.onRefused }),
+      ...(agentOptions.hold === undefined ? {} : { hold: agentOptions.hold }),
+    });
+    if (agentOptions.delivery !== "bearer") made.cookies.receive(await csrfCookie());
+    return made;
+  };
+
   return {
-    handler: (request) => web.handler(request),
+    handler,
     run,
-    request: async (method, path, init = {}) => {
-      const minted = await csrf();
-      const headers = new Headers({
-        cookie: [init.cookie, `${Api.CSRF_COOKIE_NAME}=${minted}`]
-          .filter((part) => part !== undefined && part !== "")
-          .join("; "),
-        [Api.CSRF_HEADER_NAME]: minted,
+    agent,
+    signIn: async (email, signInOptions = {}) => {
+      const { delivery, onRefused, hold, ...mint } = signInOptions;
+      const signedIn = await run(signInAs({ email, ...mint }));
+      const made = await agent({
+        ...(delivery === undefined ? {} : { delivery }),
+        ...(onRefused === undefined ? {} : { onRefused }),
+        ...(hold === undefined ? {} : { hold }),
       });
-      let body: string | undefined;
-      if (init.json !== undefined) {
-        headers.set("content-type", "application/json");
-        body = JSON.stringify(init.json);
-      } else if (init.form !== undefined) {
-        headers.set("content-type", "application/x-www-form-urlencoded");
-        body = new URLSearchParams(init.form).toString();
+      if (delivery === "bearer") {
+        made.bearer.set(Redacted.value(signedIn.token));
+      } else {
+        const received = made.cookies.receive(signedIn.setCookie);
+        if (received._tag !== "Stored") {
+          throw new Error(
+            `TestAuth.app: the agent did not store the minted session cookie (${received._tag === "Refused" ? received.refusal : received._tag}); is \`baseUrl\` an origin its \`SessionCookieConfig\` can set cookies on?`,
+          );
+        }
       }
-      for (const [name, value] of Object.entries(init.headers ?? {})) headers.set(name, value);
-      return web.handler(
-        new Request(`${baseUrl}${path}`, {
-          method,
-          headers,
-          ...(body === undefined ? {} : { body }),
-        }),
-      );
+      return {
+        ...made,
+        userId: signedIn.userId,
+        token: signedIn.token,
+      };
     },
-    signIn: (email, options = {}) => run(signInAs({ email, ...options })),
+    request: async (method, path, init = {}) => (await agent()).request(method, path, init),
     context: built,
     memoMap,
     runtime,
-    advance: (by) =>
-      options.testClock === true
-        ? run(TestClock.adjust(by))
-        : Promise.reject(new Error("TestAuth.app: `advance` needs the `testClock: true` option")),
+    advance: async (by) => {
+      if (options.testClock !== true) {
+        throw new Error("TestAuth.app: `advance` needs the `testClock: true` option");
+      }
+      await run(TestClock.adjust(by));
+      await syncClock();
+    },
     dispose: async () => {
       await web.dispose();
       await runtime.dispose();
@@ -819,17 +825,35 @@ export type { TestFramework } from "./TestFramework.ts";
  * the two ledgers) so two independent applications can be compared.
  */
 const applyMigrations = (migrations: Auth.Built<ReadonlyArray<AuthPlugin.Any>>["migrations"]) =>
+  applyMigrationsOn(migrations, SqliteClient.layer({ filename: ":memory:" }));
+
+const applyMigrationsOn = <E>(
+  migrations: Auth.Built<ReadonlyArray<AuthPlugin.Any>>["migrations"],
+  client: Layer.Layer<SqlClient.SqlClient, E>,
+) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const readSchema = sql<{
-      readonly type: string;
-      readonly name: string;
-      readonly tbl_name: string;
-      readonly sql: string;
-    }>`
+    // The statement text ownership check below is SQLite's; on Postgres only the structural shape is read.
+    const readSchema = sql.onDialectOrElse({
+      pg: () =>
+        Effect.succeed<
+          ReadonlyArray<{
+            readonly type: string;
+            readonly name: string;
+            readonly tbl_name: string;
+            readonly sql: string;
+          }>
+        >([]),
+      orElse: () => sql<{
+        readonly type: string;
+        readonly name: string;
+        readonly tbl_name: string;
+        readonly sql: string;
+      }>`
       SELECT type, name, tbl_name, sql FROM sqlite_master
       WHERE name NOT LIKE 'sqlite_%' AND name NOT IN ('effect_sql_migrations', ${Migrations.pluginMigrationsTable})
-      ORDER BY name`;
+      ORDER BY name`,
+    });
     yield* Migrator.make({})({
       loader: CoreMigrations.coreMigrations,
       table: "effect_sql_migrations",
@@ -839,8 +863,75 @@ const applyMigrations = (migrations: Auth.Built<ReadonlyArray<AuthPlugin.Any>>["
     yield* Migrations.run(migrations);
     const reapplied = yield* Migrations.run(migrations);
     const schema = yield* readSchema;
-    return { schema, coreSchema, reapplied: reapplied.length };
-  }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" })), Effect.scoped);
+    const shape = yield* TestSql.schemaOf;
+    return { schema, coreSchema, shape, reapplied: reapplied.length };
+  }).pipe(Effect.provide(client), Effect.scoped);
+
+/**
+ * Plan 22 (schema lock): the structural schema core plus `plugin`'s dependency closure and the plugin
+ * itself build on a fresh SQLite database, with the plugin's own migration names in ledger order.
+ */
+export const migratedSchema = (plugin: AuthPlugin.Any) => {
+  const closure = dependencyClosure(plugin);
+  const [first = plugin, ...rest] = closure.length === 0 ? [] : [...closure, plugin];
+  return Effect.runPromise(
+    Effect.all([applyMigrations([]), applyMigrations(Auth.make([first, ...rest]).migrations)]).pipe(
+      Effect.map(([core, composed]) => ({
+        migrations: plugin.migrations.map((migration) => migration.name),
+        // What the plugins add: core's own tables, indexes and triggers are core's lock to keep.
+        schema: {
+          tables: Object.fromEntries(
+            Object.entries(composed.shape.tables).filter(
+              ([name]) => core.shape.tables[name] === undefined,
+            ),
+          ),
+          indexes: composed.shape.indexes.filter(
+            (index) => !core.shape.indexes.some((own) => own.name === index.name),
+          ),
+          triggers: composed.shape.triggers.filter(
+            (trigger) => !core.shape.triggers.some((own) => own.name === trigger.name),
+          ),
+        },
+      })),
+    ),
+  );
+};
+
+/** Every declared table exists, and so does every column a tenancy declaration names (plan 22, D3). */
+const declarationProblems = (
+  plugin: AuthPlugin.Any,
+  shape: TestSql.SchemaShape,
+): ReadonlyArray<string> => {
+  const problems: Array<string> = [];
+  const has = (table: string, column: string) =>
+    shape.tables[table]?.some((candidate) => candidate.name === column) === true;
+  for (const [table, { tenancy }] of Object.entries(plugin.tenancy ?? {})) {
+    if (shape.tables[table] === undefined) {
+      problems.push(`table "${table}" is declared but no migration creates it`);
+      continue;
+    }
+    switch (tenancy._tag) {
+      case "Partitioned":
+      case "Keyed":
+        if (!has(table, tenancy.column))
+          problems.push(
+            `${tenancy._tag.toLowerCase()} column "${table}.${tenancy.column}" does not exist`,
+          );
+        break;
+      case "Derived":
+        if (!has(table, tenancy.via))
+          problems.push(`derived column "${table}.${tenancy.via}" does not exist`);
+        if (!has(tenancy.parent, tenancy.parentKey))
+          problems.push(
+            `derived parent key "${tenancy.parent}.${tenancy.parentKey}" does not exist`,
+          );
+        break;
+      case "Global":
+        break;
+    }
+  }
+  return problems;
+};
 
 /**
  * PV-252/INV-EA-016: what the plugins' migrations did to the schema core created. A core table
@@ -1045,7 +1136,7 @@ export const runPluginContractTests = <O, R = never>(
   framework.describe("runPluginContractTests", () => {
     let previousContract: AuthPlugin.Any["contract"] | undefined;
 
-    for (const options of config.options) {
+    for (const [optionIndex, options] of config.options.entries()) {
       const plugin = makePlugin(options);
       const host = config.host ?? dependencyClosure(plugin);
       const hostIds = new Set(host.map((installed) => installed.id));
@@ -1115,7 +1206,7 @@ export const runPluginContractTests = <O, R = never>(
           return;
         }
         const [a, b] = outcome.value;
-        if (JSON.stringify(a.schema) !== JSON.stringify(b.schema)) {
+        if (JSON.stringify(a.shape) !== JSON.stringify(b.shape)) {
           framework.fail(
             `plugin "${plugin.id}"'s migrations produced different schemas on two fresh databases — an \`up\` is not deterministic`,
           );
@@ -1126,6 +1217,68 @@ export const runPluginContractTests = <O, R = never>(
           );
         }
       });
+
+      // Plan 22 (D3, BEH-EA-198): the tables and tenancy columns a plugin declares exist after its migrations.
+      framework.it(`${label}: every declared table and tenancy column exists`, async () => {
+        const [first, ...rest] = [...host, plugin];
+        if (first === undefined) {
+          framework.fail("runPluginContractTests: host plus plugin under test was empty");
+          return;
+        }
+        const outcome = await Effect.runPromise(
+          Effect.exit(applyMigrations(Auth.make([first, ...rest]).migrations)),
+        );
+        if (Exit.isFailure(outcome)) {
+          framework.fail(
+            `plugin "${plugin.id}"'s migrations failed to apply: ${Cause.pretty(outcome.cause)}`,
+          );
+          return;
+        }
+        const problems = declarationProblems(plugin, outcome.value.shape);
+        if (problems.length > 0) {
+          framework.fail(
+            `plugin "${plugin.id}" declares tenancy its schema does not have: ${problems.join("; ")}`,
+          );
+        }
+      });
+
+      // Plan 22 (BEH-EA-198): under `AWTHAQ_POSTGRES_URL`, Postgres and SQLite build the same logical schema.
+      if (process.env["AWTHAQ_POSTGRES_URL"] !== undefined) {
+        framework.it(`${label}: Postgres and SQLite build the same logical schema`, async () => {
+          const [first, ...rest] = [...host, plugin];
+          if (first === undefined) {
+            framework.fail("runPluginContractTests: host plus plugin under test was empty");
+            return;
+          }
+          const migrations = Auth.make([first, ...rest]).migrations;
+          const outcome = await Effect.runPromise(
+            Effect.exit(
+              Effect.all([
+                // One schema per option set: a framework may run these checks concurrently, and
+                // two builds sharing a schema race on its DROP/CREATE.
+                applyMigrationsOn(
+                  migrations,
+                  TestSql.layer(`schema_parity_${plugin.id}_${optionIndex}`),
+                ),
+                applyMigrations(migrations),
+              ]),
+            ),
+          );
+          if (Exit.isFailure(outcome)) {
+            framework.fail(
+              `plugin "${plugin.id}"'s migrations failed to apply: ${Cause.pretty(outcome.cause)}`,
+            );
+            return;
+          }
+          const [onPostgres, onSqlite] = outcome.value;
+          const differences = TestSql.parityDifferences(onPostgres.shape, onSqlite.shape);
+          if (differences.length > 0) {
+            framework.fail(
+              `plugin "${plugin.id}" builds different logical schemas: ${differences.join("; ")}`,
+            );
+          }
+        });
+      }
 
       // PV-252/INV-EA-016: a plugin migration may create its own tables and nothing else. A shared
       // (core-owned) table is extended only through a declared extension point, never by an ALTER.

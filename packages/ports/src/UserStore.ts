@@ -24,6 +24,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import type { E164, UserId } from "./Ids.ts";
+import * as Sealed from "./Sealed.ts";
 import type { StoreUnavailable } from "./Store.ts";
 import * as Tenant from "./Tenant.ts";
 
@@ -38,8 +39,8 @@ export interface StoredUser {
   readonly phoneVerified: boolean;
   readonly name: string;
   readonly image: Option.Option<string>;
-  /** The adapter seals it at rest where it encrypts (CSG-006). */
-  readonly metadata: Option.Option<string>;
+  /** CSG-006: sealed by the adapter where it encrypts, `Sealed.plain` where it does not. Opened where the domain needs it. */
+  readonly metadata: Option.Option<Sealed.Sealed<string>>;
   readonly status: "active" | "suspended";
   readonly statusReason: Option.Option<string>;
   readonly suspendedUntil: Option.Option<DateTime.Utc>;
@@ -49,8 +50,10 @@ export interface StoredUser {
   readonly updatedAt: DateTime.Utc;
 }
 
-/** What `insertOrHolder` writes; the store adds the tenant. */
-export type NewUser = Omit<StoredUser, "tenantId">;
+/** What `insertOrHolder` writes; the store adds the tenant. `metadata` is the plaintext, which the store seals where it encrypts. */
+export interface NewUser extends Omit<StoredUser, "tenantId" | "metadata"> {
+  readonly metadata: Option.Option<string>;
+}
 
 /** What a profile write does to an optional column. */
 export type Change<A> =
@@ -273,7 +276,11 @@ export const layerMemory = Layer.effect(
 
     const insertOrHolder: UserStoreShape["insertOrHolder"] = (row) =>
       Effect.flatMap(Tenant.resolve(Option.none()), (tenantId) => {
-        const user: StoredUser = { ...row, tenantId };
+        const user: StoredUser = {
+          ...row,
+          metadata: Option.map(row.metadata, Sealed.plain),
+          tenantId,
+        };
         return Ref.modify(state, (s): readonly [InsertOutcome, State] => {
           const holder = holderOf(s, user.email, user.phone);
           return Option.isSome(holder)
@@ -308,7 +315,7 @@ export const layerMemory = Layer.effect(
           ...user,
           name: input.name,
           image: applyChange(user.image, input.image),
-          metadata: applyChange(user.metadata, input.metadata),
+          metadata: applyChange(user.metadata, sealedChange(input.metadata)),
           updatedAt: input.at,
         })),
       );
@@ -419,6 +426,10 @@ export const layerMemory = Layer.effect(
     });
   }),
 );
+
+/** A plaintext profile change as the sealed change the `Ref` adapter stores (`Sealed.plain`). */
+const sealedChange = (change: Change<string>): Change<Sealed.Sealed<string>> =>
+  change._tag === "Set" ? { _tag: "Set", value: Sealed.plain(change.value) } : change;
 
 const applyChange = <A>(current: Option.Option<A>, change: Change<A>): Option.Option<A> => {
   switch (change._tag) {

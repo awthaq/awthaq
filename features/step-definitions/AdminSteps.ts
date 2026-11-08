@@ -8,23 +8,54 @@ import {
   inspectSession,
   publishedEvents,
   request,
-  resolvePrincipal,
+  principalOfToken,
   setOutcome,
   signIn,
-  tokenFromCookie,
+  browser,
+  type Actor,
   World,
 } from "./AdminWorld.ts";
-import { cookieFrom } from "./shared/Harness.ts";
+import { CookieAssertions, type UserAgent } from "@awthaq/test";
 
+const IMPERSONATION_COOKIE = "__Host-impersonation";
+
+/** The session id half of a raw `<id>.<secret>` session token. */
+const sessionIdOf = (token: string): string => token.split(".")[0]!;
+
+/** The impersonation token a browser holds after a successful `admin.impersonate`. */
+const impersonationTokenOf = (agent: UserAgent.UserAgent): string => {
+  const token = agent.cookies.value(IMPERSONATION_COOKIE);
+  if (token === undefined) throw new Error("expected the browser to hold the impersonation cookie");
+  return token;
+};
+
+/**
+ * `admin.impersonate` from a browser: a fresh one holding the actor's session, or a browser the scenario
+ * already holds (an impersonating one, for the nested case). On success that browser holds the
+ * impersonation cookie beside the admin's own session (APS-006); it is recorded as `impersonatingBrowser`.
+ */
 const impersonate = Effect.fn("features.admin.impersonate")(function* (
-  adminCookie: string,
+  from: Actor | UserAgent.UserAgent,
   targetUserId: string,
   reason: string,
 ) {
-  return yield* request("POST", `/admin/impersonate/${targetUserId}`, {
+  const agent = "request" in from ? from : yield* browser(from);
+  const response = yield* request("POST", `/admin/impersonate/${targetUserId}`, {
     body: { reason },
-    headers: { cookie: adminCookie },
+    as: agent,
   });
+  yield* setOutcome("impersonatingBrowser", agent);
+  return response;
+});
+
+/** A request from a fresh browser holding `actor`'s session. */
+const requestAs = Effect.fn("features.admin.requestAs")(function* (
+  actor: Actor,
+  method: string,
+  path: string,
+  options?: { readonly body?: unknown; readonly headers?: Record<string, string> },
+) {
+  return yield* request(method, path, { ...options, as: yield* browser(actor) });
 });
 
 /** ESS-006: `GET /admin` answers a page `{ items, nextCursor }`; the scenarios only read the rows. */
@@ -51,8 +82,8 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     Effect.fn(function* () {
       const response = (yield* getOutcome("impersonateResponse")) as Response;
       if (response.status !== 200) throw new Error(`expected 200, got ${response.status}`);
-      const token = tokenFromCookie(cookieFrom(response));
-      const session = yield* inspectSession(token);
+      const impersonating = (yield* getOutcome("impersonatingBrowser")) as UserAgent.UserAgent;
+      const session = yield* inspectSession(impersonationTokenOf(impersonating));
       if (session.actingAs._tag !== "Some") {
         throw new Error("expected the target's session to carry actingAs");
       }
@@ -67,9 +98,8 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "the newly-issued session's {string} equals its {string}",
     Effect.fn(function* (_idle: string, _absolute: string) {
-      const response = (yield* getOutcome("impersonateResponse")) as Response;
-      const token = tokenFromCookie(cookieFrom(response));
-      const session = yield* inspectSession(token);
+      const impersonating = (yield* getOutcome("impersonatingBrowser")) as UserAgent.UserAgent;
+      const session = yield* inspectSession(impersonationTokenOf(impersonating));
       const idle = session.idleExpiresAt.epochMilliseconds;
       const absolute = session.absoluteExpiresAt.epochMilliseconds;
       if (idle !== absolute) {
@@ -80,7 +110,7 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     }),
   );
 
-  // ---- BEH-EA-211: resolvePrincipal closes the loop (402) ----
+  // ---- BEH-EA-211: principalOfToken closes the loop (402) ----
 
   Given(
     "a signed-in admin actively impersonating a target user",
@@ -88,18 +118,18 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* configureApp({ canImpersonate: () => Effect.succeed(true) });
       const adminCookie = yield* signIn("admin-1");
       yield* setOutcome("adminCookie", adminCookie);
-      const response = yield* impersonate(adminCookie, "target-1", "support ticket #4821");
-      const impersonatingCookie = cookieFrom(response);
-      yield* setOutcome("impersonatingCookie", impersonatingCookie);
-      yield* setOutcome("sessionId", impersonatingCookie.split("=")[1]!.split(".")[0]!);
+      yield* impersonate(adminCookie, "target-1", "support ticket #4821");
+      const impersonating = (yield* getOutcome("impersonatingBrowser")) as UserAgent.UserAgent;
+      yield* setOutcome("impersonationToken", impersonationTokenOf(impersonating));
+      yield* setOutcome("sessionId", sessionIdOf(impersonationTokenOf(impersonating)));
     }),
   );
 
   When(
     "the impersonation session's own token is resolved to a principal",
     Effect.fn(function* () {
-      const impersonatingCookie = (yield* getOutcome("impersonatingCookie")) as string;
-      const principal = yield* resolvePrincipal(tokenFromCookie(impersonatingCookie));
+      const token = (yield* getOutcome("impersonationToken")) as string;
+      const principal = yield* principalOfToken(token);
       yield* setOutcome("resolvedPrincipal", principal);
     }),
   );
@@ -139,7 +169,7 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     'a signed-in user calls "admin.impersonate" for another user',
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
       const response = yield* impersonate(adminCookie, "target-1", "reproducing a bug");
       yield* setOutcome("impersonateResponse", response);
     }),
@@ -168,7 +198,7 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     'a signed-in user calls "admin.impersonate" for another user with a valid reason',
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
       const response = yield* impersonate(adminCookie, "target-1", "reproducing a bug");
       yield* setOutcome("impersonateResponse", response);
     }),
@@ -217,7 +247,7 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "the admin calls {string} for a target user with a valid reason",
     Effect.fn(function* (_endpoint: string) {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
       const response = yield* impersonate(adminCookie, "target-1", "reproducing a bug");
       yield* setOutcome("impersonateResponse", response);
     }),
@@ -227,9 +257,10 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     "the response carries a new session cookie, distinct from the admin's own",
     Effect.fn(function* () {
       const response = (yield* getOutcome("impersonateResponse")) as Response;
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
-      const targetCookie = cookieFrom(response);
-      if (targetCookie === adminCookie) {
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
+      const impersonating = (yield* getOutcome("impersonatingBrowser")) as UserAgent.UserAgent;
+      CookieAssertions.findSetCookie(response, IMPERSONATION_COOKIE);
+      if (impersonationTokenOf(impersonating) === adminCookie.token) {
         throw new Error("expected a distinct session cookie for the target");
       }
     }),
@@ -238,10 +269,10 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "the admin's own original session cookie still authenticates afterward",
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
       // `list` is gated only by canImpersonate, not by "am I impersonating" —
       // any still-valid session for a permitted caller can reach it.
-      const response = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
+      const response = yield* requestAs(adminCookie, "GET", "/admin");
       if (response.status !== 200) {
         throw new Error(
           `expected the admin's own session to still authenticate, got ${response.status}`,
@@ -253,8 +284,22 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "the admin calls {string} for a target user with a reason of only whitespace",
     Effect.fn(function* (_endpoint: string) {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
       const response = yield* impersonate(adminCookie, "target-1", "   ");
+      yield* setOutcome("impersonateResponse", response);
+    }),
+  );
+
+  // ADR-EA-045: `admin.impersonate` declares `SessionLifecycle.Swaps`, which is cookie only.
+  When(
+    "the admin calls {string} for a target user asking for bearer delivery",
+    Effect.fn(function* (_endpoint: string) {
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
+      const response = yield* request("POST", "/admin/impersonate/target-1", {
+        body: { reason: "support ticket 42" },
+        as: yield* browser(adminCookie),
+        headers: { "x-awthaq-token-delivery": "bearer" },
+      });
       yield* setOutcome("impersonateResponse", response);
     }),
   );
@@ -262,7 +307,7 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "the admin calls {string} for a target user with a reason over 1000 characters long",
     Effect.fn(function* (_endpoint: string) {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
       const response = yield* impersonate(adminCookie, "target-1", "x".repeat(1001));
       yield* setOutcome("impersonateResponse", response);
     }),
@@ -284,7 +329,7 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "the admin calls {string} naming their own user id as the target",
     Effect.fn(function* (_endpoint: string) {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
       const response = yield* impersonate(adminCookie, "admin-1", "test");
       yield* setOutcome("impersonateResponse", response);
     }),
@@ -305,8 +350,8 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "the admin's impersonation session calls {string} for a different target user",
     Effect.fn(function* (_endpoint: string) {
-      const impersonatingCookie = (yield* getOutcome("impersonatingCookie")) as string;
-      const response = yield* impersonate(impersonatingCookie, "target-2", "nested");
+      const impersonating = (yield* getOutcome("impersonatingBrowser")) as UserAgent.UserAgent;
+      const response = yield* impersonate(impersonating, "target-2", "nested");
       yield* setOutcome("nestedResponse", response);
     }),
   );
@@ -328,10 +373,10 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "a new row appears in the impersonation audit trail for that admin, target, and session",
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
-      const impersonateResponse = (yield* getOutcome("impersonateResponse")) as Response;
-      const sessionId = cookieFrom(impersonateResponse).split("=")[1]!.split(".")[0]!;
-      const listResponse = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
+      const impersonating = (yield* getOutcome("impersonatingBrowser")) as UserAgent.UserAgent;
+      const sessionId = sessionIdOf(impersonationTokenOf(impersonating));
+      const listResponse = yield* requestAs(adminCookie, "GET", "/admin");
       const rows = yield* listRows<{
         readonly adminUserId: string;
         readonly targetUserId: string;
@@ -359,10 +404,10 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     'the admin calls "admin.stopImpersonating"',
     Effect.fn(function* () {
-      const impersonatingCookie = (yield* getOutcome("impersonatingCookie")) as string;
+      const impersonating = (yield* getOutcome("impersonatingBrowser")) as UserAgent.UserAgent;
       const response = yield* request("POST", "/admin/stop-impersonating", {
         body: {},
-        headers: { cookie: impersonatingCookie },
+        as: impersonating,
       });
       yield* setOutcome("stopResponse", response);
     }),
@@ -371,9 +416,9 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     'the matching audit row\'s "endedAt" and "endedBy" are set to "self"',
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
       const sessionId = (yield* getOutcome("sessionId")) as string;
-      const listResponse = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
+      const listResponse = yield* requestAs(adminCookie, "GET", "/admin");
       const rows = yield* listRows<{
         readonly sessionId: string;
         readonly endedAt: string | null;
@@ -394,10 +439,10 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "the admin's impersonation session calls {string}",
     Effect.fn(function* (_endpoint: string) {
-      const impersonatingCookie = (yield* getOutcome("impersonatingCookie")) as string;
+      const impersonating = (yield* getOutcome("impersonatingBrowser")) as UserAgent.UserAgent;
       const response = yield* request("POST", "/admin/stop-impersonating", {
         body: {},
-        headers: { cookie: impersonatingCookie },
+        as: impersonating,
       });
       yield* setOutcome("stopResponse", response);
     }),
@@ -410,24 +455,24 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       if (response.status !== 204) throw new Error(`expected 204, got ${response.status}`);
       // APS-006: the one Set-Cookie allowed is the impersonation cookie's expiry —
       // it hands the browser back to its own session; it never carries a token.
-      for (const line of response.headers.getSetCookie()) {
-        const [pair = "", ...attributes] = line.split(";");
-        const expiry =
-          pair.startsWith("__Host-impersonation=") &&
-          attributes.some((attribute) => /max-age=0/i.test(attribute));
-        if (!expiry) {
-          throw new Error(`expected only an impersonation-cookie expiry, got "${line}"`);
+      for (const cookie of CookieAssertions.setCookiesOf(response)) {
+        if (cookie.name !== IMPERSONATION_COOKIE) {
+          throw new Error(`expected only an impersonation-cookie expiry, got "${cookie.name}"`);
         }
       }
+      CookieAssertions.assertExpiredCookie(
+        CookieAssertions.findSetCookie(response, IMPERSONATION_COOKIE),
+      );
     }),
   );
 
   Then(
     "the revoked impersonation session no longer authenticates",
     Effect.fn(function* () {
-      const impersonatingCookie = (yield* getOutcome("impersonatingCookie")) as string;
+      // The impersonation token presented again, alone (the browser itself has dropped or still holds it).
+      const token = (yield* getOutcome("impersonationToken")) as string;
       const response = yield* request("GET", "/admin", {
-        headers: { cookie: impersonatingCookie },
+        extraCookies: { [IMPERSONATION_COOKIE]: token },
       });
       if (response.status === 200) {
         throw new Error("expected the revoked impersonation session to no longer authenticate");
@@ -438,8 +483,8 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "the admin's own original session cookie still authenticates",
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
-      const response = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
+      const response = yield* requestAs(adminCookie, "GET", "/admin");
       if (response.status !== 200) {
         throw new Error(
           `expected the admin's own session to still authenticate, got ${response.status}`,
@@ -460,10 +505,9 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "that session calls {string}",
     Effect.fn(function* (_endpoint: string) {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
-      const response = yield* request("POST", "/admin/stop-impersonating", {
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
+      const response = yield* requestAs(adminCookie, "POST", "/admin/stop-impersonating", {
         body: {},
-        headers: { cookie: adminCookie },
       });
       yield* setOutcome("stopResponse", response);
     }),
@@ -487,10 +531,10 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* configureApp({ canImpersonate: () => Effect.succeed(true) });
       const adminCookie = yield* signIn("admin-1");
       yield* setOutcome("adminCookie", adminCookie);
-      const response = yield* impersonate(adminCookie, "target-1", "support ticket #4821");
-      const sessionId = cookieFrom(response).split("=")[1]!.split(".")[0]!;
-      yield* setOutcome("sessionId", sessionId);
-      yield* setOutcome("impersonatingCookie", cookieFrom(response));
+      yield* impersonate(adminCookie, "target-1", "support ticket #4821");
+      const impersonating = (yield* getOutcome("impersonatingBrowser")) as UserAgent.UserAgent;
+      yield* setOutcome("sessionId", sessionIdOf(impersonationTokenOf(impersonating)));
+      yield* setOutcome("impersonationToken", impersonationTokenOf(impersonating));
     }),
   );
 
@@ -499,10 +543,14 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     Effect.fn(function* () {
       const secondAdminCookie = yield* signIn("admin-2");
       const sessionId = (yield* getOutcome("sessionId")) as string;
-      const response = yield* request("POST", `/admin/force-stop/${sessionId}`, {
-        body: {},
-        headers: { cookie: secondAdminCookie },
-      });
+      const response = yield* requestAs(
+        secondAdminCookie,
+        "POST",
+        `/admin/force-stop/${sessionId}`,
+        {
+          body: {},
+        },
+      );
       yield* setOutcome("forceStopResponse", response);
     }),
   );
@@ -518,9 +566,10 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "the named impersonation session no longer authenticates",
     Effect.fn(function* () {
-      const impersonatingCookie = (yield* getOutcome("impersonatingCookie")) as string;
+      // The impersonation token presented again, alone (the browser itself has dropped or still holds it).
+      const token = (yield* getOutcome("impersonationToken")) as string;
       const response = yield* request("GET", "/admin", {
-        headers: { cookie: impersonatingCookie },
+        extraCookies: { [IMPERSONATION_COOKIE]: token },
       });
       if (response.status === 200) {
         throw new Error("expected the force-stopped session to no longer authenticate");
@@ -531,9 +580,9 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     'the matching audit row\'s "endedBy" is set to "forcedByAdmin"',
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
       const sessionId = (yield* getOutcome("sessionId")) as string;
-      const listResponse = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
+      const listResponse = yield* requestAs(adminCookie, "GET", "/admin");
       const rows = yield* listRows<{
         readonly sessionId: string;
         readonly endedBy: string | null;
@@ -551,11 +600,11 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* configureApp({ canImpersonate: () => Effect.succeed(true) });
       const adminCookie = yield* signIn("admin-1");
       yield* setOutcome("adminCookie", adminCookie);
-      const response = yield* impersonate(adminCookie, "target-1", "test");
-      const sessionId = cookieFrom(response).split("=")[1]!.split(".")[0]!;
-      const first = yield* request("POST", `/admin/force-stop/${sessionId}`, {
+      yield* impersonate(adminCookie, "target-1", "test");
+      const impersonating = (yield* getOutcome("impersonatingBrowser")) as UserAgent.UserAgent;
+      const sessionId = sessionIdOf(impersonationTokenOf(impersonating));
+      const first = yield* requestAs(adminCookie, "POST", `/admin/force-stop/${sessionId}`, {
         body: {},
-        headers: { cookie: adminCookie },
       });
       if (first.status !== 204) throw new Error("expected the first force-stop to succeed");
       yield* setOutcome("sessionId", sessionId);
@@ -565,11 +614,10 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     '"admin.forceStop" is called again naming that same session id',
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
       const sessionId = (yield* getOutcome("sessionId")) as string;
-      const response = yield* request("POST", `/admin/force-stop/${sessionId}`, {
+      const response = yield* requestAs(adminCookie, "POST", `/admin/force-stop/${sessionId}`, {
         body: {},
-        headers: { cookie: adminCookie },
       });
       yield* setOutcome("forceStopResponse", response);
     }),
@@ -596,8 +644,9 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
         canImpersonate: ({ admin }) => Effect.succeed(admin.id === "admin-1"),
       });
       const adminCookie = yield* signIn("admin-1");
-      const response = yield* impersonate(adminCookie, "target-1", "support ticket #4821");
-      yield* setOutcome("sessionId", cookieFrom(response).split("=")[1]!.split(".")[0]!);
+      yield* impersonate(adminCookie, "target-1", "support ticket #4821");
+      const impersonating = (yield* getOutcome("impersonatingBrowser")) as UserAgent.UserAgent;
+      yield* setOutcome("sessionId", sessionIdOf(impersonationTokenOf(impersonating)));
     }),
   );
 
@@ -606,10 +655,14 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     Effect.fn(function* () {
       const secondAdminCookie = yield* signIn("admin-2");
       const sessionId = (yield* getOutcome("sessionId")) as string;
-      const response = yield* request("POST", `/admin/force-stop/${sessionId}`, {
-        body: {},
-        headers: { cookie: secondAdminCookie },
-      });
+      const response = yield* requestAs(
+        secondAdminCookie,
+        "POST",
+        `/admin/force-stop/${sessionId}`,
+        {
+          body: {},
+        },
+      );
       yield* setOutcome("forceStopResponse", response);
     }),
   );
@@ -689,12 +742,9 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       const adminCookie = yield* signIn("admin-1");
       yield* setOutcome("adminCookie", adminCookie);
 
-      const ended = yield* impersonate(adminCookie, "target-1", "first episode");
-      const endedCookie = cookieFrom(ended);
-      yield* request("POST", "/admin/stop-impersonating", {
-        body: {},
-        headers: { cookie: endedCookie },
-      });
+      yield* impersonate(adminCookie, "target-1", "first episode");
+      const ended = (yield* getOutcome("impersonatingBrowser")) as UserAgent.UserAgent;
+      yield* request("POST", "/admin/stop-impersonating", { body: {}, as: ended });
 
       yield* impersonate(adminCookie, "target-2", "second episode");
     }),
@@ -703,8 +753,8 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     'the admin calls "admin.list" with no filter',
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
-      const response = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
+      const response = yield* requestAs(adminCookie, "GET", "/admin");
       yield* setOutcome("listResponse", response);
     }),
   );
@@ -727,10 +777,8 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     'the admin calls "admin.list" with "active=true"',
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
-      const response = yield* request("GET", "/admin?active=true", {
-        headers: { cookie: adminCookie },
-      });
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
+      const response = yield* requestAs(adminCookie, "GET", "/admin?active=true");
       yield* setOutcome("listResponse", response);
     }),
   );
@@ -764,7 +812,7 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "an admin impersonates that target user",
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
       yield* impersonate(adminCookie, "target-1", "test");
     }),
   );
@@ -772,8 +820,8 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "the target's own original session cookie still authenticates afterward, unaffected",
     Effect.fn(function* () {
-      const targetCookie = (yield* getOutcome("targetCookie")) as string;
-      const response = yield* request("GET", "/admin", { headers: { cookie: targetCookie } });
+      const targetCookie = (yield* getOutcome("targetCookie")) as Actor;
+      const response = yield* requestAs(targetCookie, "GET", "/admin");
       // `target-1` was never granted `canImpersonate` in this World's own
       // setup, so this specifically proves the session itself still
       // authenticates (reaches the handler's own auth check) rather than
@@ -803,7 +851,7 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     'a signed-in user calls "admin.impersonate" naming the protected target {string}',
     Effect.fn(function* (protectedId: string) {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
       const response = yield* impersonate(adminCookie, protectedId, "reproducing a bug");
       yield* setOutcome("impersonateResponse", response);
     }),
@@ -812,7 +860,7 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "the admin calls {string} for an unknown user id",
     Effect.fn(function* (_endpoint: string) {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
       const response = yield* impersonate(adminCookie, "unknown-user", "reproducing a bug");
       yield* setOutcome("impersonateResponse", response);
     }),
@@ -833,8 +881,8 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "the impersonation audit trail is still empty",
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
-      const listResponse = yield* request("GET", "/admin", { headers: { cookie: adminCookie } });
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
+      const listResponse = yield* requestAs(adminCookie, "GET", "/admin");
       const rows = yield* listRows<unknown>(listResponse);
       if (rows.length !== 0) throw new Error(`expected an empty audit trail, got ${rows.length}`);
     }),
@@ -853,11 +901,8 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     'a signed-in user calls "admin.listUsers"',
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
-      yield* setOutcome(
-        "userAdminResponse",
-        yield* request("GET", "/admin/users", { headers: { cookie: adminCookie } }),
-      );
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
+      yield* setOutcome("userAdminResponse", yield* requestAs(adminCookie, "GET", "/admin/users"));
     }),
   );
 
@@ -890,14 +935,12 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     'the admin calls "admin.revokeUserSession" naming that user\'s session',
     Effect.fn(function* () {
-      const adminCookie = (yield* getOutcome("adminCookie")) as string;
-      const userCookie = (yield* getOutcome("userCookie")) as string;
-      const sessionId = tokenFromCookie(userCookie).split(".")[0]!;
+      const adminCookie = (yield* getOutcome("adminCookie")) as Actor;
+      const userCookie = (yield* getOutcome("userCookie")) as Actor;
+      const sessionId = sessionIdOf(userCookie.token);
       yield* setOutcome(
         "userAdminResponse",
-        yield* request("DELETE", `/admin/users/target-1/sessions/${sessionId}`, {
-          headers: { cookie: adminCookie },
-        }),
+        yield* requestAs(adminCookie, "DELETE", `/admin/users/target-1/sessions/${sessionId}`),
       );
     }),
   );
@@ -918,8 +961,8 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     Effect.fn(function* () {
       // The user has no admin rights in this World; a 401 (unauthenticated) rather
       // than a 403 (authenticated, refused) is what proves the session itself is gone.
-      const userCookie = (yield* getOutcome("userCookie")) as string;
-      const response = yield* request("GET", "/admin/users", { headers: { cookie: userCookie } });
+      const userCookie = (yield* getOutcome("userCookie")) as Actor;
+      const response = yield* requestAs(userCookie, "GET", "/admin/users");
       if (response.status !== 401) {
         throw new Error(`expected 401 for a revoked session, got ${response.status}`);
       }
@@ -942,14 +985,14 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     'a signed-in user calls "admin.getUser" for {string} and for {string}',
     Effect.fn(function* (unknownId: string, refusedId: string) {
-      const cookie = (yield* getOutcome("adminCookie")) as string;
+      const cookie = (yield* getOutcome("adminCookie")) as Actor;
       yield* setOutcome("getUserResponses", [
-        yield* request("GET", `/admin/users/${unknownId}`, { headers: { cookie } }),
-        yield* request("GET", `/admin/users/${refusedId}`, { headers: { cookie } }),
+        yield* requestAs(cookie, "GET", `/admin/users/${unknownId}`),
+        yield* requestAs(cookie, "GET", `/admin/users/${refusedId}`),
       ]);
       yield* setOutcome(
         "admittedResponse",
-        yield* request("GET", "/admin/users/target-1", { headers: { cookie } }),
+        yield* requestAs(cookie, "GET", "/admin/users/target-1"),
       );
     }),
   );
@@ -986,18 +1029,18 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     'the admin calls "admin.listUsers" with {string}, then again with the returned cursor',
     Effect.fn(function* (query: string) {
-      const cookie = (yield* getOutcome("adminCookie")) as string;
-      const firstResponse = yield* request("GET", `/admin/users?${query}`, { headers: { cookie } });
+      const cookie = (yield* getOutcome("adminCookie")) as Actor;
+      const firstResponse = yield* requestAs(cookie, "GET", `/admin/users?${query}`);
       const first = (yield* Effect.promise(() => firstResponse.json())) as {
         readonly items: ReadonlyArray<unknown>;
         readonly nextCursor: string | null;
       };
       yield* setOutcome("firstPage", first);
       if (first.nextCursor === null) throw new Error("expected a next cursor on the first page");
-      const secondResponse = yield* request(
+      const secondResponse = yield* requestAs(
+        cookie,
         "GET",
         `/admin/users?${query}&cursor=${encodeURIComponent(first.nextCursor)}`,
-        { headers: { cookie } },
       );
       yield* setOutcome("secondPage", yield* Effect.promise(() => secondResponse.json()));
     }),
@@ -1031,10 +1074,10 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     'the admin calls "admin.listUsers" with {string}',
     Effect.fn(function* (query: string) {
-      const cookie = (yield* getOutcome("adminCookie")) as string;
+      const cookie = (yield* getOutcome("adminCookie")) as Actor;
       yield* setOutcome(
         "userAdminResponse",
-        yield* request("GET", `/admin/users?${query}`, { headers: { cookie } }),
+        yield* requestAs(cookie, "GET", `/admin/users?${query}`),
       );
     }),
   );
@@ -1042,8 +1085,8 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     'the admin calls "admin.updateUser" naming that user with the name {string}',
     Effect.fn(function* (name: string) {
-      const cookie = (yield* getOutcome("adminCookie")) as string;
-      const listResponse = yield* request("GET", "/admin/users", { headers: { cookie } });
+      const cookie = (yield* getOutcome("adminCookie")) as Actor;
+      const listResponse = yield* requestAs(cookie, "GET", "/admin/users");
       const users = (yield* Effect.promise(() => listResponse.json())) as {
         readonly items: ReadonlyArray<{ readonly id: string; readonly name: string }>;
       };
@@ -1052,9 +1095,8 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* setOutcome("updateTarget", target);
       yield* setOutcome(
         "userAdminResponse",
-        yield* request("PATCH", `/admin/users/${target.id}`, {
+        yield* requestAs(cookie, "PATCH", `/admin/users/${target.id}`, {
           body: { name },
-          headers: { cookie },
         }),
       );
     }),
@@ -1090,8 +1132,8 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     'an "auth.admin.sessionRevoked" event is published for the admin {string} and that session',
     Effect.fn(function* (adminId: string) {
-      const userCookie = (yield* getOutcome("userCookie")) as string;
-      const sessionId = tokenFromCookie(userCookie).split(".")[0]!;
+      const userCookie = (yield* getOutcome("userCookie")) as Actor;
+      const sessionId = sessionIdOf(userCookie.token);
       const events = yield* publishedEvents();
       const revoked = events.find((event) => event._tag === "auth.admin.sessionRevoked");
       assert.ok(revoked !== undefined, "expected a sessionRevoked event");
@@ -1101,7 +1143,7 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     }),
   );
 
-  // ---- APS-006: one real browser cookie jar ----
+  // ---- APS-006: one real browser (a user agent keeps every cookie, as a browser does) ----
 
   Given(
     "an admin actively impersonating a target user through one browser cookie jar",
@@ -1111,40 +1153,36 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* configureApp({
         canImpersonate: ({ admin }) => Effect.succeed(admin.id === "admin-1"),
       });
-      const jar = new Map<string, string>();
-      const [name = "", value = ""] = (yield* signIn("admin-1")).split(/=(.*)/s);
-      jar.set(name, value);
-      yield* setOutcome("jar", jar);
+      const agent = yield* browser(yield* signIn("admin-1"));
+      yield* setOutcome("browser", agent);
       const response = yield* request("POST", "/admin/impersonate/target-1", {
         body: { reason: "support ticket #4821" },
-        headers: { cookie: jarHeader(jar) },
+        as: agent,
       });
       if (response.status !== 200) throw new Error(`expected 200, got ${response.status}`);
-      applySetCookies(jar, response);
-      const asTarget = yield* request("GET", "/admin", { headers: { cookie: jarHeader(jar) } });
+      const asTarget = yield* request("GET", "/admin", { as: agent });
       const rows = yield* listRows<unknown>(asTarget);
-      if (rows.length !== 0) throw new Error("expected the jar to be served as the target");
+      if (rows.length !== 0) throw new Error("expected the browser to be served as the target");
     }),
   );
 
   When(
     'the browser calls "admin.stopImpersonating"',
     Effect.fn(function* () {
-      const jar = (yield* getOutcome("jar")) as Map<string, string>;
-      const response = yield* request("POST", "/admin/stop-impersonating", {
-        body: {},
-        headers: { cookie: jarHeader(jar) },
-      });
+      const agent = (yield* getOutcome("browser")) as UserAgent.UserAgent;
+      const response = yield* request("POST", "/admin/stop-impersonating", { body: {}, as: agent });
       if (response.status !== 204) throw new Error(`expected 204, got ${response.status}`);
-      applySetCookies(jar, response);
+      if (agent.cookies.get(IMPERSONATION_COOKIE) !== undefined) {
+        throw new Error("expected the impersonation cookie's expiry to remove it from the browser");
+      }
     }),
   );
 
   Then(
     "the browser's next request is served as the admin, with no re-login",
     Effect.fn(function* () {
-      const jar = (yield* getOutcome("jar")) as Map<string, string>;
-      const response = yield* request("GET", "/admin", { headers: { cookie: jarHeader(jar) } });
+      const agent = (yield* getOutcome("browser")) as UserAgent.UserAgent;
+      const response = yield* request("GET", "/admin", { as: agent });
       const rows = yield* listRows<{
         readonly endedBy: string | null;
       }>(response);
@@ -1154,21 +1192,3 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     }),
   );
 });
-
-/** A browser cookie jar: one value per name, every `Set-Cookie` applied, an expired cookie deleted. */
-const jarHeader = (jar: ReadonlyMap<string, string>): string =>
-  [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
-
-const applySetCookies = (jar: Map<string, string>, response: Response): void => {
-  for (const line of response.headers.getSetCookie()) {
-    const [pair = "", ...attributes] = line.split(";");
-    const eq = pair.indexOf("=");
-    const name = pair.slice(0, eq).trim();
-    const value = pair.slice(eq + 1).trim();
-    if (value === "" || attributes.some((attribute) => /^\s*max-age=0\s*$/i.test(attribute))) {
-      jar.delete(name);
-    } else {
-      jar.set(name, value);
-    }
-  }
-};

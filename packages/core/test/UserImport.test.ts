@@ -4,7 +4,7 @@
 // a Postgres schema under `pnpm run test:pg`).
 import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { PasswordHasher, SqlTransaction } from "@awthaq/ports";
-import { CoreMigrations, Repositories } from "@awthaq/sql";
+import { CoreMigrations } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -12,7 +12,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Migrator from "effect/sql/Migrator";
-import { EncryptionLive } from "../../sql/test/contract.ts";
 import * as TestSql from "../../test/src/TestSql.ts";
 import * as Persistence from "../src/Persistence.ts";
 import * as Accounts from "../src/Accounts.ts";
@@ -37,16 +36,12 @@ const Migrated = Layer.effectDiscard(
 ).pipe(Layer.provide(SqlLive));
 
 const SqlDomain = Layer.mergeAll(
-  Users.layer
-    .pipe(Layer.provide(SqlStores))
-    .pipe(Layer.provide(Repositories.UsersRepositoryLive), Layer.provide(NodeCrypto.layer)),
-  Accounts.layer
-    .pipe(Layer.provide(SqlStores))
-    .pipe(Layer.provide(Repositories.AccountsRepositoryLive), Layer.provide(NodeCrypto.layer)),
+  Users.layer.pipe(Layer.provide(SqlStores)).pipe(Layer.provide(NodeCrypto.layer)),
+  Accounts.layer.pipe(Layer.provide(SqlStores)).pipe(Layer.provide(NodeCrypto.layer)),
   SqlTransaction.layerSql,
 ).pipe(
   Layer.provide(Hooks.HooksLive),
-  Layer.provide(EncryptionLive),
+  Layer.provide(TestEncryption.layer),
   Layer.provideMerge(SqlLive),
   Layer.provideMerge(Migrated),
 );

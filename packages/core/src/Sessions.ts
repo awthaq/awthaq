@@ -2,14 +2,21 @@
 //
 // spec/behaviors/07-sessions.md, BEH-EA-049 through BEH-EA-056.
 // Plan 02 (ADR-EA-041, ADR-EA-014): written once, over `@awthaq/ports`' `SessionStore` (a `Ref`
-// adapter there, a SQL adapter over `@awthaq/sql`'s repository, BEH-EA-033-036; a KV backend is an
+// adapter there, a SQL adapter in `@awthaq/sql` that owns its statements, BEH-EA-033-036; a KV backend is an
 // implementation of the same nine primitives). The service owns the rules (the token and its hash, the
 // proof-before-state order, the expiries, the throttled touch, rotation and its grace window, reuse
 // detection, the concurrent-session policy, the events); the store owns persistence and the
 // atomicity of each primitive.
 
 import { Api } from "@awthaq/api";
-import { Hmac, type Ids, LegacySessionBridge, SessionStore, type Store } from "@awthaq/ports";
+import {
+  Hmac,
+  type Ids,
+  LegacySessionBridge,
+  Sealed,
+  SessionStore,
+  type Store,
+} from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
@@ -19,10 +26,13 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as AuthEvents from "./AuthEvents.ts";
 import { relabel, type StoreUnavailable } from "./Errors.ts";
+import { DEFAULT_ROTATION_GRACE } from "./internal/sessionVerdict.ts";
+import * as SessionVerdict from "./internal/sessionVerdict.ts";
 import * as Observability from "./Observability.ts";
 import * as SecretHash from "./SecretHash.ts";
 import * as Tenant from "./Tenant.ts";
@@ -41,12 +51,6 @@ const { toHex } = Hmac;
 const hashSecret = SecretHash.digest;
 
 /**
- * PIL-007: the hash an unknown session id is compared against, so a miss does
- * the same hash + constant-time compare work as a known id with a wrong
- * secret. Never equals any real `hashSecret` output (SHA-256 of a secret
- * whose digest is all zeros is not computable in practice).
- */
-/**
  * CSD-003: the persisted `userAgent` is caller-supplied (a request header), so
  * it is capped at the persistence boundary — every issuing plugin benefits,
  * none has to remember.
@@ -55,35 +59,6 @@ export const MAX_USER_AGENT_LENGTH = 512;
 
 const cappedUserAgent = (userAgent: string | undefined): string | undefined =>
   userAgent?.slice(0, MAX_USER_AGENT_LENGTH);
-
-const UNKNOWN_SESSION_HASH = SecretHash.NEVER_MATCHES;
-
-// BEH-EA-056/ACS-005: both operands are the fixed-length hex output of the
-// same digest, compared in constant time by the shared `Hmac` primitive.
-const secretMatches = SecretHash.equals;
-
-/**
- * RRS-005: which of a session's accepted secrets the presented hash is. Both comparisons always run
- * (the previous one against `NEVER_MATCHES` when there is none), so the work done does not reveal
- * whether the row has a live grace window. A previous secret only counts before its own expiry.
- */
-const matchedSecret = (
-  now: DateTime.Utc,
-  presentedHash: string,
-  currentHash: string,
-  previousHash: string | undefined,
-  previousExpiresAt: DateTime.Utc | undefined,
-): "current" | "previous" | "none" => {
-  const current = secretMatches(presentedHash, currentHash);
-  const previous = secretMatches(presentedHash, previousHash ?? UNKNOWN_SESSION_HASH);
-  if (current) return "current";
-  return previous &&
-    previousHash !== undefined &&
-    previousExpiresAt !== undefined &&
-    DateTime.toEpochMillis(now) < DateTime.toEpochMillis(previousExpiresAt)
-    ? "previous"
-    : "none";
-};
 
 /**
  * SMS-003: an opt-in cap on one user's simultaneously live sessions. Absent by
@@ -120,11 +95,8 @@ export interface SessionConfig {
   readonly maxConcurrent?: ConcurrentSessionPolicy;
 }
 
-/** RRS-005: the bounded window `SessionConfig.rotationGrace` defaults to. */
-export const DEFAULT_ROTATION_GRACE = Duration.seconds(30);
-
-const graceOf = (config: SessionConfig): Duration.Duration =>
-  config.rotationGrace ?? DEFAULT_ROTATION_GRACE;
+// RRS-005: the bounded window `SessionConfig.rotationGrace` defaults to (declared with the verdict).
+export { DEFAULT_ROTATION_GRACE };
 
 /**
  * `archive/PRD.md`'s own 30-day-absolute/7-day-idle defaults
@@ -220,6 +192,18 @@ export interface SessionView {
    * another one.
    */
   readonly tenantId: Option.Option<string>;
+}
+
+/** What `issue` returns: the session and the raw token to deliver (cookie or bearer, `SessionDelivery`). */
+export interface IssuedSession {
+  readonly session: SessionView;
+  readonly token: Redacted.Redacted<string>;
+}
+
+/** What `verify` returns: the session and, when this call rotated it (BEH-EA-052), the fresh token. */
+export interface VerifiedSession {
+  readonly session: SessionView;
+  readonly rotated: Option.Option<Redacted.Redacted<string>>;
 }
 
 /** BEH-EA-054: one row of `Sessions.list`. */
@@ -350,11 +334,11 @@ export interface SessionsShape {
     readonly amr?: ReadonlyArray<AuthMethod>;
     /** BEH-EA-212: overrides `SessionConfig.absolute` for this one call — e.g. `@awthaq/admin`'s own `AdminConfig.maxDuration`, generally shorter than an ordinary session's absolute lifetime. */
     readonly absoluteDuration?: Duration.Duration;
-  }) => Effect.Effect<
-    { readonly session: SessionView; readonly token: Redacted.Redacted<string> },
-    StoreUnavailable
-  >;
+  }) => Effect.Effect<IssuedSession, StoreUnavailable>;
   /**
+   * Plan 19: what a presented credential means (refused, replayed, expired, accepted, due for rotation,
+   * a lost rotation) is the pure `internal/sessionVerdict.ts`; this is the contract it is executed for.
+   *
    * BEH-EA-050/056: hashes the presented secret and compares it to the
    * stored hash in constant time; BEH-EA-052: also performs the
    * throttled-at-most-once-per-`touchEvery` idle refresh this same request
@@ -380,7 +364,7 @@ export interface SessionsShape {
    * calling `verify` a *second time within one request* against the same
    * pre-rotation credential used to be a real architectural risk:
    * `@awthaq/qadi`'s `SubjectExtractorLive` (BEH-EA-153) calls
-   * `resolvePrincipal` — and so `verify` — independent of and potentially
+   * the credential resolution — and so `verify` — independent of and potentially
    * before `Authentication`'s own middleware runs on the same request
    * (spec/behaviors/20-qadi-bridge-path-b.md), so an endpoint wiring both
    * Path A's `Api.Authentication` and Path B's `RequirePermission`
@@ -389,8 +373,8 @@ export interface SessionsShape {
    * session.
    *
    * Resolved (upstream-hardening-followups map, ticket 03):
-   * `@awthaq/server`'s `Authentication.resolveSession` now memoizes its
-   * result per request, single-flight and keyed on the request's
+   * `@awthaq/server`'s `Credentials` (ADR-EA-042) now memoizes its
+   * result per request scope, single-flight and keyed on the request's
    * underlying `source` (TS-003/NHS-006) — both `AuthenticationLive`/
    * `OptionalAuthenticationLive` and `SubjectExtractorLive` funnel through
    * it, so a second call within the same request reuses the first's
@@ -407,10 +391,7 @@ export interface SessionsShape {
    */
   readonly verify: (
     token: Redacted.Redacted<string>,
-  ) => Effect.Effect<
-    { readonly session: SessionView; readonly rotated: Option.Option<Redacted.Redacted<string>> },
-    SessionNotFound | SessionExpired | StoreUnavailable
-  >;
+  ) => Effect.Effect<VerifiedSession, SessionNotFound | SessionExpired | StoreUnavailable>;
   /**
    * TIR-008: every revocation primitive takes the `reason` the session ended
    * and publishes exactly one `auth.session.revoked` (`AuditLog` records it)
@@ -457,7 +438,7 @@ export interface SessionsShape {
    * neither `absoluteExpiresAt` nor `idleExpiresAt` — newest activity first
    * (`lastActiveAt` descending), identically in both layers (ESS-005/
    * SMS-002). `current` is set on whichever row's id equals `current`.
-   * Exhaustive: `layerSql` drains every repository page rather than silently
+   * Exhaustive: `layerSql` drains every store page rather than silently
    * truncating (TIR-003), bounded by `LIST_LIMIT` with a logged warning if a
    * user somehow exceeds it. Not for keyed lookups — use `findOwned`.
    *
@@ -606,12 +587,12 @@ const traceVerify =
   (verify: SessionsShape["verify"]): SessionsShape["verify"] =>
   (token) => {
     const raw = Redacted.value(token);
-    const separator = raw.indexOf(".");
     // A presented id is attacker-controlled: only an id-shaped, bounded one reaches a span.
-    const presentedId = separator > 0 ? raw.slice(0, separator) : "";
-    const announce = /^[A-Za-z0-9-]{1,64}$/.test(presentedId)
-      ? Effect.annotateCurrentSpan(Observability.Field.sessionId, presentedId)
-      : Effect.void;
+    const announce = Option.match(SessionVerdict.spanId(SessionVerdict.parse(raw)), {
+      onNone: () => Effect.void,
+      onSome: (presentedId) =>
+        Effect.annotateCurrentSpan(Observability.Field.sessionId, presentedId),
+    });
     return Observability.observeSessionVerify(
       (error: SessionNotFound | SessionExpired | StoreUnavailable) =>
         error._tag === "SessionExpired"
@@ -628,34 +609,43 @@ const traceVerify =
 // `SessionView`'s own doc comment ("never the secret, never the stored hash"). One careless prop pass of
 // a `SessionView` to a Client Component (e.g. `@awthaq/next`'s `getSession`) would otherwise serialize
 // the stored hash into the RSC flight payload.
-const toView = (row: SessionStore.SessionRecord): SessionView => ({
-  id: SessionId(row.id),
-  userId: UserId(row.userId),
-  createdAt: row.createdAt,
-  authenticatedAt: row.authenticatedAt,
-  lastActiveAt: row.lastActiveAt,
-  absoluteExpiresAt: row.absoluteExpiresAt,
-  idleExpiresAt: row.idleExpiresAt,
-  ipAddress: row.ipAddress,
-  userAgent: row.userAgent,
-  actingAs: row.actingAs,
-  amr: row.amr.filter(isAuthMethod),
-  tenantId: row.tenantId,
-});
+//
+// CSG-006 (ADR-EA-019 rev 1.3): `ipAddress`/`userAgent` arrive sealed and are opened here, after the verdict
+// (the verdict never decrypts them). An unreadable value degrades to absent with one ids-only warning
+// (`Sealed.optional`); the session is still returned.
+const toView = (row: SessionStore.SessionRecord) =>
+  Effect.map(
+    Effect.all({
+      ipAddress: Sealed.optional(row.ipAddress),
+      userAgent: Sealed.optional(row.userAgent),
+    }),
+    ({ ipAddress, userAgent }): SessionView => ({
+      id: SessionId(row.id),
+      userId: UserId(row.userId),
+      createdAt: row.createdAt,
+      authenticatedAt: row.authenticatedAt,
+      lastActiveAt: row.lastActiveAt,
+      absoluteExpiresAt: row.absoluteExpiresAt,
+      idleExpiresAt: row.idleExpiresAt,
+      ipAddress: Option.map(ipAddress, Redacted.value),
+      userAgent: Option.map(userAgent, Redacted.value),
+      actingAs: row.actingAs,
+      amr: row.amr.filter(isAuthMethod),
+      tenantId: row.tenantId,
+    }),
+  );
 
-const toItem = (
-  row: SessionStore.SessionRecord,
-  current: SessionId | undefined,
-): SessionListItem => ({
-  id: SessionId(row.id),
-  createdAt: row.createdAt,
-  authenticatedAt: row.authenticatedAt,
-  lastActiveAt: row.lastActiveAt,
-  expiresAt: row.absoluteExpiresAt,
-  userAgent: row.userAgent,
-  amr: row.amr.filter(isAuthMethod),
-  current: row.id === current,
-});
+const toItem = (row: SessionStore.SessionRecord, current: SessionId | undefined) =>
+  Effect.map(Sealed.optional(row.userAgent), (userAgent): SessionListItem => ({
+    id: SessionId(row.id),
+    createdAt: row.createdAt,
+    authenticatedAt: row.authenticatedAt,
+    lastActiveAt: row.lastActiveAt,
+    expiresAt: row.absoluteExpiresAt,
+    userAgent: Option.map(userAgent, Redacted.value),
+    amr: row.amr.filter(isAuthMethod),
+    current: row.id === current,
+  }));
 
 const notFound = (id?: SessionId) =>
   new SessionNotFound({
@@ -742,9 +732,9 @@ export const layer = Layer.effect(
           reason: "limitEvicted",
         });
       }
-      const view = toView(inserted);
+      const view = yield* toView(inserted);
       yield* publishIssued(events, view, inserted.familyId, view.actingAs);
-      return { session: view, token: Redacted.make(`${id}.${secret}`) };
+      return { session: view, token: Redacted.make(SessionVerdict.format(id, secret)) };
     }, relabel("Sessions.issue"));
 
     /**
@@ -770,127 +760,72 @@ export const layer = Layer.effect(
       return Option.some({ session: minted.session, rotated: Option.some(minted.token) });
     });
 
-    const verify: SessionsShape["verify"] = Effect.fnUntraced(function* (token) {
-      const config = yield* configNow;
-      const raw = Redacted.value(token);
-      const separator = raw.indexOf(".");
-      if (separator < 0) {
-        const bridged = yield* bridgeLegacySession(raw);
-        if (Option.isSome(bridged)) return bridged.value;
-        return yield* notFound();
-      }
-      const id = SessionId(raw.slice(0, separator));
-      const secret = raw.slice(separator + 1);
-      // PIL-007: the id is the public half of the token (cookies, JWT `sid`, error messages): the
-      // secret is proven before ANY row-state branch (tombstone/reuse, expiry), so an id-only caller
-      // can neither trigger reuse-detection side effects nor learn a row's state.
-      const presentedHash = yield* hashSecret(hasher, secret);
-      const found = yield* store.get(id);
-      if (Option.isNone(found)) {
-        secretMatches(presentedHash, UNKNOWN_SESSION_HASH);
-        const bridged = yield* bridgeLegacySession(raw);
-        if (Option.isSome(bridged)) return bridged.value;
-        return yield* notFound(id);
-      }
-      const row = found.value;
-      const now = yield* DateTime.now;
-      const matched = matchedSecret(
-        now,
-        presentedHash,
-        row.secretHash,
-        Option.getOrUndefined(row.previousSecretHash),
-        Option.getOrUndefined(row.previousSecretExpiresAt),
+    /** ESA-006: an expired presentation is announced, with its kind, wherever it is found. */
+    const expire = (id: SessionId, row: SessionStore.SessionRecord, kind: "absolute" | "idle") =>
+      events
+        .publish({ _tag: "auth.session.expired", sessionId: id, userId: row.userId, kind })
+        .pipe(
+          Effect.andThen(
+            Effect.fail(
+              new SessionExpired({
+                message:
+                  kind === "idle" ? "awthaq: session idle-expired" : "awthaq: session expired",
+                id,
+              }),
+            ),
+          ),
+        );
+
+    const accepted = (row: SessionStore.SessionRecord) =>
+      Effect.map(toView(row), (session) => ({
+        session,
+        rotated: Option.none<Redacted.Redacted<string>>(),
+      }));
+
+    const bridgedOr = (raw: string, otherwise: SessionNotFound) =>
+      bridgeLegacySession(raw).pipe(
+        Effect.flatMap(
+          Option.match({ onNone: () => Effect.fail(otherwise), onSome: Effect.succeed }),
+        ),
       );
-      if (matched === "none") return yield* notFound(id);
-      // RRS-003: a tombstoned row is a presented-already-rotated token: reuse. Reached only with the
-      // correct (old) secret (PIL-007), and checked before expiry: a rotated-away row's own expiry
-      // timestamps are stale and not the interesting signal here. The external response stays the
-      // uniform `SessionNotFound` whether this is the first reuse or a later presentation of an
-      // already-flagged row: no distinguishable signal leaked.
-      if (Option.isSome(row.supersededAt)) {
-        // RRS-005: only the row's *current* secret can be reuse: a previous secret inside its grace
-        // window is a stale-but-legitimate holder, never a family-revoking signal.
-        if (matched === "current" && Option.isNone(row.reusedAt)) {
-          // "Published once": the store flags the row and revokes the family in one atomic step and
-          // answers `Some` to exactly one of any number of racing presentations.
-          const flagged = yield* store.flagReuse(id, now);
-          if (Option.isSome(flagged)) {
-            yield* events.publish({
-              _tag: "auth.session.reuse",
-              sessionId: id,
-              familyId: flagged.value.familyId,
-              userId: flagged.value.userId,
-            });
-            yield* events.publish({
-              _tag: "auth.session.revoked",
-              userId: flagged.value.userId,
-              sessionId: null,
-              scope: "family",
-              reason: "reuseDetected",
-            });
-          }
-        }
-        return yield* notFound(id);
-      }
-      if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.absoluteExpiresAt)) {
-        yield* events.publish({
-          _tag: "auth.session.expired",
-          sessionId: id,
-          userId: row.userId,
-          kind: "absolute",
-        });
-        return yield* new SessionExpired({ message: "awthaq: session expired", id });
-      }
-      if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(row.idleExpiresAt)) {
-        yield* events.publish({
-          _tag: "auth.session.expired",
-          sessionId: id,
-          userId: row.userId,
-          kind: "idle",
-        });
-        return yield* new SessionExpired({ message: "awthaq: session idle-expired", id });
-      }
-      // BEH-EA-210: a session carrying `actingAs` never idle-refreshes: its hard expiry is the whole
-      // mechanism, so `verify` never touches it.
-      if (Option.isSome(row.actingAs)) {
-        return { session: toView(row), rotated: Option.none() };
-      }
-      // BEH-EA-052: throttled idle refresh: at most one write per `touchEvery`.
-      const dueForTouch =
-        DateTime.toEpochMillis(now) >=
-        DateTime.toEpochMillis(DateTime.addDuration(row.lastActiveAt, config.touchEvery));
-      // RRS-005: a previous secret presented in its grace window always re-rotates, so the holder that
-      // missed the last delivery is handed a durable credential.
-      if (!dueForTouch && matched === "current") {
-        return { session: toView(row), rotated: Option.none() };
-      }
-      const grace = graceOf(config);
-      const keepPrevious = Duration.toMillis(grace) > 0;
-      // Ticket 01: the same throttled write also rotates the secret, compare-and-swapped against the
-      // hash this call just read, so a losing concurrent request never clobbers a winner's write with
-      // its own independently-generated secret. Losing the race isn't a failure: this call simply
-      // reports no rotation of its own, over whatever the winner's write left behind, re-checked for
-      // liveness (a row tombstoned or expired in the meantime is not authenticated).
-      const newSecret = toHex(yield* random.randomBytes(32));
-      const newSecretHash = yield* hashSecret(hasher, newSecret);
+
+    // RRS-003: "published once": the store flags the row and revokes the family in one atomic step and
+    // answers `Some` to exactly one of any number of racing presentations.
+    const flagReuse = Effect.fnUntraced(function* (id: SessionId, now: DateTime.Utc) {
+      const flagged = yield* store.flagReuse(id, now);
+      if (Option.isNone(flagged)) return;
+      yield* events.publish({
+        _tag: "auth.session.reuse",
+        sessionId: id,
+        familyId: flagged.value.familyId,
+        userId: flagged.value.userId,
+      });
+      yield* events.publish({
+        _tag: "auth.session.revoked",
+        userId: flagged.value.userId,
+        sessionId: null,
+        scope: "family",
+        reason: "reuseDetected",
+      });
+    });
+
+    const rotate = Effect.fnUntraced(function* (
+      id: SessionId,
+      verdict: Extract<SessionVerdict.Verdict, { readonly _tag: "Rotate" }>,
+      now: DateTime.Utc,
+    ) {
+      const secret = toHex(yield* random.randomBytes(32));
       const outcome = yield* store.rotate({
         id,
-        expectedSecretHash: row.secretHash,
-        secretHash: newSecretHash,
-        previous: keepPrevious
-          ? Option.some({ hash: row.secretHash, expiresAt: DateTime.addDuration(now, grace) })
-          : Option.none(),
-        lastActiveAt: now,
-        idleExpiresAt: DateTime.min(DateTime.addDuration(now, config.idle), row.absoluteExpiresAt),
+        ...verdict.rotation,
+        secretHash: yield* hashSecret(hasher, secret),
       });
       if (outcome._tag === "Lost") {
-        if (Option.isNone(outcome.current) || Option.isSome(outcome.current.value.supersededAt)) {
-          return yield* notFound(id);
-        }
-        if (!SessionStore.isLive(outcome.current.value, now)) {
-          return yield* new SessionExpired({ message: "awthaq: session expired", id });
-        }
-        return { session: toView(outcome.current.value), rotated: Option.none() };
+        return yield* Match.valueTags(SessionVerdict.afterLostRotation(outcome.current, now), {
+          Gone: () => Effect.fail(notFound(id)),
+          Expired: ({ kind, row }) => expire(id, row, kind),
+          Accepted: ({ row }) => accepted(row),
+        });
       }
       // RRS-008: only the call that won the rotation announces it.
       yield* events.publish({
@@ -898,12 +833,37 @@ export const layer = Layer.effect(
         sessionId: id,
         familyId: outcome.session.familyId,
         userId: outcome.session.userId,
-        ...(matched === "previous" ? { viaGrace: true } : {}),
+        ...(verdict.viaGrace ? { viaGrace: true } : {}),
       });
       return {
-        session: toView(outcome.session),
-        rotated: Option.some(Redacted.make(`${id}.${newSecret}`)),
+        session: yield* toView(outcome.session),
+        rotated: Option.some(Redacted.make(SessionVerdict.format(id, secret))),
       };
+    });
+
+    // The rules are `internal/sessionVerdict.ts`; this executes the verdict against the store.
+    const verify: SessionsShape["verify"] = Effect.fnUntraced(function* (token) {
+      const policy = SessionVerdict.policyOf(yield* configNow);
+      const raw = Redacted.value(token);
+      const presented = SessionVerdict.parse(raw);
+      if (presented._tag === "Opaque") return yield* bridgedOr(raw, notFound());
+      const { id, secret } = presented;
+      // PIL-007: the id is the public half of the token (cookies, JWT `sid`, error messages): the
+      // secret is hashed before the row is read and proven before ANY row-state branch.
+      const presentedHash = yield* hashSecret(hasher, secret);
+      const row = yield* store.get(id);
+      const now = yield* DateTime.now;
+      return yield* Match.valueTags(SessionVerdict.classify({ row, presentedHash, now, policy }), {
+        Unknown: () => bridgedOr(raw, notFound(id)),
+        Refused: () => Effect.fail(notFound(id)),
+        Replayed: ({ flagReuse: attempt }) =>
+          (attempt ? flagReuse(id, now) : Effect.void).pipe(
+            Effect.andThen(Effect.fail(notFound(id))),
+          ),
+        Expired: ({ kind, row }) => expire(id, row, kind),
+        Accepted: ({ row }) => accepted(row),
+        Rotate: (verdict) => rotate(id, verdict, now),
+      });
     }, relabel("Sessions.verify"));
 
     // TIR-008: every revocation primitive is one store call that answers what it removed, and publishes
@@ -983,15 +943,19 @@ export const layer = Layer.effect(
           `awthaq: Sessions.list stopped at ${LIST_LIMIT} live sessions for user ${userId}`,
         );
       }
-      return newestActivityFirst(listing.items.map((row) => toItem(row, current)));
+      return newestActivityFirst(
+        yield* Effect.forEach(listing.items, (row) => toItem(row, current)),
+      );
     }, relabel("Sessions.list"));
 
     const findOwned: SessionsShape["findOwned"] = Effect.fnUntraced(function* (userId, id) {
       const row = yield* store.get(id);
       const now = yield* DateTime.now;
-      return Option.filter(row, (r) => r.userId === userId && SessionStore.isLive(r, now)).pipe(
-        Option.map((r) => toItem(r, undefined)),
-      );
+      const owned = Option.filter(row, (r) => r.userId === userId && SessionStore.isLive(r, now));
+      return yield* Option.match(owned, {
+        onNone: () => Effect.succeedNone,
+        onSome: (r) => Effect.map(toItem(r, undefined), Option.some),
+      });
     }, relabel("Sessions.findOwned"));
 
     const isLive: SessionsShape["isLive"] = (userId, id) =>
@@ -1012,7 +976,7 @@ export const layer = Layer.effect(
         addAmr: amr ?? [],
       });
       if (Option.isNone(updated)) return yield* notFound(id);
-      return toView(updated.value);
+      return yield* toView(updated.value);
     }, relabel("Sessions.reauthenticate"));
 
     return {

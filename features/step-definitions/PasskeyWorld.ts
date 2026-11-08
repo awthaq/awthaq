@@ -24,7 +24,9 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import { Api } from "@awthaq/api";
 import { TestAuth } from "@awthaq/test";
+import { parseCookieHeader } from "@awthaq/web/cookies";
 
 export const RP_ID = "example.com";
 export const ORIGIN = "https://example.com";
@@ -248,6 +250,23 @@ const appHandle = Effect.fn("features.passkey.appHandle")(function* () {
   return (yield* Ref.get(world.app))!;
 });
 
+/** The session cookie (`name=value`) the requesting agent held after each response, keyed by that response. */
+const sessionHeldAfter = new WeakMap<Response, string | undefined>();
+
+/**
+ * The `__Host-session` pair a browser holds once `response` (from `request`) arrived: what the agent stored
+ * from its `Set-Cookie`, never a parse of the header. Throws when the response left no session cookie.
+ */
+export const sessionCookieSetBy = (response: Response): string => {
+  const held = sessionHeldAfter.get(response);
+  if (held === undefined) throw new Error("expected the response to set a session cookie");
+  return held;
+};
+
+/**
+ * One request from a fresh agent of the app (holding the seeded CSRF cookie). A `cookie` header in `headers`
+ * is the caller's session pair, sent beside the agent's own cookies.
+ */
 export const request = Effect.fn("features.passkey.request")(function* (
   method: string,
   path: string,
@@ -255,13 +274,19 @@ export const request = Effect.fn("features.passkey.request")(function* (
 ) {
   const { app } = yield* appHandle();
   const { cookie, ...headers } = options?.headers ?? {};
-  const response = yield* Effect.promise(() =>
-    app.request(method, path, {
-      ...(cookie === undefined ? {} : { cookie }),
+  const response = yield* Effect.promise(async () => {
+    const agent = await app.agent();
+    const answered = await agent.request(method, path, {
       ...(options?.body === undefined ? {} : { json: options.body }),
       headers,
-    }),
-  );
+      extraCookies: Object.fromEntries(
+        parseCookieHeader(cookie).map((pair) => [pair.name, pair.value]),
+      ),
+    });
+    const held = agent.cookies.get(Api.SESSION_COOKIE_NAME);
+    sessionHeldAfter.set(answered, held === undefined ? undefined : `${held.name}=${held.value}`);
+    return answered;
+  });
   const world = yield* World;
   yield* Ref.set(world.lastResponse, response);
   return response;
@@ -294,7 +319,12 @@ export const request = Effect.fn("features.passkey.request")(function* (
  */
 export const signIn = Effect.fn("features.passkey.signIn")(function* (email: string) {
   const { app } = yield* appHandle();
-  return yield* Effect.promise(async () => (await app.signIn(email)).cookieHeader);
+  return yield* Effect.promise(async () => {
+    const agent = await app.signIn(email);
+    const held = agent.cookies.get(Api.SESSION_COOKIE_NAME);
+    if (held === undefined) throw new Error(`no session cookie was minted for ${email}`);
+    return `${held.name}=${held.value}`;
+  });
 });
 
 /**

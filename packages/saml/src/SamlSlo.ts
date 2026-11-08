@@ -21,7 +21,7 @@
 // Outbound messages (our request, our response) are signed with the connection's SP key whenever it has one.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, Sessions, Tenant, Verification } from "@awthaq/core";
+import { AuthEvents, Sessions, Tenant, Verification, VerificationLink } from "@awthaq/core";
 import { XmlSignature } from "@awthaq/ports";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -48,7 +48,8 @@ export const protocolGrant = TenantScoped.crossTenant(
 );
 
 export const LOGOUT_COOKIE = "__Host-saml-logout";
-const LOGOUT_PREFIX = "saml-logout:";
+// BEH-EA-057: a codec-only purpose (the logout state is burn-first, ADR-EA-039 decision 6).
+const LOGOUT = { name: "saml-logout" } as const;
 const MESSAGE_PREFIX = "saml-logout-message:";
 
 const LogoutState = Schema.Struct({
@@ -197,7 +198,7 @@ export const makeSlo = (deps: SloDeps) => {
     }
     const uuid = yield* random.uuidV7();
     const requestId = `_${uuid}`;
-    const identifier = `${LOGOUT_PREFIX}${uuid}`;
+    const identifier = VerificationLink.identifierOf(LOGOUT.name, uuid);
     const { value } = yield* verification.issue({
       identifier,
       ttl: settings.requestTtl,
@@ -219,7 +220,10 @@ export const makeSlo = (deps: SloDeps) => {
       referenceId: requestId,
       relayState: undefined,
     });
-    return { ...sent, state: Redacted.make(`${identifier}.${Redacted.value(value)}`) } as const;
+    return {
+      ...sent,
+      state: VerificationLink.encode({ purpose: LOGOUT.name, publicId: uuid, value }),
+    } as const;
   });
 
   // ---- inbound ----------------------------------------------------------------------------------
@@ -439,16 +443,14 @@ export const makeSlo = (deps: SloDeps) => {
       const cookie = input.cookieState;
       if (cookie === undefined)
         return yield* Effect.fail(new SamlLogout.LogoutInvalid({ reason: "noLogoutState" }));
-      const dot = cookie.indexOf(".");
-      const identifier = dot < 0 ? "" : cookie.slice(0, dot);
-      const secret = dot < 0 ? "" : cookie.slice(dot + 1);
-      if (!identifier.startsWith(LOGOUT_PREFIX) || secret === "") {
+      const decoded = VerificationLink.decode(cookie, LOGOUT);
+      if (Option.isNone(decoded)) {
         return yield* Effect.fail(new SamlLogout.LogoutInvalid({ reason: "logoutStateMalformed" }));
       }
       // ADR-EA-039: burn-first on purpose (BEH-EA-315: the local session ended before the request left;
       // no state change follows this consume).
       const consumed = yield* verification
-        .consume(identifier, Redacted.make(secret))
+        .consume(decoded.value.identifier, decoded.value.value)
         .pipe(
           Effect.catchTag("Verification/TokenConsumed", () =>
             Effect.fail(new SamlLogout.LogoutInvalid({ reason: "logoutStateUnknownOrConsumed" })),

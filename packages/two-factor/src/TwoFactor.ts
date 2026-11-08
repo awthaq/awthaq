@@ -22,8 +22,9 @@
 //
 // See `README.md` for the full recipe and `test/` for a working composition.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract, type SessionLifecycle } from "@awthaq/api";
 import {
+  CurrentUser,
   AuthPlugin,
   ConfigDescriptor,
   DataExport,
@@ -45,7 +46,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as Headers from "effect/http/Headers";
 import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { type TwoFactorMethodUsed, type VerifiedChallenge, verified } from "./Challenge.ts";
@@ -57,7 +57,11 @@ import {
   TwoFactorSecrets,
   migrations,
   records as twoFactorRecords,
+  secretColumn,
 } from "./TwoFactorStore.ts";
+
+/** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type TwoFactorLifecycle = SessionLifecycle.Mints;
 
 // ---- the markers: what makes forgetting a gate a compile error --------------------------------
 
@@ -83,11 +87,6 @@ export const noCredentialReset = Layer.succeed(TwoFactorResetGuard, { guard: "no
 export type RecordsEncryption = Encryption.Encryption;
 
 // ---- the service shape ---------------------------------------------------------------------------
-
-export interface IssuedSession {
-  readonly session: Sessions.SessionView;
-  readonly token: Redacted.Redacted<string>;
-}
 
 export interface Enrollment {
   readonly secret: string;
@@ -127,7 +126,7 @@ export interface TwoFactorShape {
       readonly ip?: string;
     },
     context?: { readonly userAgent?: string },
-  ) => Effect.Effect<IssuedSession, VerifyError | Errors.StoreUnavailable>;
+  ) => Effect.Effect<Sessions.IssuedSession, VerifyError | Errors.StoreUnavailable>;
   /** BEH-EA-264: completes a diverted sign-in with a recovery code (spent). */
   readonly verifyRecovery: (
     input: {
@@ -136,7 +135,7 @@ export interface TwoFactorShape {
       readonly ip?: string;
     },
     context?: { readonly userAgent?: string },
-  ) => Effect.Effect<IssuedSession, VerifyError | Errors.StoreUnavailable>;
+  ) => Effect.Effect<Sessions.IssuedSession, VerifyError | Errors.StoreUnavailable>;
   /** BEH-EA-263: needs a fresh session and a valid TOTP or recovery code; removes the factor. */
   readonly disable: (
     userId: Users.UserId,
@@ -291,17 +290,6 @@ export const twoFactorExport = DataExport.contribute({
 
 // ---- handlers ------------------------------------------------------------------------------------------
 
-const currentUserPrincipal = Effect.gen(function* () {
-  const principal = yield* Api.CurrentPrincipal;
-  if (principal._tag !== "User") {
-    return yield* Defects.invariantViolation(
-      "NonUserPrincipal",
-      `awthaq: two-factor account group reached with a non-User principal: ${principal._tag}`,
-    );
-  }
-  return principal;
-});
-
 export const TwoFactorHandlers = Layer.mergeAll(
   HttpApiBuilder.group(
     TwoFactorApi.TwoFactorApi,
@@ -316,18 +304,13 @@ export const TwoFactorHandlers = Layer.mergeAll(
         run: (
           ip: string | undefined,
           context: { readonly userAgent?: string },
-        ) => Effect.Effect<IssuedSession, VerifyError>,
+        ) => Effect.Effect<Sessions.IssuedSession, VerifyError>,
       ) {
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          request,
           Effect.gen(function* () {
-            const resolvedAddress = yield* clientAddress.resolve(request);
-            const userAgent = Headers.get(request.headers, "user-agent");
-            return yield* run(
-              Option.getOrUndefined(resolvedAddress),
-              Option.isSome(userAgent) ? { userAgent: userAgent.value } : {},
-            );
+            const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
+            return yield* run(ip, context);
           }),
         );
         return response;
@@ -380,7 +363,7 @@ export const TwoFactorHandlers = Layer.mergeAll(
       const twoFactor = yield* TwoFactor;
       return handlers.handleAll({
         enable: Effect.fnUntraced(function* () {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           const enrollment = yield* twoFactor.enable(
             Users.UserId(principal.ref.id),
             principal.sessionId,
@@ -392,7 +375,7 @@ export const TwoFactorHandlers = Layer.mergeAll(
         }: {
           payload: TwoFactorApi.ConfirmPayload;
         }) {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           const recoveryCodes = yield* twoFactor.confirm(
             Users.UserId(principal.ref.id),
             payload.code,
@@ -400,7 +383,7 @@ export const TwoFactorHandlers = Layer.mergeAll(
           return new TwoFactorApi.RecoveryCodesDto({ recoveryCodes });
         }),
         disable: Effect.fnUntraced(function* ({ payload }: { payload: TwoFactorApi.CodePayload }) {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           yield* twoFactor.disable(
             Users.UserId(principal.ref.id),
             principal.sessionId,
@@ -412,7 +395,7 @@ export const TwoFactorHandlers = Layer.mergeAll(
         }: {
           payload: TwoFactorApi.CodePayload;
         }) {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           const recoveryCodes = yield* twoFactor.regenerateRecoveryCodes(
             Users.UserId(principal.ref.id),
             principal.sessionId,
@@ -421,7 +404,7 @@ export const TwoFactorHandlers = Layer.mergeAll(
           return new TwoFactorApi.RecoveryCodesDto({ recoveryCodes });
         }),
         status: Effect.fnUntraced(function* () {
-          const principal = yield* currentUserPrincipal;
+          const { principal } = yield* CurrentUser.current;
           return new TwoFactorApi.StatusDto(
             yield* twoFactor.status(Users.UserId(principal.ref.id)),
           );
@@ -474,6 +457,8 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
     two_factor_secret: AuthPlugin.Table.global("per-user factor; the directory is global"),
     two_factor_recovery_code: AuthPlugin.Table.global("per-user codes; the directory is global"),
   },
+  // Plan 17: the sealed TOTP secret, declared beside the records that seal it.
+  sealedColumns: [secretColumn],
   migrations,
   // Plan 08 (BEH-EA-T4): the secret and recovery-code stores, memory and SQL, matched.
   records: twoFactorRecords,

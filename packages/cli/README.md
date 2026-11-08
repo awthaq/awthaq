@@ -42,12 +42,21 @@ export default defineConfig({
   auth, // required: the static manifest, contract and migrations
   config: Layer.mergeAll(Roles.config([admin]), Password.config({ minLength: 14 })), // optional: your configuration overrides
   sql: SqlLive, // optional: the SQL client for migration/import (else --database-url)
-  app: AppLive, // optional: auth.layer with every port and the SQL client provided — for seed/import/doctor --build
+  app: AppLive, // optional: the application layer (below) — for seed/import/doctor --build
   production: true, // optional: overrides NODE_ENV for the audit
 });
 ```
 
-`app` must expose the `SqlClient` (`Layer.provideMerge`) for `import`, which keeps its checkpoint next to the users it writes. A TypeScript config needs a runtime that can load `.ts` (Node with native type stripping, Bun, or `tsx awthaq …`).
+`app` is the same layer the server serves, built with `AuthHost.layer` (`@awthaq/server`) and the router provided, with `migrations: "verify"`: a command that builds the application (`seed admin`, `import`) must never migrate behind `migration apply --yes`, so it refuses to run while anything is pending instead:
+
+```ts
+const AppLive = AuthHost.layer(auth, {
+  persistence: { records: "sql", client: SqlLive, migrations: "verify" },
+  csrf: Csrf.layerConfig,
+}).pipe(Layer.provide(Ports), Layer.provideMerge(HttpServer.layerServices), Layer.provideMerge(HttpRouter.layer));
+```
+
+`AuthHost` exposes the `SqlClient` in its output, which `import` needs: it keeps its checkpoint next to the users it writes. A TypeScript config needs a runtime that can load `.ts` (Node with native type stripping, Bun, or `tsx awthaq …`).
 
 ## Exit codes ([BEH-EA-225](../../spec/behaviors/26-cli.md))
 

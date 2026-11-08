@@ -11,19 +11,11 @@ import { PinRecords, Pins } from "./support/Pins.ts";
 const built = Auth.make([Pins]);
 
 const roundTrip = async (app: {
-  readonly signIn: (email: string) => Promise<TestAuth.SignedInSession>;
-  readonly request: (
-    method: string,
-    path: string,
-    init?: TestAuth.RequestInit,
-  ) => Promise<Response>;
+  readonly signIn: (email: string) => Promise<TestAuth.SignedInAgent>;
 }) => {
-  const signedIn = await app.signIn("pins@example.com");
-  const added = await app.request("POST", "/pins", {
-    cookie: signedIn.cookieHeader,
-    json: { label: "first" },
-  });
-  const listed = await app.request("GET", "/pins", { cookie: signedIn.cookieHeader });
+  const pinner = await app.signIn("pins@example.com");
+  const added = await pinner.request("POST", "/pins", { json: { label: "first" } });
+  const listed = await pinner.request("GET", "/pins");
   return { added: added.status, listed: await listed.json() };
 };
 

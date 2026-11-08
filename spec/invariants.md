@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-INV |
-> | Revision | 1.5 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.7 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) <br> 1.2 (2026-09-13): Updated INV-EA-014's Source/Enforcement/Related fields now that [27-admin-impersonation.md](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 220) makes the Admin plugin's impersonation behavior normative (CCR-EA-004) <br> 1.3 (2026-09-29): Added INV-EA-018 (identifiers are never capabilities, APS-010) <br> 1.4 (2026-09-29): Replaced the pre-implementation banner and the "(planned)" runtime section; every INV-EA-007..016 Enforcement cell now names the test that exists (or says plainly that none does); the check that keeps them honest is in `spec/scripts/check-drift.mjs` (TMS-009, DTWS-007, DTWS-001, IDS-009, CCR-EA-006) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected INV-EA-014's Source/Enforcement/Related fields, which falsely implied Admin-plugin behavior coverage that does not exist (CCR-EA-002) <br> 1.2 (2026-09-13): Updated INV-EA-014's Source/Enforcement/Related fields now that [27-admin-impersonation.md](behaviors/27-admin-impersonation.md) (BEH-EA-209 through 220) makes the Admin plugin's impersonation behavior normative (CCR-EA-004) <br> 1.3 (2026-09-29): Added INV-EA-018 (identifiers are never capabilities, APS-010) <br> 1.4 (2026-09-29): Replaced the pre-implementation banner and the "(planned)" runtime section; every INV-EA-007..016 Enforcement cell now names the test that exists (or says plainly that none does); the check that keeps them honest is in `spec/scripts/check-drift.mjs` (TMS-009, DTWS-007, DTWS-001, IDS-009, CCR-EA-006) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): INV-EA-015 names `FederatedIdentity` as the one reader-then-writer of the anchor (architecture plan 14) <br> 1.7 (2026-11-08): INV-EA-002's Source names `AuthHost.layer`'s `RIn`; INV-EA-019 (a SQL composition served through `AuthHost` is never built over a schema behind it) (ADR-EA-044, architecture plan 15) |
 
 ---
 
@@ -34,7 +34,7 @@ These are properties that the TypeScript compiler enforces through `Auth.make`'s
 
 ## INV-EA-002: A port with no implementation keeps the application from compiling
 
-**Source**: TypeScript compiler, via `Layer` type algebra at `Layer.launch` — a port (`PasswordHasher`, `Mailer`, `WebAuthn`, `SqlClient`, `Crypto`, `KeyValueStore`, `RateLimiter`) is required (`RIn`) by any plugin that uses it and is never provided (`ROut`) by a plugin (`archive/design/plugins-as-layers.md` §3.3); if the application's `Layer.provide` stack omits an implementation, that port's service remains in the final composed Layer's `RIn`, and `Layer.launch` / `Effect.provide` refuses to type-check against a required environment of `never`.
+**Source**: TypeScript compiler, via `Layer` type algebra at `Layer.launch` — a port (`PasswordHasher`, `Mailer`, `WebAuthn`, `SqlClient`, `Crypto`, `KeyValueStore`, `RateLimiter`) is required (`RIn`) by any plugin that uses it and is never provided (`ROut`) by a plugin (`archive/design/plugins-as-layers.md` §3.3); if the application's `Layer.provide` stack omits an implementation, that port's service remains in the final composed Layer's `RIn`, and `Layer.launch` / `Effect.provide` refuses to type-check against a required environment of `never`. A host on `AuthHost.layer` gets the same guarantee for the whole servable pipeline: its `RIn` is exactly the host-owned ports, adapters and platform services ([BEH-EA-340](behaviors/02-plugin-composition-validate.md#beh-ea-340-authhostlayer-derives-the-servable-layer-from-authmake-and-its-requirements-are-exactly-what-the-host-owns)).
 
 **Implication**: Without this, a missing `Mailer` implementation surfaces only when a password-reset email silently fails to send, in production, to a real user. With it, deleting the `Mailer.layerSes` line from an application's Layer stack (`archive/PRD.md` §26) is a compile error, not an incident.
 
@@ -166,7 +166,7 @@ These are properties that hold at runtime through the domain services, persisten
 
 **Implication**: Without tuple uniqueness, two different upstream accounts (or the same upstream account under two issuers, in a token-confusion attack) could collide onto one local account. Without single-use state/verifier, a captured or replayed authorization callback could complete a second time. With both, account linking is unambiguous and the OAuth exchange cannot be replayed.
 
-**Enforcement**: uniqueness: the `UNIQUE ("providerId", subject, issuer)` index in `packages/sql/src/CoreMigrations.ts` and `packages/core/test/Accounts.test.ts` ("BEH-EA-125: a second link under the same (providerId, subject, issuer) is rejected"); single-use flow state: `packages/oauth/test/OAuth.test.ts` ("REQ-EA-333: a replayed callback using an already-consumed state fails").
+**Enforcement**: `FederatedIdentity` (ADR-EA-043, `packages/core/test/FederatedIdentity.test.ts`, `FederatedIdentitySql.test.ts`) is the one reader-then-writer of the anchor and resolves a lost race to it; uniqueness: the `UNIQUE ("providerId", subject, issuer)` index in `packages/sql/src/CoreMigrations.ts` and `packages/core/test/Accounts.test.ts` ("BEH-EA-125: a second link under the same (providerId, subject, issuer) is rejected"); single-use flow state: `packages/oauth/test/OAuth.test.ts` ("REQ-EA-333: a replayed callback using an already-consumed state fails").
 
 **Related**: [BEH-EA-121 through 128](behaviors/16-oauth.md).
 
@@ -176,7 +176,7 @@ These are properties that hold at runtime through the domain services, persisten
 
 **Implication**: The core identity tables — `users`, `accounts`, `sessions`, `verification_tokens` — must share a single transaction domain. A deployment that shards or partitions them (by tenant, region or user id) must place a user and all of that user's accounts (and sessions and verification tokens) in the same shard, or the cross-table transactions above silently stop being atomic. There is deliberately no runtime assertion: the boundary is a deployment/partitioning choice, and detecting it would be speculative infrastructure; the invariant is a design constraint every shard-key proposal (multi-tenancy, data residency) must respect. `SqlTransaction.layerNoop` (in-memory compositions) is atomic only per `Ref`, so a memory composition can still orphan a user if `accounts.link` dies — acceptable for development and tests only.
 
-**Enforcement**: Design constraint, no runtime check. Referenced from [BEH-EA-035](behaviors/05-persistence-stratum.md#beh-ea-035-repositories-are-built-with-sqlmodelmakerepository-over-the-ambient-sqlclient-never-opening-their-own-transactions); the transactions relying on it are covered by `packages/oauth/test/OAuth.test.ts` and `packages/password/test/Password.test.ts`.
+**Enforcement**: Design constraint, no runtime check. Referenced from [BEH-EA-035](behaviors/05-persistence-stratum.md#beh-ea-035-a-core-store-adapter-owns-its-statements-over-the-ambient-sqlclient-a-multi-statement-primitive-opens-one-unit-never-the-callers-boundary); the transactions relying on it are covered by `packages/oauth/test/OAuth.test.ts` and `packages/password/test/Password.test.ts`.
 
 **Related**: [BEH-EA-035](behaviors/05-persistence-stratum.md), [BEH-EA-058](behaviors/08-verification-tokens.md), [BEH-EA-121 through 128](behaviors/16-oauth.md).
 
@@ -199,3 +199,13 @@ These are properties that hold at runtime through the domain services, persisten
 **Enforcement**: `Sessions.verify` (`packages/core/test/Sessions.test.ts` — the PIL-007 tests); `Sessions.revokeOwned`/`findOwned` (same file, GC-005/TIR-003 tests). Ids are additionally never used as bearer tokens by any endpoint.
 
 **Related**: [BEH-EA-049](behaviors/07-sessions.md#beh-ea-049-a-session-token-is-an-opaque-idsecret-pair), [BEH-EA-056](behaviors/07-sessions.md#beh-ea-056-session-secret-verification-is-a-constant-time-comparison-over-a-fixed-length-hash), [BEH-EA-086](behaviors/11-http-error-mapping.md#beh-ea-086-error-responses-are-enumeration-safe-uniformly-across-the-http-surface).
+
+## INV-EA-019: A SQL composition served through `AuthHost` is never built over a schema behind it
+
+**Source**: plan 15 §2.4 — the migrations are the one part of a composition the compiler cannot guard (an effect someone must run, not a service anything requires). A host that ran only core's migrations type-checked with nothing in `RIn` and answered `503 StoreUnavailable` (`no such table`) for every request to a table-owning plugin; a boot that ran `Migrator` and then `Migrations.run` skipped a plugin inserted before an applied one without an error.
+
+**Implication**: Without this, a schema behind the composition is discovered request by request, in production. With it, `AuthHost`'s SQL mode reaches the client only through a layer that first runs `Migrations.onBuild`: `"apply"` brings the schema current, `"verify"` refuses the build while anything is pending, and both refuse a drifted ledger.
+
+**Enforcement**: `Migrations.onBuild` inside the client's only path (`packages/server/src/AuthHost.ts`); `packages/server/test/AuthHost.test.ts` ("AuthHost.layer migrations (sql)"), `packages/core/test/Migrations.test.ts`, `examples/sql-server/test/smoke.test.ts`.
+
+**Related**: [BEH-EA-341](behaviors/05-persistence-stratum.md#beh-ea-341-a-sql-host-composition-never-serves-a-schema-that-is-behind-it), [ADR-EA-044](decisions/044-host-composition.md).

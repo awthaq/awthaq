@@ -1,7 +1,7 @@
 // THS-001, AOMS-003, ARF-005, THS-004/005/007, BCR-002/006 (BEH-EA-259 to BEH-EA-266): the plugin
 // end to end at the domain level — the real `Password` plugin as the first factor, the real
 // `TwoFactor` plugin and its two gates, real (in-memory) stores, the real `Encryption` port.
-import { AuditLog, AuthEvents, Hooks, SignIn, Users, VerificationLink } from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, SignIn, Users } from "@awthaq/core";
 import { SealedColumn } from "@awthaq/sql";
 import { Password } from "@awthaq/password";
 import { assert, describe, it } from "@effect/vitest";
@@ -18,7 +18,6 @@ import * as TestClock from "effect/testing/TestClock";
 import * as SecondFactor from "../src/SecondFactor.ts";
 import * as TwoFactor from "../src/TwoFactor.ts";
 import * as TwoFactorStore from "../src/TwoFactorStore.ts";
-import { CHALLENGE_PURPOSE } from "../src/Challenge.ts";
 import {
   buildDurableAuditLayer,
   awaitMail,
@@ -294,53 +293,6 @@ describe("TwoFactor: the challenge (BEH-EA-262, THS-007)", () => {
           before + 1,
         );
       }).pipe(Effect.provide(buildLayer())),
-  );
-
-  it.effect("a challenge issued for user A cannot be spent as user B's", () =>
-    Effect.gen(function* () {
-      const factor = yield* SecondFactor.SecondFactor;
-      const a = yield* enrolledUser("a@example.com");
-      const b = yield* enrolledUser("b@example.com");
-      const challengeA = yield* factor.issueChallenge({
-        userId: a.userId,
-        strategy: "password",
-        amr: ["pwd"],
-        attempt: 0,
-      });
-      // Rewrite the claimed user to B, keeping A's secret value.
-      const value = challengeA.slice(challengeA.lastIndexOf(".") + 1);
-      const forged = `${VerificationLink.identifierOf(CHALLENGE_PURPOSE, b.userId)}.${value}`;
-      const failure = yield* factor
-        .redeemChallenge(Redacted.make(forged), Effect.succeed)
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "InvalidTwoFactorCode");
-      // A's own challenge is still intact (the forgery consumed nothing of A's).
-      const consumed = yield* factor.redeemChallenge(Redacted.make(challengeA), Effect.succeed);
-      assert.strictEqual(consumed.userId, a.userId);
-    }).pipe(Effect.provide(buildLayer())),
-  );
-
-  it.effect("a second divert supersedes the first challenge (one live challenge per account)", () =>
-    Effect.gen(function* () {
-      const factor = yield* SecondFactor.SecondFactor;
-      const user = yield* enrolledUser("single@example.com");
-      const input = {
-        userId: user.userId,
-        strategy: "password",
-        amr: ["pwd" as const],
-        attempt: 0,
-      };
-      const first = yield* factor.issueChallenge(input);
-      const second = yield* factor.issueChallenge(input);
-      const stale = yield* factor
-        .redeemChallenge(Redacted.make(first), Effect.succeed)
-        .pipe(Effect.flip);
-      assert.strictEqual(stale._tag, "InvalidTwoFactorCode");
-      assert.strictEqual(
-        (yield* factor.redeemChallenge(Redacted.make(second), Effect.succeed)).userId,
-        user.userId,
-      );
-    }).pipe(Effect.provide(buildLayer())),
   );
 
   it.effect("a challenge expires after ten minutes", () =>

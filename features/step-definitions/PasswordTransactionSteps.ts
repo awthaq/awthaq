@@ -1,7 +1,7 @@
-// BEH-EA-035 (05-persistence-stratum.feature): the domain service, not the repository, holds the
+// BEH-EA-035 (05-persistence-stratum.feature): the domain service, not the store adapter, holds the
 // transaction boundary. The claim is observable through `Password.confirmReset` over the real
 // SQLite transaction PasswordWorld already provides (TIR-005): with a fault injected between the
-// two repository writes nothing may persist, and once the fault is lifted both effects land
+// two store writes nothing may persist, and once the fault is lifted both effects land
 // together. The same World and helpers as 15-password.feature's REQ-EA-317/693.
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
@@ -41,7 +41,7 @@ export const passwordTransactionSteps = defineSteps<World>(({ Given, When, Then 
   );
 
   When("{string} runs", function* (_operation: string) {
-    // A failure between the two repository writes: the boundary is what decides what survives.
+    // A failure between the two store writes: the boundary is what decides what survives.
     yield* setFault("revokeAll");
     const response = yield* request("/password/confirm-reset", {
       token: yield* getNote("resetToken"),
@@ -51,9 +51,9 @@ export const passwordTransactionSteps = defineSteps<World>(({ Given, When, Then 
   });
 
   Then(
-    "the domain service itself opens the transaction boundary around both repository calls",
+    "the domain service itself opens the transaction boundary around both store calls",
     function* () {
-      // Had each repository call committed on its own, the consumed token (or the revoked session)
+      // Had each store call committed on its own, the consumed token (or the revoked session)
       // would have outlived the failed operation. Neither did: the boundary spans both.
       assert.equal(yield* getNote("firstAttempt"), "500");
       assert.equal(
