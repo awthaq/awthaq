@@ -847,7 +847,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
             : Effect.succeed(grace);
         };
 
-        /** Mints and stores a key; the plaintext exists only in the returned value. */
+        /** Mints a key, not yet stored; the plaintext exists only in the returned value. */
         const mint = Effect.fnUntraced(function* (input: {
           readonly ownerId: Users.UserId;
           readonly name: string;
@@ -877,8 +877,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
             lastUsedAt: Option.none(),
             rotatedFrom: input.rotatedFrom,
           };
-          yield* records.insert(record);
-          return { view: toView(record), key: Redacted.make(key) };
+          return { record, created: { view: toView(record), key: Redacted.make(key) } };
         });
 
         const ownedKey = Effect.fnUntraced(function* (ownerId: Users.UserId, keyId: string) {
@@ -893,13 +892,14 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
           const scopes = dedupe(input.scopes);
           yield* grantable(scopes);
           const expiresIn = yield* lifetime(input.expiresIn);
-          const created = yield* mint({
+          const { record, created } = yield* mint({
             ownerId,
             name: input.name,
             scopes,
             expiresIn,
             rotatedFrom: Option.none(),
           });
+          yield* records.insert(record);
           yield* events.publish({
             _tag: "auth.apiKey.created",
             userId: ownerId,
@@ -913,16 +913,23 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
 
         const revoke: ApiKeyShape["revoke"] = Effect.fnUntraced(function* (ownerId, keyId) {
           const record = yield* ownedKey(ownerId, keyId);
-          const now = yield* DateTime.now;
-          yield* records.revoke(record.id, now);
-          yield* events.publish({ _tag: "auth.apiKey.revoked", userId: ownerId, keyId: record.id });
+          const revoked = yield* records.revoke(record.id, yield* DateTime.now);
+          // F10: only the call that revoked the key announces it; a repeat (or a lost race) is a no-op.
+          if (revoked) {
+            yield* events.publish({
+              _tag: "auth.apiKey.revoked",
+              userId: ownerId,
+              keyId: record.id,
+            });
+          }
         });
 
         const rotate: ApiKeyShape["rotate"] = Effect.fnUntraced(
           function* (ownerId, keyId, options) {
             const record = yield* ownedKey(ownerId, keyId);
             const now = yield* DateTime.now;
-            // Rotating a dead key would resurrect it as a live successor.
+            // Rotating a dead key would resurrect it as a live successor. This early answer saves the
+            // mint; the store's `rotate` is the authority (a revoke may land after this read).
             if (!isLive(record, now)) return yield* new ApiKeyApi.ApiKeyNotFound();
             const grace = yield* graceOf(options?.gracePeriod);
             const expiresIn = yield* lifetime(options?.expiresIn);
@@ -933,16 +940,23 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
               expiresIn,
               rotatedFrom: Option.some(record.id),
             });
-            // The successor exists before the predecessor starts its countdown, so there is
-            // never a moment with no valid key.
-            yield* records.limitExpiry(record.id, DateTime.addDuration(now, grace));
+            // F6: the successor is stored and the predecessor starts its countdown in one step, and
+            // only while the predecessor is still live, so there is never a moment with no valid key
+            // and never a live successor of a key revoked before the rotation.
+            const outcome = yield* records.rotate({
+              predecessorId: record.id,
+              successor: successor.record,
+              graceUntil: DateTime.addDuration(now, grace),
+              now,
+            });
+            if (outcome === "notLive") return yield* new ApiKeyApi.ApiKeyNotFound();
             yield* events.publish({
               _tag: "auth.apiKey.rotated",
               userId: ownerId,
               keyId: record.id,
-              successorKeyId: successor.view.id,
+              successorKeyId: successor.record.id,
             });
-            return successor;
+            return successor.created;
           },
         );
 

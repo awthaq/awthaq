@@ -1,10 +1,11 @@
-// THS-001 step 3, BCR-002, THS-005 (BEH-EA-264/265): the two records services over both layers —
-// `layerMemory` and `layerSql` on a real database (SQLite by default, Postgres under
-// `AWTHAQ_POSTGRES_URL`/`pnpm run test:pg`) with the plugin's real migrations, never a hand-written
-// `CREATE TABLE`.
+// THS-001 step 3, BCR-002, THS-005 (BEH-EA-264/265): what is not a store contract — the erasure and export
+// contributions over the stores, and the sealed `secret` column's wiring suite over both adapters — on a real database
+// (SQLite by default, Postgres under `AWTHAQ_POSTGRES_URL`/`pnpm run test:pg`) with the plugin's real migrations.
+// The two stores' own cases are `RecordsContract` suites (`test/contract/`, run from `Contract.test.ts`, plan 25
+// ticket 21). Hand-built layers, not `RecordsContract.recordsBase`: the sealed suite needs the secrets layer without
+// `Encryption` (it provides a rotatable one) and the memory adapter's `MemoryEnvelopes` seam.
 import { DataExport, Erasure, Migrations, Users } from "@awthaq/core";
 import { PasswordHasher } from "@awthaq/ports";
-import { SealedColumn } from "@awthaq/sql";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -33,169 +34,9 @@ const SqlNeedsEncryption = Layer.mergeAll(
 ).pipe(Layer.provide(NodeCrypto.layer), Layer.provideMerge(SqlLive), Layer.provideMerge(Migrated));
 const SqlStores = SqlNeedsEncryption.pipe(Layer.provide(EncryptionLive));
 
-const MemoryStores = Layer.mergeAll(
-  TwoFactorStore.layerSecretsMemory.pipe(Layer.provide(EncryptionLive)),
-  TwoFactorStore.layerRecoveryCodesMemory,
-).pipe(Layer.provide(NodeCrypto.layer));
-
-/** What a sealed secret holds, opened through the substrate. */
-const openSecret = (sealed: SealedColumn.Sealed<string>) =>
-  Effect.map(SealedColumn.orDie(sealed.open), Redacted.value);
-
 const hash = (text: string) => PasswordHasher.PhcHash(`$argon2id$test$${text}`);
 const userA = Users.UserId("user-a");
 const userB = Users.UserId("user-b");
-
-const suite = (
-  name: string,
-  layer: Layer.Layer<
-    TwoFactorStore.TwoFactorSecrets | TwoFactorStore.TwoFactorRecoveryCodes,
-    unknown,
-    never
-  >,
-): void => {
-  describe(name, () => {
-    it.effect("a pending secret is replaced until it is confirmed, then it is final", () =>
-      Effect.gen(function* () {
-        const secrets = yield* TwoFactorStore.TwoFactorSecrets;
-        assert.isTrue(yield* secrets.upsertPending(userA, Redacted.make("secret-1")));
-        assert.isTrue(yield* secrets.upsertPending(userA, Redacted.make("secret-2")));
-        const pending = yield* secrets.find(userA);
-        assert.strictEqual(yield* openSecret(Option.getOrThrow(pending).secret), "secret-2");
-        assert.isTrue(Option.isNone(Option.getOrThrow(pending).confirmedAt));
-
-        // Confirmation records the step of the code that proved it, exactly once.
-        assert.isTrue(yield* secrets.confirm(userA, BigInt(100)));
-        assert.isFalse(yield* secrets.confirm(userA, BigInt(101)));
-        const confirmed = Option.getOrThrow(yield* secrets.find(userA));
-        assert.isTrue(Option.isSome(confirmed.confirmedAt));
-        assert.deepStrictEqual(confirmed.lastUsedStep, Option.some(BigInt(100)));
-
-        // A confirmed secret is never overwritten by a fresh `enable`.
-        assert.isFalse(yield* secrets.upsertPending(userA, Redacted.make("secret-3")));
-        assert.strictEqual(
-          yield* openSecret(Option.getOrThrow(yield* secrets.find(userA)).secret),
-          "secret-2",
-        );
-      }).pipe(Effect.provide(layer)),
-    );
-
-    it.effect("THS-005: lastUsedStep only moves forward, and never on an unconfirmed secret", () =>
-      Effect.gen(function* () {
-        const secrets = yield* TwoFactorStore.TwoFactorSecrets;
-        yield* secrets.upsertPending(userA, Redacted.make("e"));
-        // Not yet confirmed: no step can be spent.
-        assert.isFalse(yield* secrets.advanceLastUsedStep(userA, BigInt(5)));
-        yield* secrets.confirm(userA, BigInt(10));
-        assert.isFalse(yield* secrets.advanceLastUsedStep(userA, BigInt(10)));
-        assert.isFalse(yield* secrets.advanceLastUsedStep(userA, BigInt(9)));
-        assert.isTrue(yield* secrets.advanceLastUsedStep(userA, BigInt(11)));
-        assert.isFalse(yield* secrets.advanceLastUsedStep(userA, BigInt(11)));
-      }).pipe(Effect.provide(layer)),
-    );
-
-    it.effect("THS-005: of many concurrent verifications of one step, exactly one wins", () =>
-      Effect.gen(function* () {
-        const secrets = yield* TwoFactorStore.TwoFactorSecrets;
-        yield* secrets.upsertPending(userA, Redacted.make("e"));
-        yield* secrets.confirm(userA, BigInt(1));
-        const results = yield* Effect.all(
-          Array.from({ length: 12 }, () => secrets.advanceLastUsedStep(userA, BigInt(2))),
-          { concurrency: "unbounded" },
-        );
-        assert.strictEqual(results.filter(Boolean).length, 1);
-      }).pipe(Effect.provide(layer)),
-    );
-
-    it.effect("delete reports whether a row existed and leaves other users alone", () =>
-      Effect.gen(function* () {
-        const secrets = yield* TwoFactorStore.TwoFactorSecrets;
-        yield* secrets.upsertPending(userA, Redacted.make("a"));
-        yield* secrets.upsertPending(userB, Redacted.make("b"));
-        assert.isTrue(yield* secrets.delete(userA));
-        assert.isFalse(yield* secrets.delete(userA));
-        assert.isTrue(Option.isSome(yield* secrets.find(userB)));
-      }).pipe(Effect.provide(layer)),
-    );
-
-    it.effect("BCR-002: replaceAll swaps the whole set; countUnused tracks each spend", () =>
-      Effect.gen(function* () {
-        const codes = yield* TwoFactorStore.TwoFactorRecoveryCodes;
-        yield* codes.replaceAll(userA, [hash("1"), hash("2"), hash("3")]);
-        yield* codes.replaceAll(userB, [hash("b1")]);
-        assert.strictEqual(yield* codes.countUnused(userA), 3);
-        const [first] = yield* codes.listUnused(userA);
-        if (first === undefined) return assert.fail("no codes");
-        assert.isTrue(yield* codes.markUsed(userA, first.id));
-        assert.isFalse(yield* codes.markUsed(userA, first.id));
-        assert.strictEqual(yield* codes.countUnused(userA), 2);
-        // Another user's id cannot be spent through this user.
-        const [theirs] = yield* codes.listUnused(userB);
-        assert.isFalse(yield* codes.markUsed(userA, theirs?.id ?? ""));
-
-        yield* codes.replaceAll(userA, [hash("x"), hash("y")]);
-        const fresh = yield* codes.listUnused(userA);
-        assert.strictEqual(fresh.length, 2);
-        assert.isFalse(fresh.some((row) => row.id === first.id));
-        assert.strictEqual(yield* codes.countUnused(userB), 1);
-      }).pipe(Effect.provide(layer)),
-    );
-
-    it.effect("a recovery code is spent exactly once under concurrent presentation", () =>
-      Effect.gen(function* () {
-        const codes = yield* TwoFactorStore.TwoFactorRecoveryCodes;
-        yield* codes.replaceAll(userA, [hash("only")]);
-        const [row] = yield* codes.listUnused(userA);
-        const results = yield* Effect.all(
-          Array.from({ length: 10 }, () => codes.markUsed(userA, row?.id ?? "")),
-          { concurrency: "unbounded" },
-        );
-        assert.strictEqual(results.filter(Boolean).length, 1);
-        assert.strictEqual(yield* codes.countUnused(userA), 0);
-      }).pipe(Effect.provide(layer)),
-    );
-
-    it.effect("deleteAllByUser removes the secret's siblings for that user only", () =>
-      Effect.gen(function* () {
-        const codes = yield* TwoFactorStore.TwoFactorRecoveryCodes;
-        yield* codes.replaceAll(userA, [hash("1")]);
-        yield* codes.replaceAll(userB, [hash("2")]);
-        yield* codes.deleteAllByUser(userA);
-        assert.strictEqual(yield* codes.countUnused(userA), 0);
-        assert.strictEqual(yield* codes.countUnused(userB), 1);
-      }).pipe(Effect.provide(layer)),
-    );
-  });
-};
-
-suite("TwoFactorStore (layerMemory)", MemoryStores);
-suite("TwoFactorStore (layerSql)", SqlStores);
-
-describe("TwoFactorStore.layerRecoveryCodesSql atomicity (BCR-002)", () => {
-  it.effect("a failure while inserting the new set leaves the old set intact", () =>
-    Effect.gen(function* () {
-      const codes = yield* TwoFactorStore.TwoFactorRecoveryCodes;
-      yield* codes.replaceAll(userA, [hash("old-1"), hash("old-2")]);
-      const before = (yield* codes.listUnused(userA)).map((row) => row.id).sort();
-
-      // The delete succeeds, then the first insert fails: without the transaction the user would have no codes at all.
-      yield* TestSql.injectFailure({
-        name: "two_factor_fail_insert",
-        table: "two_factor_recovery_code",
-        event: "INSERT",
-      });
-      const failure = yield* codes.replaceAll(userA, [hash("new-1")]).pipe(Effect.exit);
-      assert.isTrue(failure._tag === "Failure");
-
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql.unsafe("DROP TRIGGER two_factor_fail_insert ON two_factor_recovery_code"),
-        orElse: () => sql.unsafe("DROP TRIGGER two_factor_fail_insert"),
-      });
-      assert.deepStrictEqual((yield* codes.listUnused(userA)).map((row) => row.id).sort(), before);
-    }).pipe(Effect.provide(SqlStores)),
-  );
-});
 
 describe("TwoFactor erasure and export contributions (CSG-001/CSG-005)", () => {
   const RegistryLayer = SqlStores.pipe(

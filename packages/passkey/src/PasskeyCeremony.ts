@@ -11,7 +11,8 @@
 //   2. origin: BEH-EA-133 / MNA-007 / CB-003 / TC-008, one policy;
 //   3. port:   `WebAuthn.verify*` (registration: UP per mode; assertion: the stored key, or the
 //              decoy key for a credential this ceremony may not use, TSS-004);
-//   4. policy: registration: UV, attestation. Assertion: user handle, UV, counter, then the usage write.
+//   4. policy: registration: UV, attestation. Assertion: user handle, UV, then the usage write, which
+//              decides the counter verdict (plan 25 F8).
 import type { Api } from "@awthaq/api";
 import { AuthEvents, type Sessions, type Users } from "@awthaq/core";
 import { WebAuthn } from "@awthaq/ports";
@@ -81,7 +82,7 @@ export type AssertionRefusal =
   | "challenge"
   | "origin"
   | "rpId"
-  | "unknownCredential" // no such credential, or (step-up) not the caller's; the decoy was verified
+  | "unknownCredential" // no such credential, or (step-up) not the caller's (the decoy was verified); or deleted mid-ceremony
   | "signature"
   | "userHandle" // BPAS-003: the assertion's handle is not the one the credential was registered under
   | "userVerification"
@@ -382,29 +383,32 @@ export const make = Effect.gen(function* () {
     Option.isSome(credential.counterAnomalyAt);
 
   /**
-   * CB-004/WPS-006: a regression (`newCounter <= stored`, except the normal `0 === 0`) is published
-   * and flagged; whether it also refuses is the policy's call. The stored counter never moves
-   * backwards (`PasskeyCredentials.recordUsage`).
+   * CB-004/WPS-006 (plan 25 F8): the usage write decides the counter verdict (`recordUsage`, at the
+   * write: above the stored counter, or the normal `0 === 0`, advances it). A regression is published
+   * and flagged, and stores nothing else; whether it also refuses is the policy's call. So of two
+   * concurrent assertions with one counter the second is a regression too, flagged under `"flag"`.
+   * The credential vanishing under the ceremony (a concurrent delete) is an unknown credential.
    */
-  const counterVerdict = Effect.fnUntraced(function* (
+  const recordUsage = Effect.fnUntraced(function* (
     credential: PasskeyCredentials.PasskeyCredentialRecord,
     verified: WebAuthn.VerifiedAuthentication,
     policy: CeremonyPolicy,
   ) {
-    const regressed =
-      verified.newCounter <= credential.counter &&
-      !(verified.newCounter === 0 && credential.counter === 0);
-    if (!regressed) return "accepted" as const;
+    const usage = yield* credentials.recordUsage(
+      credential.id,
+      verified.newCounter,
+      verified.credentialBackedUp,
+    );
+    if (usage === "advanced") return Option.none<AssertionRefusal>();
     yield* events.publish({
       _tag: "auth.passkey.counterAnomaly",
       userId: credential.userId,
       credentialId: credential.id,
     });
-    // The row was read a moment ago in this ceremony: a vanished row is a bug, not a domain outcome.
-    yield* credentials
-      .flagCounterAnomaly(credential.id)
-      .pipe(Effect.catchTag("PasskeyCredentials/NotFound", Effect.die));
-    return policy.counterAnomalyPolicy === "reject" ? ("rejected" as const) : ("accepted" as const);
+    yield* credentials.flagCounterAnomaly(credential.id);
+    return policy.counterAnomalyPolicy === "reject"
+      ? Option.some<AssertionRefusal>("counterAnomaly")
+      : Option.none<AssertionRefusal>();
   });
 
   /** Sign-in may use any registered credential; step-up only one the caller owns. */
@@ -461,12 +465,12 @@ export const make = Effect.gen(function* () {
     ) {
       return yield* refuse("userVerification");
     }
-    if ((yield* counterVerdict(credential, verified, input.policy)) === "rejected") {
-      return yield* refuse("counterAnomaly");
-    }
-    yield* credentials
-      .recordUsage(credential.id, verified.newCounter, verified.credentialBackedUp)
-      .pipe(Effect.catchTag("PasskeyCredentials/NotFound", Effect.die));
+    const counter = yield* recordUsage(credential, verified, input.policy).pipe(
+      Effect.catchTag("PasskeyCredentials/NotFound", () =>
+        Effect.succeed(Option.some<AssertionRefusal>("unknownCredential")),
+      ),
+    );
+    if (Option.isSome(counter)) return yield* refuse(counter.value);
     return { credential, verified, amr: passkeyAmr(verified) };
   });
 

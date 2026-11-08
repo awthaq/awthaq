@@ -36,6 +36,16 @@
 // `markRotated` only applies to a row that is still current and reports
 // whether it did, so a second rotator can neither mint a duplicate current
 // key nor re-extend a grace period that already started.
+//
+// Plan 25 ticket 20 (plan 24 R6, Q3): a `kid` names one key forever (ADR-EA-017).
+// `create` with a `kid` already stored never touches that row: the same public key
+// again (same `alg`, same public JWK, no private half on either side) answers the
+// stored record unchanged, so a host registering its remote key at every boot keeps
+// working; anything else fails `KidTaken`. Memory decides it in the same
+// `Ref.modify` as the insert; SQL inserts with `ON CONFLICT (kid) DO NOTHING` and
+// reads the stored row back when nothing was inserted. (Before, memory overwrote the
+// row, current key and sealed private JWK included, and SQL reported the primary-key
+// clash as `CurrentKeyConflict`, which `KeyRing` turned into a defect.)
 
 import { Defects, type Encryption } from "@awthaq/ports";
 import { Models as SqlModels, SealedColumn, StoreFailure } from "@awthaq/sql";
@@ -81,6 +91,11 @@ interface StoredSigningKey extends Omit<SigningKeyRecord, "privateKeyJwk"> {
   readonly privateKeyJwk: Option.Option<string>;
 }
 
+/** Plan 24 R6: `create` was handed a `kid` already stored for a different key. A kid names one key forever. */
+export class KidTaken extends Data.TaggedError("SigningKeyRecords/KidTaken")<{
+  readonly kid: string;
+}> {}
+
 /** JJS-004: another process (or fiber) already created the one current key. Re-read `findCurrent` and use it. */
 export class CurrentKeyConflict extends Data.TaggedError("CurrentKeyConflict")<{
   readonly kid: string;
@@ -91,7 +106,11 @@ export interface SigningKeyRecordsShape {
    * Inserts a key. Without `rotated` it becomes the current signing key and
    * fails with `CurrentKeyConflict` when one already exists; with `rotated` it
    * is inserted already rotated (a verification-only key, e.g. one imported
-   * from another system), which never conflicts.
+   * from another system), which never conflicts with the current key.
+   *
+   * A `kid` already stored is never overwritten: the same public key again (same
+   * `alg` and public JWK, no private half on either side) answers the stored
+   * record unchanged, whatever its rotation state; any other key fails `KidTaken`.
    */
   readonly create: (input: {
     readonly kid: string;
@@ -102,7 +121,14 @@ export interface SigningKeyRecordsShape {
       readonly rotatedAt: DateTime.Utc;
       readonly retiresAt: DateTime.Utc;
     };
-  }) => Effect.Effect<SigningKeyRecord, CurrentKeyConflict | StoreFailure.StoreUnavailable>;
+  }) => Effect.Effect<
+    SigningKeyRecord,
+    CurrentKeyConflict | KidTaken | StoreFailure.StoreUnavailable
+  >;
+  /** The key stored under `kid`, rotated, retired or current. */
+  readonly findByKid: (
+    kid: string,
+  ) => Effect.Effect<Option.Option<SigningKeyRecord>, StoreFailure.StoreUnavailable>;
   /** The row with no `rotatedAt` yet — the one currently used to sign new tokens, if any exists. */
   readonly findCurrent: () => Effect.Effect<
     Option.Option<SigningKeyRecord>,
@@ -154,6 +180,39 @@ const isVerifiable = (
     onNone: () => true,
     onSome: (retiresAt) => DateTime.toEpochMillis(retiresAt) > DateTime.toEpochMillis(now),
   });
+
+/** A JSON value with every object's keys sorted, so two equal JWKs serialise alike. */
+const canonical = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(canonical)
+    : typeof value === "object" && value !== null
+      ? Object.fromEntries(
+          Object.entries(value)
+            .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+            .map(([key, entry]) => [key, canonical(entry)]),
+        )
+      : value;
+
+/**
+ * R6/Q3: whether a `create` input is the very key already stored under its `kid`: a public-only key
+ * (no private half on either side) with the same algorithm and the same public JWK.
+ */
+const isSameKey = (
+  stored: {
+    readonly alg: Algorithm;
+    readonly publicKeyJwk: Jwk;
+    readonly privateKeyJwk: Option.Option<unknown>;
+  },
+  input: {
+    readonly alg: Algorithm;
+    readonly publicKeyJwk: Jwk;
+    readonly privateKeyJwk: Option.Option<unknown>;
+  },
+): boolean =>
+  Option.isNone(stored.privateKeyJwk) &&
+  Option.isNone(input.privateKeyJwk) &&
+  stored.alg === input.alg &&
+  JSON.stringify(canonical(stored.publicKeyJwk)) === JSON.stringify(canonical(input.publicKeyJwk));
 
 // ---- layerMemory ------------------------------------------------------------
 
@@ -215,16 +274,34 @@ export const layerMemory: Layer.Layer<
         rotatedAt: Option.fromNullishOr(input.rotated?.rotatedAt),
         retiresAt: Option.fromNullishOr(input.rotated?.retiresAt),
       };
-      // One atomic step: the single-current check and the insert.
+      // One atomic step: the kid check, the single-current check and the insert.
       return yield* Ref.modify(
         state,
-        (s): readonly [Result.Result<StoredSigningKey, CurrentKeyConflict>, RecordsState] =>
-          Option.isNone(record.rotatedAt) &&
-          Array.from(HashMap.values(s)).some((row) => Option.isNone(row.rotatedAt))
+        (
+          s,
+        ): readonly [
+          Result.Result<StoredSigningKey, CurrentKeyConflict | KidTaken>,
+          RecordsState,
+        ] => {
+          const taken = HashMap.get(s, record.kid);
+          if (Option.isSome(taken)) {
+            return [
+              isSameKey(taken.value, input)
+                ? Result.succeed(taken.value)
+                : Result.fail(new KidTaken({ kid: record.kid })),
+              s,
+            ];
+          }
+          return Option.isNone(record.rotatedAt) &&
+            Array.from(HashMap.values(s)).some((row) => Option.isNone(row.rotatedAt))
             ? [Result.fail(new CurrentKeyConflict({ kid: record.kid })), s]
-            : [Result.succeed(record), HashMap.set(s, record.kid, record)],
+            : [Result.succeed(record), HashMap.set(s, record.kid, record)];
+        },
       ).pipe(Effect.flatMap(Effect.fromResult), Effect.map(toRecord));
     });
+
+    const findByKid: SigningKeyRecordsShape["findByKid"] = (kid) =>
+      Effect.map(Ref.get(state), (s) => Option.map(HashMap.get(s, kid), toRecord));
 
     const findCurrent: SigningKeyRecordsShape["findCurrent"] = () =>
       Ref.get(state).pipe(
@@ -271,7 +348,7 @@ export const layerMemory: Layer.Layer<
           : [false, s];
       });
 
-    const records = { create, findCurrent, listVerifiable, markRotated, retire };
+    const records = { create, findByKid, findCurrent, listVerifiable, markRotated, retire };
     const envelopes = MemoryEnvelopes.of({
       stored: (kid) =>
         Effect.map(Ref.get(state), (s) =>
@@ -354,7 +431,9 @@ export const layerSql: Layer.Layer<
       return record;
     });
 
-    const insert = SqlSchema.findOne({
+    // R6: a kid already stored is left alone (`DO NOTHING`); `create` reads it back to tell the
+    // same key from a different one. The single-current index still raises.
+    const insert = SqlSchema.findOneOption({
       Request: Schema.Struct({
         kid: Schema.String,
         alg: AlgorithmLiterals,
@@ -370,8 +449,15 @@ export const layerSql: Layer.Layer<
             (kid, alg, "publicKeyJwk", "privateKeyJwk", "createdAt", "rotatedAt", "retiresAt")
           VALUES
             (${r.kid}, ${r.alg}, ${r.publicKeyJwk}, ${r.privateKeyJwk}, ${r.createdAt}, ${r.rotatedAt}, ${r.retiresAt})
+          ON CONFLICT (kid) DO NOTHING
           RETURNING *
         `,
+    });
+
+    const findByKidQuery = SqlSchema.findOneOption({
+      Request: Schema.String,
+      Result: SigningKeyRow,
+      execute: (kid) => sql`SELECT * FROM jwt_signing_key WHERE kid = ${kid}`,
     });
 
     const findCurrentQuery = SqlSchema.findOneOption({
@@ -424,6 +510,17 @@ export const layerSql: Layer.Layer<
         `,
     });
 
+    const findByKid: SigningKeyRecordsShape["findByKid"] = (kid) =>
+      findByKidQuery(kid).pipe(
+        unavailable("findByKid"),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeedNone,
+            onSome: (row) => Effect.map(decodeRow(row), Option.some),
+          }),
+        ),
+      );
+
     const create: SigningKeyRecordsShape["create"] = Effect.fnUntraced(function* (input) {
       const now = yield* DateTime.now;
       const privateKeyJwk = yield* Option.match(input.privateKeyJwk, {
@@ -440,7 +537,7 @@ export const layerSql: Layer.Layer<
         retiresAt: input.rotated?.retiresAt ?? null,
       }).pipe(
         // A unique violation on a *current* key insert can only be the
-        // single-current index (the kid is a fresh identifier): another
+        // single-current index (a taken kid is `DO NOTHING`): another
         // process minted the current key first.
         input.rotated === undefined
           ? StoreFailure.orConflict(
@@ -449,7 +546,11 @@ export const layerSql: Layer.Layer<
             )
           : unavailable("create"),
       );
-      return yield* decodeRow(row);
+      if (Option.isSome(row)) return yield* decodeRow(row.value);
+      // The kid was taken: the same public key again answers the stored row, anything else is `KidTaken`.
+      const taken = yield* findByKid(input.kid);
+      if (Option.isSome(taken) && isSameKey(taken.value, input)) return taken.value;
+      return yield* Effect.fail(new KidTaken({ kid: input.kid }));
     });
 
     const findCurrent: SigningKeyRecordsShape["findCurrent"] = () =>
@@ -478,7 +579,7 @@ export const layerSql: Layer.Layer<
     const retire: SigningKeyRecordsShape["retire"] = (kid, retiresAt) =>
       retireQuery({ kid, retiresAt }).pipe(Effect.map(Option.isSome), unavailable("retire"));
 
-    return { create, findCurrent, listVerifiable, markRotated, retire };
+    return { create, findByKid, findCurrent, listVerifiable, markRotated, retire };
   }),
 );
 

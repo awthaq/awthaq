@@ -1,6 +1,6 @@
 // @awthaq/device-authorization — DeviceGrantRecords
 //
-// BEH-EA-300/312/313, spec/models/13-device-authorization.md "Design constraints". Persistence for
+// BEH-EA-299 to 304 and 306, spec/models/13-device-authorization.md "Design constraints". Persistence for
 // `device_authorization_grant`, one row per pending, decided or unredeemed grant, built the way
 // `@awthaq/api-key`'s records are: a records service with an in-memory and a SQL layer (SQLite and
 // Postgres, ADR-EA-004), the row codecs following the client's dialect (`Models.dialectFields`).
@@ -53,7 +53,10 @@ export interface DeviceGrantRecord {
 }
 
 export interface DeviceGrantRecordsShape {
-  /** `false` when the user-code hash is already taken by a live row: the caller draws another code. */
+  /**
+   * `false` when the user-code hash, the device-code hash or the id is already taken by a live row: the caller
+   * draws another code. One conditional write on every adapter.
+   */
   readonly insert: (
     record: DeviceGrantRecord,
   ) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
@@ -145,15 +148,17 @@ export const layerMemory = Layer.effect(
       );
 
     return DeviceGrantRecords.of({
+      // Refuses a taken id as well as a taken hash, as the SQL `ON CONFLICT DO NOTHING` does.
       insert: (record) =>
-        Ref.modify(state, (records) =>
+        Ref.modify(state, (records): [boolean, HashMap.HashMap<string, DeviceGrantRecord>] =>
+          HashMap.has(records, record.id) ||
           HashMap.toValues(records).some(
             (row) =>
               row.userCodeHash === record.userCodeHash ||
               row.deviceCodeHash === record.deviceCodeHash,
           )
-            ? ([false, records] as const)
-            : ([true, HashMap.set(records, record.id, record)] as const),
+            ? [false, records]
+            : [true, HashMap.set(records, record.id, record)],
         ),
       findByDeviceHash: (hash) => find((record) => record.deviceCodeHash === hash),
       findByUserHash: (hash) => find((record) => record.userCodeHash === hash),
@@ -386,7 +391,7 @@ export const layerSql = Layer.effect(
           createdAt: record.createdAt,
           expiresAt: record.expiresAt,
           lastPolledAt: Option.getOrNull(record.lastPolledAt),
-        }).pipe(Effect.map(Option.isSome), unavailable("amr")),
+        }).pipe(Effect.map(Option.isSome), unavailable("insert")),
       findByDeviceHash: (hash) =>
         findByDeviceQuery(hash).pipe(
           Effect.map(Option.map(toRecord)),

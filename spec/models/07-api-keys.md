@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-07 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): `@awthaq/api-key` implemented — API keys, `client_credentials` clients and service tokens, rotation, the `x-api-key` transport (ADR-EA-022; OCM-001/OCM-002/OCM-005/MAPS-003) <br> 1.2 (2026-09-29): Status vocabulary aligned with the adoption matrix (OCM-008, AOMS-011) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): `@awthaq/api-key` implemented — API keys, `client_credentials` clients and service tokens, rotation, the `x-api-key` transport (ADR-EA-022; OCM-001/OCM-002/OCM-005/MAPS-003) <br> 1.2 (2026-09-29): Status vocabulary aligned with the adoption matrix (OCM-008, AOMS-011) <br> 1.3 (2026-11-08): rotation and revocation decided at the store (`ApiKeyRecords.rotate`, `revoke` answering whether it revoked); the store-level suites under `test/contract/` (architecture plan 25 ticket 17) |
 ---
 
 ## What it is
@@ -66,7 +66,12 @@ bearer token is just such a key, scoped `scim:*` (SCP-002).
 - **Transport**: `x-api-key` only; `Authorization: Bearer` is reserved for JWTs
   ([ADR-EA-022](../decisions/022-api-key-rotation-and-transport.md)).
 - **Rotation**: dual-validity for a bounded window (default 24 hours, at most 30
-  days) for keys, and at most two valid secrets per client (ADR-EA-022).
+  days) for keys, and at most two valid secrets per client (ADR-EA-022). A key's
+  rotation is one store step (`ApiKeyRecords.rotate`): the successor is stored and the
+  predecessor's expiry capped at `now + grace` (never lengthened) only while the
+  predecessor is live, so a revoke racing a rotation either precedes it (the rotation
+  is `ApiKeyNotFound`, no successor) or follows it. `revoke` publishes
+  `auth.apiKey.revoked` only from the call that revoked the key; a repeat is a no-op.
 - **Client credentials**: `registerClient`/`revokeClient`/`rotateClientSecret`;
   `POST /api-key/token` accepts `grant_type=client_credentials` with
   `client_secret_post` or `client_secret_basic`, negotiates scope (requested ∩
@@ -130,6 +135,8 @@ principal; turning scopes into qadi permissions is the default resolver's, not t
 `packages/api-key/test/ApiKey.test.ts` (key lifecycle, rotation and policy, memory and migrated SQL),
 `packages/api-key/test/ServiceToken.test.ts` (clients, scope negotiation, secret rotation),
 `packages/api-key/test/AuthHttp.test.ts` (the real HTTP surface, both tiers, RFC 6749 shapes, throttles),
+`packages/api-key/test/contract/ApiKeyRecords.ts` and `ApiKeyClientRecords.ts` (the stores on memory and SQL,
+run by `Contract.test.ts`: rotation and revocation under concurrency, reused ids, outage labels),
 `packages/server/test/CredentialResolvers.test.ts` (the registry), `packages/qadi/test/SubjectResolver.test.ts`
 (scopes to permissions).
 

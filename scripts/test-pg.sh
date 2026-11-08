@@ -49,9 +49,7 @@ suites=(
   packages/test/test/TestAuthHost.test.ts
   packages/test/test/TestSqlSchema.test.ts
   examples/plugin-template/test/Template.test.ts
-  packages/admin/test/ImpersonationRecords.test.ts
   packages/api-key/test/ApiKey.test.ts
-  packages/api-key/test/StoreOutage.test.ts
   packages/core/test/AuthEventsUnitOfWork.test.ts
   packages/core/test/Migrations.test.ts
   packages/core/test/FederatedIdentitySql.test.ts
@@ -62,9 +60,7 @@ suites=(
   packages/core/test/Verification.test.ts
   packages/device-authorization/test/DeviceAuthorization.test.ts
   packages/device-authorization/test/AuthHttp.test.ts
-  packages/device-authorization/test/StoreOutage.test.ts
   packages/jwt/test/KeyRing.test.ts
-  packages/jwt/test/RevocationStore.test.ts
   packages/migrate-better-auth/test/LegacySessionBridgeLive.test.ts
   packages/organization/test/ConnectionRecords.test.ts
   packages/organization/test/OrganizationMembers.test.ts
@@ -75,10 +71,7 @@ suites=(
   packages/organization/test/OrganizationSql.test.ts
   packages/organization/test/TeamRecords.test.ts
   packages/organization/test/TenantMiddleware.test.ts
-  packages/passkey/test/ChallengeStore.test.ts
   packages/passkey/test/PasskeyCeremony.test.ts
-  packages/passkey/test/PasskeyCredentials.test.ts
-  packages/passkey/test/PasskeyUserHandle.test.ts
   packages/password/test/PasswordStoreOutage.test.ts
   packages/qadi/test/UserClaims.test.ts
   packages/scim/test/ScimRecords.test.ts
