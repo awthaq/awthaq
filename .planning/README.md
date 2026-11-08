@@ -305,7 +305,7 @@ Wave E: the deepenings
 | Wave 0 · 30 tickets 01–04 | Landed, PR #51 |
 | Wave 0 · 27 ticket 04 | Landed, PR #50 |
 | Wave 0 · 28 tickets 01–02 | Landed, PR #48 |
-| 30 ticket 21 | Unblocked (the merge of main landed with PR #46); next |
+| 30 ticket 21 | Done: plan 17 verified on the merged base, no regression; R1 NO-GO (no pre-1.3 environment), so 22–23 are closed |
 | Wave E | Not started |
 
 Each plan's "Decisions taken" section records what its Wave 0 PR decided and where the plan was stale. Numbers
