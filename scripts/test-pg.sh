@@ -76,6 +76,7 @@ suites=(
   packages/passkey/test/PasskeyCeremony.test.ts
   packages/passkey/test/PasskeyCredentials.test.ts
   packages/passkey/test/PasskeyUserHandle.test.ts
+  packages/password/test/PasswordStoreOutage.test.ts
   packages/qadi/test/UserClaims.test.ts
   packages/scim/test/ScimRecords.test.ts
   packages/two-factor/test/TwoFactorStore.test.ts

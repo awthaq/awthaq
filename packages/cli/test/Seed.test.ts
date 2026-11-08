@@ -181,6 +181,28 @@ describe("seed admin", () => {
   );
 
   it.effect(
+    "ADR-EA-028: a store outage while linking the seeded password is a retryable usage error (exit 2), never a defect",
+    () =>
+      withApp((sql) =>
+        Effect.gen(function* () {
+          // The password credential is the only `accounts` row `seed admin` writes.
+          yield* sql.unsafe(
+            `CREATE TRIGGER seed_accounts_down BEFORE INSERT ON accounts
+             BEGIN SELECT RAISE(ABORT, 'injected'); END`,
+          );
+          const exit = yield* seed(
+            input({ password: Option.some(Redacted.make("a-long-enough-password")) }),
+            sqlApp(sql),
+          );
+          assert.strictEqual(exitCode(exit), 2);
+          const error = Exit.findErrorOption(exit);
+          assert.isTrue(Option.isSome(error));
+          if (Option.isSome(error)) assert.include(String(error.value), "database is unavailable");
+        }),
+      ),
+  );
+
+  it.effect(
     "fails ApplicationUnavailable (exit 9) when the module exports no application Layer",
     () =>
       Effect.gen(function* () {

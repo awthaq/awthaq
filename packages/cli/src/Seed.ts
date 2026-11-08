@@ -140,7 +140,9 @@ export const seedAdmin = (config: CliConfig, input: SeedInput) =>
               subject: user.id,
               credentialHash: Redacted.make(hash),
             })
-            .pipe(Effect.orDie);
+            // A concurrent seed linked one first; an outage (ADR-EA-028) flows on to the
+            // `StoreUnavailable` mapping below.
+            .pipe(Effect.catchTag("AccountAlreadyLinked", () => Effect.void));
         }
       }
 
