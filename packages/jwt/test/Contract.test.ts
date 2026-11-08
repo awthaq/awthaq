@@ -1,14 +1,22 @@
 // The shared plugin-contract harness (docs/plugin-authoring.md checklist item 6, `pnpm check:contract-tests`): manifest legality, group ids, table prefixes, migration determinism, the records bundle's parity, and the plugin's own hook taps
 // for `Jwt` (its issuer is configuration, not an adapter).
-import { RecordsContract, TestAuth } from "@awthaq/test";
+import { TestAuth } from "@awthaq/test";
 import { describe, it } from "@effect/vitest";
 import * as Jwt from "../src/Jwt.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
+import { revocationStore } from "./contract/RevocationStore.ts";
+import { signingKeyRecords } from "./contract/SigningKeyRecords.ts";
 
 const framework = TestAuth.throwingFramework(describe, it);
 
 TestAuth.runPluginContractTests(framework, () => Jwt.Jwt, {
   options: [{}],
-  records: { suite: "jwt_records_contract", suites: RecordsContract.pending("20") },
+  records: {
+    suite: "jwt_records_contract",
+    suites: {
+      "awthaq/jwt/records/SigningKeyRecords": signingKeyRecords,
+      "awthaq/jwt/records/RevocationStore": revocationStore,
+    },
+  },
   build: { services: JwtConfig.config({ issuer: "https://issuer.test" }) },
 });

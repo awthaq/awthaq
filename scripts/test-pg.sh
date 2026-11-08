@@ -61,7 +61,6 @@ suites=(
   packages/device-authorization/test/DeviceAuthorization.test.ts
   packages/device-authorization/test/AuthHttp.test.ts
   packages/jwt/test/KeyRing.test.ts
-  packages/jwt/test/RevocationStore.test.ts
   packages/migrate-better-auth/test/LegacySessionBridgeLive.test.ts
   packages/organization/test/ConnectionRecords.test.ts
   packages/organization/test/OrganizationMembers.test.ts

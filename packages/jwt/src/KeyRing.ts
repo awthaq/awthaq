@@ -129,12 +129,22 @@ const mint = Effect.fnUntraced(function* (algorithm: Algorithm, rsaModulusLength
     .pipe(Effect.catch(StoreFailure.storeUnavailable("KeyRing.mint")));
   const { publicKeyJwk: rawPublicJwk, privateKeyJwk: rawPrivateJwk } =
     yield* JwtCodec.generateKeyJwks(algorithm, { rsaModulusLength });
-  return yield* records.create({
-    kid,
-    alg: algorithm,
-    publicKeyJwk: { ...rawPublicJwk, kid, alg: algorithm },
-    privateKeyJwk: Option.some(Redacted.make({ ...rawPrivateJwk, kid, alg: algorithm })),
-  });
+  return yield* records
+    .create({
+      kid,
+      alg: algorithm,
+      publicKeyJwk: { ...rawPublicJwk, kid, alg: algorithm },
+      privateKeyJwk: Option.some(Redacted.make({ ...rawPrivateJwk, kid, alg: algorithm })),
+    })
+    .pipe(
+      // The kid is a fresh UUIDv7: finding it taken means the id source repeats itself.
+      Effect.catchTag("SigningKeyRecords/KidTaken", () =>
+        Defects.invariantViolation(
+          "SigningKeyKidReused",
+          `awthaq/jwt: a freshly generated signing key id "${kid}" is already stored`,
+        ),
+      ),
+    );
 });
 
 /**
@@ -212,6 +222,13 @@ const settleCurrent = Effect.fnUntraced(function* (options: {
  * JJS-004: the remote key must be the store's single current key, so in one
  * transaction any existing current key is rotated out (its grace period is
  * `keyGracePeriod`) before the remote key is inserted.
+ *
+ * Plan 24 R6/Q3: a `kid` names one key forever. Registering the same key again
+ * (same `alg` and public JWK, e.g. at every boot) is a no-op that answers the
+ * stored key and rotates nothing; a different key under a stored `kid` fails
+ * `KidTaken`, also rotating nothing. A concurrent registration or mint that made
+ * another key current between this call's rotation and its insert fails
+ * `CurrentKeyConflict` (over SQL the transaction rolls the rotation back).
  */
 export const registerRemoteKey = (input: {
   readonly kid: string;
@@ -225,9 +242,13 @@ export const registerRemoteKey = (input: {
     return yield* transaction
       .withTransaction(
         Effect.gen(function* () {
+          // A kid already stored (by an earlier boot, or by a racing registration that the current
+          // read below may already see): `create` answers the stored record or `KidTaken` without
+          // inserting, so nothing is rotated.
+          const taken = yield* records.findByKid(input.kid);
           const now = yield* DateTime.now;
           const existing = yield* records.findCurrent();
-          if (Option.isSome(existing)) {
+          if (Option.isNone(taken) && Option.isSome(existing) && existing.value.kid !== input.kid) {
             yield* records.markRotated(
               existing.value.kid,
               now,
@@ -238,8 +259,6 @@ export const registerRemoteKey = (input: {
         }),
       )
       .pipe(
-        // The current key was rotated out in this transaction, so no other current key can exist.
-        Effect.catchTag("CurrentKeyConflict", Effect.die),
         Effect.catchTag("SqlError", StoreFailure.storeUnavailable("KeyRing.registerRemoteKey")),
       );
   });
@@ -252,6 +271,10 @@ export const registerRemoteKey = (input: {
  * it never competes with the one current key, and no private material is ever
  * accepted or stored. A running `KeyRing` picks it up within `keyCacheMaxAge`
  * (or at once, when a token names its `kid`).
+ *
+ * Plan 24 R6/Q3: importing the same public key again under its `kid` answers the
+ * stored key unchanged; a different key under a stored `kid` (the current key's
+ * included) fails `KidTaken` and nothing is written.
  */
 export const importKey = (input: {
   readonly kid: string;
