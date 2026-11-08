@@ -222,7 +222,11 @@ const rows: ReadonlyArray<Row> = [
     denial: "AdminImpersonationDenied",
     passed: "AdminTargetNotFound",
     run: ({ admin, ghostUser }) =>
-      outcome(admin.impersonate({ caller: adminCaller, targetUserId: ghostUser, reason: "x" })),
+      outcome(
+        admin
+          .impersonate({ caller: adminCaller, targetUserId: ghostUser, reason: "x" })
+          .pipe(TestAuth.withoutRequest),
+      ),
   },
   {
     name: "forceStop",
@@ -309,7 +313,7 @@ const scenario = (options: {
         options.tenant === undefined ? effect : Tenant.withTenant(options.tenant)(effect);
       return options.request === undefined
         ? scoped
-        : scoped.pipe(Effect.provide(Admin.config(options.request)));
+        : scoped.pipe(TestAuth.withoutRequest, Effect.provide(Admin.config(options.request)));
     };
     const outcomes: Record<string, string> = {};
     for (const row of rows) {
@@ -318,7 +322,7 @@ const scenario = (options: {
     }
     yield* TestClock.adjust(Duration.millis(10));
     return { outcomes, denials: yield* Ref.get(seen) } satisfies Scenario;
-  }).pipe(Effect.scoped, Effect.provide(buildLayer(options.build)));
+  }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer(options.build)));
 
 const expectedFor = (row: Row, opens: boolean) => (opens ? row.passed : row.denial);
 
@@ -385,7 +389,7 @@ describe("the admin gate (plan 13)", () => {
           ["getOrganization", undefined, "ghost-org"],
         ],
       );
-    }).pipe(Effect.scoped, Effect.provide(buildLayer({}))),
+    }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer({}))),
   );
 
   it.effect(
@@ -417,7 +421,7 @@ describe("the admin gate (plan 13)", () => {
         assert.strictEqual(denied.length, 1);
         assert.strictEqual(denied[0]?.operation, "impersonate");
         assert.strictEqual(denied[0]?.targetUserId, target.id);
-      }).pipe(Effect.scoped, Effect.provide(buildLayer({}))),
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer({}))),
   );
 
   it.effect(
@@ -456,7 +460,7 @@ describe("the admin gate (plan 13)", () => {
         assert.strictEqual(denied[0]?.operation, "forceStop");
         assert.strictEqual(denied[0]?.sessionId, issued.session.id);
         assert.strictEqual(denied[0]?.targetUserId, target.id);
-      }).pipe(Effect.scoped, Effect.provide(buildLayer({}))),
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer({}))),
   );
 
   it.effect("BEH-EA-221: each operation opens on its own predicate and on no other", () =>
@@ -553,10 +557,10 @@ describe("the admin gate (plan 13)", () => {
       });
       const refused = yield* accounts
         .deleteUser(adminCaller, target.id)
-        .pipe(Effect.provide(Admin.config({})), Effect.flip);
+        .pipe(TestAuth.withoutRequest, Effect.provide(Admin.config({})), Effect.flip);
       assert.strictEqual(refused._tag, "AdminActionDenied");
       assert.strictEqual((yield* users.findById(target.id)).id, target.id);
-    }).pipe(Effect.provide(buildLayer({ canDeleteUsers: allow }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ canDeleteUsers: allow }))),
   );
 
   it.effect(
@@ -703,7 +707,7 @@ describe("the admin gate (plan 13)", () => {
         // maxDuration: the impersonation session expires at the tenant's ceiling.
         const issued = yield* admin
           .impersonate({ caller: adminCaller, targetUserId: target.id, reason: "x" })
-          .pipe(Effect.provide(ops));
+          .pipe(TestAuth.withoutRequest, Effect.provide(ops));
         const now = yield* DateTime.now;
         assert.strictEqual(
           DateTime.toEpochMillis(issued.session.absoluteExpiresAt) - DateTime.toEpochMillis(now),
@@ -714,7 +718,7 @@ describe("the admin gate (plan 13)", () => {
           .setUserPassword(adminCaller, target.id, {
             password: Redacted.make("a thirty character password no digit"),
           })
-          .pipe(Effect.provide(ops), Effect.flip);
+          .pipe(TestAuth.withoutRequest, Effect.provide(ops), Effect.flip);
         assert.strictEqual(weak._tag, "AdminWeakPassword");
         if (weak._tag === "AdminWeakPassword") {
           assert.deepStrictEqual(weak.hints, ["must contain a digit"]);
@@ -722,10 +726,10 @@ describe("the admin gate (plan 13)", () => {
         // links.changeEmail: the mailed URL.
         yield* accounts
           .setUserEmail(adminCaller, target.id, { email: "new@example.com" })
-          .pipe(Effect.provide(ops));
+          .pipe(TestAuth.withoutRequest, Effect.provide(ops));
         const mail = (yield* mailer.sent)[0];
         assert.match(String(mail?.data?.["url"]), /^https:\/\/ops\.example\/confirm\?token=/);
-      }).pipe(Effect.scoped, Effect.provide(buildLayer({}))),
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer({}))),
   );
 
   it.effect(

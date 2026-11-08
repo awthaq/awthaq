@@ -103,7 +103,7 @@ export const makeApp = (options: HarnessOptions) => {
           identity: { _tag: "Email", email: `${label}@example.com` },
           name: label,
         });
-        const issued = yield* sessions.issue({ userId: user.id });
+        const issued = yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest);
         return yield* TestAuth.sessionSetCookie(issued);
       }),
     );
@@ -119,6 +119,7 @@ export const orphanOwner = (userId: Users.UserId) =>
   Erasure.AccountErasure.use((erasure) =>
     erasure.eraseAccount(userId, Erasure.ErasureInitiator.Self()),
   ).pipe(
+    TestAuth.withoutRequest,
     Effect.provide(
       Erasure.layer.pipe(
         // `Layer.fresh`: the composition's own registry (holding api-key's contribution) is memoized

@@ -1,4 +1,5 @@
 // ERAS-002: the core services run on the edge-runtime crypto provider, not only Node's.
+import { Api } from "@awthaq/api";
 import { WebCrypto } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -26,6 +27,9 @@ describe("Sessions over WebCrypto.layer (ERAS-002)", () => {
       const verified = yield* sessions.verify(token);
       assert.strictEqual(verified.session.id, session.id);
       assert.strictEqual(verified.session.userId, userId);
-    }).pipe(Effect.provide(EdgeLayer)),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(EdgeLayer),
+    ),
   );
 });

@@ -164,7 +164,7 @@ describe("AdminAccounts: deleteUser (BAM-005)", () => {
               e.userId === targetId,
           ),
         );
-      }).pipe(Effect.scoped, Effect.provide(buildLayer(manageAll))),
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect("an administrator cannot delete their own account", () =>
@@ -174,7 +174,7 @@ describe("AdminAccounts: deleteUser (BAM-005)", () => {
       const failure = yield* admin.deleteUser(asCaller(adminId), adminId).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "AdminSelfActionRefused");
       assert.strictEqual((yield* users.findById(adminId)).id, adminId);
-    }).pipe(Effect.provide(buildLayer(manageAll))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect("a BeforeUserDelete veto surfaces as HookAborted and nothing is deleted", () =>
@@ -188,7 +188,7 @@ describe("AdminAccounts: deleteUser (BAM-005)", () => {
       const failure = yield* admin.deleteUser(asCaller(adminId), held.id).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "HookAborted");
       assert.strictEqual((yield* users.findById(held.id)).id, held.id);
-    }).pipe(Effect.provide(buildLayer(manageAll, { veto: true }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll, { veto: true }))),
   );
 });
 
@@ -236,7 +236,7 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
           (e) => e._tag === "auth.admin.userEmailChangeRequested" && e.userId === targetId,
         ),
       );
-    }).pipe(Effect.scoped, Effect.provide(buildLayer(manageAll))),
+    }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect("the same address is a no-op; a taken address is refused to the administrator", () =>
@@ -251,7 +251,7 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
         .pipe(Effect.flip);
       assert.strictEqual(taken._tag, "AdminEmailAlreadyExists");
       assert.strictEqual((yield* mailer.sent).length, 0);
-    }).pipe(Effect.provide(buildLayer(manageAll))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect("a link builder puts the confirmation URL in the mail", () =>
@@ -266,6 +266,7 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
         /^https:\/\/app\.example\/confirm-email#change-email:/,
       );
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         buildLayer({
           ...manageAll,
@@ -290,7 +291,11 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
         assert.isFalse(
           (yield* Ref.get(seen)).some((e) => e._tag === "auth.admin.userEmailChangeRequested"),
         );
-      }).pipe(Effect.scoped, Effect.provide(buildLayer(manageAll, { mailer: failingMailer }))),
+      }).pipe(
+        Effect.scoped,
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer(manageAll, { mailer: failingMailer })),
+      ),
   );
 
   it.effect("a user with no email identity has no address to replace", () =>
@@ -302,7 +307,7 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
         .setUserEmail(asCaller(adminId), guest.id, { email: "new@example.com" })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "AdminNoEmailIdentity");
-    }).pipe(Effect.provide(buildLayer(manageAll))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 });
 
@@ -353,7 +358,7 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
         );
         // No event carries the password.
         assert.notInclude(JSON.stringify(events), Redacted.value(newPassword));
-      }).pipe(Effect.scoped, Effect.provide(buildLayer(manageAll))),
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect("creates the password credential of a user who had none", () =>
@@ -366,7 +371,7 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
       });
       yield* admin.setUserPassword(asCaller(adminId), oauthOnly.id, { password: newPassword });
       assert.isTrue(yield* hasher.verify(newPassword, yield* storedHash(accounts, oauthOnly.id)));
-    }).pipe(Effect.provide(buildLayer(manageAll))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect("a password violating the policy is refused with its hints, and nothing changes", () =>
@@ -379,7 +384,7 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
       assert.strictEqual(failure._tag, "AdminWeakPassword");
       if (failure._tag === "AdminWeakPassword") assert.isAbove(failure.hints.length, 0);
       assert.isTrue(yield* hasher.verify(oldPassword, yield* storedHash(accounts, targetId)));
-    }).pipe(Effect.provide(buildLayer(manageAll))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect("a host policy replaces the default", () =>
@@ -393,6 +398,7 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
         "no passphrases here",
       ]);
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         buildLayer({ ...manageAll, passwordPolicy: () => Effect.succeed(["no passphrases here"]) }),
       ),
@@ -407,7 +413,7 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
         .setUserPassword(asCaller(adminId), adminId, { password: newPassword })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "AdminSelfActionRefused");
-    }).pipe(Effect.provide(buildLayer(manageAll))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect(
@@ -424,6 +430,7 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
           assert.strictEqual(failure.operation, "AdminAccounts.setUserPassword");
         }
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer(manageAll, {
             transaction: Layer.succeed(
@@ -469,6 +476,6 @@ describe("AdminAccounts: setUserPassword consults BeforeCredentialReset (ARF-005
         );
         assert.isTrue(yield* hasher.verify(oldPassword, stored));
         yield* sessions.verify(live.token);
-      }).pipe(Effect.provide(buildLayer(manageAll, { resetVeto: true }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll, { resetVeto: true }))),
   );
 });

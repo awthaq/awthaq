@@ -290,7 +290,7 @@ const sessionFor = (name: string) =>
       identity: { _tag: "Email", email: `${name}@example.com` },
       name,
     });
-    const issued = yield* sessions.issue({ userId: user.id });
+    const issued = yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest);
     const rendered = yield* SessionCookie.render(issued.session, issued.token);
     return {
       userId: user.id,

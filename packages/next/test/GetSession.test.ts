@@ -5,6 +5,7 @@
 // `@awthaq/web` (`packages/web/test/Session.test.ts`, BO-004). What is
 // Next-specific is asserted here: the public entry, and that the `React.cache`
 // wrapped `getSession` still resolves a real session.
+import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { Credentials } from "@awthaq/server";
@@ -59,7 +60,7 @@ describe("getSession — the React.cache wrapped verify (BEH-EA-185, NSA-002)", 
             identity: { _tag: "Email", email: "next-get-session@example.com" },
             name: "Next",
           });
-          return yield* sessions.issue({ userId: user.id });
+          return yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest);
         }),
       );
       const withCookie = {

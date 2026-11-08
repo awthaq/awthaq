@@ -4,6 +4,7 @@
 // `RelationshipResolver`, the `reauth` obligation handler, the audit `DecisionSink`) are exercised
 // through the real qadi evaluator. INV-EA-012 is the through-line: a resolver failure is a typed
 // error, never a silent denial.
+import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import { Auth, AuthEvents, AuthPlugin, Sessions, Slots, Users } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
@@ -550,7 +551,9 @@ export const resolversSteps = defineSteps<World>(({ Given, When, Then }) => {
           identity: { _tag: "Email", email: `${name}@example.com` },
           name,
         });
-        const { session, token } = yield* sessions.issue({ userId: user.id });
+        const { session, token } = yield* sessions
+          .issue({ userId: user.id })
+          .pipe(TestAuth.withoutRequest);
         // Time passes after sign-in: `authenticatedAt` is now `ageSeconds` in the past.
         yield* TestClock.adjust(Duration.seconds(ageSeconds));
         return { userId: user.id, sessionId: session.id, token: Redacted.value(token) };

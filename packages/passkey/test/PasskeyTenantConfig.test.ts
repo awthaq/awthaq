@@ -1,6 +1,7 @@
 // EP-007 (ADR-EA-018 Decision 8, BEH-EA-236): the ceremony policy (rpId, origins, ...) is read per
 // operation, so one composition serves tenants on different relying-party domains. With no
 // override the build-time configuration applies exactly as before.
+import { TestAuth } from "@awthaq/test";
 import { Sessions, Tenant, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -53,7 +54,7 @@ describe("EP-007: per-tenant Passkey.config in one composition", () => {
       assert.strictEqual(acme.rp.id, "acme.test");
       const fallback = yield* passkey.registerOptions(userId, sessionId);
       assert.strictEqual(fallback.rp.id, RP_ID);
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("a tenant's origin allow-list decides its own registrations", () =>
@@ -87,6 +88,6 @@ describe("EP-007: per-tenant Passkey.config in one composition", () => {
         )
         .pipe(inTenant("acme"));
       assert.strictEqual(record.id, "cred-tenant-1");
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 });

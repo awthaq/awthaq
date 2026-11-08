@@ -38,7 +38,7 @@ describe("token classes (VB-005)", () => {
       const jwt = yield* Jwt.Jwt;
       const token = yield* jwt.sign(asCaller("user-1", "session-1"));
       assert.strictEqual(headerOf(token).typ, "at+jwt");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("signJWT produces header typ JWT by default and honours options.typ", () =>
@@ -49,7 +49,7 @@ describe("token classes (VB-005)", () => {
         headerOf(yield* jwt.signJWT({ sub: "a" }, { typ: "custom+jwt" })).typ,
         "custom+jwt",
       );
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("signJWT({ sub, sid }) is rejected by verifyLive and verify (typ mismatch)", () =>
@@ -66,7 +66,7 @@ describe("token classes (VB-005)", () => {
         plain._tag === "JwtInvalidError" ? plain.reason : plain._tag,
         "typ mismatch",
       );
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("a principal token is not accepted by verifyJWT", () =>
@@ -78,7 +78,7 @@ describe("token classes (VB-005)", () => {
         result._tag === "JwtInvalidError" ? result.reason : result._tag,
         "typ mismatch",
       );
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -94,7 +94,7 @@ describe("token classes (VB-005)", () => {
         );
         const claims = yield* jwt.verifyJWT(token, { audience: "svc-a" });
         assert.strictEqual(claims["aud"], "svc-a");
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("signJWT accepts several audiences and rejects an empty list", () =>
@@ -104,7 +104,7 @@ describe("token classes (VB-005)", () => {
       yield* jwt.verifyJWT(token, { audience: "svc-b" });
       const empty = yield* jwt.signJWT({ sub: "svc" }, { audience: [] }).pipe(Effect.flip);
       assert.strictEqual(empty._tag, "JwtInvalidError");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 });
 
@@ -115,7 +115,7 @@ describe("subject requirement (JJS-007)", () => {
       const token = yield* jwt.signJWT({ machine: "etl-job" });
       const claims = yield* jwt.verifyJWT(token);
       assert.strictEqual(claims["machine"], "etl-job");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("Jwt.verify still rejects a principal token without sub", () =>
@@ -127,7 +127,7 @@ describe("subject requirement (JJS-007)", () => {
         result._tag === "JwtInvalidError" ? result.reason : result._tag,
         "missing sub",
       );
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 });
 
@@ -154,13 +154,16 @@ describe("algorithm switch (JJS-003)", () => {
             Layer.provideMerge(JwtConfig.config({ issuer: "https://issuer.test", algorithm })),
             Layer.provideMerge(NodeCrypto.layer),
           );
-        const before = yield* KeyRing.current.pipe(Effect.provide(ringWith("EdDSA")));
+        const before = yield* KeyRing.current.pipe(
+          TestAuth.withoutRequest,
+          Effect.provide(ringWith("EdDSA")),
+        );
         assert.strictEqual(before.alg, "EdDSA");
         const after = yield* Effect.gen(function* () {
           const current = yield* KeyRing.current;
           const verifiable = yield* KeyRing.verifiable;
           return { current, verifiable };
-        }).pipe(Effect.provide(ringWith("ES256")));
+        }).pipe(TestAuth.withoutRequest, Effect.provide(ringWith("ES256")));
         assert.strictEqual(after.current.alg, "ES256");
         assert.notStrictEqual(after.current.kid, before.kid);
         assert.isTrue(
@@ -186,14 +189,14 @@ describe("algorithm switch (JJS-003)", () => {
         const oldToken = yield* Effect.gen(function* () {
           const jwt = yield* Jwt.Jwt;
           return yield* jwt.signJWT({ sub: "a" });
-        }).pipe(Effect.provide(Layer.fresh(layerWith("EdDSA"))));
+        }).pipe(TestAuth.withoutRequest, Effect.provide(Layer.fresh(layerWith("EdDSA"))));
         yield* Effect.gen(function* () {
           const jwt = yield* Jwt.Jwt;
           const newToken = yield* jwt.signJWT({ sub: "b" });
           assert.strictEqual(headerOf(newToken).alg, "ES256");
           yield* jwt.verifyJWT(newToken);
           yield* jwt.verifyJWT(oldToken);
-        }).pipe(Effect.provide(Layer.fresh(layerWith("ES256"))));
+        }).pipe(TestAuth.withoutRequest, Effect.provide(Layer.fresh(layerWith("ES256"))));
       }),
   );
 });

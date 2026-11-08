@@ -4,6 +4,7 @@
 // plugin, real handlers, real bearer authentication), through the real command tree and the generated
 // `HttpApiClient`. The person on the second device is the test, deciding through the plugin's own
 // service inside the poll's pacing hook; time is `TestClock`, so a whole login takes milliseconds.
+import { TestAuth } from "@awthaq/test";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -89,7 +90,7 @@ describe("login (the device authorization flow)", () => {
           });
           assert.strictEqual(whoami.code, 0, everything(whoami));
         }),
-      ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+      ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect(
@@ -127,7 +128,7 @@ describe("login (the device authorization flow)", () => {
           assert.isString(document.sessionId);
           assert.include(stderr.join("\n"), "Waiting for approval");
         }),
-      ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+      ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect(
@@ -164,7 +165,7 @@ describe("login (the device authorization flow)", () => {
           // after a slow_down is at least the previous plus 5 (RFC 8628 §3.5).
           assert.deepStrictEqual(sleeps, [5, 5, 10, 15]);
         }),
-      ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+      ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("a denied request ends the login (exit 8) and stores nothing", () =>
@@ -189,7 +190,7 @@ describe("login (the device authorization flow)", () => {
         assert.include(everything(result), "denied");
         assert.strictEqual(yield* Ref.get(creds.writes), 0);
       }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("a code nobody approved expires (exit 8) and stores nothing", () =>
@@ -205,7 +206,7 @@ describe("login (the device authorization flow)", () => {
         assert.include(everything(result), "expired");
         assert.strictEqual(yield* Ref.get(creds.writes), 0);
       }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("a server without the plugin is exit 9 and names it", () =>
@@ -222,7 +223,7 @@ describe("login (the device authorization flow)", () => {
         assert.include(everything(result), "--token");
         assert.strictEqual(yield* Ref.get(creds.writes), 0);
       }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("an unreachable server is exit 9, not a crash", () =>
@@ -248,7 +249,7 @@ describe("login (the device authorization flow)", () => {
           assert.strictEqual(result.code, 2);
           assert.include(everything(result), "not-registered");
         }),
-      ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+      ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("--token still wins: no device code is requested when a token is given", () =>
@@ -266,7 +267,7 @@ describe("login (the device authorization flow)", () => {
         assert.strictEqual(result.code, 0, everything(result));
         assert.notInclude(stderr.join("\n"), "confirm the code");
       }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 });
 

@@ -200,7 +200,10 @@ describe("AuthHttp + Session (real HTTP)", () => {
         const bStillWorks = yield* send("/session", { token: b.token });
         assert.strictEqual(bStillWorks.status, 200);
       }),
-    ).pipe(Effect.provide(AppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AppLayer),
+    ),
   );
 
   it.effect(
@@ -254,7 +257,10 @@ describe("AuthHttp + Session (real HTTP)", () => {
             );
           assert.strictEqual(stillWorks.status, 200);
         }),
-      ).pipe(Effect.provide(AppLayer)),
+      ).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(AppLayer),
+      ),
   );
 
   it.effect("BEH-EA-031: revoking one's own other session succeeds and it stops working", () =>
@@ -291,7 +297,10 @@ describe("AuthHttp + Session (real HTTP)", () => {
           );
         assert.strictEqual(otherResponse.status, 401);
       }),
-    ).pipe(Effect.provide(AppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AppLayer),
+    ),
   );
 
   it.effect("BEH-EA-054/031: revokeOthers revokes every other session but the current one", () =>
@@ -342,7 +351,10 @@ describe("AuthHttp + Session (real HTTP)", () => {
           );
         assert.strictEqual(aResponse.status, 200);
       }),
-    ).pipe(Effect.provide(AppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AppLayer),
+    ),
   );
 });
 
@@ -412,7 +424,10 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
         assert.strictEqual(response.status, 204);
         assertSessionEnded(response);
       }),
-    ).pipe(Effect.provide(AppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AppLayer),
+    ),
   );
 
   // TIR-008: sign-out and account deletion are audited, not silent.
@@ -432,7 +447,10 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
         assert.strictEqual(payload.sessionId, session.id);
         assert.strictEqual(payload.scope, "one");
       }),
-    ).pipe(Effect.provide(AppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AppLayer),
+    ),
   );
 
   it.effect("POST /session/revoke-all expires __Host-session", () =>
@@ -444,7 +462,10 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
         assert.strictEqual(response.status, 204);
         assertSessionEnded(response);
       }),
-    ).pipe(Effect.provide(AppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AppLayer),
+    ),
   );
 
   it.effect("POST /session/revoke with the caller's own id expires the cookie", () =>
@@ -460,7 +481,10 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
         assert.strictEqual(response.status, 204);
         assertSessionEnded(response);
       }),
-    ).pipe(Effect.provide(AppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AppLayer),
+    ),
   );
 
   it.effect("revoking a different session does NOT expire the caller's cookie", () =>
@@ -480,7 +504,10 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
         assert.isUndefined(response.headers[Api.SESSION_ENDED_HEADER]);
         assert.strictEqual(response.headers["cache-control"], "no-store");
       }),
-    ).pipe(Effect.provide(AppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AppLayer),
+    ),
   );
 
   it.effect("DELETE /user expires __Host-session", () =>
@@ -497,7 +524,10 @@ describe("AuthHttp + Session: self-ending endpoints expire the cookie (CSS-002)"
         assert.strictEqual(response.status, 204);
         assertSessionEnded(response);
       }),
-    ).pipe(Effect.provide(AppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AppLayer),
+    ),
   );
 });
 
@@ -512,7 +542,10 @@ describe("GET /user/export (CSG-005)", () => {
         rules.map((rule) => [rule.plugin, rule.group, rule.endpoint, rule.name, rule.key]),
         [["account", "account", "exportData", "exportData", "user"]],
       );
-    }).pipe(Effect.provide(AppLayer)),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AppLayer),
+    ),
   );
 
   it.effect(
@@ -574,7 +607,10 @@ describe("GET /user/export (CSG-005)", () => {
             requestedBy: "self",
           });
         }),
-      ).pipe(Effect.provide(AppLayer)),
+      ).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(AppLayer),
+      ),
   );
 
   it.effect("answers 401 without a valid session", () =>
@@ -586,7 +622,10 @@ describe("GET /user/export (CSG-005)", () => {
         });
         assert.strictEqual(response.status, 401);
       }),
-    ).pipe(Effect.provide(AppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AppLayer),
+    ),
   );
 
   it.effect("is rate limited per account: the sixth export in an hour answers 429", () =>
@@ -607,6 +646,7 @@ describe("GET /user/export (CSG-005)", () => {
         assert.strictEqual(limited.status, 429);
       }),
     ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
       Effect.provide(
         makeAppLayer(
           Sessions.layer.pipe(Layer.provide(Persistence.memory)),
@@ -637,7 +677,10 @@ describe("AuthHttp + Session: a concurrently revoked current session (EHA-009)",
         assert.strictEqual(response.status, 401);
         assertSessionCookieExpired(response);
       }),
-    ).pipe(Effect.provide(makeAppLayer(VanishingSessions))),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(makeAppLayer(VanishingSessions)),
+    ),
   );
 });
 
@@ -692,7 +735,10 @@ describe("AuthHttp + Session: point queries never go through list (TIR-003/GC-00
         assert.strictEqual(body.id, session.id);
         assert.isTrue(body.current);
       }),
-    ).pipe(Effect.provide(ListlessAppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(ListlessAppLayer),
+    ),
   );
 
   it.effect("POST /session/revoke revokes an owned session even when list omits it", () =>
@@ -718,7 +764,10 @@ describe("AuthHttp + Session: point queries never go through list (TIR-003/GC-00
         const failure = yield* sessions.verify(other.token).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "Sessions/NotFound");
       }),
-    ).pipe(Effect.provide(ListlessAppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(ListlessAppLayer),
+    ),
   );
 });
 
@@ -742,7 +791,10 @@ describe("AuthHttp + Session: bearer clients (MNA-008, decision 24 §2)", () => 
         );
         assert.strictEqual(response.status, 204);
       }),
-    ).pipe(Effect.provide(AppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AppLayer),
+    ),
   );
 
   it.effect("a cookie-authenticated POST without the CSRF pair is still rejected 403", () =>
@@ -764,7 +816,10 @@ describe("AuthHttp + Session: bearer clients (MNA-008, decision 24 §2)", () => 
         );
         assert.strictEqual(response.status, 403);
       }),
-    ).pipe(Effect.provide(AppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AppLayer),
+    ),
   );
 });
 
@@ -811,7 +866,10 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
         const stored = yield* users.findById(user.id);
         assert.strictEqual(stored.name, "Ada Lovelace");
       }),
-    ).pipe(Effect.provide(AppLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AppLayer),
+    ),
   );
 
   it.effect(
@@ -870,7 +928,10 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
           assert.strictEqual((yield* patch({ name: "Img 2", image: null })).status, 200);
           assert.isTrue(Option.isNone((yield* users.findById(user.id)).image));
         }),
-      ).pipe(Effect.provide(AppLayer)),
+      ).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(AppLayer),
+      ),
   );
 
   // SAM-004/BEH-EA-048: plugin-declared fields ride the profile payload; the registry decides who may write what.
@@ -954,7 +1015,10 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
             },
           );
         }),
-      ).pipe(Effect.provide(FieldsAppLayer)),
+      ).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(FieldsAppLayer),
+      ),
   );
 
   it.effect(
@@ -991,7 +1055,10 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
           const refused = yield* patch({ name: "None", fields: { billing_plan: "pro" } });
           assert.strictEqual(refused.status, 422);
         }),
-      ).pipe(Effect.provide(AppLayer)),
+      ).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(AppLayer),
+      ),
   );
 
   it.effect(
@@ -1086,7 +1153,10 @@ describe("AuthHttp + Account (real HTTP) — shipping-gaps/09/10", () => {
             );
           assert.strictEqual(sessionCheck.status, 401);
         }),
-      ).pipe(Effect.provide(AppLayer)),
+      ).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(AppLayer),
+      ),
   );
 });
 
@@ -1137,7 +1207,7 @@ describe("AuthHttp (BEH-EA-087's ManagedRuntime escape hatch)", () => {
           Effect.gen(function* () {
             const sessions = yield* Sessions.Sessions;
             return yield* sessions.issue({ userId });
-          }),
+          }).pipe(Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest)),
         ),
       );
       assert.strictEqual(session.userId, userId);
@@ -1163,7 +1233,10 @@ describe("AuthHttp.layerRedactedHeaders (MAPS-008)", () => {
       assert.isTrue(Redacted.isRedacted(redacted["x-jwt-token"]));
       assert.isTrue(Redacted.isRedacted(redacted["authorization"]));
       assert.strictEqual(redacted["x-request-id"], "not-secret");
-    }).pipe(Effect.provide(AuthHttp.layerRedactedHeaders)),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AuthHttp.layerRedactedHeaders),
+    ),
   );
 
   it.effect("without the layer the rotated token would be logged verbatim", () =>

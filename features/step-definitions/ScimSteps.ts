@@ -4,6 +4,7 @@
 // operator can do (creating a connection, an administrator's ban, live sessions, a team made
 // by hand), directly against the services the handler runs on. A Then reads the response, or
 // the services, for what HTTP cannot show.
+import { TestAuth } from "@awthaq/test";
 import { Accounts, AuditLog, Erasure, Sessions, Users } from "@awthaq/core";
 import { Organization, OrganizationActor, OrganizationTeams } from "@awthaq/organization";
 import {
@@ -377,7 +378,10 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
         const user = yield* users
           .create({ identity: { _tag: "Email", email: `${name}@example.com` }, name })
           .pipe(Effect.orDie);
-        const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+        const issued = yield* sessions
+          .issue({ userId: user.id })
+          .pipe(TestAuth.withoutRequest)
+          .pipe(Effect.orDie);
         return `${Sessions.SESSION_COOKIE_NAME}=${encodeURIComponent(Redacted.value(issued.token))}`;
       }),
     );
@@ -393,7 +397,10 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
         const issued = [];
         for (let i = 0; i < count; i++) {
           issued.push(
-            (yield* sessions.issue({ userId: Users.UserId(id) }).pipe(Effect.orDie)).token,
+            (yield* sessions
+              .issue({ userId: Users.UserId(id) })
+              .pipe(TestAuth.withoutRequest)
+              .pipe(Effect.orDie)).token,
           );
         }
         return issued;

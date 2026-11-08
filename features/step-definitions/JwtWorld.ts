@@ -137,7 +137,10 @@ export const signInUser = Effect.fn("features.jwt.signInUser")(function* (name: 
     app.withContext(
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        const issued = yield* sessions.issue({ userId: Users.UserId(userId) }).pipe(Effect.orDie);
+        const issued = yield* sessions
+          .issue({ userId: Users.UserId(userId) })
+          .pipe(TestAuth.withoutRequest)
+          .pipe(Effect.orDie);
         const token = Redacted.value(issued.token);
         return {
           name,
@@ -167,6 +170,7 @@ export const openSession = Effect.fn("features.jwt.openSession")(function* (
         const sessions = yield* Sessions.Sessions;
         const issued = yield* sessions
           .issue({ userId: Users.UserId(owner.userId) })
+          .pipe(TestAuth.withoutRequest)
           .pipe(Effect.orDie);
         const token = Redacted.value(issued.token);
         return {

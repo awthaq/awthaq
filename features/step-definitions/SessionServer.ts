@@ -147,14 +147,16 @@ export const startSessionServer = (options?: { readonly device?: boolean }) =>
     const issue: SessionServer["issue"] = (email) =>
       Effect.gen(function* () {
         const user = yield* users.create({ identity: { _tag: "Email", email }, name: "Scenario" });
-        const issued = yield* sessions.issue({ userId: user.id });
+        const issued = yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest);
         return { userId: user.id, token: Redacted.value(issued.token) };
       }).pipe(Effect.orDie);
 
     const decide: SessionServer["decide"] = (userCode, email, decision) =>
       Effect.gen(function* () {
         const user = yield* users.create({ identity: { _tag: "Email", email }, name: "Approver" });
-        const issued = yield* sessions.issue({ userId: user.id, amr: ["pwd"] });
+        const issued = yield* sessions
+          .issue({ userId: user.id, amr: ["pwd"] })
+          .pipe(TestAuth.withoutRequest);
         const caller = {
           userId: user.id,
           sessionId: issued.session.id,

@@ -4,6 +4,7 @@
 // One random WebAuthn user handle per user, minted once, sent as `user.id` in
 // every registration ceremony, stored on every credential, and checked
 // against the `userHandle` a discoverable credential's assertion carries.
+import { TestAuth } from "@awthaq/test";
 import { Migrations, Sessions, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -54,7 +55,7 @@ describe("BPAS-003: one stable handle per user", () => {
         assert.strictEqual(first.user.id, conditional.user.id);
         assert.strictEqual(firstRecord.webauthnUserId, first.user.id);
         assert.strictEqual(secondRecord.webauthnUserId, first.user.id);
-      }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 
   it.effect("two users get different handles, and the handle is not the internal user id", () =>
@@ -66,7 +67,7 @@ describe("BPAS-003: one stable handle per user", () => {
       const optionsB = yield* passkey.registerOptions(b.userId, b.sessionId);
       assert.notStrictEqual(optionsA.user.id, optionsB.user.id);
       assert.notStrictEqual(optionsA.user.id, a.userId);
-    }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 });
 
@@ -97,7 +98,7 @@ describe("BPAS-006/TC-004: the signals surface", () => {
         assert.strictEqual(signals.name, "signals-me@example.com");
         assert.strictEqual(signals.displayName, "Name of signals-me@example.com");
         assert.deepStrictEqual([...signals.allAcceptedCredentialIds].sort(), ["mine-1", "mine-2"]);
-      }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 
   it.effect("a user with no credentials still gets a handle and an empty accepted set", () =>
@@ -107,7 +108,7 @@ describe("BPAS-006/TC-004: the signals surface", () => {
       const signals = yield* passkey.signals(userId);
       assert.isAbove(signals.userId.length, 0);
       assert.deepStrictEqual(signals.allAcceptedCredentialIds, []);
-    }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 });
 
@@ -138,7 +139,7 @@ const suite = (
         assert.match(first, /^[A-Za-z0-9_-]{43}$/);
         assert.strictEqual(yield* handles.getOrCreate(alice), first);
         assert.notStrictEqual(yield* handles.getOrCreate(bob), first);
-      }).pipe(Effect.provide(layer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(layer)),
     );
 
     it.effect("concurrent first calls for one user all agree on a single handle", () =>
@@ -151,7 +152,7 @@ const suite = (
         );
         assert.strictEqual(new Set(results).size, 1);
         assert.strictEqual(yield* handles.getOrCreate(user), results[0]);
-      }).pipe(Effect.provide(layer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(layer)),
     );
 
     it.effect("deleteByUser forgets the handle (a later one is fresh) and is idempotent", () =>
@@ -162,7 +163,7 @@ const suite = (
         yield* handles.deleteByUser(user);
         yield* handles.deleteByUser(user);
         assert.notStrictEqual(yield* handles.getOrCreate(user), before);
-      }).pipe(Effect.provide(layer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(layer)),
     );
   });
 };

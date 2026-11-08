@@ -2,6 +2,7 @@
 // per-plugin sign-up hook tests (veto, amendment, announcement, conflicts) are these cases; each
 // plugin keeps one wiring probe. Memory here; `SignUpSql.test.ts` runs the rollback cases over a
 // real transaction (and Postgres under `pnpm test:pg`).
+import { Api } from "@awthaq/api";
 import { SqlTransaction } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -147,7 +148,10 @@ describe("SignUp.vet", () => {
         assert.strictEqual(error.code, "NO_SIGNUPS");
       }
       assert.isTrue(Option.isNone(yield* users.findByEmail("ada@example.com")));
-    }).pipe(Effect.provide(envFor(recorder, { abort: true })));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder, { abort: true })),
+    );
   });
 
   it.effect(
@@ -164,6 +168,7 @@ describe("SignUp.vet", () => {
         assert.deepStrictEqual(vetted.identity, { _tag: "Email", email: "ada@corp.example" });
         assert.strictEqual(vetted.strategy, "password");
       }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
         Effect.provide(
           envFor(recorder, { amend: { name: "Ada Lovelace", email: "ada@corp.example" } }),
         ),
@@ -177,7 +182,10 @@ describe("SignUp.vet", () => {
       const signUp = yield* SignUp.make;
       const vetted = yield* signUp.vet(application());
       assert.deepStrictEqual(vetted.identity, { _tag: "Email", email: "ada@example.com" });
-    }).pipe(Effect.provide(envFor(recorder, { amend: { dropEmail: true } })));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder, { amend: { dropEmail: true } })),
+    );
   });
 
   it.effect(
@@ -194,7 +202,10 @@ describe("SignUp.vet", () => {
         const kept = yield* signUp.vet(anonymous);
         assert.deepStrictEqual(kept.identity, { _tag: "Anonymous" });
         assert.deepStrictEqual(recorder.beforeSignUp, [{ name: "Ghost", strategy: "acme" }]);
-      }).pipe(Effect.provide(envFor(recorder)));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor(recorder)),
+      );
     },
   );
 
@@ -208,7 +219,10 @@ describe("SignUp.vet", () => {
         strategy: "acme",
       });
       assert.deepStrictEqual(vetted.identity, { _tag: "Email", email: "found@corp.example" });
-    }).pipe(Effect.provide(envFor(recorder, { amend: { email: "found@corp.example" } })));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder, { amend: { email: "found@corp.example" } })),
+    );
   });
 
   it.effect("a phone application is unchanged", () => {
@@ -223,7 +237,10 @@ describe("SignUp.vet", () => {
       });
       assert.deepStrictEqual(vetted.identity, { _tag: "Phone", phone });
       assert.deepStrictEqual(recorder.beforeSignUp, [{ name: "Phoney", strategy: "sms" }]);
-    }).pipe(Effect.provide(envFor(recorder)));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder)),
+    );
   });
 });
 
@@ -239,7 +256,10 @@ describe("SignUp.create", () => {
       assert.deepStrictEqual(recorder.afterSignUp, [
         { userId: user.id, email: "ada@example.com", strategy: "password" },
       ]);
-    }).pipe(Effect.provide(envFor(recorder)));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder)),
+    );
   });
 
   it.effect("a duplicate email or phone is IdentityTaken with no event and no AfterSignUp", () => {
@@ -267,7 +287,10 @@ describe("SignUp.create", () => {
       );
       assert.deepStrictEqual(yield* eventTags, ["auth.user.created", "auth.user.created"]);
       assert.strictEqual(recorder.afterSignUp.length, 0);
-    }).pipe(Effect.provide(envFor(recorder)));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder)),
+    );
   });
 
   it.effect("a link conflict is IdentityTaken{Account} and no user remains", () => {
@@ -286,7 +309,10 @@ describe("SignUp.create", () => {
       );
       assert.isTrue(Option.isNone(yield* users.findByEmail("second@example.com")));
       assert.deepStrictEqual(yield* eventTags, ["auth.user.created"]);
-    }).pipe(Effect.provide(envFor(recorder)));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder)),
+    );
   });
 
   it.effect("verified marks the mailbox verified in the same unit and links the credential", () => {
@@ -302,7 +328,10 @@ describe("SignUp.create", () => {
       assert.isTrue(Option.isSome(yield* accounts.findByProviderSubject("acme", "acme-v")));
       const unverified = yield* signUp.create(yield* signUp.vet(application("u@example.com")));
       assert.isFalse(Users.isEmailVerified(unverified));
-    }).pipe(Effect.provide(envFor(recorder)));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder)),
+    );
   });
 
   it.effect("an AfterSignUp failure does not fail the sign-up", () => {
@@ -312,7 +341,10 @@ describe("SignUp.create", () => {
       const user = yield* signUp.create(yield* signUp.vet(application()));
       assert.strictEqual(user.name, "Ada");
       assert.strictEqual(recorder.afterSignUp.length, 1);
-    }).pipe(Effect.provide(envFor(recorder, { afterFails: true })));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder, { afterFails: true })),
+    );
   });
 
   it.effect("a transaction's SqlError is StoreUnavailable (SignUp.create), never a defect", () => {
@@ -331,7 +363,10 @@ describe("SignUp.create", () => {
       const error = yield* Effect.flip(signUp.create(yield* signUp.vet(application())));
       assert.strictEqual(error._tag, "StoreUnavailable");
       if (error._tag === "StoreUnavailable") assert.strictEqual(error.operation, "SignUp.create");
-    }).pipe(Effect.provide(failing.pipe(Layer.provideMerge(envFor(recorder)))));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(failing.pipe(Layer.provideMerge(envFor(recorder)))),
+    );
   });
 });
 
@@ -365,7 +400,10 @@ describe("SignUp.createWith", () => {
         // Nobody was told the failed user existed, so abandoning it consults no delete veto and announces no deletion.
         assert.strictEqual(recorder.beforeUserDelete.length, 0);
         assert.strictEqual(recorder.afterSignUp.length, 1);
-      }).pipe(Effect.provide(envFor(recorder)));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor(recorder)),
+      );
     },
   );
 });
@@ -388,7 +426,10 @@ describe("SignUp.createSignedIn", () => {
           "auth.user.signedIn",
         ]);
         assert.isTrue(tags.indexOf("auth.user.created") < tags.indexOf("auth.user.signedIn"));
-      }).pipe(Effect.provide(envFor(recorder)));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor(recorder)),
+      );
     },
   );
 
@@ -403,7 +444,10 @@ describe("SignUp.createSignedIn", () => {
       assert.strictEqual(error._tag, "HookAborted");
       assert.isTrue(Option.isNone(yield* users.findByEmail("ada@example.com")));
       assert.deepStrictEqual(yield* eventTags, []);
-    }).pipe(Effect.provide(envFor(recorder, { signInAbort: true })));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder, { signInAbort: true })),
+    );
   });
 
   it.effect("a divert commits the account and answers TwoFactorRequired with no session", () => {
@@ -419,7 +463,10 @@ describe("SignUp.createSignedIn", () => {
       const sessions = yield* Sessions.Sessions;
       assert.strictEqual((yield* sessions.list(user.id)).length, 0);
       assert.deepStrictEqual(yield* eventTags, ["auth.user.created"]);
-    }).pipe(Effect.provide(envFor(recorder, { divert: true })));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder, { divert: true })),
+    );
   });
 
   it.effect("a session-store outage is StoreUnavailable and no user remains", () => {
@@ -433,6 +480,9 @@ describe("SignUp.createSignedIn", () => {
       assert.strictEqual(error._tag, "StoreUnavailable");
       assert.isTrue(Option.isNone(yield* users.findByEmail("ada@example.com")));
       assert.deepStrictEqual(yield* eventTags, []);
-    }).pipe(Effect.provide(envFor(recorder, { sessionsOutage: true })));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder, { sessionsOutage: true })),
+    );
   });
 });

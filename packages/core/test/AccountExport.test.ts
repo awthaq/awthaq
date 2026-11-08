@@ -1,5 +1,6 @@
 // CSG-005 (GDPR Art. 15/20): `AccountExport.exportAccount` and the `DataExportRegistry`
 // plugins contribute a section to (ADR-EA-033).
+import { Api } from "@awthaq/api";
 import { PasswordHasher } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -64,10 +65,16 @@ const seed = Effect.gen(function* () {
       PasswordHasher.PhcHash("$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA"),
     ),
   });
-  yield* sessions.issue({
-    userId: user.id,
-    request: { ip: "203.0.113.9", userAgent: "TestAgent/1" },
-  });
+  yield* sessions.issue({ userId: user.id }).pipe(
+    Effect.provideService(
+      Api.AuthRequestContext,
+      Api.AuthRequestContext.request({
+        correlationId: "test",
+        ip: "203.0.113.9",
+        userAgent: "TestAgent/1",
+      }),
+    ),
+  );
   return user;
 });
 
@@ -124,6 +131,7 @@ describe("AccountExport", () => {
           requestedBy: "self",
         });
       }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
         Effect.provide(
           layerWith(
             Layer.mergeAll(
@@ -147,7 +155,10 @@ describe("AccountExport", () => {
         recorded[0]?.payload._tag === "auth.user.dataExported" && recorded[0].payload.requestedBy,
         "admin",
       );
-    }).pipe(Effect.provide(layerWith(Layer.empty))),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(layerWith(Layer.empty)),
+    ),
   );
 
   it.effect("an unknown user fails UserNotFound and publishes nothing", () =>
@@ -159,7 +170,10 @@ describe("AccountExport", () => {
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "UserNotFound");
       assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.user.dataExported" }), []);
-    }).pipe(Effect.provide(layerWith(Layer.empty))),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(layerWith(Layer.empty)),
+    ),
   );
 
   it.effect("a failing contribution fails the whole export: no partial document, no event", () =>
@@ -171,6 +185,7 @@ describe("AccountExport", () => {
       assert.isTrue(Exit.isFailure(exit));
       assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.user.dataExported" }), []);
     }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
       Effect.provide(
         layerWith(
           Layer.mergeAll(
@@ -194,6 +209,9 @@ describe("AccountExport", () => {
         registry.register({ id: "late", collect: () => Effect.succeed(null) }),
       );
       assert.isTrue(Exit.isFailure(exit));
-    }).pipe(Effect.provide(layerWith(Layer.empty))),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(layerWith(Layer.empty)),
+    ),
   );
 });

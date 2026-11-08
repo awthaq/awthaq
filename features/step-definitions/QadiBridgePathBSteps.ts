@@ -4,6 +4,7 @@
 // asserted here is the bridge's own contract: which subject the extractor resolves (and that it
 // reuses Authentication's session logic), which statuses a missing annotation / outage / denial end
 // in, what the registry route serves. qadi's policy evaluation is real and never stubbed.
+import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import { Credentials } from "@awthaq/server";
 import { Sessions, Users } from "@awthaq/core";
@@ -207,7 +208,7 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
           identity: { _tag: "Email", email: "agree@example.com" },
           name: "Agree",
         });
-        const { token } = yield* sessions.issue({ userId: user.id });
+        const { token } = yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest);
         return { userId: user.id, token: Redacted.value(token) };
       }),
     );

@@ -42,9 +42,14 @@ const serve = <A, E>(layer: Layer.Layer<A, E>) => {
   const scope = Scope.makeUnsafe();
   const web = HttpRouter.toWebHandler(layer, { memoMap, disableLogger: true });
   let context: Promise<Context.Context<A>> | undefined;
-  const run = <X, XE>(effect: Effect.Effect<X, XE, A>) => {
+  // In-process work answers no request (ADR-EA-047).
+  const run = <X, XE>(effect: Effect.Effect<X, XE, A | Api.AuthRequestContext>) => {
     context ??= Effect.runPromise(Layer.buildWithMemoMap(layer, memoMap, scope));
-    return context.then((services) => Effect.runPromiseWith(services)(effect));
+    return context.then((services) =>
+      Effect.runPromiseWith(services)(
+        Effect.provideService(effect, Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      ),
+    );
   };
   const request = (
     method: string,
@@ -295,7 +300,12 @@ describe("AuthHost.layer migrations (sql)", () => {
     );
   /** Reads the database directly, beside the app, to see what a build did to it. */
   const inspect = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
-    Effect.runPromise(effect.pipe(Effect.provide(SqliteClient.layer({ filename }))));
+    Effect.runPromise(
+      effect.pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(SqliteClient.layer({ filename })),
+      ),
+    );
   const ledgerRows = (table: string) =>
     Effect.gen(function* () {
       if (!(yield* Migrations.tableExists(table))) return -1;

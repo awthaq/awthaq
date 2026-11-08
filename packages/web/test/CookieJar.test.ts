@@ -252,7 +252,13 @@ describe("applyResponseCookies — a real HTTP response (BEH-EA-189)", () => {
             name: "Cookie Test",
           })
           .pipe(Effect.orDie);
-        const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+        // The cookie jar is under test, not the request context: the mint answers no request.
+        const { token, session } = yield* sessions
+          .issue({ userId: user.id })
+          .pipe(
+            Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+            Effect.orDie,
+          );
         return yield* SessionDelivery.respond(Effect.succeed({ session, token }));
       }),
     }),

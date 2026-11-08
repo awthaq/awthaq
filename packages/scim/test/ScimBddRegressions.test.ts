@@ -46,7 +46,10 @@ describe("SCIM DELETE with erasure configured (BEH-EA-250)", () => {
         assert.strictEqual((yield* members.listByUser(grant, id)).length, 1);
         assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.user.deleted" }), []);
         assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.scim.userDeleted" }), []);
-      }).pipe(Effect.provide(ScimLive({ deleteBehavior: "erase" }, {}, undefined, LegalHold))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(ScimLive({ deleteBehavior: "erase" }, {}, undefined, LegalHold)),
+      ),
   );
 });
 

@@ -77,7 +77,7 @@ describe("SubjectExtractor (Path B adapter)", () => {
       const request = HttpServerRequest.fromWeb(new Request("http://localhost/whatever"));
       const subject = yield* extractor.extract(request);
       assert.strictEqual(subject.id, "anonymous");
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   // Bug B (plan 11): Path B used to take the first PRESENT credential and never fall through.
@@ -104,7 +104,7 @@ describe("SubjectExtractor (Path B adapter)", () => {
           ),
         );
         assert.strictEqual(subject.id, `user:${user.id}`);
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -151,6 +151,7 @@ describe("SubjectExtractor (Path B adapter)", () => {
         const subject = yield* extractor.extract(request);
         assert.strictEqual(subject.id, `user:${user.id}`);
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(Layer.mergeAll(Credentials.PrincipalResolverLive, ShortLivedTestLayer)),
       ),
   );
@@ -200,6 +201,7 @@ describe("SubjectExtractor (Path B adapter)", () => {
           yield* sessions.verify(Redacted.make(rotated.value));
         }),
       ).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(Layer.mergeAll(Credentials.PrincipalResolverLive, ShortLivedTestLayer)),
       ),
   );
@@ -219,6 +221,7 @@ describe("SubjectExtractor (Path B adapter)", () => {
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "SubjectExtractionFailed");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         SubjectExtractor.SubjectExtractorLive.pipe(
           Layer.provide(Credentials.PrincipalResolverLive),
@@ -262,6 +265,7 @@ describe("SubjectExtractor (Path B adapter)", () => {
         );
         assert.strictEqual(subject.id, "user:22222222-2222-2222-2222-222222222222");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           TestAuth.layer(Auth.make([UserClaims.UserClaims]), {
             principalResolver: Layer.succeed(Credentials.PrincipalResolver, {
@@ -319,7 +323,7 @@ describe("SubjectExtractor (Path B adapter)", () => {
             authorization: "Bearer svc.x.y",
           });
           assert.strictEqual(subject.id, "service:from-bearer");
-        }).pipe(Effect.provide(WithResolvers)),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(WithResolvers)),
     );
 
     it.effect(
@@ -339,6 +343,7 @@ describe("SubjectExtractor (Path B adapter)", () => {
           });
           assert.strictEqual(subject.id, `user:${user.id}`);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(
             TestAuth.layer(Auth.make([UserClaims.UserClaims]), {
               services: Layer.mergeAll(

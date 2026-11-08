@@ -81,7 +81,7 @@ describe("Jwt.introspectComposed (TIR-007)", () => {
         // bare introspect (denylist only) and verify keep the documented lag until exp
         assert.isTrue((yield* jwt.introspect(token)).active);
         yield* jwt.verify(token);
-      }).pipe(Effect.provide(WithSessions)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(WithSessions)),
   );
 
   it.effect("still works (denylist only) in a composition without Sessions", () =>
@@ -90,7 +90,7 @@ describe("Jwt.introspectComposed (TIR-007)", () => {
       const token = yield* jwt.sign(caller("user-1", "session-that-jwt-cannot-check"));
       const result = yield* jwt.introspectComposed(token);
       assert.isTrue(result.active);
-    }).pipe(Effect.provide(WithoutSessions)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(WithoutSessions)),
   );
 });
 
@@ -108,6 +108,6 @@ describe("act claim (JR-005)", () => {
         assert.strictEqual(claims["sub"], "target-user");
         const plain = yield* jwt.verify(yield* jwt.sign(caller("target-user", "session-2")));
         assert.isUndefined(plain["act"]);
-      }).pipe(Effect.provide(WithSessions)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(WithSessions)),
   );
 });

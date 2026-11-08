@@ -162,7 +162,7 @@ describe("DeviceAuthorization redemption through the sign-in machinery (BEH-EA-3
           2,
           "no third session was minted",
         );
-      }).pipe(Effect.provide(buildLayer({ store: "memory" }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ store: "memory" }))),
   );
 
   it.effect(
@@ -174,7 +174,7 @@ describe("DeviceAuthorization redemption through the sign-in machinery (BEH-EA-3
         const redeemed = yield* pollOf(issued);
         assert.strictEqual(redeemed.session.userId, caller.userId);
         assert.deepStrictEqual(redeemed.session.amr, ["pwd", "otp", "mfa"]);
-      }).pipe(Effect.provide(buildLayer({ store: "memory" }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ store: "memory" }))),
   );
 
   it.effect(
@@ -201,6 +201,7 @@ describe("DeviceAuthorization redemption through the sign-in machinery (BEH-EA-3
         assert.isTrue(Option.isSome(yield* grantOf(issued)));
         assert.strictEqual((yield* sessions.list(user.id)).length, 1);
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer(
             { store: "memory" },
@@ -271,7 +272,7 @@ describe("DeviceGrantRecords compare-and-swap primitives", () => {
       const consumed = yield* records.consume("g1", owner);
       assert.isTrue(Option.isSome(consumed));
       assert.isTrue(Option.isNone(yield* records.consume("g1", owner)));
-    }).pipe(Effect.provide(DeviceGrantRecords.layerMemory)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(DeviceGrantRecords.layerMemory)),
   );
 
   it.effect("two concurrent consumes hand the approved row to exactly one caller", () =>
@@ -302,6 +303,6 @@ describe("DeviceGrantRecords compare-and-swap primitives", () => {
         },
       );
       assert.strictEqual(results.filter(Option.isSome).length, 1);
-    }).pipe(Effect.provide(DeviceGrantRecords.layerMemory)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(DeviceGrantRecords.layerMemory)),
   );
 });

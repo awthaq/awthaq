@@ -463,7 +463,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
         yield* identity(
           Effect.gen(function* () {
             const sessions = yield* Sessions.Sessions;
-            return yield* sessions.issue({ userId: user.id });
+            return yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest);
           }),
         );
         break;
@@ -594,7 +594,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     const issued = yield* identity(
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        return yield* sessions.issue({ userId });
+        return yield* sessions.issue({ userId }).pipe(TestAuth.withoutRequest);
       }),
     );
     yield* Ref.set(world.sessionTenant, issued.session.tenantId);
@@ -608,7 +608,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       Tenant.withTenant(tenant)(
         Effect.gen(function* () {
           const sessions = yield* Sessions.Sessions;
-          return yield* sessions.issue({ userId });
+          return yield* sessions.issue({ userId }).pipe(TestAuth.withoutRequest);
         }),
       ),
     );

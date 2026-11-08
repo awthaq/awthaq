@@ -7,6 +7,7 @@
 // does not have (PV-221); its scenario stays `@skip` with the reason in the .feature file rather
 // than being wired against a stand-in. BEH-EA-048 (plugin user fields) and BEH-EA-254 (the data
 // export) are in `UserFieldsSteps.ts`.
+import { TestAuth } from "@awthaq/test";
 import { Accounts, Sessions, Users } from "@awthaq/core";
 import { PasswordHasher } from "@awthaq/ports";
 import { defineSteps } from "@effect-cucumber/vitest";
@@ -482,7 +483,9 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
     // An OAuth-style user: created and given a session, never a password Account.
     const user = yield* createUserDirect(name);
     yield* direct(
-      Effect.flatMap(Sessions.Sessions, (sessions) => sessions.issue({ userId: user.id })),
+      Effect.flatMap(Sessions.Sessions, (sessions) =>
+        sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest),
+      ),
     );
     assert.equal((yield* accountsOf(user.id)).length, 0);
   });
@@ -536,7 +539,9 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
     function* (name: string, providerId: string) {
       const user = yield* createUserDirect(name);
       yield* direct(
-        Effect.flatMap(Sessions.Sessions, (sessions) => sessions.issue({ userId: user.id })),
+        Effect.flatMap(Sessions.Sessions, (sessions) =>
+          sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest),
+        ),
       );
       const found = yield* rows(
         'SELECT id FROM accounts WHERE "userId" = ? AND "providerId" = ?',

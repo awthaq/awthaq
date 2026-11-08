@@ -50,12 +50,6 @@ export class UserGone extends Data.TaggedError("SignIn/UserGone")<{
   readonly userId: Users.UserId;
 }> {}
 
-/** Explicit request facts; each field falls back to `Api.AuthRequestContext` when omitted. */
-export interface SessionRequest {
-  readonly ip?: string | undefined;
-  readonly userAgent?: string | undefined;
-}
-
 /** A failed sign-in attempt, announced by `SignIn.failed`. No user id, no email (ALF-003/CSD-004). */
 export interface Failure {
   readonly strategy: string;
@@ -82,10 +76,8 @@ export const makeSteps = Effect.gen(function* () {
    */
   const failed = (failure: Failure) =>
     Effect.gen(function* () {
-      const ip = Option.flatMap(
-        Option.filter(yield* Effect.serviceOption(Api.AuthRequestContext), Api.isRequest),
-        (facts) => facts.ip,
-      );
+      const context = yield* Api.AuthRequestContext;
+      const ip = Api.isRequest(context) ? context.ip : Option.none<string>();
       yield* events.publish({
         _tag: "auth.user.signInFailed",
         strategy: failure.strategy,
@@ -161,24 +153,10 @@ export const makeSteps = Effect.gen(function* () {
   });
 
   /** Inside or outside a transaction: the row only (plus the core-owned `auth.session.issued`). */
-  const mint = (cleared: Clearance, request: SessionRequest | undefined) =>
+  /** ADR-EA-047: `Sessions.issue` records the request context's facts itself. */
+  const mint = (cleared: Clearance) =>
     Effect.gen(function* () {
-      const context = Option.filter(
-        yield* Effect.serviceOption(Api.AuthRequestContext),
-        Api.isRequest,
-      );
-      const ip = request?.ip ?? Option.getOrUndefined(Option.flatMap(context, (facts) => facts.ip));
-      const userAgent =
-        request?.userAgent ??
-        Option.getOrUndefined(Option.flatMap(context, (facts) => facts.userAgent));
-      const issue = sessions.issue({
-        userId: cleared.user.id,
-        request: {
-          ...(ip === undefined ? {} : { ip }),
-          ...(userAgent === undefined ? {} : { userAgent }),
-        },
-        amr: cleared.amr,
-      });
+      const issue = sessions.issue({ userId: cleared.user.id, amr: cleared.amr });
       // D3: a resumed sign-in is minted in the first factor's tenant, not the verify request's.
       return yield* Option.match(cleared.tenantId, {
         onNone: () => issue,

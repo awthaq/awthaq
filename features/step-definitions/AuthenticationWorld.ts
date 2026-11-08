@@ -13,6 +13,7 @@
 // real handler `Authentication.AuthenticationLive` built — and the `PostAuthResponseHook`
 // (the middleware's own extension point, told `context.scheme` on every success) records
 // which scheme authenticated. Nothing about resolution is stubbed.
+import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import { ApiKey, ApiKeyClientRecords, ApiKeyRecords } from "@awthaq/api-key";
 import {
@@ -386,7 +387,7 @@ export const signIn = Effect.fn("features.authentication.signIn")(function* (nam
         identity: { _tag: "Email", email: `${name}@example.com` },
         name,
       });
-      const issued = yield* sessions.issue({ userId: user.id });
+      const issued = yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest);
       const token = Redacted.value(issued.token);
       return {
         userId: user.id,
@@ -408,7 +409,9 @@ export const issueSecondSession = Effect.fn("features.authentication.issueSecond
     return yield* app.withServices(
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        const issued = yield* sessions.issue({ userId: Users.UserId(actor.userId) });
+        const issued = yield* sessions
+          .issue({ userId: Users.UserId(actor.userId) })
+          .pipe(TestAuth.withoutRequest);
         const token = Redacted.value(issued.token);
         return {
           cookie: `${Api.SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
@@ -432,10 +435,12 @@ export const expiredSessionCookie = Effect.fn("features.authentication.expiredSe
           identity: { _tag: "Email", email: "expired-holder@example.com" },
           name: "expired-holder",
         });
-        const issued = yield* sessions.issue({
-          userId: user.id,
-          absoluteDuration: Duration.millis(1),
-        });
+        const issued = yield* sessions
+          .issue({
+            userId: user.id,
+            absoluteDuration: Duration.millis(1),
+          })
+          .pipe(TestAuth.withoutRequest);
         return `${Api.SESSION_COOKIE_NAME}=${encodeURIComponent(Redacted.value(issued.token))}`;
       }),
     );

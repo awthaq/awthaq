@@ -72,7 +72,7 @@ describe("Admin user administration (BAM-005)", () => {
       });
       assert.strictEqual(second.items.length, 2); // 5 users in all
       assert.isTrue(Option.isNone(second.nextCursor));
-    }).pipe(Effect.provide(buildLayer(manageAll))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect(
@@ -102,7 +102,7 @@ describe("Admin user administration (BAM-005)", () => {
         yield* TestClock.adjust(Duration.millis(10));
         const events = (yield* Ref.get(seen)).filter((e) => e._tag === "auth.admin.userUpdated");
         assert.strictEqual(events.length, 2);
-      }).pipe(Effect.scoped, Effect.provide(buildLayer(manageAll))),
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect(
@@ -172,6 +172,7 @@ describe("Admin user administration (BAM-005)", () => {
         );
       }).pipe(
         Effect.scoped,
+        TestAuth.withoutRequest,
         Effect.provide(buildLayer({ ...manageAll, canImpersonate: () => Effect.succeed(true) })),
       ),
   );
@@ -236,6 +237,7 @@ describe("Admin ban / unban (BAM-005 remainder, SCP-001)", () => {
         assert.isAtLeast(revocations.length, 1);
       }).pipe(
         Effect.scoped,
+        TestAuth.withoutRequest,
         Effect.provide(buildLayer({ ...manageAll, canBanUsers: () => Effect.succeed(true) })),
       ),
   );
@@ -262,6 +264,10 @@ describe("Admin ban / unban (BAM-005 remainder, SCP-001)", () => {
         .banUser(caller, Users.UserId("00000000-0000-0000-0000-000000000000"), {})
         .pipe(Effect.flip);
       assert.strictEqual(unknown._tag, "AdminTargetNotFound");
-    }).pipe(Effect.scoped, Effect.provide(buildLayer({ canBanUsers: () => Effect.succeed(true) }))),
+    }).pipe(
+      Effect.scoped,
+      TestAuth.withoutRequest,
+      Effect.provide(buildLayer({ canBanUsers: () => Effect.succeed(true) })),
+    ),
   );
 });

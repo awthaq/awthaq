@@ -2,6 +2,7 @@
 // causal handoffs it must never break (ADR-EA-014: revocation and rotation are
 // authoritative on the very next read). The replica is a real second database
 // that only changes when the test calls `catchUp` (`LaggingReplica`).
+import { Api } from "@awthaq/api";
 import * as TestEncryption from "../src/TestEncryption.ts";
 import { AuditLog, AuthEvents, Persistence, Sessions, Users } from "@awthaq/core";
 import { AuditLogStore, Ids, SessionStore } from "@awthaq/ports";
@@ -86,7 +87,10 @@ describe("ReadRouting (RRC-001)", () => {
       // An eventual read with no replica configured is simply the primary.
       assert.strictEqual(yield* listCount(sessions, "eventual"), 1);
       assert.strictEqual(yield* listCount(sessions), 1);
-    }).pipe(Effect.provide(SessionStoreSql.layer.pipe(Layer.provideMerge(MigratedSqlite)))),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(SessionStoreSql.layer.pipe(Layer.provideMerge(MigratedSqlite))),
+    ),
   );
 
   it.effect(
@@ -108,7 +112,10 @@ describe("ReadRouting (RRC-001)", () => {
 
           yield* lag.catchUp;
           assert.strictEqual(yield* listCount(sessions, "eventual"), 1);
-        }).pipe(Effect.provide(MigratedSqlite)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(MigratedSqlite),
+        ),
       ),
   );
 
@@ -142,7 +149,10 @@ describe("ReadRouting (RRC-001)", () => {
           assert.strictEqual((yield* audit.select(all, "eventual")).length, 1);
           const page = { after: Option.none<string>(), eventTag: Option.none<string>(), limit: 10 };
           assert.strictEqual((yield* audit.pageAfter(page, "eventual")).length, 1);
-        }).pipe(Effect.provide(MigratedSqlite)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(MigratedSqlite),
+        ),
       ),
   );
 
@@ -179,7 +189,10 @@ describe("ReadRouting (RRC-001)", () => {
           assert.strictEqual(yield* listCount(sessions, "eventual"), 1);
           yield* lag.catchUp;
           assert.strictEqual(yield* listCount(sessions, "eventual"), 0);
-        }).pipe(Effect.provide(MigratedSqlite)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(MigratedSqlite),
+        ),
       ),
   );
 
@@ -197,7 +210,10 @@ describe("ReadRouting (RRC-001)", () => {
         );
         assert.strictEqual(seeded, 1);
         assert.strictEqual(yield* listCount(sessions, "eventual"), 0);
-      }).pipe(Effect.provide(MigratedSqlite)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(MigratedSqlite),
+      ),
     ),
   );
 
@@ -225,7 +241,10 @@ describe("ReadRouting (RRC-001)", () => {
           );
           // The write still succeeded, and the fiber is held to the primary (which has the row).
           assert.strictEqual(afterFailedCapture, 1);
-        }).pipe(Effect.provide(MigratedSqlite)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(MigratedSqlite),
+        ),
       ),
   );
 });
@@ -255,7 +274,10 @@ describe("causal handoffs under replica lag (RRC-008)", () => {
         const { token } = yield* sessions.issue({ userId });
         const verified = yield* sessions.verify(token);
         assert.strictEqual(verified.session.userId, userId);
-      }).pipe(Effect.provide(MigratedSqlite)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(MigratedSqlite),
+      ),
     ),
   );
 
@@ -268,7 +290,10 @@ describe("causal handoffs under replica lag (RRC-008)", () => {
         yield* sessions.revoke(session.id, "userRevoked"); // …and is then left behind by the revoke
         const failure = yield* sessions.verify(token).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(MigratedSqlite)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(MigratedSqlite),
+      ),
     ),
   );
 
@@ -292,7 +317,10 @@ describe("causal handoffs under replica lag (RRC-008)", () => {
         // A fiber that wrote nothing still sees the stale replica until it catches up.
         const stale = yield* sessions.list(userId, undefined, { consistency: "eventual" });
         assert.strictEqual(stale.length, 1);
-      }).pipe(Effect.provide(MigratedSqlite)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(MigratedSqlite),
+      ),
     ),
   );
 
@@ -308,7 +336,10 @@ describe("causal handoffs under replica lag (RRC-008)", () => {
         // The superseded token is a tombstone on the primary, whatever the replica says.
         const old = yield* sessions.verify(first.token).pipe(Effect.flip);
         assert.strictEqual(old._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(MigratedSqlite)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(MigratedSqlite),
+      ),
     ),
   );
 });

@@ -233,7 +233,7 @@ export const signedInCaller = (email: string, amr: ReadonlyArray<Sessions.AuthMe
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
       const user = yield* users.create({ identity: { _tag: "Email", email }, name: email });
-      const issued = yield* sessions.issue({ userId: user.id, amr });
+      const issued = yield* sessions.issue({ userId: user.id, amr }).pipe(TestAuth.withoutRequest);
       const caller: DeviceAuthorization.Caller = {
         userId: user.id,
         sessionId: issued.session.id,
@@ -251,7 +251,7 @@ export const enrolSecondFactor = (userId: Users.UserId) =>
       const sessions = yield* Sessions.Sessions;
       const twoFactor = yield* TwoFactor.TwoFactor;
       const mac = yield* Mac.Mac;
-      const fresh = yield* sessions.issue({ userId });
+      const fresh = yield* sessions.issue({ userId }).pipe(TestAuth.withoutRequest);
       const enrolment = yield* twoFactor.enable(userId, fresh.session.id);
       const key = Option.getOrThrow(Totp.base32Decode(enrolment.secret));
       const now = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);

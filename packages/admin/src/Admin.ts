@@ -65,7 +65,9 @@ export interface AdminShape {
     | AdminApi.AdminSelfImpersonationRefused
     | AdminApi.AdminAlreadyImpersonating
     | AdminApi.AdminTargetNotFound
-    | Errors.StoreUnavailable
+    | Errors.StoreUnavailable,
+    /** Plan 26 Q5 (ADR-EA-047): the impersonation session records the administrator's request facts. */
+    Api.AuthRequestContext
   >;
   /** BEH-EA-216: `caller`'s own session must itself carry `actingAs`, or there is nothing to stop. */
   readonly stopImpersonating: (

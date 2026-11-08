@@ -57,13 +57,10 @@ interface Recorded {
 }
 
 /** ADR-EA-047: a session records the facts of the request that minted it; `NoRequest` records none. */
-const recordedFrom = (context: Option.Option<Api.RequestFacts | Api.NoRequest>): Recorded => {
-  const facts = Option.filter(context, Api.isRequest);
-  return {
-    ipAddress: Option.flatMap(facts, (request) => request.ip),
-    userAgent: Option.flatMap(facts, (request) => request.userAgent),
-  };
-};
+const recordedFrom = (context: Api.RequestFacts | Api.NoRequest): Recorded =>
+  Api.isRequest(context)
+    ? { ipAddress: context.ip, userAgent: context.userAgent }
+    : { ipAddress: Option.none(), userAgent: Option.none() };
 
 /**
  * SMS-003: an opt-in cap on one user's simultaneously live sessions. Absent by
@@ -323,7 +320,6 @@ export interface SessionsShape {
    */
   readonly issue: (input: {
     readonly userId: UserId;
-    readonly request?: { readonly ip?: string; readonly userAgent?: string };
     readonly supersedes?: SessionId;
     /**
      * BEH-EA-209/210: sets a hard expiry (`idleExpiresAt = absoluteExpiresAt`) and disables idle-refresh for this session's whole lifetime.
@@ -339,7 +335,12 @@ export interface SessionsShape {
     readonly amr?: ReadonlyArray<AuthMethod>;
     /** BEH-EA-212: overrides `SessionConfig.absolute` for this one call — e.g. `@awthaq/admin`'s own `AdminConfig.maxDuration`, generally shorter than an ordinary session's absolute lifetime. */
     readonly absoluteDuration?: Duration.Duration;
-  }) => Effect.Effect<IssuedSession, StoreUnavailable>;
+  }) => Effect.Effect<
+    IssuedSession,
+    StoreUnavailable,
+    /** ADR-EA-047/CSD-003: the session records the address and user agent of the request that minted it. */
+    Api.AuthRequestContext
+  >;
   /**
    * Plan 19: what a presented credential means (refused, replayed, expired, accepted, due for rotation,
    * a lost rotation) is the pure `internal/sessionVerdict.ts`; this is the contract it is executed for.
@@ -745,21 +746,11 @@ export const layer = Layer.effect(
       return { session: view, token: Redacted.make(SessionVerdict.format(id, secret)) };
     });
 
-    // ADR-EA-047 (plan 26 phase 3, transitional): the facts come from `Api.AuthRequestContext`; an explicit
-    // `request` field still wins until the plugins stop passing one (phase 5 removes it).
+    // ADR-EA-047: the facts come from `Api.AuthRequestContext` and nowhere else.
     const issue: SessionsShape["issue"] = (input) =>
-      Effect.flatMap(Effect.serviceOption(Api.AuthRequestContext), (context) => {
-        const ambient = recordedFrom(context);
-        const ip = input.request?.ip;
-        const userAgent = input.request?.userAgent;
-        return issueRecording(input, {
-          ipAddress: ip === undefined ? ambient.ipAddress : Option.some(ip),
-          userAgent:
-            userAgent === undefined
-              ? ambient.userAgent
-              : Option.some(Api.toUserAgentHeader(userAgent)),
-        });
-      }).pipe(relabel("Sessions.issue"));
+      Effect.flatMap(Effect.service(Api.AuthRequestContext), (context) =>
+        issueRecording(input, recordedFrom(context)),
+      ).pipe(relabel("Sessions.issue"));
 
     /**
      * BAM-003 (.issues/high): consulted only on a primary-store miss: a still-live legacy (e.g.

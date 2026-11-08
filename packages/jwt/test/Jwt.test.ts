@@ -50,7 +50,7 @@ describe("Jwt sign/verify", () => {
       assert.strictEqual(claims["iss"], "https://issuer.test");
       assert.strictEqual(claims["aud"], "https://issuer.test");
       assert.isUndefined(claims["act"]);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   // AOMS-012: downstream verifiers can tell how the session was authenticated from the token alone.
@@ -68,7 +68,7 @@ describe("Jwt sign/verify", () => {
       const claims = yield* jwt.verify(token);
       assert.deepStrictEqual(claims["amr"], ["pwd", "otp", "mfa"]);
       assert.strictEqual(claims["auth_time"], 1_700_000_000);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("omits amr and auth_time when the session recorded none", () =>
@@ -78,7 +78,7 @@ describe("Jwt sign/verify", () => {
       const claims = yield* jwt.verify(token);
       assert.isFalse("amr" in claims);
       assert.isFalse("auth_time" in claims);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("populates act when the caller is impersonating", () =>
@@ -96,7 +96,7 @@ describe("Jwt sign/verify", () => {
       // JR-005: RFC 8693 §4.1 — the actor is identified by `sub`; its principal
       // type is a private member.
       assert.deepStrictEqual(claims["act"], { sub: "target-1", awthaq_actor_type: "user" });
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("a tampered signature fails verification", () =>
@@ -110,7 +110,7 @@ describe("Jwt sign/verify", () => {
 
       const result = yield* jwt.verify(tampered).pipe(Effect.flip);
       assert.strictEqual(result._tag, "JwtInvalidError");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("verification fails once the token's ttl has elapsed", () =>
@@ -123,7 +123,7 @@ describe("Jwt sign/verify", () => {
 
       const result = yield* jwt.verify(token).pipe(Effect.flip);
       assert.strictEqual(result._tag, "JwtInvalidError");
-    }).pipe(Effect.provide(buildLayer({ ttl: Duration.minutes(15) }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ ttl: Duration.minutes(15) }))),
   );
 
   it.effect("extra claims from definePayload never override registered claims", () =>
@@ -137,6 +137,7 @@ describe("Jwt sign/verify", () => {
       assert.strictEqual(claims["sub"], "user-1");
       assert.strictEqual(claims["tenant"], "acme");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         buildLayer({
           definePayload: () => Effect.succeed({ tenant: "acme", sub: "should-be-ignored" }),
@@ -170,7 +171,7 @@ describe("Jwt verifyLive", () => {
 
       const liveCheckFails = yield* jwt.verifyLive(token).pipe(Effect.flip);
       assert.strictEqual(liveCheckFails._tag, "JwtInvalidError");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("verifyLive fails for a token with no sid to check (signJWT-minted)", () =>
@@ -180,7 +181,7 @@ describe("Jwt verifyLive", () => {
 
       const result = yield* jwt.verifyLive(token).pipe(Effect.flip);
       assert.strictEqual(result._tag, "JwtInvalidError");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   // TIR-002: `verifyLive` used to compare only `SessionListItem.expiresAt`
@@ -208,7 +209,7 @@ describe("Jwt verifyLive", () => {
         const liveCheckFails = yield* jwt.verifyLive(token).pipe(Effect.flip);
         if (liveCheckFails._tag !== "JwtInvalidError") return assert.fail(liveCheckFails._tag);
         assert.strictEqual(liveCheckFails.reason, "session no longer live");
-      }).pipe(Effect.provide(buildLayer({ ttl: Duration.days(30) }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ ttl: Duration.days(30) }))),
   );
 });
 
@@ -224,7 +225,7 @@ describe("Jwt signJWT/verifyJWT", () => {
 
       assert.strictEqual(claims["sub"], "service-a");
       assert.strictEqual(claims["scope"], "read:things");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   // `definePayload` is principal-scoped and `signJWT` has no principal, so
@@ -239,7 +240,7 @@ describe("Jwt signJWT/verifyJWT", () => {
       const claims = yield* jwt.verifyJWT(token);
 
       assert.strictEqual(claims["iss"], "https://issuer.test");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("options.ttl overrides the configured default for one call", () =>
@@ -250,7 +251,7 @@ describe("Jwt signJWT/verifyJWT", () => {
 
       const result = yield* jwt.verifyJWT(token).pipe(Effect.flip);
       assert.strictEqual(result._tag, "JwtInvalidError");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 });
 
@@ -267,7 +268,7 @@ describe("Jwt introspect/introspectLive", () => {
       const claims = yield* jwt.verify(token);
       assert.isString(claims["jti"]);
       assert.isAbove((claims["jti"] as string).length, 0);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("introspect reports active:true with claims for a fresh, unrevoked token", () =>
@@ -277,7 +278,7 @@ describe("Jwt introspect/introspectLive", () => {
       const result = yield* jwt.introspect(token);
       assert.isTrue(result.active);
       if (result.active) assert.strictEqual(result.claims["sub"], "service-a");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("introspect reports active:false for a revoked token's jti", () =>
@@ -296,7 +297,7 @@ describe("Jwt introspect/introspectLive", () => {
 
       const afterRevoke = yield* jwt.introspect(token);
       assert.isFalse(afterRevoke.active);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("introspect reports active:false for a bad signature or expired token", () =>
@@ -313,7 +314,7 @@ describe("Jwt introspect/introspectLive", () => {
       yield* TestClock.adjust(Duration.minutes(2));
       const expiredResult = yield* jwt.introspect(expiring);
       assert.isFalse(expiredResult.active);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("introspectLive reports active:true for a token whose session is still live", () =>
@@ -326,7 +327,7 @@ describe("Jwt introspect/introspectLive", () => {
 
       const result = yield* jwt.introspectLive(token);
       assert.isTrue(result.active);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("introspectLive reports active:false once the underlying session is revoked", () =>
@@ -347,7 +348,7 @@ describe("Jwt introspect/introspectLive", () => {
 
       const live = yield* jwt.introspectLive(token);
       assert.isFalse(live.active);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -358,6 +359,6 @@ describe("Jwt introspect/introspectLive", () => {
         const token = yield* jwt.signJWT({ sub: "service-a" });
         const result = yield* jwt.introspectLive(token);
         assert.isTrue(result.active);
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 });

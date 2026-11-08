@@ -277,7 +277,10 @@ export const signInUser = Effect.fn("features.organization.signInUser")(function
           .create({ identity: { _tag: "Email", email }, name })
           .pipe(Effect.orDie);
         if (input.verified !== false) yield* users.verifyEmail(created.id).pipe(Effect.orDie);
-        const issued = yield* sessions.issue({ userId: created.id }).pipe(Effect.orDie);
+        const issued = yield* sessions
+          .issue({ userId: created.id })
+          .pipe(TestAuth.withoutRequest)
+          .pipe(Effect.orDie);
         return { name, userId: created.id, email, setCookie: yield* renderSession(issued) };
       }),
     ),
@@ -300,7 +303,10 @@ export const openSession = Effect.fn("features.organization.openSession")(functi
     app.withContext(
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        const issued = yield* sessions.issue({ userId: owner.userId }).pipe(Effect.orDie);
+        const issued = yield* sessions
+          .issue({ userId: owner.userId })
+          .pipe(TestAuth.withoutRequest)
+          .pipe(Effect.orDie);
         return yield* renderSession(issued);
       }),
     ),

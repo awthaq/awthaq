@@ -17,6 +17,7 @@
 // Path B group (`RequirePermission`); the reference handlers in it are the documented handler
 // patterns (BEH-EA-146..152) written out once, over real `@qadi/core` calls, so the scenarios can
 // drive them over real HTTP. They are fixtures for those patterns, not shipped awthaq code.
+import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import {
   Accounts,
@@ -944,7 +945,10 @@ export const mintActor = Effect.fn("features.qadiBridge.mintActor")(function* (
           for (const roleName of roles)
             yield* installed.value.assign(user.id, roleName).pipe(Effect.orDie);
         }
-        const { token } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+        const { token } = yield* sessions
+          .issue({ userId: user.id })
+          .pipe(TestAuth.withoutRequest)
+          .pipe(Effect.orDie);
         return {
           userId: user.id,
           cookie: `${Sessions.SESSION_COOKIE_NAME}=${encodeURIComponent(Redacted.value(token))}`,

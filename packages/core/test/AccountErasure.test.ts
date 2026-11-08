@@ -5,6 +5,7 @@
 // late veto, undoes *everything*) need a real transaction, so they run over SQLite, migrated
 // by `@awthaq/sql`'s own `CoreMigrations` — the schema is FK-less on purpose (SEA-001), so
 // this rollback is the only thing standing between a crash and a half-erased account.
+import { Api } from "@awthaq/api";
 import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { SqlTransaction } from "@awthaq/ports";
 import { CoreMigrations } from "@awthaq/sql";
@@ -215,7 +216,10 @@ const suite = (
         assert.isFalse(JSON.stringify(naming).includes("erase@example.com"));
         // the other user's trail is untouched
         assert.isAbove((yield* auditLog.list({ actorUserId: other.user.id })).length, 0);
-      }).pipe(Effect.provide(layer));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      );
     });
 
     it.effect(
@@ -264,7 +268,10 @@ const suite = (
             connectionId: "conn-1",
             organizationId: "org-1",
           });
-        }).pipe(Effect.provide(layer));
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        );
       },
     );
 
@@ -288,7 +295,10 @@ const suite = (
           accounts: 1,
           sessions: 1,
         });
-      }).pipe(Effect.provide(layer));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      );
     });
 
     it.effect("an unknown user fails UserNotFound and touches nothing", () => {
@@ -304,7 +314,10 @@ const suite = (
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "UserNotFound");
         assert.deepStrictEqual(probe.ran, []);
-      }).pipe(Effect.provide(layer));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      );
     });
 
     it.effect(
@@ -329,7 +342,10 @@ const suite = (
             sessions: 1,
           });
           assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.user.deleted" }), []);
-        }).pipe(Effect.provide(layer));
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        );
       },
     );
 
@@ -353,7 +369,10 @@ const suite = (
             (yield* registry.contributions).map((c) => c.id),
             ["a"],
           );
-        }).pipe(Effect.provide(layer));
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        );
       },
     );
   });
@@ -378,7 +397,10 @@ describe("AccountErasure over memory: ErasureConfig", () => {
           (row) => row.payload._tag === "auth.session.issued",
         ),
       );
-    }).pipe(Effect.provide(layer));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(layer),
+    );
   });
 });
 
@@ -425,7 +447,10 @@ describe("AccountErasure over SQLite: atomicity", () => {
           JSON.stringify(yield* auditLog.list({ actorUserId: user.id })),
           auditBefore,
         );
-      }).pipe(Effect.provide(layer));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      );
     },
   );
 
@@ -458,7 +483,10 @@ describe("AccountErasure over SQLite: atomicity", () => {
         yield* events.publish({ _tag: "auth.token.replay", identifier: "sentinel" });
         const [first] = yield* stream.pipe(Stream.take(1), Stream.runCollect);
         assert.strictEqual(first?._tag, "auth.token.replay");
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
   });
 });
