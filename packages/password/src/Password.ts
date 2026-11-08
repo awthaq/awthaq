@@ -1432,9 +1432,15 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                   ),
                 );
               const hash = yield* hasher.hash(input.password);
+              // ADR-EA-028: an outage is `StoreUnavailable` (503) and rolls the consume back; a
+              // credential unlinked since the lookup above is the same dead token as none at all.
               yield* accounts
                 .updateCredentialHash(account.id, Redacted.make(hash))
-                .pipe(Effect.orDie);
+                .pipe(
+                  Effect.catchTag("AccountNotFound", () =>
+                    Effect.fail(new PasswordApi.TokenConsumed()),
+                  ),
+                );
 
               // ARF-008: consuming a token mailed to the address proves the same mailbox control
               // `verifyEmail` demands: otherwise a user who resets is still refused at `signIn`.
@@ -1574,7 +1580,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         );
         const hashOpt = yield* Option.match(accountOpt, {
           onNone: () => Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
-          onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
+          // ADR-EA-028: an outage is `StoreUnavailable`; an account unlinked since the lookup has no hash.
+          onSome: (account) =>
+            accounts
+              .findCredentialHash(account.id)
+              .pipe(Effect.catchTag("AccountNotFound", () => Effect.succeedNone)),
         });
         // Same uniform-cost shape as `signIn`'s own `dummyHash` check —
         // this endpoint is authenticated (no enumeration concern), but
@@ -1599,7 +1609,13 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         }
 
         const hash = yield* hasher.hash(input.newPassword);
-        yield* accounts.updateCredentialHash(account.id, Redacted.make(hash)).pipe(Effect.orDie);
+        // ADR-EA-028: an outage is `StoreUnavailable`; a credential unlinked since it was verified is
+        // the same answer as no credential at all.
+        yield* accounts
+          .updateCredentialHash(account.id, Redacted.make(hash))
+          .pipe(
+            Effect.catchTag("AccountNotFound", () => Effect.fail(new PasswordApi.WrongPassword())),
+          );
         yield* events.publish({ _tag: "auth.password.changed", userId: input.userId });
 
         // BEH-EA-053: revoke every *other* session first, while
@@ -1627,7 +1643,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         );
         const hashOpt = yield* Option.match(accountOpt, {
           onNone: () => Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
-          onSome: (account) => accounts.findCredentialHash(account.id).pipe(Effect.orDie),
+          // ADR-EA-028: an outage is `StoreUnavailable`; an account unlinked since the lookup has no hash.
+          onSome: (account) =>
+            accounts
+              .findCredentialHash(account.id)
+              .pipe(Effect.catchTag("AccountNotFound", () => Effect.succeedNone)),
         });
         // Same uniform-cost shape as `changePassword`'s own `dummyHash`
         // check — this endpoint is authenticated (no enumeration
