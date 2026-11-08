@@ -312,3 +312,15 @@ Feature: Testing Harness
       Given a plugin package whose class extends "AuthPlugin.Service" and whose tests never call "runPluginContractTests"
       When the package's "test/Contract.test.ts" calls "runPluginContractTests" for the class
       Then it exits zero
+
+    @REQ-EA-1500
+    Scenario: A Contract.test.ts that passes records but is missing from scripts/test-pg.sh fails pnpm check
+      Given a plugin package whose "test/Contract.test.ts" passes "records" to "runPluginContractTests"
+      When the script "scripts/check-contract-tests.mjs" runs
+      Then it exits non-zero, naming "packages/demo/test/Contract.test.ts" and "scripts/test-pg.sh"
+
+    @REQ-EA-1501
+    Scenario: The same package passes once its Contract.test.ts is listed in scripts/test-pg.sh
+      Given a plugin package whose "test/Contract.test.ts" passes "records" to "runPluginContractTests"
+      When "packages/demo/test/Contract.test.ts" is listed in "scripts/test-pg.sh"
+      Then it exits zero

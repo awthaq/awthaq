@@ -267,6 +267,47 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
     },
   );
 
+  // Plan 25 (BEH-EA-336): a Contract.test.ts passing `records` must also run on Postgres.
+  Given(
+    "a plugin package whose {string} passes {string} to {string}",
+    function* (file: string, _option: string, _call: string) {
+      const { outcomes } = yield* World;
+      const root = mkdtempSync(path.join(tmpdir(), "awthaq-contract-tests-"));
+      mkdirSync(path.join(root, "packages", "demo", "src"), { recursive: true });
+      mkdirSync(path.join(root, "packages", "demo", "test"), { recursive: true });
+      mkdirSync(path.join(root, "scripts"), { recursive: true });
+      mkdirSync(path.join(root, "examples"), { recursive: true });
+      writeFileSync(
+        path.join(root, "packages", "demo", "src", "Demo.ts"),
+        'export class Demo extends AuthPlugin.Service<Demo, {}>()("demo", {}) {}\n',
+      );
+      writeFileSync(
+        path.join(root, "packages", "demo", file),
+        'TestAuth.runPluginContractTests(framework, () => Demo.Demo, {\n  options: [{}],\n  records: { suite: "demo", suites },\n});\n',
+      );
+      writeFileSync(path.join(root, "scripts", "test-pg.sh"), "suites=(\n)\n");
+      yield* outcomes.set("root", root);
+    },
+  );
+
+  Then("it exits non-zero, naming {string} and {string}", function* (file: string, script: string) {
+    const { outcomes } = yield* World;
+    const root = yield* outcomes.getAs("root", isString);
+    rmSync(root, { recursive: true, force: true });
+    assert.equal(yield* outcomes.getAs("status", isNumber), 1);
+    const report = yield* outcomes.getAs("report", isString);
+    assert.ok(report.includes(file) && report.includes(script), report);
+  });
+
+  When("{string} is listed in {string}", function* (file: string, script: string) {
+    const { outcomes } = yield* World;
+    const root = yield* outcomes.getAs("root", isString);
+    writeFileSync(path.join(root, script), `suites=(\n  ${file}\n)\n`);
+    const result = runCheck(root);
+    rmSync(root, { recursive: true, force: true });
+    yield* outcomes.set("status", result.status ?? -1);
+  });
+
   Then("it exits zero", function* () {
     const { outcomes } = yield* World;
     assert.equal(yield* outcomes.getAs("status", isNumber), 0);

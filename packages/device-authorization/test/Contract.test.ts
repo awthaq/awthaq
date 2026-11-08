@@ -2,7 +2,7 @@
 // for `DeviceAuthorization`.
 import { SessionLifecycle } from "@awthaq/api";
 import * as DeviceAuthorizationApi from "../src/DeviceAuthorizationApi.ts";
-import { TestAuth } from "@awthaq/test";
+import { RecordsContract, TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Layer from "effect/Layer";
 import * as DeviceAuthorization from "../src/DeviceAuthorization.ts";
@@ -11,6 +11,10 @@ const framework = TestAuth.throwingFramework(describe, it);
 
 TestAuth.runPluginContractTests(framework, () => DeviceAuthorization.DeviceAuthorization, {
   options: [{}],
+  records: {
+    suite: "device_authorization_records_contract",
+    suites: RecordsContract.pending("19"),
+  },
   build: { services: Layer.empty },
 });
 

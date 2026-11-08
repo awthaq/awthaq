@@ -105,12 +105,39 @@ const crossTenantWitness = TenantScoped.crossTenant("tenant conformance suite");
 const asTenant = <A2, E, R2>(tenant: string | undefined, effect: Effect.Effect<A2, E, R2>) =>
   tenant === undefined ? Tenant.withoutTenant(effect) : Tenant.withTenant(tenant)(effect);
 
-const run = <A2, R>(layer: Layer.Layer<R, unknown>, effect: Effect.Effect<A2, unknown, R>) =>
-  Effect.runPromise(Effect.scoped(effect.pipe(Effect.provide(layer))));
+/** Runs one probe effect on a fresh adapter (plan 25: `RecordsContract` derives these from `Plugin.records`). */
+export type Runner<R> = <A2>(effect: Effect.Effect<A2, unknown, R>) => Promise<A2>;
+
+const runnerOf =
+  <R>(layer: Layer.Layer<R, unknown>): Runner<R> =>
+  (effect) =>
+    Effect.runPromise(Effect.scoped(effect.pipe(Effect.provide(layer))));
 
 export const runTenantIsolationTests = <Shape, Id, R>(
   framework: TestFramework,
   config: TenantIsolationConfig<Shape, Id, R>,
+): void =>
+  runTenantIsolationWith(framework, {
+    plugin: config.plugin,
+    adapters: config.adapters.map((adapter) => ({
+      name: adapter.name,
+      run: runnerOf(adapter.layer),
+    })),
+    cases: config.cases,
+    ...(config.covers === undefined ? {} : { covers: config.covers }),
+    ...(config.rls === undefined ? {} : { rls: { run: runnerOf(config.rls.layer) } }),
+  });
+
+/** `runTenantIsolationTests` over runners instead of layers: the seam `RecordsContract` uses. */
+export const runTenantIsolationWith = <Shape, Id, R>(
+  framework: TestFramework,
+  config: {
+    readonly plugin: TenantIsolationConfig<Shape, Id, R>["plugin"];
+    readonly adapters: ReadonlyArray<{ readonly name: string; readonly run: Runner<R> }>;
+    readonly cases: ReadonlyArray<TableCase<Shape, Id, R>>;
+    readonly covers?: ReadonlyArray<string>;
+    readonly rls?: { readonly run: Runner<R | SqlClient.SqlClient> };
+  },
 ): void => {
   const declarations = declaredTables(config).filter(
     (declared) => config.covers === undefined || config.covers.includes(declared.table),
@@ -152,8 +179,7 @@ export const runTenantIsolationTests = <Shape, Id, R>(
             framework.it(
               `${label}.${method}: sees and changes only the ambient tenant's rows`,
               async () => {
-                const outcome = await run(
-                  adapter.layer,
+                const outcome = await adapter.run(
                   Effect.gen(function* () {
                     const id = yield* asTenant(A, tableCase.insert);
                     // A mutation under another tenant, or none, must leave A's row alone.
@@ -174,8 +200,7 @@ export const runTenantIsolationTests = <Shape, Id, R>(
             framework.it(
               `${label}.${method}: an untenanted row is the platform's, not a tenant's`,
               async () => {
-                const outcome = await run(
-                  adapter.layer,
+                const outcome = await adapter.run(
                   Effect.gen(function* () {
                     const id = yield* asTenant(undefined, tableCase.insert);
                     const underA = yield* asTenant(A, probe.run(id));
@@ -195,8 +220,7 @@ export const runTenantIsolationTests = <Shape, Id, R>(
               framework.it(
                 `${label}.${method}: a witnessed call reaches ${owner ?? "an untenanted"} row from another tenant`,
                 async () => {
-                  const reached = await run(
-                    adapter.layer,
+                  const reached = await adapter.run(
                     Effect.gen(function* () {
                       const id = yield* asTenant(owner, tableCase.insert);
                       return yield* asTenant(owner === B ? A : B, probe.run(id));
@@ -215,8 +239,7 @@ export const runTenantIsolationTests = <Shape, Id, R>(
             framework.it(
               `${label}.${method}: never touches another organization's rows`,
               async () => {
-                const outcome = await run(
-                  adapter.layer,
+                const outcome = await adapter.run(
                   Effect.gen(function* () {
                     const id = yield* asTenant(A, tableCase.insert);
                     const other = yield* probe.run(id, "other");
@@ -254,65 +277,63 @@ export const runTenantIsolationTests = <Shape, Id, R>(
         framework.it(
           `rls / ${tableCase.table}: the database confines an unfiltered statement, and a witness lifts it`,
           async () => {
-            await Effect.runPromise(
-              Effect.scoped(
-                Effect.gen(function* () {
-                  const sql = yield* SqlClient.SqlClient;
-                  const isPg = yield* sql.onDialectOrElse({
-                    pg: () => Effect.succeed(true),
-                    orElse: () => Effect.succeed(false),
-                  });
-                  if (!isPg) return;
-                  yield* Effect.acquireUseRelease(
+            await rls.run(
+              Effect.gen(function* () {
+                const sql = yield* SqlClient.SqlClient;
+                const isPg = yield* sql.onDialectOrElse({
+                  pg: () => Effect.succeed(true),
+                  orElse: () => Effect.succeed(false),
+                });
+                if (!isPg) return;
+                yield* Effect.acquireUseRelease(
+                  Effect.gen(function* () {
+                    yield* sql.unsafe(
+                      `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${PROBE_ROLE}') THEN CREATE ROLE ${PROBE_ROLE} NOLOGIN; END IF; END $$`,
+                    );
+                    yield* TestSql.prepareRlsProbe(PROBE_ROLE);
+                    yield* TenantScope.enableRls({
+                      plugins: declaredTables(config),
+                      includeKeyed: true,
+                    });
+                  }),
+                  () =>
                     Effect.gen(function* () {
-                      yield* sql.unsafe(
-                        `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${PROBE_ROLE}') THEN CREATE ROLE ${PROBE_ROLE} NOLOGIN; END IF; END $$`,
-                      );
-                      yield* TestSql.prepareRlsProbe(PROBE_ROLE);
-                      yield* TenantScope.enableRls({
-                        plugins: declaredTables(config),
-                        includeKeyed: true,
-                      });
-                    }),
-                    () =>
-                      Effect.gen(function* () {
-                        yield* asTenant(A, tableCase.insert);
-                        yield* asTenant(B, tableCase.insert);
-                        const count = (lifted: boolean) =>
-                          Effect.gen(function* () {
-                            yield* sql.unsafe(`SET LOCAL ROLE ${PROBE_ROLE}`);
-                            const counted = sql.unsafe<{ readonly n: string }>(
-                              `SELECT count(*)::text AS n FROM "${tableCase.table}"`,
-                            );
-                            const rows = yield* lifted
-                              ? counted.pipe(TenantScoped.lift(crossTenantWitness))
-                              : counted;
-                            return Number(rows[0]?.n ?? "0");
-                          }).pipe(TenantScope.withTenant(B));
-                        const confined = yield* count(false);
-                        const lifted = yield* count(true);
-                        if (!(confined > 0 && confined < lifted)) {
-                          framework.fail(
-                            `rls / ${tableCase.table}: tenant B saw ${confined} rows confined and ${lifted} lifted; expected 0 < confined < lifted`,
+                      yield* asTenant(A, tableCase.insert);
+                      yield* asTenant(B, tableCase.insert);
+                      const count = (lifted: boolean) =>
+                        Effect.gen(function* () {
+                          yield* sql.unsafe(`SET LOCAL ROLE ${PROBE_ROLE}`);
+                          const counted = sql.unsafe<{ readonly n: string }>(
+                            `SELECT count(*)::text AS n FROM "${tableCase.table}"`,
                           );
-                        }
-                        // A forged insert for tenant A inside tenant B's scope is refused by the database.
-                        const forged = yield* Effect.exit(
-                          Effect.gen(function* () {
-                            yield* sql.unsafe(`SET LOCAL ROLE ${PROBE_ROLE}`);
-                            return yield* asTenant(A, tableCase.insert);
-                          }).pipe(TenantScope.withTenant(B)),
+                          const rows = yield* lifted
+                            ? counted.pipe(TenantScoped.lift(crossTenantWitness))
+                            : counted;
+                          return Number(rows[0]?.n ?? "0");
+                        }).pipe(TenantScope.withTenant(B));
+                      const confined = yield* count(false);
+                      const lifted = yield* count(true);
+                      if (!(confined > 0 && confined < lifted)) {
+                        framework.fail(
+                          `rls / ${tableCase.table}: tenant B saw ${confined} rows confined and ${lifted} lifted; expected 0 < confined < lifted`,
                         );
-                        if (Exit.isSuccess(forged)) {
-                          framework.fail(
-                            `rls / ${tableCase.table}: an insert for tenant A succeeded inside tenant B's scope`,
-                          );
-                        }
-                      }),
-                    () => Effect.orDie(TenantScope.disableRls),
-                  );
-                }).pipe(Effect.provide(rls.layer)),
-              ),
+                      }
+                      // A forged insert for tenant A inside tenant B's scope is refused by the database.
+                      const forged = yield* Effect.exit(
+                        Effect.gen(function* () {
+                          yield* sql.unsafe(`SET LOCAL ROLE ${PROBE_ROLE}`);
+                          return yield* asTenant(A, tableCase.insert);
+                        }).pipe(TenantScope.withTenant(B)),
+                      );
+                      if (Exit.isSuccess(forged)) {
+                        framework.fail(
+                          `rls / ${tableCase.table}: an insert for tenant A succeeded inside tenant B's scope`,
+                        );
+                      }
+                    }),
+                  () => Effect.orDie(TenantScope.disableRls),
+                );
+              }),
             );
           },
         );

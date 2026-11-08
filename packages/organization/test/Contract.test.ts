@@ -2,7 +2,7 @@
 // for `Organization`.
 import { SessionLifecycle } from "@awthaq/api";
 import * as OrganizationApi from "../src/OrganizationApi.ts";
-import { TestAuth } from "@awthaq/test";
+import { RecordsContract, TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Layer from "effect/Layer";
 import * as Organization from "../src/Organization.ts";
@@ -11,6 +11,7 @@ const framework = TestAuth.throwingFramework(describe, it);
 
 TestAuth.runPluginContractTests(framework, () => Organization.Organization, {
   options: [{}],
+  records: { suite: "organization_records_contract", suites: RecordsContract.pending("10") },
   build: { services: Layer.empty },
 });
 
