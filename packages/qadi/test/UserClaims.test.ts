@@ -1,6 +1,8 @@
 // FAMS-004: the opt-in per-user custom-claims store (Firebase `setCustomUserClaims`, routed
-// through qadi). Both layers run the same contract; then a real policy reads a migrated
-// claim through the resolver.
+// through qadi): what `UserClaims` does over its store (shallow merge, events of keys only, the
+// erasure and export contributions, the resolver and a real policy reading a claim), once, on
+// memory; and plan 24 C7's domain regression on memory and SQL (Postgres under `pnpm test:pg`).
+// The store itself is `contract/UserClaims.ts`, run from `Contract.test.ts` (plan 25 ticket 24).
 import {
   AuditLog,
   Auth,
@@ -29,6 +31,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Scheduler from "effect/Scheduler";
 import * as AttributeResolvers from "../src/AttributeResolvers.ts";
 import * as Resolvers from "../src/Resolvers.ts";
 import * as UserClaims from "../src/UserClaims.ts";
@@ -59,154 +62,174 @@ const SqlLayer = withResolver(
 const alice = Users.UserId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
 const admin = Users.UserId("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
 
-const contract = (
-  name: string,
-  layer: Layer.Layer<
-    | UserClaims.UserClaims
-    | AttributeResolver
-    | AuditLog.AuditLog
-    | Erasure.ErasureRegistry
-    | DataExport.DataExportRegistry,
-    unknown,
-    never
-  >,
-) =>
-  describe(name, () => {
-    it.effect("a user with no claims reads as an empty record", () =>
+const layer = MemoryLayer;
+
+describe("UserClaims (memory)", () => {
+  it.effect("a user with no claims reads as an empty record", () =>
+    Effect.gen(function* () {
+      const claims = yield* UserClaims.UserClaims;
+      assert.deepStrictEqual(yield* claims.get(alice), {});
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("set replaces, merge is shallow, and a null value deletes a key", () =>
+    Effect.gen(function* () {
+      const claims = yield* UserClaims.UserClaims;
+      yield* claims.set(alice, { plan: "pro", seats: 3 });
+      assert.deepStrictEqual(yield* claims.get(alice), { plan: "pro", seats: 3 });
+
+      const merged = yield* claims.merge(alice, { seats: 5, beta: true });
+      assert.deepStrictEqual(merged, { plan: "pro", seats: 5, beta: true });
+
+      yield* claims.merge(alice, { beta: null });
+      assert.deepStrictEqual(yield* claims.get(alice), { plan: "pro", seats: 5 });
+
+      yield* claims.set(alice, { only: "this" });
+      assert.deepStrictEqual(yield* claims.get(alice), { only: "this" });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("delete clears every claim; claims are per user", () =>
+    Effect.gen(function* () {
+      const claims = yield* UserClaims.UserClaims;
+      yield* claims.set(alice, { plan: "pro" });
+      yield* claims.set(admin, { plan: "free" });
+      yield* claims.delete(alice);
+      assert.deepStrictEqual(yield* claims.get(alice), {});
+      assert.deepStrictEqual(yield* claims.get(admin), { plan: "free" });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect(
+    "a real change publishes auth.user.claimsUpdated with the keys and actor; a no-op publishes nothing",
+    () =>
       Effect.gen(function* () {
         const claims = yield* UserClaims.UserClaims;
-        assert.deepStrictEqual(yield* claims.get(alice), {});
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* claims.set(alice, { plan: "pro", seats: 3 }, { actorId: admin });
+        yield* claims.merge(alice, { seats: 3 }, { actorId: admin });
+        yield* claims.merge(alice, { seats: 4 }, { actorId: admin });
+        const recorded = yield* auditLog.list({ eventTag: "auth.user.claimsUpdated" });
+        assert.strictEqual(recorded.length, 2);
+        assert.deepStrictEqual(recorded[0]?.actorUserId, Option.some(admin));
+        const payloads = recorded.map((row) => JSON.stringify(row.payload));
+        // Keys only: claim values never enter the audit trail.
+        assert.isTrue(payloads.every((p) => !p.includes("pro")));
+        assert.isTrue(payloads.some((p) => p.includes("seats")));
       }).pipe(Effect.provide(layer)),
-    );
+  );
 
-    it.effect("set replaces, merge is shallow, and a null value deletes a key", () =>
+  // CSG-001: the plugin's layer registers its erasure contribution.
+  it.effect("registers a `claims` erasure that removes the user's claims document", () =>
+    Effect.gen(function* () {
+      const claims = yield* UserClaims.UserClaims;
+      const registry = yield* Erasure.ErasureRegistry;
+      yield* claims.set(alice, { plan: "pro" });
+      yield* claims.set(admin, { plan: "free" });
+      const contributions = yield* registry.contributions;
+      assert.deepStrictEqual(
+        contributions.map((c) => c.id),
+        ["claims"],
+      );
+      for (const c of contributions) yield* c.erase({ userId: alice, email: "alice@example.com" });
+      assert.deepStrictEqual(yield* claims.get(alice), {});
+      assert.deepStrictEqual(yield* claims.get(admin), { plan: "free" });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  // CSG-005: the plugin's section of the data-subject export.
+  it.effect("registers a `claims` export with the user's claims document", () =>
+    Effect.gen(function* () {
+      const claims = yield* UserClaims.UserClaims;
+      const registry = yield* DataExport.DataExportRegistry;
+      yield* claims.set(alice, { plan: "pro" });
+      yield* claims.set(admin, { plan: "free" });
+      const contribution = (yield* registry.contributions).find((c) => c.id === "claims");
+      assert.isDefined(contribution);
+      assert.deepStrictEqual(
+        yield* contribution!.collect({ userId: alice, email: "alice@example.com" }),
+        { claims: { plan: "pro" } },
+      );
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("the resolver answers `claims` for a user: subject, and nothing else", () =>
+    Effect.gen(function* () {
+      const claims = yield* UserClaims.UserClaims;
+      const resolver = yield* AttributeResolver;
+      yield* claims.set(alice, { plan: "pro" });
+      assert.deepStrictEqual(yield* resolver.resolve(makeSubjectId(`user:${alice}`), "claims"), {
+        plan: "pro",
+      });
+      assert.isUndefined(yield* resolver.resolve(makeSubjectId(`user:${alice}`), "email"));
+      assert.isUndefined(yield* resolver.resolve(makeSubjectId("apikey:k"), "claims"));
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect(
+    "a qadi policy on claims.plan allows or denies with the stored claim, no redeploy",
+    () =>
       Effect.gen(function* () {
         const claims = yield* UserClaims.UserClaims;
-        yield* claims.set(alice, { plan: "pro", seats: 3 });
-        assert.deepStrictEqual(yield* claims.get(alice), { plan: "pro", seats: 3 });
-
-        const merged = yield* claims.merge(alice, { seats: 5, beta: true });
-        assert.deepStrictEqual(merged, { plan: "pro", seats: 5, beta: true });
-
-        yield* claims.merge(alice, { beta: null });
-        assert.deepStrictEqual(yield* claims.get(alice), { plan: "pro", seats: 5 });
-
-        yield* claims.set(alice, { only: "this" });
-        assert.deepStrictEqual(yield* claims.get(alice), { only: "this" });
-      }).pipe(Effect.provide(layer)),
-    );
-
-    it.effect("delete clears every claim; claims are per user", () =>
-      Effect.gen(function* () {
-        const claims = yield* UserClaims.UserClaims;
-        yield* claims.set(alice, { plan: "pro" });
-        yield* claims.set(admin, { plan: "free" });
-        yield* claims.delete(alice);
-        assert.deepStrictEqual(yield* claims.get(alice), {});
-        assert.deepStrictEqual(yield* claims.get(admin), { plan: "free" });
-      }).pipe(Effect.provide(layer)),
-    );
-
-    it.effect(
-      "a real change publishes auth.user.claimsUpdated with the keys and actor; a no-op publishes nothing",
-      () =>
-        Effect.gen(function* () {
-          const claims = yield* UserClaims.UserClaims;
-          const auditLog = yield* AuditLog.AuditLog;
-          yield* claims.set(alice, { plan: "pro", seats: 3 }, { actorId: admin });
-          yield* claims.merge(alice, { seats: 3 }, { actorId: admin });
-          yield* claims.merge(alice, { seats: 4 }, { actorId: admin });
-          const recorded = yield* auditLog.list({ eventTag: "auth.user.claimsUpdated" });
-          assert.strictEqual(recorded.length, 2);
-          assert.deepStrictEqual(recorded[0]?.actorUserId, Option.some(admin));
-          const payloads = recorded.map((row) => JSON.stringify(row.payload));
-          // Keys only: claim values never enter the audit trail.
-          assert.isTrue(payloads.every((p) => !p.includes("pro")));
-          assert.isTrue(payloads.some((p) => p.includes("seats")));
-        }).pipe(Effect.provide(layer)),
-    );
-
-    // CSG-001: the plugin's layer registers its erasure contribution.
-    it.effect("registers a `claims` erasure that removes the user's claims document", () =>
-      Effect.gen(function* () {
-        const claims = yield* UserClaims.UserClaims;
-        const registry = yield* Erasure.ErasureRegistry;
-        yield* claims.set(alice, { plan: "pro" });
-        yield* claims.set(admin, { plan: "free" });
-        const contributions = yield* registry.contributions;
-        assert.deepStrictEqual(
-          contributions.map((c) => c.id),
-          ["claims"],
+        const isPro = hasAttribute(
+          UserClaims.claimsAttr("claims"),
+          fieldMatch("plan", eq(literal("pro"))),
         );
-        for (const c of contributions)
-          yield* c.erase({ userId: alice, email: "alice@example.com" });
-        assert.deepStrictEqual(yield* claims.get(alice), {});
-        assert.deepStrictEqual(yield* claims.get(admin), { plan: "free" });
-      }).pipe(Effect.provide(layer)),
-    );
-
-    // CSG-005: the plugin's section of the data-subject export.
-    it.effect("registers a `claims` export with the user's claims document", () =>
-      Effect.gen(function* () {
-        const claims = yield* UserClaims.UserClaims;
-        const registry = yield* DataExport.DataExportRegistry;
-        yield* claims.set(alice, { plan: "pro" });
-        yield* claims.set(admin, { plan: "free" });
-        const contribution = (yield* registry.contributions).find((c) => c.id === "claims");
-        assert.isDefined(contribution);
-        assert.deepStrictEqual(
-          yield* contribution!.collect({ userId: alice, email: "alice@example.com" }),
-          { claims: { plan: "pro" } },
-        );
-      }).pipe(Effect.provide(layer)),
-    );
-
-    it.effect("the resolver answers `claims` for a user: subject, and nothing else", () =>
-      Effect.gen(function* () {
-        const claims = yield* UserClaims.UserClaims;
+        // The real resolver goes innermost, so it (not the fail-closed default) answers.
         const resolver = yield* AttributeResolver;
-        yield* claims.set(alice, { plan: "pro" });
-        assert.deepStrictEqual(yield* resolver.resolve(makeSubjectId(`user:${alice}`), "claims"), {
-          plan: "pro",
-        });
-        assert.isUndefined(yield* resolver.resolve(makeSubjectId(`user:${alice}`), "email"));
-        assert.isUndefined(yield* resolver.resolve(makeSubjectId("apikey:k"), "claims"));
-      }).pipe(Effect.provide(layer)),
-    );
-
-    it.effect(
-      "a qadi policy on claims.plan allows or denies with the stored claim, no redeploy",
-      () =>
-        Effect.gen(function* () {
-          const claims = yield* UserClaims.UserClaims;
-          const isPro = hasAttribute(
-            UserClaims.claimsAttr("claims"),
-            fieldMatch("plan", eq(literal("pro"))),
-          );
-          // The real resolver goes innermost, so it (not the fail-closed default) answers.
-          const resolver = yield* AttributeResolver;
-          const askWith = evaluate(isPro).pipe(
-            Effect.provideService(AttributeResolver, resolver),
-            Effect.provide(
-              Layer.mergeAll(
-                EvaluationServicesNone,
-                currentSubjectLayer(makeSubject({ id: `user:${alice}` })),
-              ),
+        const askWith = evaluate(isPro).pipe(
+          Effect.provideService(AttributeResolver, resolver),
+          Effect.provide(
+            Layer.mergeAll(
+              EvaluationServicesNone,
+              currentSubjectLayer(makeSubject({ id: `user:${alice}` })),
             ),
-            Effect.map(isAllowed),
-          );
+          ),
+          Effect.map(isAllowed),
+        );
 
-          assert.isFalse(yield* askWith);
-          yield* claims.set(alice, { plan: "pro" });
-          assert.isTrue(yield* askWith);
-          yield* claims.merge(alice, { plan: "free" });
-          assert.isFalse(yield* askWith);
-        }).pipe(Effect.provide(layer)),
+        assert.isFalse(yield* askWith);
+        yield* claims.set(alice, { plan: "pro" });
+        assert.isTrue(yield* askWith);
+        yield* claims.merge(alice, { plan: "free" });
+        assert.isFalse(yield* askWith);
+      }).pipe(Effect.provide(layer)),
+  );
+});
+
+// Plan 24 C7 (plan 25 ticket 24): concurrent merges keep both keys and each publishes the key it changed. The
+// store's lock is the authority (`UserClaimsRecords.modify`); on Postgres it is what this case proves.
+for (const [name, store] of [
+  ["memory", MemoryLayer],
+  ["sql", SqlLayer],
+] satisfies ReadonlyArray<readonly [string, typeof MemoryLayer | typeof SqlLayer]>) {
+  describe(`UserClaims (${name}): concurrent merges`, () => {
+    it.effect("8 merges of distinct keys keep every key and publish 8 events, one key each", () =>
+      Effect.gen(function* () {
+        const claims = yield* UserClaims.UserClaims;
+        const auditLog = yield* AuditLog.AuditLog;
+        const keys = ["a", "b", "c", "d", "e", "f", "g", "h"];
+        yield* Effect.all(
+          keys.map((key) => claims.merge(alice, { [key]: 1 }, { actorId: admin })),
+          { concurrency: "unbounded" },
+        ).pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, 4));
+        assert.deepStrictEqual(Object.keys(yield* claims.get(alice)).sort(), keys);
+        const recorded = yield* auditLog.list({ eventTag: "auth.user.claimsUpdated" });
+        assert.deepStrictEqual(
+          recorded
+            .flatMap((row) => {
+              const payload = row.payload;
+              return typeof payload === "object" && payload !== null && "keys" in payload
+                ? [JSON.stringify(payload.keys)]
+                : [];
+            })
+            .sort(),
+          keys.map((key) => JSON.stringify([key])),
+        );
+      }).pipe(Effect.provide(store)),
     );
   });
-
-contract("UserClaims (layer, memory)", MemoryLayer);
-contract("UserClaims (layerSql)", SqlLayer);
+}
 
 describe("UserClaims composition", () => {
   it("is a plugin: Auth.make aggregates its table and migrations, and it contributes no groups", () => {
@@ -257,23 +280,5 @@ describe("UserClaims composition", () => {
         );
         assert.deepStrictEqual(announced, [["claims"]]);
       }),
-  );
-});
-
-// Plan 05 (ADR-EA-028): a store outage is the typed `StoreUnavailable`, never a defect.
-describe("UserClaims over records.sql: a store outage", () => {
-  it.effect("set fails with StoreUnavailable naming the operation", () =>
-    Effect.gen(function* () {
-      yield* TestSql.injectFailure({
-        name: "claims_fail_insert",
-        table: "claims_user",
-        event: "INSERT",
-      });
-      const claims = yield* UserClaims.UserClaims;
-      const failure = yield* claims
-        .set(Users.UserId("outage-user"), { plan: "pro" })
-        .pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "StoreUnavailable");
-    }).pipe(Effect.provide(SqlLayer)),
   );
 });

@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-21 |
-> | Revision | 1.4 |
+> | Revision | 1.5 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-012 callout to BEH-EA-161 and a note on unhandled same-attribute/relation resolver conflicts across plugins (CCR-EA-002) <br> 1.2 (2026-09-29): Banner replaced with per-behavior implementation pointers; BEH-EA-161's example rewritten to the shipped shape (no `plan` attribute; a user-table defect surfaces as `AttributeResolveError`); the same-attribute-resolver paragraph rewritten around `attributeResolverRegistry` (AAPS-007, RZS-007, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-165's `reauth` handler uses `Sessions.requireFresh` (BEH-EA-320) <br> 1.4 (2026-10-13): BEH-EA-162 note: relations read `OrganizationAuthority` (ADR-EA-040, architecture plan 04 phase 10) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added the INV-EA-012 callout to BEH-EA-161 and a note on unhandled same-attribute/relation resolver conflicts across plugins (CCR-EA-002) <br> 1.2 (2026-09-29): Banner replaced with per-behavior implementation pointers; BEH-EA-161's example rewritten to the shipped shape (no `plan` attribute; a user-table defect surfaces as `AttributeResolveError`); the same-attribute-resolver paragraph rewritten around `attributeResolverRegistry` (AAPS-007, RZS-007, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-165's `reauth` handler uses `Sessions.requireFresh` (BEH-EA-320) <br> 1.4 (2026-10-13): BEH-EA-162 note: relations read `OrganizationAuthority` (ADR-EA-040, architecture plan 04 phase 10) <br> 1.5 (2026-11-08): BEH-EA-161 note: the `claims` document's writes are serialised per user, so concurrent merges keep every key (plan 24 C7); its store runs the `RecordsContract` suite (plan 25 ticket 24) |
 ---
 
 > Implemented: BEH-EA-161 in `@awthaq/qadi`'s `Resolvers.UserAttributes`; BEH-EA-162 in `@awthaq/organization`'s `OrganizationQadi.relationships` (with the application's `ResourceOrganizationLookup`, layer `layerNone` by default; it reads `OrganizationAuthority`, the same computation as the plugin's own gating, ADR-EA-040); BEH-EA-163 by `@qadi/core`'s `relationshipResolverFromEdges`; BEH-EA-165 in `Resolvers` (`reauth`, `ObligationHandlers.reauth`). BEH-EA-164 (decision history over the audit table) is an example of what an application composes from `AuditLog`; awthaq ships no `DecisionHistory` layer of its own. Tests: `packages/qadi/test/Resolvers.test.ts`, `packages/organization/test/OrganizationQadi.test.ts`. The Gherkin scenarios in `features/` are `@skip @unwired`.
@@ -41,6 +41,8 @@ REQUIREMENT: An `AttributeResolver` backed by awthaq's user table MUST
 ```
 
 `usage-qadi.md` §6.1 draws the line precisely: the resolver returns `undefined` for an attribute it does not recognize (`type !== "user"`, or an unhandled attribute name), and maps every genuine failure — a database error reading `users.byId` — to a typed `AttributeResolveError` instead. Collapsing those two cases would make an outage of the user table indistinguishable from "this subject has no such attribute," turning an infrastructure failure into a silent authorization decision. The attribute set is what awthaq's user record carries (`email`, `emailVerified`, `name`); an application-specific attribute such as a billing plan belongs to the plugin or application that owns it, registered as its own resolver. A deleted user resolves `undefined`, a legitimate "no opinion" answer.
+
+The opt-in `UserClaims` plugin is such a resolver (`UserClaimsAttributes`, the `claims` attribute: one JSON document per user, FAMS-004). Its store rewrites a document as one step (`UserClaimsRecords.modify`): on SQL the read and the upsert run under the user's `SqlStore.atomically` lock (`qadi_claims:user:<id>`, plan 24 C7, plan 25 ticket 24), because a transaction alone let two concurrent merges on Postgres each read the same document, the second dropping the first one's key while both published `auth.user.claimsUpdated`. Concurrent merges now keep every key and each event names the keys its own write changed; the store's `RecordsContract` suite races 8 merges (`packages/qadi/test/contract/UserClaims.ts`), and `UserClaims.test.ts` races 8 through the plugin on memory and SQL.
 
 _Previous: [BEH-EA-160](20-qadi-bridge-path-b.md#beh-ea-160-both-bridges-share-one-wiring-root) | Next: [BEH-EA-162](21-qadi-resolvers-obligations.md#beh-ea-162-relationships-resolved-from-organization-membership)_
 

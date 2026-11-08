@@ -1,13 +1,8 @@
-// BAM-006 (.issues/high): proves `Roles.Roles.layer` over `Roles.records.sql` genuinely persists
-// role assignments — assign/revoke/listRoleNames round-trip through a real
-// SQLite database migrated via this plugin's own `Migrations.run`, not a
-// hand-rolled fixture, the same `packages/jwt/test/RevocationStore.test.ts`
-// precedent `BAM-002`'s own resolution established for admin/organization/
-// passkey. `assign` is idempotent at the database layer too (the
-// `UNIQUE(userId, role)` constraint this migration declares), mirroring
-// `layerMemory`'s own "assigning an already-held role name is a no-op"
-// contract — the one property `Roles.test.ts`'s in-memory suite cannot
-// itself prove.
+// `Roles.Roles.layer` over `Roles.records.sql`, through a real SQLite database (Postgres under `pnpm test:pg`)
+// migrated by this plugin's own `Migrations.run`: what the domain does over the SQL store (catalog drift observed
+// at resolve, `UnknownRole` writes nothing, only a real change is audited, the erasure and export contributions).
+// The store itself, idempotent `add`/`remove` and its outage label included, is `contract/RoleAssignments.ts`,
+// run from `Contract.test.ts` (plan 25 ticket 24).
 import {
   AuditLog,
   AuthEvents,
@@ -70,62 +65,6 @@ const CaptureLogs = Logger.layer([
 ]);
 
 describe("Roles.Roles.layer over Roles.records.sql", () => {
-  it.effect("assign persists a role assignment, listRoleNames reads it back", () =>
-    Effect.gen(function* () {
-      const roles = yield* Roles.Roles;
-      const userId = Users.UserId("11111111-1111-1111-1111-111111111111");
-      yield* roles.assign(userId, "owner");
-      const names = yield* roles.listRoleNames(userId);
-      assert.deepStrictEqual(names, ["owner"]);
-    }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect("assigning an already-held role name is a no-op, not a database error", () =>
-    Effect.gen(function* () {
-      const roles = yield* Roles.Roles;
-      const userId = Users.UserId("22222222-2222-2222-2222-222222222222");
-      yield* roles.assign(userId, "owner");
-      yield* roles.assign(userId, "owner");
-      const names = yield* roles.listRoleNames(userId);
-      assert.deepStrictEqual(names, ["owner"]);
-    }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect("revoke removes exactly the named role, not a different user's or role's row", () =>
-    Effect.gen(function* () {
-      const roles = yield* Roles.Roles;
-      const userA = Users.UserId("33333333-3333-3333-3333-333333333333");
-      const userB = Users.UserId("44444444-4444-4444-4444-444444444444");
-      yield* roles.assign(userA, "owner");
-      yield* roles.assign(userA, "editor");
-      yield* roles.assign(userB, "owner");
-      yield* roles.revoke(userA, "owner");
-      assert.deepStrictEqual(yield* roles.listRoleNames(userA), ["editor"]);
-      assert.deepStrictEqual(yield* roles.listRoleNames(userB), ["owner"]);
-    }).pipe(Effect.provide(TestLayer)),
-  );
-
-  // ECS-006: `awthaq seed admin` finds an existing administrator through `holders`.
-  it.effect("holders lists exactly the users holding the role", () =>
-    Effect.gen(function* () {
-      const roles = yield* Roles.Roles;
-      const userA = Users.UserId("66666666-6666-6666-6666-666666666666");
-      const userB = Users.UserId("77777777-7777-7777-7777-777777777777");
-      yield* roles.assign(userA, "owner");
-      yield* roles.assign(userB, "editor");
-      assert.deepStrictEqual(yield* roles.holders("owner"), [userA]);
-      assert.deepStrictEqual(yield* roles.holders("nobody"), []);
-    }).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect("a user with no assigned roles lists empty", () =>
-    Effect.gen(function* () {
-      const roles = yield* Roles.Roles;
-      const userId = Users.UserId("55555555-5555-5555-5555-555555555555");
-      assert.deepStrictEqual(yield* roles.listRoleNames(userId), []);
-    }).pipe(Effect.provide(TestLayer)),
-  );
-
   // RRM-003: drift after a catalog rename is observable, not silent.
   it.effect(
     "a stored name later removed from the catalog logs a warning at resolve and is listed",
@@ -230,22 +169,6 @@ describe("Roles.Roles.layer over Roles.records.sql", () => {
         yield* roleSection!.collect({ userId: mine, email: "m@example.com" }),
         { roles: ["owner"] },
       );
-    }).pipe(Effect.provide(TestLayer)),
-  );
-});
-
-// Plan 05 (ADR-EA-028): a store outage is the typed `StoreUnavailable`, never a defect.
-describe("Roles over Roles.records.sql: a store outage", () => {
-  it.effect("assign fails with StoreUnavailable naming the operation", () =>
-    Effect.gen(function* () {
-      yield* TestSql.injectFailure({
-        name: "roles_fail_insert",
-        table: "roles_assignments",
-        event: "INSERT",
-      });
-      const roles = yield* Roles.Roles;
-      const failure = yield* roles.assign(Users.UserId("outage-user"), "editor").pipe(Effect.flip);
-      assert.strictEqual(failure._tag, "StoreUnavailable");
     }).pipe(Effect.provide(TestLayer)),
   );
 });
