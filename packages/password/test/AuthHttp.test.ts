@@ -764,7 +764,7 @@ describe("AuthHttp + Password (real HTTP)", () => {
 
   // Plan 21 (ADR-EA-045): a bearer client follows `set-auth-token`; `changePassword` superseded the presented
   // token, so presenting it again is refresh-token reuse (RRS-003) and revokes the whole family.
-  it.effect.fails(
+  it.effect(
     "a bearer changePassword names the new token in set-auth-token, so a client following the header stays signed in",
     () =>
       Effect.gen(function* () {

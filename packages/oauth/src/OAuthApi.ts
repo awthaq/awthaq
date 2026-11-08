@@ -11,7 +11,7 @@
 // application's own frontend is the one place a user-facing "something
 // went wrong" redirect belongs, not this plugin.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
 import { HookPoint, Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -209,7 +209,7 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
         HookPoint.HookAborted,
         Hooks.TwoFactorRequired,
       ],
-    }),
+    }).middleware(SessionLifecycle.Mints),
   )
   .middleware(Api.OptionalAuthentication);
 
@@ -235,7 +235,7 @@ export const OAuthExchangeGroup = HttpApiGroup.make("oauth.exchange").add(
     payload: ExchangePayload,
     success: SessionContract.SessionDto,
     error: [OAuthCallbackFailed, Api.RateLimited, Api.StoreUnavailable],
-  }),
+  }).middleware(SessionLifecycle.Mints),
 );
 
 export const OAuthApi = HttpApi.make("auth").add(OAuthGroup).add(OAuthExchangeGroup);

@@ -20,7 +20,7 @@
 // - **The link carries its token in the URL fragment** (`baseUrl`/`link` config), so it is never sent
 //   to a server, logged or put in a `Referer`, and **no GET route consumes it** — see `MagicLinkApi.ts`.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract, type SessionLifecycle } from "@awthaq/api";
 import {
   AuthEvents,
   AuthPlugin,
@@ -48,6 +48,9 @@ import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Channel from "./Channel.ts";
 import * as MagicLinkApi from "./MagicLinkApi.ts";
+
+/** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type MagicLinkLifecycle = SessionLifecycle.Mints;
 
 // ---- config -----------------------------------------------------------------------------------------
 
@@ -185,7 +188,6 @@ export const MagicLinkHandlers = HttpApiBuilder.group(
       }) {
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          request,
           Effect.gen(function* () {
             const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
             return yield* magicLink.verify({ token: payload.token, ip }, context);

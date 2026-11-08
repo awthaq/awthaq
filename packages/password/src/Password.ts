@@ -7,7 +7,7 @@
 // transport) filled in and documented at each site rather than left to
 // silently die or guessed at without a comment explaining the choice.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
 import {
   CurrentUser,
   Accounts,
@@ -674,16 +674,14 @@ export const PasswordHandlers = HttpApiBuilder.group(
           };
         });
         // TMS-005: `conceal` answers 202 with no session for a fresh and an
-        // existing address alike (ADR-EA-026). It mints nothing, so it is the one
-        // endpoint outside `respond`; MNA-001's validation still runs first.
+        // existing address alike (ADR-EA-026). It mints nothing, so it declines the
+        // `Mints` declaration; the marker validated the delivery header before this ran.
         if ((yield* configNow).signUpEnumeration === "conceal") {
-          yield* SessionDelivery.mode(request);
+          yield* SessionDelivery.decline(SessionLifecycle.MintGrant);
           return yield* password.signUpConcealed(yield* signUpInput);
         }
-        // MNA-001: the delivery is validated before anything is minted.
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          request,
           Effect.flatMap(signUpInput, password.signUp),
         );
         return response;
@@ -698,7 +696,6 @@ export const PasswordHandlers = HttpApiBuilder.group(
       }) {
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          request,
           Effect.gen(function* () {
             // AGA-001/NHS-003: resolved through the application-provided
             // `ClientAddress` port rather than `request.remoteAddress`
@@ -810,7 +807,6 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
         const { principal } = yield* CurrentUser.current;
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          request,
           Effect.gen(function* () {
             const facts = yield* ClientAddress.facts(clientAddress, request);
             return yield* password.changePassword({

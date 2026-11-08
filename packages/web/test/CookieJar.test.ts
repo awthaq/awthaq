@@ -14,24 +14,15 @@
 // (`Users.rename`, `Sessions.issue` called directly) returns plain data, not
 // a `Response` — the type system already makes that misuse impossible to
 // even attempt, a stronger guarantee than a runtime assertion could give.
-import { Api } from "@awthaq/api";
-import {
-  AuditLog,
-  AuthEvents,
-  Hooks,
-  Persistence,
-  SessionCookie,
-  Sessions,
-  Users,
-} from "@awthaq/core";
-import { AuthHttp } from "@awthaq/server";
+import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
+import { AuthHttp, SessionDelivery } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
 import * as Etag from "effect/http/Etag";
 import * as HttpPlatform from "effect/http/HttpPlatform";
 import * as HttpRouter from "effect/http/HttpRouter";
@@ -212,7 +203,9 @@ describe("CookieJarLike — second-adapter fit (BO-010)", () => {
 
 describe("applyResponseCookies — a real HTTP response (BEH-EA-189)", () => {
   const LoginGroup = HttpApiGroup.make("login").add(
-    HttpApiEndpoint.post("login", "/login", { success: Schema.Void }),
+    HttpApiEndpoint.post("login", "/login", { success: SessionContract.SessionDto }).middleware(
+      SessionLifecycle.Mints,
+    ),
   );
   const LoginApi = HttpApi.make("with-next-cookies-test-login").add(LoginGroup);
 
@@ -228,7 +221,7 @@ describe("applyResponseCookies — a real HTTP response (BEH-EA-189)", () => {
           })
           .pipe(Effect.orDie);
         const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
-        yield* SessionCookie.set(session, token);
+        return yield* SessionDelivery.respond(Effect.succeed({ session, token }));
       }),
     }),
   );
@@ -247,6 +240,7 @@ describe("applyResponseCookies — a real HTTP response (BEH-EA-189)", () => {
   );
   const AppLayer = AuthHttp.routes(LoginApi, {}).pipe(
     Layer.provide(LoginHandlers),
+    Layer.provide(AuthHttp.sessionLifecycle),
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(TestServices),
     Layer.provideMerge(HttpRouter.layer),

@@ -25,7 +25,7 @@
 // own header comment for how the anonymous authenticate ceremony correlates
 // its two calls.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract, type SessionLifecycle } from "@awthaq/api";
 import {
   CurrentUser,
   Accounts,
@@ -68,6 +68,9 @@ import * as PasskeyCeremony from "./PasskeyCeremony.ts";
 import { PasskeyConfig, type PasskeyConfigShape } from "./PasskeyConfig.ts";
 import * as PasskeyCredentials from "./PasskeyCredentials.ts";
 import * as PasskeyUserHandles from "./PasskeyUserHandles.ts";
+
+/** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type PasskeyLifecycle = SessionLifecycle.Mints | SessionLifecycle.Refreshes;
 
 export { PasskeyConfig, config } from "./PasskeyConfig.ts";
 export type { AttestationPolicy, PasskeyConfigShape } from "./PasskeyConfig.ts";
@@ -360,7 +363,6 @@ export const PasskeyHandlers = Layer.mergeAll(
           // port (trusted-proxy aware), user agent from the header.
           // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
           const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-            request,
             Effect.gen(function* () {
               const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
               return yield* passkey.authenticateVerify({ ...payload, ip }, context);

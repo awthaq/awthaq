@@ -6,7 +6,9 @@
 // closed union of typed opt-in modes, and EVERY issuance site — password,
 // passkey, OAuth, admin, the Next adapter, the server's rotation delivery —
 // renders its `Set-Cookie` through `render` below, so no site can drift from
-// another and illegal combinations (a `__Host-` cookie with a `Domain`) are
+// another (ADR-EA-045: the writers that register a cookie on a response live in
+// `@awthaq/server`, behind `SessionDelivery`; this module is configuration and
+// pure rendering) and illegal combinations (a `__Host-` cookie with a `Domain`) are
 // unrepresentable by construction: only `SecureDomain` carries a `domain`,
 // and it renders the `__Secure-` prefix instead.
 
@@ -16,8 +18,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as HttpEffect from "effect/http/HttpEffect";
-import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { Api } from "@awthaq/api";
 
 /** BEH-EA-055 modes. The default is `Host`; the others are explicit, typed opt-ins. */
@@ -110,8 +110,11 @@ export interface RenderedCookie {
   readonly options: CookieOptions;
 }
 
-/** The mode-derived attributes shared by set and expire (no lifetime). */
-const baseOptions = (cfg: SessionCookieConfigShape): CookieOptions => {
+/**
+ * The mode-derived attributes shared by a write and an expiry (no lifetime). Exported for
+ * `@awthaq/server`, which owns every write of the session cookie onto a response (ADR-EA-045).
+ */
+export const baseOptions = (cfg: SessionCookieConfigShape): CookieOptions => {
   switch (cfg.mode._tag) {
     case "Host":
       return { secure: true, httpOnly: true, path: "/", sameSite: "strict" };
@@ -169,49 +172,6 @@ export const render = (
     const now = yield* DateTime.now;
     return renderAt(cfg, Redacted.value(token), session.absoluteExpiresAt, now, kind);
   });
-
-/**
- * Registers the session cookie on whatever response this request ends with
- * (success or typed error), the way `HttpApiBuilder.securitySetCookie` does —
- * the one call every issuing handler makes. An unencodable cookie is a
- * defect: the name, attributes and token are all this library's own.
- */
-export const set = (
-  session: { readonly absoluteExpiresAt: DateTime.Utc },
-  token: Redacted.Redacted<string>,
-  kind: CookieKind = "session",
-) =>
-  render(session, token, kind).pipe(
-    Effect.flatMap((cookie) =>
-      HttpEffect.appendPreResponseHandler((_request, response) =>
-        HttpServerResponse.setCookie(response, cookie.name, cookie.value, cookie.options).pipe(
-          Effect.orDie,
-        ),
-      ),
-    ),
-  );
-
-/**
- * CSS-002: expires the session cookie on the response — same name, `Path`,
- * `Domain`, `Secure` and `SameSite` as the write (a mismatch and the browser
- * keeps the cookie). Best-effort: an encoding failure leaves the response as
- * it was, since expiry is hygiene and must never fail the request that
- * triggered it.
- */
-const expireKind = (kind: CookieKind) =>
-  Effect.gen(function* () {
-    const cfg = yield* SessionCookieConfig;
-    yield* HttpEffect.appendPreResponseHandler((_request, response) =>
-      HttpServerResponse.expireCookie(response, cookieName(cfg, kind), baseOptions(cfg)).pipe(
-        Effect.catch(() => Effect.succeed(response)),
-      ),
-    );
-  });
-
-export const expire = expireKind("session");
-
-/** APS-006: expires the impersonation cookie (`stopImpersonating`), handing the browser back to the admin's own session cookie. */
-export const expireImpersonation = expireKind("impersonation");
 
 /**
  * AGA-004: the CSRF cookie's cross-site attributes follow the session

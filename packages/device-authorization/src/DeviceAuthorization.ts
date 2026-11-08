@@ -25,7 +25,7 @@
 // listed and expired like every other session, and a second factor or a policy hook applies exactly as it does to a
 // password sign-in.
 
-import { Api } from "@awthaq/api";
+import { Api, type SessionLifecycle } from "@awthaq/api";
 import {
   Assurance,
   AuthEvents,
@@ -62,6 +62,9 @@ import * as DeviceAuthorizationApi from "./DeviceAuthorizationApi.ts";
 import * as DeviceClientRecords from "./DeviceClientRecords.ts";
 import * as DeviceGrantRecords from "./DeviceGrantRecords.ts";
 import * as UserCode from "./UserCode.ts";
+
+/** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type DeviceAuthorizationLifecycle = SessionLifecycle.Mints;
 
 // ---- config: a Context.Reference with a default (ADR-EA-011) ---------------------------------------------------------
 
@@ -554,8 +557,9 @@ export const DeviceAuthorizationHandlers = Layer.mergeAll(
             },
             context,
           );
-          // MNA-001: a device has no cookie jar — the session always travels as a bearer token, `no-store`.
-          const delivered = yield* SessionDelivery.deliver("bearer", redeemed);
+          // MNA-001/RFC 8628: a device has no cookie jar — the session always travels as a bearer token
+          // (`SessionLifecycle.Mints` makes the response `no-store`).
+          const delivered = yield* SessionDelivery.deliverBearer(redeemed);
           if (delivered.token === undefined) {
             return yield* Defects.invariantViolation(
               "DeviceTokenNotDelivered",

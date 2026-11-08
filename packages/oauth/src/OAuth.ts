@@ -21,7 +21,7 @@
 // calling the provider's API on the user's behalf never handles a raw
 // token directly.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
 import {
   Accounts,
   AuthEvents,
@@ -48,7 +48,7 @@ import {
   RateLimiter,
   SqlTransaction,
 } from "@awthaq/ports";
-import { Session } from "@awthaq/server";
+import { Session, SessionDelivery } from "@awthaq/server";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
@@ -538,18 +538,12 @@ const OAuthFlowHandlers = HttpApiBuilder.group(
         const response = bounce
           ? bouncePage(outcome.callbackURL)
           : HttpServerResponse.redirect(outcome.callbackURL);
+        // ADR-EA-045: the session cookie rides the navigation through `SessionDelivery.redirect`; a landing
+        // that mints nothing (an account link, a native deep link, a refused callback) declines `Mints`.
         if (outcome.session !== undefined) {
-          const cookie = yield* SessionCookie.render(
-            outcome.session.session,
-            outcome.session.token,
-          );
-          return yield* HttpServerResponse.setCookie(
-            response,
-            cookie.name,
-            cookie.value,
-            cookie.options,
-          ).pipe(Effect.orDie);
+          return yield* SessionDelivery.redirect(response, outcome.session);
         }
+        yield* SessionDelivery.decline(SessionLifecycle.MintGrant);
         return response;
       }),
     });
@@ -572,17 +566,16 @@ const OAuthExchangeHandlers = HttpApiBuilder.group(
         request: HttpServerRequest.HttpServerRequest;
       }) {
         const address = yield* ClientAddress.address(clientAddress, request);
-        // Holds a live token: never cacheable (MAPS-008).
-        yield* HttpEffect.appendPreResponseHandler((_request, response) =>
-          Effect.succeed(HttpServerResponse.setHeader(response, "cache-control", "no-store")),
-        );
         // Typed local so declaration emit can name `SessionDto` (TS2883).
         const session: SessionContract.SessionDto = yield* oauth.exchange({
           code: payload.code,
           ...(payload.codeVerifier === undefined ? {} : { codeVerifier: payload.codeVerifier }),
           ...address,
         });
-        return session;
+        // MNA-003/ADR-EA-045: the token rides `set-auth-token` too; `SessionLifecycle.Mints` makes it `no-store`.
+        const delivered: SessionContract.SessionDto =
+          yield* SessionDelivery.deliverExchanged(session);
+        return delivered;
       }),
     });
   }),

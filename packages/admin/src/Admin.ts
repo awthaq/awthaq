@@ -10,7 +10,7 @@
 // The admin gate (configuration in force, predicates, denial events, target lookup) is the one
 // internal module `./internal/AdminGate.ts`; this plugin never reads `AdminConfig` itself.
 
-import { AccountContract, Api, SessionContract } from "@awthaq/api";
+import { AccountContract, Api, SessionContract, SessionLifecycle } from "@awthaq/api";
 import {
   CurrentUser,
   AuditChain,
@@ -21,11 +21,10 @@ import {
   EffectiveConfig,
   Errors,
   Migrations,
-  SessionCookie,
   Sessions,
   Users,
 } from "@awthaq/core";
-import { Session } from "@awthaq/server";
+import { Session, SessionDelivery } from "@awthaq/server";
 import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -260,9 +259,6 @@ const toRecordDto = (
     tenantId: Option.getOrNull(record.tenantId),
   });
 
-/** APS-006: expires the impersonation cookie so the browser reverts to the admin's own session cookie. */
-const clearImpersonationCookie = SessionCookie.expireImpersonation;
-
 export const AdminHandlers = HttpApiBuilder.group(
   AdminApi.AdminApi,
   "admin",
@@ -283,20 +279,23 @@ export const AdminHandlers = HttpApiBuilder.group(
           reason: payload.reason,
         });
         // APS-006: a cookie of its own — the admin's `__Host-session` stays
-        // untouched and `Authentication` prefers this one while it lives.
-        yield* SessionCookie.set(issued.session, issued.token, "impersonation");
+        // untouched and `Authentication` prefers this one while it lives (`SessionLifecycle.Swaps`,
+        // cookie only: a bearer request was refused before this ran).
+        yield* SessionDelivery.swapIn(issued);
         return sessionResponse(issued.session);
       }),
       stopImpersonating: Effect.fnUntraced(function* () {
         const { principal: caller } = yield* CurrentUser.current;
         yield* admin.stopImpersonating(caller);
-        yield* clearImpersonationCookie;
+        // APS-006: expiring the impersonation cookie hands the browser back to the admin's own session.
+        yield* SessionDelivery.swapOut;
       }),
       forceStop: Effect.fnUntraced(function* ({ params }: { params: AdminApi.SessionIdParams }) {
         const { principal: caller } = yield* CurrentUser.current;
         yield* admin.forceStop(caller, params.sessionId);
         // APS-006: ending one's own current episode must hand the browser back.
-        if (params.sessionId === caller.sessionId) yield* clearImpersonationCookie;
+        if (params.sessionId === caller.sessionId) yield* SessionDelivery.swapOut;
+        else yield* SessionDelivery.decline(SessionLifecycle.SwapGrant);
       }),
       effectiveConfig: Effect.fnUntraced(function* () {
         const { principal: caller } = yield* CurrentUser.current;

@@ -8,7 +8,7 @@
 // plugin's own package (`spec/overview.md`: "Each plugin's own groups,
 // schemas, errors, and contract `HttpApi`").
 
-import { Api, EmailContract, SessionContract } from "@awthaq/api";
+import { Api, EmailContract, SessionContract, SessionLifecycle } from "@awthaq/api";
 import { HookPoint, Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -239,7 +239,7 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // from a `Hooks.BeforeSignUp` veto tap (e.g. an email-domain
       // allow-list).
       // MNA-001: `Api.InvalidTokenDelivery` (400) for an unrecognised
-      // `X-Awthaq-Token-Delivery` value.
+      // `X-Awthaq-Token-Delivery` value is declared by `SessionLifecycle.Mints` (ADR-EA-045).
       error: [
         WeakPassword,
         EmailAlreadyExists,
@@ -247,9 +247,8 @@ export const PasswordGroup = HttpApiGroup.make("password")
         HookPoint.HookAborted,
         // ADR-EA-038: the first session is a cleared sign-in, so a divert tap can ask for a second factor.
         Hooks.TwoFactorRequired,
-        Api.InvalidTokenDelivery,
       ],
-    }),
+    }).middleware(SessionLifecycle.Mints),
   )
   .add(
     HttpApiEndpoint.post("signIn", "/password/sign-in", {
@@ -261,7 +260,7 @@ export const PasswordGroup = HttpApiGroup.make("password")
       // (a future `TwoFactor` plugin) diverts. NAM-002: `HookPoint.HookAborted`
       // from a `Hooks.BeforeSignIn` veto tap.
       // SCP-001: `Users.UserSuspended` when `Users.assertCanSignIn` refuses.
-      // MNA-001: `Api.InvalidTokenDelivery` for an unrecognised `X-Awthaq-Token-Delivery` value.
+      // MNA-001: `Api.InvalidTokenDelivery` comes with `SessionLifecycle.Mints` (ADR-EA-045).
       error: [
         Api.InvalidCredentials,
         EmailNotVerified,
@@ -269,9 +268,8 @@ export const PasswordGroup = HttpApiGroup.make("password")
         Api.RateLimited,
         HookPoint.HookAborted,
         Hooks.TwoFactorRequired,
-        Api.InvalidTokenDelivery,
       ],
-    }),
+    }).middleware(SessionLifecycle.Mints),
   )
   .add(
     HttpApiEndpoint.post("requestReset", "/password/request-reset", {
@@ -364,8 +362,8 @@ export const PasswordAccountGroup = HttpApiGroup.make("password.account")
       // response carries the new session the same way signUp/signIn's do.
       success: SessionContract.SessionDto,
       // Ticket 14: rate-limited.
-      error: [WrongPassword, WeakPassword, Api.RateLimited, Api.InvalidTokenDelivery],
-    }),
+      error: [WrongPassword, WeakPassword, Api.RateLimited],
+    }).middleware(SessionLifecycle.Rotates),
   )
   .add(
     // BAM-009: the requesting half — mails a confirmation token to the *new* address (never the
@@ -393,7 +391,7 @@ export const PasswordAccountGroup = HttpApiGroup.make("password.account")
     HttpApiEndpoint.post("reauthenticate", "/password/reauthenticate", {
       payload: ReauthenticatePayload,
       error: [WrongPassword, Api.RateLimited],
-    }),
+    }).middleware(SessionLifecycle.Refreshes),
   )
   .middleware(Api.Authentication)
   .middleware(Api.CsrfProtection);

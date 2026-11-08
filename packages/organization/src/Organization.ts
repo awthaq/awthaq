@@ -13,7 +13,7 @@
 // as a separate, additive export — this file does not need to anticipate
 // their shape.
 
-import { Api } from "@awthaq/api";
+import { Api, type SessionLifecycle } from "@awthaq/api";
 import {
   AuthEvents,
   AuthPlugin,
@@ -55,6 +55,9 @@ import * as OrganizationTeams from "./OrganizationTeams.ts";
 import type { OrganizationShape } from "./OrganizationShape.ts";
 import { ownsEmail } from "./internal/invitee.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
+
+/** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type OrganizationLifecycle = SessionLifecycle.Refreshes;
 
 // ---- cross-organization witnesses (plan 05, ADR-EA-018 decision 10) ----------------------
 //

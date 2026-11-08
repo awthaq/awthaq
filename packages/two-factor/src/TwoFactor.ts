@@ -22,7 +22,7 @@
 //
 // See `README.md` for the full recipe and `test/` for a working composition.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract, type SessionLifecycle } from "@awthaq/api";
 import {
   CurrentUser,
   AuthPlugin,
@@ -59,6 +59,9 @@ import {
   records as twoFactorRecords,
   secretColumn,
 } from "./TwoFactorStore.ts";
+
+/** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type TwoFactorLifecycle = SessionLifecycle.Mints;
 
 // ---- the markers: what makes forgetting a gate a compile error --------------------------------
 
@@ -305,7 +308,6 @@ export const TwoFactorHandlers = Layer.mergeAll(
       ) {
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          request,
           Effect.gen(function* () {
             const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
             return yield* run(ip, context);

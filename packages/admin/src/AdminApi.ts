@@ -6,7 +6,7 @@
 // (including `list`) requires a real, already-authenticated caller, gated
 // again by `AdminConfig.canImpersonate` inside the handler itself.
 
-import { AccountContract, Api, SessionContract } from "@awthaq/api";
+import { AccountContract, Api, SessionContract, SessionLifecycle } from "@awthaq/api";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
@@ -265,20 +265,20 @@ export const AdminGroup = HttpApiGroup.make("admin")
         AdminAlreadyImpersonating,
         AdminTargetNotFound,
       ],
-    }),
+    }).middleware(SessionLifecycle.Swaps),
   )
   .add(
     HttpApiEndpoint.post("stopImpersonating", "/admin/stop-impersonating", {
       success: HttpApiSchema.Empty(204),
       error: AdminImpersonationNotFound,
-    }),
+    }).middleware(SessionLifecycle.Swaps),
   )
   .add(
     HttpApiEndpoint.post("forceStop", "/admin/force-stop/:sessionId", {
       params: SessionIdParams,
       success: HttpApiSchema.Empty(204),
       error: [AdminImpersonationDenied, AdminImpersonationNotFound],
-    }),
+    }).middleware(SessionLifecycle.Swaps),
   )
   .add(
     HttpApiEndpoint.get("list", "/admin", {

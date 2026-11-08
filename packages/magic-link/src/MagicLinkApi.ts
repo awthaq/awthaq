@@ -15,7 +15,7 @@
 // `MagicLinkConsumed` (410, BEH-EA-059's shape): unknown, expired, replayed and foreign tokens are
 // indistinguishable.
 
-import { Api, EmailContract, SessionContract } from "@awthaq/api";
+import { Api, EmailContract, SessionContract, SessionLifecycle } from "@awthaq/api";
 import { HookPoint, Hooks, Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -60,10 +60,8 @@ export const MagicLinkGroup = HttpApiGroup.make("magicLink")
         Hooks.TwoFactorRequired,
         // SCP-001: `Users.assertCanSignIn` refused.
         Users.UserSuspended,
-        // MNA-001: an unrecognised `X-Awthaq-Token-Delivery` value.
-        Api.InvalidTokenDelivery,
       ],
-    }),
+    }).middleware(SessionLifecycle.Mints),
   )
   // Public and anonymous by design, but still unsafe-method endpoints a browser reaches: CSRF-worth
   // protecting the same as `PasswordApi.ts`'s public `signIn`.

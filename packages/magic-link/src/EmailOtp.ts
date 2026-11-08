@@ -28,7 +28,7 @@
 // never an account's only factor, recorded as `sms` (not `otp`) so a policy can rank it lower, and
 // emitting a distinguishable audit event.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract, type SessionLifecycle } from "@awthaq/api";
 import {
   AuthEvents,
   AuthPlugin,
@@ -55,6 +55,9 @@ import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Channel from "./Channel.ts";
 import * as EmailOtpApi from "./EmailOtpApi.ts";
+
+/** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type EmailOtpLifecycle = SessionLifecycle.Mints;
 
 // ---- config -----------------------------------------------------------------------------------------
 
@@ -183,7 +186,6 @@ export const EmailOtpHandlers = HttpApiBuilder.group(
       }) {
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          request,
           Effect.gen(function* () {
             const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
             return yield* emailOtp.verify(

@@ -17,7 +17,7 @@
 // branches on `_tag`. The two secrets a response can carry (the enrolment secret, the fresh
 // recovery codes) are shown exactly once, in the body of the response that creates them.
 
-import { Api, SessionContract } from "@awthaq/api";
+import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
 import { Users } from "@awthaq/core";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -123,22 +123,15 @@ export const TwoFactorGroup = HttpApiGroup.make("two_factor")
         Api.RateLimited,
         // The account was suspended between the first factor and this one (SCP-001).
         Users.UserSuspended,
-        Api.InvalidTokenDelivery,
       ],
-    }),
+    }).middleware(SessionLifecycle.Mints),
   )
   .add(
     HttpApiEndpoint.post("verifyRecovery", "/two-factor/verify-recovery", {
       payload: VerifyRecoveryPayload,
       success: SessionContract.SessionDto,
-      error: [
-        InvalidTwoFactorCode,
-        SecondFactorLocked,
-        Api.RateLimited,
-        Users.UserSuspended,
-        Api.InvalidTokenDelivery,
-      ],
-    }),
+      error: [InvalidTwoFactorCode, SecondFactorLocked, Api.RateLimited, Users.UserSuspended],
+    }).middleware(SessionLifecycle.Mints),
   )
   .middleware(Api.CsrfProtection);
 

@@ -26,7 +26,7 @@
 // ceiling (BEH-EA-316, `SamlRoleMapping`). Not offered, by decision (spec/behaviors/29-saml-sp.md BEH-EA-244, ADR-EA-036):
 // IdP-initiated LOGIN and encrypted assertions.
 
-import { Api } from "@awthaq/api";
+import { Api, type SessionLifecycle } from "@awthaq/api";
 import {
   CurrentUser,
   AuthEvents,
@@ -38,7 +38,6 @@ import {
   Migrations,
   RateLimits,
   Retention,
-  SessionCookie,
   Sessions,
   SignIn,
   Tenant,
@@ -63,6 +62,7 @@ import {
   OrganizationDirectory,
   OrganizationMembers,
 } from "@awthaq/organization";
+import { SessionDelivery } from "@awthaq/server";
 import { TenantScoped } from "@awthaq/sql";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -97,6 +97,9 @@ import * as SamlRecords from "./SamlRecords.ts";
 import * as SamlRoleMapping from "./SamlRoleMapping.ts";
 import * as SamlSlo from "./SamlSlo.ts";
 import * as SamlSpKeys from "./SamlSpKeys.ts";
+
+/** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type SamlLifecycle = SessionLifecycle.Mints | SessionLifecycle.Ends;
 
 /** The session-row sweep covers every connection's sign-ins. */
 const sweepGrant = TenantScoped.crossTenant(
@@ -486,13 +489,11 @@ export const SamlHandlers = HttpApiBuilder.group(
           cookieState: request.cookies[REQUEST_COOKIE],
           ...facts,
         });
-        const cookie = yield* SessionCookie.render(outcome.session.session, outcome.session.token);
-        return yield* HttpServerResponse.setCookie(
+        // ADR-EA-045: the session cookie rides the redirect through `SessionDelivery` (`SessionLifecycle.Mints`).
+        return yield* SessionDelivery.redirect(
           HttpServerResponse.redirect(outcome.callbackURL),
-          cookie.name,
-          cookie.value,
-          cookie.options,
-        ).pipe(Effect.orDie);
+          outcome.session,
+        );
       }),
 
       slo: Effect.fnUntraced(function* ({
@@ -590,8 +591,9 @@ export const SamlAccountHandlers = HttpApiBuilder.group(
           callbackURL: payload.callbackURL,
           ip: Option.getOrUndefined(resolved),
         });
-        // The caller's own session ended, so its cookie is expired, whatever the IdP does next.
-        yield* SessionCookie.expire;
+        // The caller's own session ended (`SessionLifecycle.Ends`), so its cookie is expired and a bearer
+        // client told so, whatever the IdP does next.
+        yield* SessionDelivery.end;
         if (started._tag === "local") return HttpServerResponse.redirect(started.callbackURL);
         const response =
           started._tag === "redirect"

@@ -14,8 +14,9 @@
 // single `HttpRouter.toWebHandler(AppLayer)` runtime is built once and
 // reused for both requests, since each independent build would otherwise
 // own its own, unrelated `Sessions`/`Users` state.
-import { Api } from "@awthaq/api";
-import { Auth, AuthPlugin, SessionCookie, Sessions, Users } from "@awthaq/core";
+import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
+import { SessionDelivery } from "@awthaq/server";
+import { Auth, AuthPlugin, Sessions, Users } from "@awthaq/core";
 import { assert, describe, expectTypeOf, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -30,7 +31,11 @@ import { TestAuth } from "@awthaq/test";
 class Whoami extends Schema.Class<Whoami>("Whoami")({ subjectId: Schema.String }) {}
 
 const WhoamiGroup = HttpApiGroup.make("whoami")
-  .add(HttpApiEndpoint.post("login", "/login", { success: Schema.Void }))
+  .add(
+    HttpApiEndpoint.post("login", "/login", { success: SessionContract.SessionDto }).middleware(
+      SessionLifecycle.Mints,
+    ),
+  )
   .add(HttpApiEndpoint.get("get", "/whoami", { success: Whoami }))
   .middleware(AuthorizedSubject.AuthorizedSubject)
   .middleware(Api.OptionalAuthentication);
@@ -49,7 +54,7 @@ const WhoamiHandlers = HttpApiBuilder.group(
           .create({ identity: { _tag: "Email", email: "whoami@example.com" }, name: "Whoami" })
           .pipe(Effect.orDie);
         const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
-        yield* SessionCookie.set(session, token);
+        return yield* SessionDelivery.respond(Effect.succeed({ session, token }));
       }),
       get: Effect.fnUntraced(function* () {
         const subject = yield* CurrentSubject;

@@ -55,7 +55,7 @@ const App = AuthHost.layer(auth, {
 
 ## Session delivery
 
-A plugin handler that mints a session answers through `SessionDelivery.respond(request, mint)`: it validates `X-Awthaq-Token-Delivery` first (an unknown value is `InvalidTokenDelivery` and `mint` never runs), runs `mint`, then delivers the session as a cookie (the default) or, for `bearer`, as the response body's `token` with `Cache-Control: no-store`. Only an endpoint that mints no session (a concealed sign-up) calls `SessionDelivery.mode` on its own.
+An endpoint that changes the caller's session declares it on the contract with a `SessionLifecycle` marker (`Mints`, `Rotates`, `Ends`, `Swaps`, `Refreshes`; ADR-EA-045). `AuthHttp.middlewareFor` (and so `AuthHost.layer`) derives the markers' server half like the other host middleware; a hand-wired composition provides `AuthHttp.sessionLifecycle`. The marker validates `X-Awthaq-Token-Delivery` before the handler runs, makes the response `Cache-Control: no-store`, and provides the grant `SessionDelivery` requires: `respond(mint)` delivers a minted session as a cookie or, for `bearer`, as the body's `token` and the `set-auth-token` header; `end` expires the session and answers `x-awthaq-session-ended`; `redirect`, `deliverBearer`, `deliverExchanged`, `swapIn`, `swapOut` and `decline` cover the rest. A successful response that settles nothing is a defect. `AuthHttp.cors` exposes both response headers.
 
 ## Deployment checklist
 

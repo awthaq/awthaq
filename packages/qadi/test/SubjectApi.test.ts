@@ -4,9 +4,9 @@
 // carries) — proving the real, exported `SubjectApi`/`SubjectHandlers`
 // actually serve a decodable `SubjectDto`, not just that the underlying
 // `AuthorizedSubject` middleware chain resolves a subject in memory.
-import { SubjectContract } from "@awthaq/api";
-import { Auth, SessionCookie, Sessions, Users } from "@awthaq/core";
-import { AuthHttp } from "@awthaq/server";
+import { SubjectContract, SessionContract, SessionLifecycle } from "@awthaq/api";
+import { Auth, Sessions, Users } from "@awthaq/core";
+import { AuthHttp, SessionDelivery } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -26,7 +26,9 @@ import { TestAuth } from "@awthaq/test";
 // `extraGroups` beside the `UserClaims` plugin through the composition a host builds. `HttpApiBuilder.group`'s
 // handler tag is keyed by the composed api's id, so the login group is declared against `auth`.
 const LoginGroup = HttpApiGroup.make("login").add(
-  HttpApiEndpoint.post("login", "/login", { success: Schema.Void }),
+  HttpApiEndpoint.post("login", "/login", { success: SessionContract.SessionDto }).middleware(
+    SessionLifecycle.Mints,
+  ),
 );
 const LoginApi = HttpApi.make("auth").add(LoginGroup);
 
@@ -45,7 +47,7 @@ const LoginHandlers = HttpApiBuilder.group(
           })
           .pipe(Effect.orDie);
         const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
-        yield* SessionCookie.set(session, token);
+        return yield* SessionDelivery.respond(Effect.succeed({ session, token }));
       }),
     });
   }),

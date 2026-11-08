@@ -10,7 +10,7 @@ import { CurrentUser, Sessions } from "@awthaq/core";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
-import { expireSessionCookie } from "./internal/SessionCookie.ts";
+import * as SessionCookie from "./internal/SessionCookie.ts";
 import { toSessionDto as mapSessionDto } from "./internal/SessionDto.ts";
 import * as SessionDelivery from "./SessionDelivery.ts";
 
@@ -55,7 +55,8 @@ export const SessionHandlers = HttpApiBuilder.group(
           // middleware's verify and this read — a concurrent revoke, not a
           // server fault. Answer what the caller needs to act on: a typed
           // 401 and an expired cookie, so its session atom clears.
-          yield* expireSessionCookie;
+          // Not a lifecycle event (the credential was already dead): undeclared hygiene, not `SessionDelivery`.
+          yield* SessionCookie.expire;
           return yield* Effect.fail(new Api.Unauthenticated());
         }
         return toDto({ ...item.value, current: true });

@@ -7,8 +7,9 @@
 // enforces a policy carrying `reauth(...)` declares it in `error:` and a client
 // decodes it — the very schema asserted against below — telling a reauth demand
 // (with its window) apart from a plain permission denial.
-import { Api } from "@awthaq/api";
-import { Auth, AuthPlugin, SessionCookie, Sessions, Users } from "@awthaq/core";
+import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
+import { SessionDelivery } from "@awthaq/server";
+import { Auth, AuthPlugin, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import { allOf, enforce, EvaluationServicesNone, obliged } from "@qadi/core";
 import * as Effect from "effect/Effect";
@@ -26,7 +27,9 @@ import { TestAuth } from "@awthaq/test";
 // A window of 0 makes any elapsed time "stale" without needing a test clock the
 // router's own runtime would not share; a wide window is never stale.
 const LoginGroup = HttpApiGroup.make("login").add(
-  HttpApiEndpoint.post("login", "/login", { success: Schema.Void }),
+  HttpApiEndpoint.post("login", "/login", { success: SessionContract.SessionDto }).middleware(
+    SessionLifecycle.Mints,
+  ),
 );
 
 const StaleGroup = HttpApiGroup.make("reauth")
@@ -70,7 +73,7 @@ const LoginHandlers = HttpApiBuilder.group(
           .create({ identity: { _tag: "Email", email: "reauth@example.com" }, name: "Reauth" })
           .pipe(Effect.orDie);
         const { token, session } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
-        yield* SessionCookie.set(session, token);
+        return yield* SessionDelivery.respond(Effect.succeed({ session, token }));
       }),
     });
   }),

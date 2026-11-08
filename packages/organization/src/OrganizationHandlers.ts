@@ -3,7 +3,7 @@
 // The HTTP handlers of the `organization` group: wire decoding, DTO mapping and a call into the
 // authorized interface. Built over a service tag so this file never imports the plugin class.
 
-import { Api } from "@awthaq/api";
+import { Api, type SessionLifecycle } from "@awthaq/api";
 import { CurrentUser, Users } from "@awthaq/core";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -18,6 +18,13 @@ import type { OrganizationShape } from "./OrganizationShape.ts";
 import * as OrganizationRecords from "./OrganizationRecords.ts";
 import * as OrgRoleRecords from "./OrgRoleRecords.ts";
 import * as TeamRecords from "./TeamRecords.ts";
+
+/**
+ * ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer
+ * types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope).
+ * @public
+ */
+export type OrganizationHandlersLifecycle = SessionLifecycle.Refreshes;
 
 /** GC-003: the user-tier caller, as the `Api.UserPrincipal` the authorized interface takes (`Api` also lets declaration emit name the middleware requirements, TS2883). */
 const currentCaller = Effect.map(
