@@ -67,6 +67,7 @@ suites=(
   packages/organization/test/DomainClaims.test.ts
   packages/organization/test/InvitationRecords.test.ts
   packages/organization/test/MembershipRecords.test.ts
+  packages/organization/test/OrganizationMembers.test.ts
   packages/organization/test/OrgRoleRecords.test.ts
   packages/organization/test/OrganizationRecords.test.ts
   packages/organization/test/OrganizationSql.test.ts

@@ -12,6 +12,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as TestClock from "effect/testing/TestClock";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
@@ -142,6 +143,31 @@ const suite = (
         assert.isTrue(Option.isNone(found));
         const failure = yield* records.remove(userA, orgId).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "MembershipRecordNotFound");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // BEH-EA-285 (plan 25 tickets 02–03): the owner count and the write are one step on every adapter.
+    it.effect("8 owners removing one another concurrently leave exactly one", () =>
+      Effect.gen(function* () {
+        const records = yield* MembershipRecords.MembershipRecords;
+        const owners = Array.from({ length: 8 }, (_, index) => Users.UserId(`owner-${index}`));
+        for (const owner of owners) {
+          yield* records.create({ userId: owner, organizationId: orgId, role: ["owner"] });
+        }
+        const outcomes = yield* Effect.all(
+          owners.map((owner) =>
+            Effect.map(Effect.result(records.remove(owner, orgId)), (result): string =>
+              Result.isFailure(result) ? result.failure._tag : "ok",
+            ),
+          ),
+          { concurrency: "unbounded" },
+        );
+        assert.strictEqual(yield* records.countOwners(orgId), 1);
+        assert.strictEqual(outcomes.filter((outcome) => outcome === "ok").length, 7);
+        assert.deepStrictEqual(
+          outcomes.filter((outcome) => outcome !== "ok"),
+          ["MembershipRecords/LastOwner"],
+        );
       }).pipe(Effect.provide(layer)),
     );
 
