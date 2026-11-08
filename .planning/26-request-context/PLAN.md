@@ -1515,3 +1515,28 @@ Phase 2 (tickets 06–08, one commit):
   `RequestContext.RequestContextLive`; 17 test files' groups that declare an authentication middleware gained
   `.middleware(Api.RequestContext)`.
 - The OpenAPI document of `examples/memory-server` is byte-identical to the baseline.
+
+Phases 3–6:
+
+- **Ticket 09** split `Sessions.issue` into a private `issueRecording(input, recorded)` already in phase 3, so the legacy
+  bridge passed the legacy row's facts exactly (not merged with the presenting request's) from the start.
+- **Tickets 13–20 declare `Api.AuthRequestContext` in each plugin member's `R`** while core still read the context
+  optionally (phase 4), so plan 27's module is born with the requirement and the in-process tests changed once. The
+  plugin probes are one `ADR-EA-047` case in each package's HTTP suite (`AuthHttp.test.ts`, `SamlHttp.test.ts` for
+  SAML). The api-key probe proves one bucket per address, not two addresses (one app has one fixed `clientAddress`).
+- **`Channel.failed`** (magic-link) carries `SignIn.failed` to both plugins; **SamlSlo's `rateLimit` dep** is an
+  `Effect`; **DeviceAuthorization's `Source`** type is gone.
+- **Ticket 23:** `Key.ip`'s input is `{ readonly ip?: never }`, not `Schema.Struct({})`: an empty object type disables
+  the excess-property check, so `spend("xByIp", { ip })` would still have compiled. The erased runtime treats an
+  omitted input as `{}`, and an ip rule spent with no context dies `RateLimitRequestContextMissing` (unreachable
+  through the typed handle). `bucketKey` returns a string still (`R = never` rules always apply).
+- **No new BEH ids.** `spec:verify:strict` requires contiguous BEH ids and BEH-EA-345 is reserved for plan 27, so the
+  plan's BEH-EA-RC1/RC2/RC3 are paragraphs of BEH-EA-065 (09), BEH-EA-054 (07), BEH-EA-193 (25), with BEH-EA-101,
+  108, 209 and 322 revised. ADR-EA-047 is written; 010, 012, 037, 038 and 042 gained a Related line; the glossary has
+  **Request context** and **No request**.
+- **BDD:** five scenarios, REQ-EA-1400..1404, in `09-authentication-middleware.feature` under one `@BEH-EA-065` Rule
+  (correlation, the session's address and user agent, the compile gate, a `noRequest` session, a `noRequest` job not
+  throttled per source). The "fails with a fixed context" check of ticket 27 was not run.
+- **Doctor (Q8):** `request-context-missing`, a warning per endpoint; the CLI's Widget fixture declares the
+  middleware so its one finding stays the CSRF gap.
+- **Postgres** was down for the whole run (`127.0.0.1:55499` refused); `pnpm test:pg` was not run locally.

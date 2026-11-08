@@ -344,6 +344,7 @@ const contextHandlers = HttpApiBuilder.group(contextApi, "context", (handlers) =
 // A group whose handler reads the request context, served without the populator, leaves `Api.RequestContext`
 // an unmet requirement: the layer cannot be launched.
 // @ts-expect-error - `Api.RequestContext` (the request context's populator) is still required
+// @effect-diagnostics-next-line missingLayerContext:off
 export const servedWithoutRequestContext: Layer.Layer<never, never, never> = contextHandlers;
 export const servedWithRequestContext = contextHandlers.pipe(
   Layer.provide(RequestContext.RequestContextLive),

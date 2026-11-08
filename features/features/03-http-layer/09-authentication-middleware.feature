@@ -166,3 +166,37 @@ Feature: Authentication Middleware
       When a request presenting both a valid bearer token and a valid session cookie is authenticated
       Then the bearer handler is tried first
       And the try-order changed only because the declaration itself changed
+
+  # ADR-EA-047 — spec/behaviors/09-authentication-middleware.md (the request context runs first), 07-sessions.md, 14-rate-limiting.md
+  @BEH-EA-065
+  Rule: Every request awthaq serves carries one request context, captured once at its edge; in-process work states that it answers none
+
+    @REQ-EA-1400
+    Scenario: Every event one request raises shares one correlation id
+      Given a composition served with the request context, whose clients resolve to "198.51.100.30"
+      When a person signs up over HTTP with request id "req-bdd-1" and user agent "BddBrowser/1"
+      Then every audit row that request caused carries the correlation id "req-bdd-1"
+
+    @REQ-EA-1401
+    Scenario: A session minted over HTTP records the client's address and user agent
+      Given a composition served with the request context, whose clients resolve to "198.51.100.31"
+      When a person signs up over HTTP with request id "req-bdd-2" and user agent "BddBrowser/2"
+      Then the session records the address "198.51.100.31" and the user agent "BddBrowser/2"
+
+    @REQ-EA-1402
+    Scenario: A composition that serves awthaq's routes without the request-context middleware does not compile
+      Given a group whose handler reads the request context
+      When it is served without the request context's populator
+      Then the composition does not compile
+
+    @REQ-EA-1403
+    Scenario: A session minted by in-process work with no request records no address
+      Given a composition served with the request context, whose clients resolve to "198.51.100.32"
+      When in-process work that answers no request mints a session
+      Then the session records no address and no user agent
+
+    @REQ-EA-1404
+    Scenario: Work that answers no request is not throttled per source, and is still throttled per identity
+      Given a composition served with the request context, whose clients resolve to "198.51.100.33"
+      When in-process work that answers no request asks for 6 password resets for one address
+      Then the per-address rule refuses the 6th, and no per-source rule was applied

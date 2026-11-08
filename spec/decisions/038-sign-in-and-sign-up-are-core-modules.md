@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-038 |
-> | Revision | 1.2 |
+> | Revision | 1.3 |
 > | Effective Date | 2026-10-13 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-13): Initial release (architecture plan 01) <br> 1.1 (2026-10-13): every sign-in and sign-up site is migrated and guarded; status Accepted — implemented <br> 1.2 (2026-10-18): a federated sign-in reaches `SignUp` through `FederatedIdentity` (ADR-EA-043) |
+> | Change History | 1.0 (2026-10-13): Initial release (architecture plan 01) <br> 1.1 (2026-10-13): every sign-in and sign-up site is migrated and guarded; status Accepted — implemented <br> 1.2 (2026-10-18): a federated sign-in reaches `SignUp` through `FederatedIdentity` (ADR-EA-043) <br> 1.3 (2026-11-08): Related: ADR-EA-047, request facts are read from `AuthRequestContext` (architecture plan 26) |
 
 ---
 
@@ -49,3 +49,5 @@ The suspension gate was deliberately a plain call and not a hook ([BEH-EA-046](.
 ## Related
 
 [ADR-EA-033](033-hook-registries-per-composition.md) (Decision 5 is made true by this ADR), [ADR-EA-028](028-infrastructure-error-policy.md) (no `orDie` on sign-in or sign-up), [ADR-EA-037](037-unit-of-work-releases-events-on-commit.md) (events follow the commit), [ADR-EA-031](031-erasure-registry-and-retention.md), [ADR-EA-012](012-slots-exclusive-registries-aggregate.md) (continuations aggregate), [ADR-EA-043](043-federated-identity-resolution.md) (federated resolution sits above `SignUp`).
+
+[ADR-EA-047](047-request-facts-from-auth-request-context.md): `SignIn` and `SignUp.createSignedIn` take no request facts; they read `Api.AuthRequestContext`, and `SignIn.failed` is the one publisher of `auth.user.signInFailed`.

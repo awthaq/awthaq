@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-GLOSSARY |
-> | Revision | 1.12 |
+> | Revision | 1.13 |
 > | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) <br> 1.7 (2026-10-18): External identity, Email trust and Federated identity resolution (architecture plan 14) <br> 1.8 (2026-10-18): Credential carrier and Tier; CurrentPrincipal names `CurrentUser.current` as the user-tier read (architecture plan 11) <br> 1.9 (2026-10-18): Link purpose; VerificationToken names `VerificationLink.redeemer` (architecture plan 18) <br> 1.10 (2026-10-18): Sealed column (architecture plan 17) <br> 1.11 (2026-11-08): AuthHost; Port: what the composition owns is not a port; Auth.make is served with `AuthHost.layer`; TestAuth is `AuthHost.layer` over test ports (ADR-EA-044, architecture plan 15) <br> 1.12 (2026-11-08): Session lifecycle (ADR-EA-045, architecture plan 21) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) <br> 1.7 (2026-10-18): External identity, Email trust and Federated identity resolution (architecture plan 14) <br> 1.8 (2026-10-18): Credential carrier and Tier; CurrentPrincipal names `CurrentUser.current` as the user-tier read (architecture plan 11) <br> 1.9 (2026-10-18): Link purpose; VerificationToken names `VerificationLink.redeemer` (architecture plan 18) <br> 1.10 (2026-10-18): Sealed column (architecture plan 17) <br> 1.11 (2026-11-08): AuthHost; Port: what the composition owns is not a port; Auth.make is served with `AuthHost.layer`; TestAuth is `AuthHost.layer` over test ports (ADR-EA-044, architecture plan 15) <br> 1.12 (2026-11-08): Session lifecycle (ADR-EA-045, architecture plan 21) <br> 1.13 (2026-11-08): Added **Request context** and **No request** (ADR-EA-047, architecture plan 26) |
 
 ---
 
@@ -93,6 +93,14 @@ The domain service that composes awthaq's CSRF defenses into one strategy chain,
 ### TestAuth
 
 The testing harness's entry point (`@awthaq/test`): `TestAuth.layer` runs the whole plugin pipeline — the same `Auth.make` composition an application uses — over an in-memory backend, so a plugin author's tests exercise the real contract and Layer graph rather than a stand-in. See: [BEH-EA-193](behaviors/25-testing-harness.md#beh-ea-193-testauthlayer-is-the-whole-pipeline-over-memory). It is `AuthHost.layer` over test ports ([BEH-EA-342](behaviors/25-testing-harness.md#beh-ea-342-testauthlayer-is-authhostlayer-over-the-test-ports)).
+
+### Request context
+
+The facts of the HTTP request a piece of work answers (a correlation id, the client address, the capped user agent), captured once by the `RequestContext` middleware every awthaq group declares outermost and read from `Api.AuthRequestContext`. Sessions, rate limits, events and audit rows all read this one value; no interface takes an address or a user agent. See: [ADR-EA-047](decisions/047-request-facts-from-auth-request-context.md).
+
+### No request
+
+The request context of in-process work (a CLI command, a job, a test), stated explicitly with `Api.AuthRequestContext.noRequest`: a session records no address or user agent, an ip-keyed rate-limit rule does not apply, and an event carries no request facts. See: [ADR-EA-047](decisions/047-request-facts-from-auth-request-context.md).
 
 ### Redacted
 

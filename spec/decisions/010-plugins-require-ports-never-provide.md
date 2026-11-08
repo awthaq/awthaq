@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-010 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-11-08 |
 > | Status | Accepted — implemented (enforced at the type level by `Auth.make`, JH-008) |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Corrected the bcrypt example to the shipped verify-only `LegacyPasswordVerifiers` mechanism (SAM-002) <br> 1.2 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) <br> 1.3 (2026-11-08): Decision: what the composition owns is not a port; `AuthHost` provides it and never a port (ADR-EA-044, architecture plan 15) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Corrected the bcrypt example to the shipped verify-only `LegacyPasswordVerifiers` mechanism (SAM-002) <br> 1.2 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006) <br> 1.3 (2026-11-08): Decision: what the composition owns is not a port; `AuthHost` provides it and never a port (ADR-EA-044, architecture plan 15) <br> 1.4 (2026-11-08): Related: ADR-EA-047, request facts are read from `AuthRequestContext` (architecture plan 26) |
 
 ---
 
@@ -35,3 +35,7 @@ What the composition owns (core services, records bundles, hook points, registri
 **Negative**: Every application must explicitly provide every port a plugin (transitively) requires before `Layer.launch` will accept the composed Layer — there is no "one plugin came with a reasonable default hasher built in" convenience; ports left unprovided remain visible in `auth.layer`'s `RIn` (as PRD §9.2's table notes: "a port has no implementation" fails at `Layer.launch`), which is caught early but does add boilerplate to every application's setup relative to a model where a sensible default plugin could have supplied it.
 
 **Trade-off accepted**: awthaq trades the convenience of a plugin shipping its own working port default for the guarantee that port selection is always an explicit, visible, application-level decision — accepting that every new application must wire up `PasswordHasher`, `Mailer`, and any other required port itself, rather than inheriting an implicit choice from whichever plugin happened to bundle one.
+
+## Related
+
+[ADR-EA-047](047-request-facts-from-auth-request-context.md): no plugin requires `ClientAddress` any more; its one consumer is `@awthaq/server`'s request-context middleware, so the topology choice is the host's alone.
