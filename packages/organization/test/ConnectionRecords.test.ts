@@ -1,9 +1,13 @@
 // EP-004 (ADR-EA-018): `ConnectionRecords`, the `organization_oauth_connection`
 // store — one contract suite over both layers, `layerSql` migrated through the
 // plugin's own real `migrations` (and, under `pnpm run test:pg`, on Postgres).
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Migrations } from "@awthaq/core";
 import { SealedColumn } from "@awthaq/sql";
 import { TestAuth } from "@awthaq/test";
+import * as LibsqlClient from "@effect/sql-libsql/LibsqlClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -180,6 +184,27 @@ const suite = (
 
 suite("ConnectionRecords (layerMemory)", MemoryLayer);
 suite("ConnectionRecords (layerSql)", SqlLayer);
+
+// Plan 28: libSQL reports a duplicate domain as a `ConstraintError`, not a `UniqueViolation`, so the
+// same suite runs on a libSQL file (a fresh one per layer build, removed when its scope closes).
+const LibsqlLive = Layer.unwrap(
+  Effect.map(
+    Effect.acquireRelease(
+      Effect.sync(() => mkdtempSync(join(tmpdir(), "awthaq-connection-records-libsql-"))),
+      (dir) => Effect.sync(() => rmSync(dir, { recursive: true, force: true })),
+    ),
+    (dir) => LibsqlClient.layer({ url: `file:${join(dir, "auth.db")}` }),
+  ),
+);
+const LibsqlLayer = ConnectionRecords.layerSql.pipe(
+  Layer.provide(EncryptionLive),
+  Layer.provideMerge(
+    Layer.effectDiscard(Migrations.run(Organization.Organization.migrations)).pipe(
+      Layer.provideMerge(LibsqlLive),
+    ),
+  ),
+);
+suite("ConnectionRecords (layerSql, libSQL)", LibsqlLayer);
 
 // Plan 05: the tenant-isolation conformance suite. `organization_oauth_connection` and its domain
 // table are both Keyed by `organizationId`: a method that takes an organization id can only reach that
