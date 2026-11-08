@@ -2,6 +2,7 @@
 // group is a thin shell over (the HTTP wiring is `SamlAdminHttp.test.ts`). Fail-closed and tenant-scoped, IdP metadata imported from
 // XML or a URL (the fetch itself is `SamlMetadataFetcher.test.ts`), the trust set replaced by a refresh, the SP signing key rotated,
 // and every successful mutation audited by identifiers only.
+import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import { AuditLog, Tenant } from "@awthaq/core";
 import { RateLimiter } from "@awthaq/ports";
@@ -117,7 +118,7 @@ describe("the gate is fail-closed", () => {
           "Acme Okta",
         );
         assert.deepStrictEqual(yield* auditTags("auth.saml."), []);
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -140,6 +141,7 @@ describe("the gate is fail-closed", () => {
         assert.strictEqual(refusedList._tag, "SamlActionDenied");
         assert.strictEqual(mine.organizationId, acme.id);
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           SamlLive({
             // The gate is asked with the organization for create/list; by-id operations are gated on the action alone.
@@ -162,7 +164,7 @@ describe("the gate is fail-closed", () => {
         const fake = yield* ops.getConnection(admin, "nope").pipe(Effect.flip);
         assert.strictEqual(real._tag, "SamlActionDenied");
         assert.strictEqual(fake._tag, "SamlActionDenied");
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect("past the gate each administrator is limited per window", () =>
@@ -181,6 +183,7 @@ describe("the gate is fail-closed", () => {
       });
       yield* ops.listConnections(other, acme.id);
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         SamlLive(
           { canManageSaml: allow, adminRate: { limit: 2, window: Duration.minutes(1) } },
@@ -213,7 +216,7 @@ describe("registering a connection", () => {
       assert.deepStrictEqual(created.spCertificates, []);
       assert.deepStrictEqual(created.roleCeiling, ["member"]);
       assert.deepStrictEqual(yield* auditTags("auth.saml."), ["auth.saml.connectionCreated"]);
-    }).pipe(Effect.provide(SamlLive({ canManageSaml: allow }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive({ canManageSaml: allow }))),
   );
 
   it.effect(
@@ -245,7 +248,7 @@ describe("registering a connection", () => {
         assert.isTrue(created.authnRequestsSigned);
         assert.strictEqual(created.spCertificates.length, 1);
         assert.isNull(created.metadataUrl);
-      }).pipe(Effect.provide(SamlLive({ canManageSaml: allow }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive({ canManageSaml: allow }))),
   );
 
   it.effect(
@@ -288,7 +291,10 @@ describe("registering a connection", () => {
           _tag: "SamlMetadataUnavailable",
           failure: "timeout",
         });
-      }).pipe(Effect.provide(SamlLive({ canManageSaml: allow }, undefined, fetcher.layer)));
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(SamlLive({ canManageSaml: allow }, undefined, fetcher.layer)),
+      );
     },
   );
 
@@ -337,7 +343,7 @@ describe("registering a connection", () => {
         assert.include(yield* refuse({}, { entityId: "   " }), "entity id is empty");
         const records = yield* SamlRecords.SamlRecords;
         assert.deepStrictEqual(yield* records.listByOrganization(acme.id), []);
-      }).pipe(Effect.provide(SamlLive({ canManageSaml: allow }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive({ canManageSaml: allow }))),
   );
 
   it.effect(
@@ -355,7 +361,7 @@ describe("registering a connection", () => {
           domain: "acme.example",
         });
         assert.deepStrictEqual(yield* ops.listConnections(admin, globex.id), []);
-      }).pipe(Effect.provide(SamlLive({ canManageSaml: allow }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive({ canManageSaml: allow }))),
   );
 });
 
@@ -400,7 +406,7 @@ describe("editing and removing a connection", () => {
           "auth.saml.connectionUpdated",
           "auth.saml.connectionDeleted",
         ]);
-      }).pipe(Effect.provide(SamlLive({ canManageSaml: allow }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive({ canManageSaml: allow }))),
   );
 
   it.effect("a refused or failed operation publishes no mutation event", () =>
@@ -416,7 +422,7 @@ describe("editing and removing a connection", () => {
       yield* ops.deleteConnection(admin, "missing").pipe(Effect.flip);
       yield* ops.rotateSigningKey(admin, "missing", {}).pipe(Effect.flip);
       assert.deepStrictEqual(yield* auditTags("auth.saml."), ["auth.saml.connectionCreated"]);
-    }).pipe(Effect.provide(SamlLive({ canManageSaml: allow }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive({ canManageSaml: allow }))),
   );
 });
 
@@ -461,7 +467,7 @@ describe("scoped to the ambient tenant", () => {
         const mine = yield* asAcme(ops.createConnection(admin, handBuilt(acme.id)));
         assert.strictEqual((yield* asAcme(ops.listConnections(admin, acme.id))).length, 1);
         assert.strictEqual(mine.organizationId, acme.id);
-      }).pipe(Effect.provide(SamlLive({ canManageSaml: allow }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive({ canManageSaml: allow }))),
   );
 });
 
@@ -513,7 +519,10 @@ describe("refreshing the metadata", () => {
         assert.strictEqual(refreshed.sloUrl, "https://idp.example.com/slo");
         // The old key's signatures stop at once, the new key's start.
         assert.strictEqual(yield* signIn(idp, "_old"), "SamlAssertionRejected");
-      }).pipe(Effect.provide(SamlLive({ canManageSaml: allow }, undefined, fetcher.layer)));
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(SamlLive({ canManageSaml: allow }, undefined, fetcher.layer)),
+      );
     },
   );
 
@@ -569,7 +578,10 @@ describe("refreshing the metadata", () => {
           _tag: "SamlMetadataUnavailable",
           failure: "tooLarge",
         });
-      }).pipe(Effect.provide(SamlLive({ canManageSaml: allow }, undefined, fetcher.layer)));
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(SamlLive({ canManageSaml: allow }, undefined, fetcher.layer)),
+      );
     },
   );
 });
@@ -590,7 +602,7 @@ describe("the SP signing key", () => {
       );
       assert.notInclude(JSON.stringify([key, listed]), "PRIVATE KEY");
       assert.include(yield* auditTags("auth.saml."), "auth.saml.signingKeyRotated");
-    }).pipe(Effect.provide(SamlLive({ canManageSaml: allow }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive({ canManageSaml: allow }))),
   );
 
   it.effect(
@@ -618,6 +630,6 @@ describe("the SP signing key", () => {
           .rotateSigningKey(admin, created.id, { privateKeyPem: idp.key })
           .pipe(Effect.flip);
         assert.strictEqual(half._tag, "InvalidSamlConnectionRequest");
-      }).pipe(Effect.provide(SamlLive({ canManageSaml: allow }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive({ canManageSaml: allow }))),
   );
 });

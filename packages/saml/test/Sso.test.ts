@@ -2,6 +2,7 @@
 // BEH-EA-317 (spec/behaviors/29-saml-sp.md, ADR-EA-023 Decision 4): the `Sso` dispatcher. An email domain (or an organization id) routes
 // to an organization's OIDC connection or its SAML connection, and the answer is the URL of the owning protocol plugin's own login
 // route; which protocol wins when both route the same hint is configured, and `discoverAll` shows the conflict instead of hiding it.
+import { TestAuth } from "@awthaq/test";
 import { AuthHttp, RequestContext } from "@awthaq/server";
 import { Organization, OrganizationActor, OrganizationConnections } from "@awthaq/organization";
 import { ConnectionRecords } from "@awthaq/organization/records";
@@ -82,7 +83,7 @@ describe("routing an email domain", () => {
         organizationId,
         loginUrl: `/auth/saml/login?connection=${connection.id}&callbackURL=%2Fdash%20board`,
       });
-    }).pipe(Effect.provide(SsoLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SsoLive())),
   );
 
   it.effect(
@@ -101,7 +102,7 @@ describe("routing an email domain", () => {
           route.loginUrl,
           `/oauth/${encodeURIComponent(view.providerId)}/authorize`,
         );
-      }).pipe(Effect.provide(SsoLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SsoLive())),
   );
 
   it.effect(
@@ -119,7 +120,7 @@ describe("routing an email domain", () => {
           Option.getOrThrow(yield* dispatcher.discover({ organizationId: other.id })).protocol,
           "oidc",
         );
-      }).pipe(Effect.provide(SsoLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SsoLive())),
   );
 
   it.effect(
@@ -138,7 +139,7 @@ describe("routing an email domain", () => {
         ]) {
           assert.isTrue(Option.isNone(yield* dispatcher.discover(hint)), JSON.stringify(hint));
         }
-      }).pipe(Effect.provide(SsoLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SsoLive())),
   );
 });
 
@@ -163,7 +164,7 @@ describe("when both protocols route the same hint", () => {
         Option.getOrThrow(yield* dispatcher.discover({ email: "ada@acme.example" })).protocol,
         "saml",
       );
-    }).pipe(Effect.provide(SsoLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SsoLive())),
   );
 
   it.effect("the configured preference decides, in discover and in the order of discoverAll", () =>
@@ -178,7 +179,7 @@ describe("when both protocols route the same hint", () => {
         Option.getOrThrow(yield* dispatcher.discover({ email: "ada@acme.example" })).protocol,
         "oidc",
       );
-    }).pipe(Effect.provide(SsoLive({}, "oidc"))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SsoLive({}, "oidc"))),
   );
 });
 
@@ -190,21 +191,31 @@ describe("the start endpoint", () => {
         yield* atNow;
         const dispatcher = yield* sso;
         yield* seedConnection({ emailDomains: ["acme.example"] });
-        const found = yield* dispatcher.start({ email: "ada@acme.example" }, "203.0.113.9");
+        const found = yield* dispatcher
+          .start({ email: "ada@acme.example" })
+          .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }));
         assert.strictEqual(found.protocol, "saml");
         const missing = yield* dispatcher
-          .start({ email: "ada@nowhere.example" }, "203.0.113.9")
+          .start({ email: "ada@nowhere.example" })
+          .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }))
           .pipe(Effect.flip);
         assert.deepStrictEqual(JSON.parse(JSON.stringify(missing)), { _tag: "SsoNotFound" });
-        const empty = yield* dispatcher.start({}, "203.0.113.9").pipe(Effect.flip);
+        const empty = yield* dispatcher
+          .start({})
+          .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }))
+          .pipe(Effect.flip);
         assert.deepStrictEqual(JSON.parse(JSON.stringify(empty)), { _tag: "SsoNotFound" });
         // Two calls made, two more would be a third and a fourth: the budget is 3 per window for this address.
         const limited = yield* dispatcher
-          .start({ email: "ada@acme.example" }, "203.0.113.9")
+          .start({ email: "ada@acme.example" })
+          .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }))
           .pipe(Effect.flip);
         assert.strictEqual(limited._tag, "RateLimited");
-        yield* dispatcher.start({ email: "ada@acme.example" }, "203.0.113.10");
+        yield* dispatcher
+          .start({ email: "ada@acme.example" })
+          .pipe(TestAuth.withRequest({ ip: "203.0.113.10" }));
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           SsoLive(
             {
@@ -245,6 +256,7 @@ describe("the start endpoint", () => {
                 const scope = yield* Effect.scope;
                 const context = yield* Layer.buildWithMemoMap(Live, memoMap, scope);
                 return yield* seedConnection({ emailDomains: ["acme.example"] }).pipe(
+                  TestAuth.withoutRequest,
                   Effect.provide(context),
                 );
               }),

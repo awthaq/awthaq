@@ -1,6 +1,7 @@
 // BEH-EA-238 through 245 (spec/behaviors/29-saml-sp.md), through the service: SP-initiated login, then the ACS
 // chain against signed responses the fixtures' IdP produces — and against every way of getting one wrong. The
 // invariant asserted throughout: every rejection is the SAME `SamlAssertionRejected`, and never a session.
+import { TestAuth } from "@awthaq/test";
 import { Accounts, Auth, AuthEvents, RateLimits, Users } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
 import { OrganizationRecords } from "@awthaq/organization/records";
@@ -47,7 +48,9 @@ import { Rendezvous } from "@awthaq/test";
 const grant = TenantScoped.crossTenant("test: a cross-organization caller");
 
 const acs = (samlResponse: string, cookieState: string | undefined, ip?: string) =>
-  Effect.flatMap(Saml.Saml, (saml) => saml.acs({ samlResponse, cookieState, ip }));
+  Effect.flatMap(Saml.Saml, (saml) =>
+    saml.acs({ samlResponse, cookieState }).pipe(TestAuth.withRequest({ ip })),
+  );
 
 /** The failing tag of an ACS call that must fail. */
 const rejectedAs = (samlResponse: string, cookieState: string | undefined) =>
@@ -78,7 +81,7 @@ describe("SP-initiated login", () => {
         // The cookie state is `<identifier>.<secret>`; the secret is not the request id.
         assert.notInclude(started.state, started.requestId);
         assert.match(started.state, /^saml-request:[0-9a-f-]+\.[^.]+$/);
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -97,7 +100,7 @@ describe("SP-initiated login", () => {
           (yield* saml.metadata("nope").pipe(Effect.flip))._tag,
           "SamlConnectionNotFound",
         );
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect("an untrusted callbackURL falls back to the default; a trusted origin is kept", () =>
@@ -123,6 +126,7 @@ describe("SP-initiated login", () => {
       assert.strictEqual(yield* landing("//evil.example.com/phish", "_c4"), "/welcome");
       assert.strictEqual(yield* landing(undefined, "_c5"), "/welcome");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         SamlLive({ trustedOrigins: ["https://app.example.com"], defaultCallbackURL: "/welcome" }),
       ),
@@ -152,7 +156,7 @@ describe("a valid login", () => {
         assert.strictEqual(session.userId, user.id);
         assert.deepStrictEqual(session.amr, ["fed"]);
         assert.strictEqual(user.name, "ada@acme.example");
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -173,7 +177,7 @@ describe("a valid login", () => {
           cookieState: two.state,
         });
         assert.strictEqual(first_.session.session.userId, second.session.session.userId);
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect("a Response-signed document and a doubly-signed one work too", () =>
@@ -192,7 +196,7 @@ describe("a valid login", () => {
         });
         assert.isDefined(outcome.session.token);
       }
-    }).pipe(Effect.provide(SamlLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -224,7 +228,7 @@ describe("a valid login", () => {
           "SamlAssertionRejected",
         );
         yield* signIn(idpNext, "_new-2");
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 });
 
@@ -337,7 +341,7 @@ describe("the chain refuses, uniformly", () => {
         // Nothing came of it: no user was created.
         const users = yield* Users.Users;
         assert.isTrue(Option.isNone(yield* users.findByEmail("ada@acme.example")));
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
     );
   }
 
@@ -350,7 +354,7 @@ describe("the chain refuses, uniformly", () => {
         yield* rejectedAs(idpResponse(started, connection.id), undefined),
         "SamlAssertionRejected",
       );
-    }).pipe(Effect.provide(SamlLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -384,7 +388,7 @@ describe("the chain refuses, uniformly", () => {
         const users = yield* Users.Users;
         assert.isTrue(Option.isNone(yield* users.findByEmail("ceo@acme.example")));
         assert.isTrue(Option.isNone(yield* users.findByEmail("intern@acme.example")));
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -413,7 +417,7 @@ describe("the chain refuses, uniformly", () => {
           samlResponse: idpResponse(second, connection.id, { assertionId: "_y" }),
           cookieState: second.state,
         });
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -443,7 +447,7 @@ describe("the chain refuses, uniformly", () => {
           samlResponse: idpResponse(good, acme.id, { who: idp }),
           cookieState: good.state,
         });
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -466,7 +470,7 @@ describe("the chain refuses, uniformly", () => {
           ),
           "SamlAssertionRejected",
         );
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -497,7 +501,7 @@ describe("the chain refuses, uniformly", () => {
           ),
           "SamlAssertionRejected",
         );
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -522,7 +526,7 @@ describe("the chain refuses, uniformly", () => {
           (yield* saml.metadata(connection.id).pipe(Effect.flip))._tag,
           "SamlConnectionNotFound",
         );
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -559,7 +563,7 @@ describe("the chain refuses, uniformly", () => {
         yield* acs("AAAA", undefined).pipe(Effect.flip);
         yield* TestClock.adjust(Duration.millis(10));
         assert.include(yield* Ref.get(seen), "saml|assertionInvalid");
-      }).pipe(Effect.scoped, Effect.provide(SamlLive())),
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 });
 
@@ -605,7 +609,7 @@ describe("account linking (BEH-EA-245)", () => {
         });
         assert.strictEqual(outcome.session.session.userId, local.id);
         assert.strictEqual((yield* accounts.listByUser(local.id)).length, 1);
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   const firstSignInVerified = (trustsEmail: boolean) =>
@@ -623,7 +627,7 @@ describe("account linking (BEH-EA-245)", () => {
         cookieState: started.state,
       });
       return Users.isEmailVerified(yield* users.findById(outcome.session.session.userId));
-    }).pipe(Effect.provide(SamlLive()));
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive()));
 
   it.effect(
     "a connection that trusts email creates its first-time user with the address verified (BEH-EA-245)",
@@ -658,7 +662,7 @@ describe("account linking (BEH-EA-245)", () => {
           })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "UserSuspended");
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect("tenantScoped: false leaves the session unstamped", () =>
@@ -672,7 +676,7 @@ describe("account linking (BEH-EA-245)", () => {
         cookieState: started.state,
       });
       assert.isTrue(Option.isNone(outcome.session.session.tenantId));
-    }).pipe(Effect.provide(SamlLive({ tenantScoped: false }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive({ tenantScoped: false }))),
   );
 });
 
@@ -715,7 +719,10 @@ describe("concurrent first sign-ins for one NameID (plan 14)", () => {
       assert.strictEqual(a.session.session.userId, b.session.session.userId);
       const accounts = yield* Accounts.Accounts;
       assert.strictEqual((yield* accounts.listByUser(a.session.session.userId)).length, 1);
-    }).pipe(Effect.provide(SamlLive({}, undefined, undefined, Rendezvous.anchorReadsMeet(2)))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(SamlLive({}, undefined, undefined, Rendezvous.anchorReadsMeet(2))),
+    ),
   );
 });
 
@@ -735,13 +742,14 @@ describe("rate limits", () => {
       yield* atNow;
       const saml = yield* Saml.Saml;
       const { connection } = yield* seedConnection();
-      yield* saml.authnRequest(connection.id, { ip: "203.0.113.7" });
-      yield* saml.authnRequest(connection.id, { ip: "203.0.113.7" });
+      yield* saml.authnRequest(connection.id, {}).pipe(TestAuth.withRequest({ ip: "203.0.113.7" }));
+      yield* saml.authnRequest(connection.id, {}).pipe(TestAuth.withRequest({ ip: "203.0.113.7" }));
       const limited = yield* saml
-        .authnRequest(connection.id, { ip: "203.0.113.7" })
+        .authnRequest(connection.id, {})
+        .pipe(TestAuth.withRequest({ ip: "203.0.113.7" }))
         .pipe(Effect.flip);
       assert.strictEqual(limited._tag, "RateLimited");
-      yield* saml.authnRequest(connection.id, { ip: "203.0.113.8" });
+      yield* saml.authnRequest(connection.id, {}).pipe(TestAuth.withRequest({ ip: "203.0.113.8" }));
       const tags: Array<string> = [];
       for (let i = 0; i < 3; i++) {
         tags.push((yield* acs("x", undefined, "198.51.100.1").pipe(Effect.flip))._tag);
@@ -752,6 +760,7 @@ describe("rate limits", () => {
         "RateLimited",
       ]);
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         SamlLive(
           {
@@ -800,6 +809,7 @@ describe("rate-limit rules are declared and registered (plan 06)", () => {
         ],
       );
     }).pipe(
+      TestAuth.withoutRequest,
       // A partial `rateLimits` changes only the named endpoint; the others keep their defaults (D10).
       Effect.provide(
         SamlLive({ rateLimits: { login: { limit: 7, window: Duration.minutes(1) } } }),

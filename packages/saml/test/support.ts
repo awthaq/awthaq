@@ -82,6 +82,8 @@ export const SamlLive = <
     never,
     Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
   > = Layer.empty,
+  /** ADR-EA-047: the address every request resolves to. */
+  clientAddress?: string,
 ) =>
   TestAuth.layer(built, {
     services: Layer.mergeAll(
@@ -96,6 +98,7 @@ export const SamlLive = <
     ),
     ...(coreOverride === undefined ? {} : { decorate: coreOverride }),
     taps,
+    ...(clientAddress === undefined ? {} : { clientAddress }),
   });
 
 export const ownerPrincipal = new Api.UserPrincipal({

@@ -45,14 +45,7 @@ import {
   Verification,
   VerificationLink,
 } from "@awthaq/core";
-import {
-  ClientAddress,
-  Defects,
-  type Encryption,
-  RateLimiter,
-  SqlTransaction,
-  XmlSignature,
-} from "@awthaq/ports";
+import { Defects, type Encryption, RateLimiter, SqlTransaction, XmlSignature } from "@awthaq/ports";
 import {
   DomainClaims,
   Organization,
@@ -146,17 +139,16 @@ export interface SamlShape {
   /** SP-initiated login: reserves the AuthnRequest id and returns the IdP redirect and the state the browser cookie must carry. */
   readonly authnRequest: (
     connectionId: string,
-    input: { readonly callbackURL?: string | undefined; readonly ip?: string | undefined },
+    input: { readonly callbackURL?: string | undefined },
   ) => Effect.Effect<
     { readonly location: string; readonly state: Redacted.Redacted<string> },
-    SamlApi.SamlConnectionNotFound | Api.RateLimited | ServerError | ServerError
+    SamlApi.SamlConnectionNotFound | Api.RateLimited | ServerError | ServerError,
+    Api.AuthRequestContext
   >;
   /** The Assertion Consumer Service. `cookieState` is the value of the request cookie, if the browser sent one. */
   readonly acs: (input: {
     readonly samlResponse: string;
     readonly cookieState: string | undefined;
-    readonly ip?: string | undefined;
-    readonly userAgent?: string | undefined;
   }) => Effect.Effect<
     { readonly callbackURL: string; readonly session: Sessions.IssuedSession },
     | SamlApi.SamlAssertionRejected
@@ -165,7 +157,8 @@ export interface SamlShape {
     | Hooks.TwoFactorRequired
     | Api.RateLimited
     | ServerError
-    | ServerError
+    | ServerError,
+    Api.AuthRequestContext
   >;
   /**
    * BEH-EA-315: a Single Logout message delivered by the IdP's browser (a `LogoutRequest` to end sessions, or the
@@ -175,12 +168,13 @@ export interface SamlShape {
     input: SamlSlo.SloInput,
   ) => Effect.Effect<
     SamlSlo.SloOutcome,
-    SamlApi.SamlLogoutRejected | Api.RateLimited | ServerError | ServerError
+    SamlApi.SamlLogoutRejected | Api.RateLimited | ServerError | ServerError,
+    Api.AuthRequestContext
   >;
   /** BEH-EA-315: the signed-in user's own SP-initiated logout: ends their session and, when the connection has a logout endpoint, sends the IdP a `LogoutRequest`. */
   readonly logout: (
     caller: Api.UserPrincipal,
-    input: { readonly callbackURL?: string | undefined; readonly ip?: string | undefined },
+    input: { readonly callbackURL?: string | undefined },
   ) => Effect.Effect<SamlSlo.LogoutStart, ServerError | ServerError>;
   /** BEH-EA-318: the administrator's operations (the `saml.admin` group). */
   readonly admin: SamlAdmin.SamlAdminShape;
@@ -445,25 +439,17 @@ export const SamlHandlers = HttpApiBuilder.group(
   "saml",
   Effect.fnUntraced(function* (handlers) {
     const saml = yield* Saml;
-    const clientAddress = yield* ClientAddress.ClientAddress;
     const settings = yield* SamlConfig.SamlConfig;
+    // ADR-EA-047: no handler reads the address or the user agent; the group's request context carries them.
     return handlers.handleAll({
       metadata: Effect.fnUntraced(function* ({ query }: { query: SamlApi.ConnectionQuery }) {
         return yield* saml.metadata(query.connection);
       }),
 
-      login: Effect.fnUntraced(function* ({
-        query,
-        request,
-      }: {
-        query: SamlApi.LoginQuery;
-        request: HttpServerRequest.HttpServerRequest;
-      }) {
+      login: Effect.fnUntraced(function* ({ query }: { query: SamlApi.LoginQuery }) {
         yield* noReferrer;
-        const address = yield* ClientAddress.address(clientAddress, request);
         const started = yield* saml.authnRequest(query.connection, {
           callbackURL: query.callbackURL,
-          ...address,
         });
         return yield* HttpServerResponse.setCookie(
           HttpServerResponse.redirect(started.location),
@@ -483,11 +469,9 @@ export const SamlHandlers = HttpApiBuilder.group(
         yield* noReferrer;
         // The request state is single-use: every ACS response, success or failure, clears it.
         yield* expireRequestCookie;
-        const facts = yield* ClientAddress.facts(clientAddress, request);
         const outcome = yield* saml.acs({
           samlResponse: payload.SAMLResponse,
           cookieState: request.cookies[REQUEST_COOKIE],
-          ...facts,
         });
         // ADR-EA-045: the session cookie rides the redirect through `SessionDelivery` (`SessionLifecycle.Mints`).
         return yield* SessionDelivery.redirect(
@@ -506,7 +490,6 @@ export const SamlHandlers = HttpApiBuilder.group(
         request: HttpServerRequest.HttpServerRequest;
       }) {
         yield* noReferrer;
-        const resolved = yield* clientAddress.resolve(request);
         // The signature covers the RAW query the IdP sent; the handler hands it on untouched.
         const questionMark = request.url.indexOf("?");
         const outcome = yield* saml.slo({
@@ -517,7 +500,6 @@ export const SamlHandlers = HttpApiBuilder.group(
           samlResponse: query.SAMLResponse,
           relayState: query.RelayState,
           cookieState: request.cookies[LOGOUT_COOKIE],
-          ip: Option.getOrUndefined(resolved),
         });
         return yield* respondToBrowser(outcome);
       }),
@@ -532,7 +514,6 @@ export const SamlHandlers = HttpApiBuilder.group(
         request: HttpServerRequest.HttpServerRequest;
       }) {
         yield* noReferrer;
-        const resolved = yield* clientAddress.resolve(request);
         const outcome = yield* saml.slo({
           connectionId: params.connection,
           binding: "post",
@@ -541,7 +522,6 @@ export const SamlHandlers = HttpApiBuilder.group(
           samlResponse: payload.SAMLResponse,
           relayState: payload.RelayState,
           cookieState: request.cookies[LOGOUT_COOKIE],
-          ip: Option.getOrUndefined(resolved),
         });
         return yield* respondToBrowser(outcome);
       }),
@@ -574,23 +554,12 @@ export const SamlAccountHandlers = HttpApiBuilder.group(
   "saml.account",
   Effect.fnUntraced(function* (handlers) {
     const saml = yield* Saml;
-    const clientAddress = yield* ClientAddress.ClientAddress;
     const settings = yield* SamlConfig.SamlConfig;
     return handlers.handleAll({
-      logout: Effect.fnUntraced(function* ({
-        payload,
-        request,
-      }: {
-        payload: SamlApi.LogoutPayload;
-        request: HttpServerRequest.HttpServerRequest;
-      }) {
+      logout: Effect.fnUntraced(function* ({ payload }: { payload: SamlApi.LogoutPayload }) {
         yield* noReferrer;
         const { principal } = yield* CurrentUser.current;
-        const resolved = yield* clientAddress.resolve(request);
-        const started = yield* saml.logout(principal, {
-          callbackURL: payload.callbackURL,
-          ip: Option.getOrUndefined(resolved),
-        });
+        const started = yield* saml.logout(principal, { callbackURL: payload.callbackURL });
         // The caller's own session ended (`SessionLifecycle.Ends`), so its cookie is expired and a bearer
         // client told so, whatever the IdP does next.
         yield* SessionDelivery.end;
@@ -825,12 +794,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
   records: SamlRecords.records,
 }) {
   static readonly layer = AuthPlugin.layer(Saml, {
-    ports: [
-      ClientAddress.ClientAddress,
-      RateLimiter.RateLimiter,
-      SqlTransaction.SqlTransaction,
-      XmlSignature.XmlSignature,
-    ],
+    ports: [RateLimiter.RateLimiter, SqlTransaction.SqlTransaction, XmlSignature.XmlSignature],
     dependsOn: [Organization.Organization],
     contributes: Layer.mergeAll(samlOrganizationDeletion, samlSessionRetention),
     handlers: Layer.mergeAll(SamlHandlers, SamlAccountHandlers, SamlAdminHandlers),
@@ -902,7 +866,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
 
       const authnRequest: SamlShape["authnRequest"] = Effect.fnUntraced(
         function* (connectionId, input) {
-          yield* limits.spend("login", { ip: input.ip });
+          yield* limits.spend("login", {});
           const connection = yield* usableConnection(connectionId);
           if (Option.isNone(connection))
             return yield* Effect.fail(new SamlApi.SamlConnectionNotFound());
@@ -1139,7 +1103,6 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const signIn = Effect.fnUntraced(function* (
         connection: SamlRecords.ConnectionRecord,
         assertion: SignedAssertion,
-        input: { readonly ip?: string | undefined; readonly userAgent?: string | undefined },
       ) {
         const providerId = providerIdOf(connection.organizationId, connection.id);
         // ADR-EA-043: which local user is this NameID is core's `FederatedIdentity` (the anchor, a trusted email
@@ -1179,25 +1142,22 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         // apply when a second factor finishes the sign-in.
         const roles = SamlRoleMapping.rolesFor(connection.roleMapping, assertion);
         return yield* completion
-          .complete(
-            {
-              userId: targetUserId,
-              strategy: providerId,
-              amr: ["fed"],
-              continuation: yield* continuation.of({
-                connectionId: connection.id,
-                nameId: assertion.nameId.value,
-                ...(assertion.nameId.format === undefined
-                  ? {}
-                  : { nameIdFormat: assertion.nameId.format }),
-                ...(assertion.sessionIndex === undefined
-                  ? {}
-                  : { sessionIndex: assertion.sessionIndex }),
-                ...(roles === undefined ? {} : { roles }),
-              }),
-            },
-            input,
-          )
+          .complete({
+            userId: targetUserId,
+            strategy: providerId,
+            amr: ["fed"],
+            continuation: yield* continuation.of({
+              connectionId: connection.id,
+              nameId: assertion.nameId.value,
+              ...(assertion.nameId.format === undefined
+                ? {}
+                : { nameIdFormat: assertion.nameId.format }),
+              ...(assertion.sessionIndex === undefined
+                ? {}
+                : { sessionIndex: assertion.sessionIndex }),
+              ...(roles === undefined ? {} : { roles }),
+            }),
+          })
           .pipe(
             // An erasure can run between the IdP's proof and here: the uniform rejection, not a server error.
             Effect.catchTag("SignIn/UserGone", () =>
@@ -1207,19 +1167,14 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       });
 
       const acs: SamlShape["acs"] = Effect.fnUntraced(function* (input) {
-        yield* limits.spend("acs", { ip: input.ip });
+        yield* limits.spend("acs", {});
         // Which connection the attempt was for, once known, so the audit event can name it.
         let strategy = "saml";
         const reject = (reason: string) =>
           Effect.all(
             [
               Effect.logWarning("awthaq/saml: assertion rejected", { reason }),
-              events.publish({
-                _tag: "auth.user.signInFailed",
-                strategy,
-                reason: "assertionInvalid",
-                ...(input.ip === undefined ? {} : { clientIp: input.ip }),
-              }),
+              completion.failed({ strategy, reason: "assertionInvalid" }),
             ],
             { discard: true },
           ).pipe(Effect.andThen(Effect.fail(new SamlApi.SamlAssertionRejected())));
@@ -1232,7 +1187,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
             return yield* Effect.fail(new AssertionInvalid({ reason: "connectionUnavailable" }));
           strategy = providerIdOf(connection.value.organizationId, connection.value.id);
           const assertion = yield* verifyResponse(xml, connection.value, request.requestId);
-          const run = signIn(connection.value, assertion, input);
+          const run = signIn(connection.value, assertion);
           const issued = yield* settings.tenantScoped
             ? run.pipe(Tenant.withTenant(connection.value.organizationId))
             : run;
@@ -1255,7 +1210,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
         spKeys,
         random,
         hasher,
-        rateLimit: (ip) => limits.spend("slo", { ip }),
+        rateLimit: limits.spend("slo", {}),
         resolveCallbackURL: (raw) => resolveCallbackURL(raw, settings),
       });
 

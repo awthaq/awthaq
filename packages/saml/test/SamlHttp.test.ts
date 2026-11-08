@@ -1,10 +1,15 @@
 // BEH-EA-238 through 245 over real HTTP, through `HttpRouter.toWebHandler`: the login redirect and its
 // `__Host-saml-request` cookie (SameSite=None: the IdP's POST is cross-site), the ACS form post that answers 302 with
 // a session cookie, the metadata document, and the uniform 400 for everything the chain refuses.
-import { Auth } from "@awthaq/core";
+import { Auth, Sessions } from "@awthaq/core";
+import { RateLimiter } from "@awthaq/ports";
 import { Organization } from "@awthaq/organization";
 import { assert, describe, it } from "@effect/vitest";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import { inflateRawSync } from "node:zlib";
 import { CookieAssertions, TestAuth, UserAgent } from "@awthaq/test";
 import * as Saml from "../src/Saml.ts";
@@ -123,6 +128,70 @@ describe("SAML over HTTP", () => {
         const xml = yield* Effect.promise(() => metadata.text());
         assert.include(xml, `entityID="${SP_ENTITY_ID_PREFIX}${connection.id}"`);
         assert.include(xml, ACS_URL);
+      }),
+  );
+
+  // ADR-EA-047 (plan 26 ticket 16): the wiring probe. SAML reads no address and no header; the ACS session records
+  // the request context's facts, and the per-source login rule counts per request address.
+  it.effect(
+    "ADR-EA-047: the ACS session records the request's address and user agent; login counts per address",
+    () =>
+      Effect.gen(function* () {
+        const appAt = (clientAddress: string) =>
+          TestAuth.app(
+            SamlLive(
+              { rateLimits: { login: { limit: 2, window: Duration.minutes(1) } } },
+              RateLimiter.layerMemory,
+              undefined,
+              undefined,
+              Layer.empty,
+              clientAddress,
+            ),
+            { baseUrl: BASE_URL },
+          );
+        const app = appAt("198.51.100.16");
+        const { connection } = yield* Effect.promise(() => app.run(seedConnection()));
+        const browser = yield* Effect.promise(() => app.agent());
+        const login = yield* Effect.promise(() =>
+          browser.request("GET", `/auth/saml/login?connection=${connection.id}`),
+        );
+        const samlResponse = Buffer.from(
+          signedResponse(
+            responseXml({
+              inResponseTo: requestIdOf(login) ?? "",
+              audience: `${SP_ENTITY_ID_PREFIX}${connection.id}`,
+              issuer: IDP_ENTITY_ID,
+              ...around(),
+            }),
+          ),
+        ).toString("base64");
+        const landed = yield* Effect.promise(() =>
+          browser.request("POST", ACS_URL, {
+            form: acsBody(samlResponse),
+            site: "cross-site",
+            navigation: true,
+            headers: { "user-agent": "SamlProbe/1" },
+          }),
+        );
+        assert.strictEqual(landed.status, 302);
+        const token = browser.cookies.get("__Host-session")?.value ?? "";
+        const verified = yield* Effect.promise(() =>
+          app.run(
+            Effect.flatMap(Effect.service(Sessions.Sessions), (sessions) =>
+              sessions.verify(Redacted.make(token)),
+            ),
+          ),
+        );
+        assert.deepStrictEqual(verified.session.ipAddress, Option.some("198.51.100.16"));
+        assert.deepStrictEqual(verified.session.userAgent, Option.some("SamlProbe/1"));
+        // `login` tuned to 2 per minute: the flow spent one, the next is admitted, the third refused.
+        const loginStatus = (target: typeof app) =>
+          Effect.promise(() =>
+            target.request("GET", `/auth/saml/login?connection=${connection.id}`),
+          ).pipe(Effect.map((response) => response.status));
+        assert.strictEqual(yield* loginStatus(app), 302);
+        assert.strictEqual(yield* loginStatus(app), 429);
+        yield* Effect.promise(() => app.dispose());
       }),
   );
 

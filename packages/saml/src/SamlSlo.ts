@@ -70,7 +70,6 @@ export interface SloInput {
   readonly relayState: string | undefined;
   /** The `__Host-saml-logout` cookie, if the browser sent one (a LogoutResponse must carry it). */
   readonly cookieState: string | undefined;
-  readonly ip: string | undefined;
 }
 
 /** What the handler does with the browser next. */
@@ -113,8 +112,11 @@ export interface SloDeps {
   readonly spKeys: SamlSpKeys.SamlSpKeysShape;
   readonly random: SecureRandom.SecureRandom["Service"];
   readonly hasher: Digest.Digest["Service"];
-  /** The `slo` rule of `Saml`'s budget, spent per source address (a closure: this module must not import `Saml.ts`). */
-  readonly rateLimit: (ip: string | undefined) => Effect.Effect<void, Api.RateLimited>;
+  /**
+   * The `slo` rule of `Saml`'s budget, spent per request address (handed in: this module must not import `Saml.ts`).
+   * ADR-EA-047: it reads the request context.
+   */
+  readonly rateLimit: Effect.Effect<void, Api.RateLimited, Api.AuthRequestContext>;
   readonly resolveCallbackURL: (raw: string | undefined) => string;
 }
 
@@ -175,7 +177,7 @@ export const makeSlo = (deps: SloDeps) => {
 
   const logout = Effect.fnUntraced(function* (
     caller: Api.UserPrincipal,
-    input: { readonly callbackURL?: string | undefined; readonly ip?: string | undefined },
+    input: { readonly callbackURL?: string | undefined },
   ) {
     const callbackURL = deps.resolveCallbackURL(input.callbackURL);
     const sessionId = Sessions.SessionId(caller.sessionId);
@@ -379,7 +381,7 @@ export const makeSlo = (deps: SloDeps) => {
   });
 
   const slo = Effect.fnUntraced(function* (input: SloInput) {
-    yield* deps.rateLimit(input.ip);
+    yield* deps.rateLimit;
     let strategy = "saml";
     const reject = (reason: string) =>
       Effect.all(

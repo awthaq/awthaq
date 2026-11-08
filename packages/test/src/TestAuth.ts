@@ -200,9 +200,9 @@ const fixedClientAddress = (address: string) =>
 export const withRequest =
   (
     facts: {
-      readonly ip?: string;
-      readonly userAgent?: string;
-      readonly correlationId?: string;
+      readonly ip?: string | undefined;
+      readonly userAgent?: string | undefined;
+      readonly correlationId?: string | undefined;
     } = {},
   ) =>
   <A, E, R>(self: Effect.Effect<A, E, R>) =>

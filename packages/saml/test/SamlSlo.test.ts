@@ -2,6 +2,7 @@
 // same signature verification as the ACS. The invariant asserted throughout: every refusal is the SAME `SamlLogoutRejected` and
 // changes nothing (no session ended, no state consumed by a message that failed), and a valid message ends exactly the sessions
 // it names, at the connection it came from, with reason `federatedLogout`.
+import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import { AuditLog, Retention, Sessions, Users } from "@awthaq/core";
 import { RateLimiter } from "@awthaq/ports";
@@ -119,7 +120,6 @@ const redirectDelivery = (
     samlResponse: kind === "SAMLResponse" ? decodeURIComponent(parts.message) : undefined,
     relayState: options.relayState,
     cookieState: options.cookieState,
-    ip: undefined,
   };
 };
 
@@ -148,7 +148,6 @@ const postDelivery = (
     samlResponse: kind === "SAMLResponse" ? encoded : undefined,
     relayState: undefined,
     cookieState: options.cookieState,
-    ip: undefined,
   };
 };
 
@@ -266,7 +265,7 @@ describe("an IdP-initiated LogoutRequest over the Redirect binding", () => {
         // The row the connection kept for it is gone.
         const records = yield* SamlRecords.SamlRecords;
         assert.isTrue(Option.isNone(yield* records.findSession(sessionId)));
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -297,7 +296,7 @@ describe("an IdP-initiated LogoutRequest over the Redirect binding", () => {
         );
         assert.isTrue(Option.isNone(yield* records.findSession("old")));
         assert.isTrue(Option.isSome(yield* records.findSession("fresh")));
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -310,14 +309,14 @@ describe("an IdP-initiated LogoutRequest over the Redirect binding", () => {
         const { connection } = yield* seedConnection({ sloUrl: IDP_SLO });
         const one = yield* signIn(connection.id);
         // A second session of the same NameID with a different SessionIndex, and a third of somebody else.
-        const second = yield* sessions.issue({ userId: one.userId, request: {} });
+        const second = yield* sessions.issue({ userId: one.userId });
         yield* records.saveSession({
           sessionId: second.session.id,
           connectionId: connection.id,
           nameId: "ada@acme.example",
           sessionIndex: "idx-2",
         });
-        const other = yield* sessions.issue({ userId: one.userId, request: {} });
+        const other = yield* sessions.issue({ userId: one.userId });
         yield* records.saveSession({
           sessionId: other.session.id,
           connectionId: connection.id,
@@ -350,7 +349,7 @@ describe("an IdP-initiated LogoutRequest over the Redirect binding", () => {
         );
         assert.isFalse(yield* isLive(one.userId, one.sessionId));
         assert.isTrue(yield* isLive(one.userId, other.session.id));
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -371,7 +370,7 @@ describe("an IdP-initiated LogoutRequest over the Redirect binding", () => {
         );
         assert.strictEqual(outcome._tag, "redirect");
         assert.deepStrictEqual(yield* revocations, []);
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -402,7 +401,7 @@ describe("an IdP-initiated LogoutRequest over the Redirect binding", () => {
           ),
         );
         assert.isTrue(yield* isLive(a.userId, a.sessionId));
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 });
 
@@ -459,7 +458,7 @@ describe("an IdP-initiated LogoutRequest over the POST binding", () => {
           NOW,
         );
         assert.include(verified.signedXml, 'InResponseTo="_idp-logout-1"');
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 });
 
@@ -529,7 +528,7 @@ describe("every way of getting a logout message wrong is the same refusal, and e
           "SamlLogoutRejected",
         );
         assert.isTrue(yield* stillLive(session));
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -599,7 +598,7 @@ describe("every way of getting a logout message wrong is the same refusal, and e
           "SamlLogoutRejected",
         );
         assert.isTrue(yield* stillLive(session));
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -653,7 +652,7 @@ describe("every way of getting a logout message wrong is the same refusal, and e
           yield* stillLive(again),
           "a replayed LogoutRequest cannot log the user out again",
         );
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -669,7 +668,7 @@ describe("every way of getting a logout message wrong is the same refusal, and e
         // This connection has no logout endpoint (its IdP offers none): nothing to answer, so nothing is accepted.
         assert.strictEqual(yield* rejectedAs(message(connection.id)), "SamlLogoutRejected");
         assert.isTrue(yield* isLive(session.userId, session.sessionId));
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -687,7 +686,7 @@ describe("every way of getting a logout message wrong is the same refusal, and e
           Effect.flatMap((log) => log.list({ eventTag: "auth.saml.logoutRejected" })),
         );
         assert.strictEqual(rows.length, 1);
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 });
 
@@ -721,7 +720,7 @@ describe("SP-initiated logout", () => {
           (yield* revocations).map((row) => row.reason),
           ["signOut"],
         );
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 });
 
@@ -775,7 +774,7 @@ describe("the IdP's LogoutResponse to our own logout", () => {
           ),
           "SamlLogoutRejected",
         );
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -797,7 +796,7 @@ describe("the IdP's LogoutResponse to our own logout", () => {
         );
         // The local session was already ended: a failed status at the IdP is logged, and the user still lands on the callback.
         assert.strictEqual(done._tag, "done");
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -905,7 +904,7 @@ describe("the IdP's LogoutResponse to our own logout", () => {
           ),
           "SamlLogoutRejected",
         );
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 });
 
@@ -926,7 +925,7 @@ describe("logout without an IdP round trip", () => {
         assert.deepStrictEqual(local, { _tag: "local", callbackURL: "/bye" });
         assert.isFalse(yield* isLive(session.userId, session.sessionId));
         // A password session (no SAML row at all).
-        const plain = yield* sessions.issue({ userId: session.userId, request: {} });
+        const plain = yield* sessions.issue({ userId: session.userId });
         const alsoLocal = yield* saml.logout(principalOf(session.userId, plain.session.id), {});
         assert.strictEqual(alsoLocal._tag, "local");
         assert.isFalse(yield* isLive(session.userId, plain.session.id));
@@ -935,7 +934,7 @@ describe("logout without an IdP round trip", () => {
           callbackURL: "https://evil.example.com/",
         });
         assert.deepStrictEqual(bad, { _tag: "local", callbackURL: "/" });
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect("a connection whose IdP takes the POST binding is sent an auto-submitting form", () =>
@@ -955,7 +954,7 @@ describe("logout without an IdP round trip", () => {
       // The document it carries is a signed LogoutRequest (the SP key exists).
       const encoded = /name="SAMLRequest" value="([^"]+)"/.exec(started.html)?.[1] ?? "";
       assert.include(Buffer.from(encoded, "base64").toString("utf8"), "<ds:Signature");
-    }).pipe(Effect.provide(SamlLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 });
 
@@ -972,8 +971,8 @@ describe("the logout endpoint's own limits", () => {
             logoutRequestXml({ destination: sloUrlOf(connection.id) }),
             { unsigned: true },
           ),
-          ip: "203.0.113.5",
         }).pipe(
+          TestAuth.withRequest({ ip: "203.0.113.5" }),
           Effect.flip,
           Effect.map((failure) => failure._tag),
         );
@@ -981,6 +980,7 @@ describe("the logout endpoint's own limits", () => {
       assert.strictEqual(yield* attempt(), "SamlLogoutRejected");
       assert.strictEqual(yield* attempt(), "RateLimited");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         SamlLive(
           {
