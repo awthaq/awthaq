@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1334 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1501; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1335 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1502; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1352,3 +1352,4 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1404 | [BEH-EA-065](../spec/behaviors/09-authentication-middleware.md#beh-ea-065-the-authentication-middleware-tries-a-cookie-handler-first-in-its-declared-security-record) | [03-http-layer/09-authentication-middleware.feature](features/03-http-layer/09-authentication-middleware.feature) | Work that answers no request is not throttled per source, and is still throttled per identity |
 | REQ-EA-1500 | [BEH-EA-336](../spec/behaviors/25-testing-harness.md#beh-ea-336-every-shipped-plugin-runs-the-contract-suite-which-checks-its-records) | [08-tooling/25-testing-harness.feature](features/08-tooling/25-testing-harness.feature) | A Contract.test.ts that passes records but is missing from scripts/test-pg.sh fails pnpm check |
 | REQ-EA-1501 | [BEH-EA-336](../spec/behaviors/25-testing-harness.md#beh-ea-336-every-shipped-plugin-runs-the-contract-suite-which-checks-its-records) | [08-tooling/25-testing-harness.feature](features/08-tooling/25-testing-harness.feature) | The same package passes once its Contract.test.ts is listed in scripts/test-pg.sh |
+| REQ-EA-1502 | [BEH-EA-120](../spec/behaviors/15-password.md#beh-ea-120-password-policy-is-configuration-not-a-plugin-variant) | [05-authentication-methods/15-password.feature](features/05-authentication-methods/15-password.feature) | Password.config's policy also governs a password an administrator sets |

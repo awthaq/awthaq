@@ -18,6 +18,7 @@ import {
   makeCapturingMailer,
   makeNamedRegistry,
 } from "./shared/Harness.ts";
+import { Admin, AdminAccounts } from "@awthaq/admin";
 import { Password } from "@awthaq/password";
 import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
@@ -104,7 +105,17 @@ export interface AppOptions {
   readonly slowMailer?: boolean;
   /** APS-003: enforce the plugin's production rate limits (the default is permissive, so an ordinary scenario never trips one). */
   readonly realLimits?: boolean;
+  /** BEH-EA-120/345: compose `AdminAccounts` beside Password, every administrator allowed to manage credentials (memory only). */
+  readonly adminAccounts?: boolean;
 }
+
+/** What a step reads through `inApp`: the running services the handler uses. */
+type ReadHandles =
+  | Users.Users
+  | Accounts.Accounts
+  | Sessions.Sessions
+  | Verification.Verification
+  | PasswordHasher.PasswordHasher;
 
 export interface AppHandle {
   readonly handler: (request: Request) => Promise<Response>;
@@ -112,20 +123,26 @@ export interface AppHandle {
   readonly publishedEvents: Effect.Effect<ReadonlyArray<AuthEvents.AuthEvent>>;
   readonly fault: Ref.Ref<Fault>;
   /** Runs `effect` against the same running services `handler` uses (real clock, like `AdminWorld`'s reads). */
-  readonly inApp: <A, E>(
-    effect: Effect.Effect<
-      A,
-      E,
-      | Users.Users
-      | Accounts.Accounts
-      | Sessions.Sessions
-      | Verification.Verification
-      | PasswordHasher.PasswordHasher
-    >,
-  ) => Promise<A>;
+  readonly inApp: <A, E>(effect: Effect.Effect<A, E, ReadHandles>) => Promise<A>;
 }
 
 const built = Auth.make([Password.Password]);
+
+/** BEH-EA-120/345: Password beside the administrator's credential surface, built only for the scenario that asks for it. */
+const builtWithAdminAccounts = Auth.make([
+  Password.Password,
+  Admin.Admin,
+  AdminAccounts.AdminAccounts,
+]);
+
+/** Held open: the handler's own (lazy) build then finds these layers in the shared memo map. */
+const openApp = <A, E>(app: TestAuth.App<A | ReadHandles, E>) =>
+  Effect.promise(() => app.run(Effect.void)).pipe(
+    Effect.as({
+      handler: app.handler,
+      inApp: <X, XE>(effect: Effect.Effect<X, XE, ReadHandles>) => app.run(effect),
+    }),
+  );
 
 /**
  * Mirrors `AuthHttp.test.ts`'s own `capturingMailer` — a capture cell built
@@ -172,18 +189,30 @@ const buildApp = Effect.fn("features.password.buildApp")(function* (options: App
   };
   // TIR-005: `"sqlite"` runs the core stores over a real migrated SQLite database with real transactions, so
   // atomicity is observable; the default is memory.
-  const appLayer =
-    options.storage === "sqlite"
-      ? TestAuth.layer(built, { ...common, records: "sql", suite: "features_PasswordWorld" })
-      : TestAuth.layer(built, common);
-
   // Built eagerly and held open: the handler's own (lazy) build then finds these layers in the shared memo map, so
   // a read handle used before the first request neither builds a second copy nor tears the first down. Run on the
   // real clock, like the handler's own runtime (a step's fiber may sit under a `TestClock`).
-  const app = TestAuth.app(appLayer);
-  yield* Effect.promise(() => app.run(Effect.void));
-  const inApp: AppHandle["inApp"] = (effect) => app.run(effect);
-  return { handler: app.handler, sentMail: sent, publishedEvents: Ref.get(events), fault, inApp };
+  const { handler, inApp } =
+    options.adminAccounts === true
+      ? yield* openApp(
+          TestAuth.app(
+            TestAuth.layer(builtWithAdminAccounts, {
+              ...common,
+              services: Layer.merge(
+                common.services,
+                Admin.config({ canManageCredentials: () => Effect.succeed(true) }),
+              ),
+            }),
+          ),
+        )
+      : options.storage === "sqlite"
+        ? yield* openApp(
+            TestAuth.app(
+              TestAuth.layer(built, { ...common, records: "sql", suite: "features_PasswordWorld" }),
+            ),
+          )
+        : yield* openApp(TestAuth.app(TestAuth.layer(built, common)));
+  return { handler, sentMail: sent, publishedEvents: Ref.get(events), fault, inApp };
 });
 
 export interface ActorState {
@@ -575,4 +604,31 @@ export const emailIsVerified = Effect.fn("features.password.emailIsVerified")(fu
 export const currentOptions = Effect.fn("features.password.currentOptions")(function* () {
   const { options } = yield* World;
   return yield* Ref.get(options);
+});
+
+/**
+ * BEH-EA-120/345: a signed-in administrator's session cookie (`name=value`) on the `adminAccounts`
+ * composition, and the id of the user `email` names.
+ */
+export const administratorOver = Effect.fn("features.password.administratorOver")(function* (
+  email: string,
+) {
+  const { inApp } = yield* appHandle();
+  return yield* Effect.promise(() =>
+    inApp(
+      Effect.gen(function* () {
+        const users = yield* Users.Users;
+        const sessions = yield* Sessions.Sessions;
+        const target = yield* users.findByEmail(email);
+        if (Option.isNone(target)) return yield* Effect.die(new Error(`no user for ${email}`));
+        const admin = yield* users.create({
+          identity: { _tag: "Email", email: "an-administrator@example.com" },
+          name: "An administrator",
+        });
+        const issued = yield* sessions.issue({ userId: admin.id }).pipe(TestAuth.withoutRequest);
+        const setCookie = yield* TestAuth.sessionSetCookie(issued);
+        return { cookie: setCookie.split(";")[0] ?? "", targetId: target.value.id };
+      }),
+    ),
+  );
 });

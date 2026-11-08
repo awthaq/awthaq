@@ -267,6 +267,17 @@ Feature: Password Authentication
       Then sign-up fails with "422 WeakPassword"
       And the failure carries hints including "appears in known breaches"
 
+    # ADR-EA-048 / BEH-EA-345: one policy for every path that sets a password.
+    @REQ-EA-1502
+    Scenario: Password.config's policy also governs a password an administrator sets
+      Given "password({ breachCheck: true, minLength: 12 })"
+      And AdminAccounts is installed beside Password
+      And a user "victim" who signed up with a password
+      When an administrator sets the password of "victim" to one that appears in a known breach
+      Then the administrator's set fails with "422 AdminWeakPassword"
+      And the failure carries hints including "appears in known breaches"
+      And the password of "victim" is unchanged
+
   # BEH-EA-259 — spec/behaviors/15-password.md; see also BEH-EA-093, BEH-EA-261
   # Wired over the two-factor composition (TwoFactorWorld): `credentialResetGate` is the tap.
   @BEH-EA-259
