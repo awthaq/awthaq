@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1316 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1325; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1318 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1327; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1334,3 +1334,5 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1323 | [BEH-EA-341](../spec/behaviors/05-persistence-stratum.md#beh-ea-341-a-sql-host-composition-never-serves-a-schema-that-is-behind-it) | [01-contract-and-persistence/05-persistence-stratum.feature](features/01-contract-and-persistence/05-persistence-stratum.feature) | A server in verify mode refuses to start while migrations are pending |
 | REQ-EA-1324 | [BEH-EA-341](../spec/behaviors/05-persistence-stratum.md#beh-ea-341-a-sql-host-composition-never-serves-a-schema-that-is-behind-it) | [01-contract-and-persistence/05-persistence-stratum.feature](features/01-contract-and-persistence/05-persistence-stratum.feature) | A boot that would skip a plugin migration refuses to start |
 | REQ-EA-1325 | [BEH-EA-342](../spec/behaviors/25-testing-harness.md#beh-ea-342-testauthlayer-is-authhostlayer-over-the-test-ports) | [08-tooling/25-testing-harness.feature](features/08-tooling/25-testing-harness.feature) | The harness serves the same wiring a host composition serves |
+| REQ-EA-1326 | [BEH-EA-175](../spec/behaviors/22-client-effect.md#beh-ea-175-transformclient-is-the-one-seam-for-custom-auth-policy) | [07-client-integration/22-client-effect.feature](features/07-client-integration/22-client-effect.feature) | A bearer client that changes its password stays signed in |
+| REQ-EA-1327 | [BEH-EA-175](../spec/behaviors/22-client-effect.md#beh-ea-175-transformclient-is-the-one-seam-for-custom-auth-policy) | [07-client-integration/22-client-effect.feature](features/07-client-integration/22-client-effect.feature) | A bearer client forgets a token whose session ended |

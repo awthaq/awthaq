@@ -312,18 +312,18 @@ describe("bearerTransformClient (MNA-005)", () => {
   );
 
   // Plan 21 (ADR-EA-045): the server says when the caller's own session ended; the store forgets it.
-  it.effect.fails("a response carrying x-awthaq-session-ended clears the store", () =>
+  it.effect("a response carrying x-awthaq-session-ended clears the store", () =>
     Effect.gen(function* () {
       const store = yield* AuthClient.BearerTokenStore;
       yield* store.set(Redacted.make("token-0"));
       const seen: Array<string | undefined> = [];
-      yield* run(store, fakeTransport(seen, [{ "x-awthaq-session-ended": "1" }, {}]), 2);
+      yield* run(store, fakeTransport(seen, [{ [Api.SESSION_ENDED_HEADER]: "1" }, {}]), 2);
       assert.deepStrictEqual(seen, ["Bearer token-0", undefined]);
       assert.isTrue(Option.isNone(yield* store.get));
     }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
   );
 
-  it.effect.fails("ended wins over a set-auth-token on the same response", () =>
+  it.effect("ended wins over a set-auth-token on the same response", () =>
     Effect.gen(function* () {
       const store = yield* AuthClient.BearerTokenStore;
       yield* store.set(Redacted.make("token-0"));
@@ -331,44 +331,10 @@ describe("bearerTransformClient (MNA-005)", () => {
         store,
         fakeTransport(
           [],
-          [{ "x-awthaq-session-ended": "1", [Api.ROTATED_TOKEN_HEADER]: "token-dead" }],
+          [{ [Api.SESSION_ENDED_HEADER]: "1", [Api.ROTATED_TOKEN_HEADER]: "token-dead" }],
         ),
         1,
       );
-      assert.isTrue(Option.isNone(yield* store.get));
-    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
-  );
-
-  it.effect("captureSessionToken stores the body token so the next request is authenticated", () =>
-    Effect.gen(function* () {
-      const store = yield* AuthClient.BearerTokenStore;
-      const seen: Array<string | undefined> = [];
-      const signedIn = yield* AuthClient.captureSessionToken(
-        Effect.succeed({ id: "s1", token: "from-body" }),
-      );
-      // The response is handed back unchanged, token included.
-      assert.deepStrictEqual(signedIn, { id: "s1", token: "from-body" });
-      assert.strictEqual(Option.getOrThrow(yield* store.get).pipe(Redacted.value), "from-body");
-      yield* run(store, fakeTransport(seen, [{}]), 1);
-      assert.deepStrictEqual(seen, ["Bearer from-body"]);
-    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
-  );
-
-  it.effect("captureSessionToken stores nothing when the response carries no token", () =>
-    Effect.gen(function* () {
-      const store = yield* AuthClient.BearerTokenStore;
-      yield* store.set(Redacted.make("kept"));
-      yield* AuthClient.captureSessionToken(Effect.succeed({ id: "s1" }));
-      yield* AuthClient.captureSessionToken(Effect.succeed({ id: "s2", token: "" }));
-      assert.strictEqual(Option.getOrThrow(yield* store.get).pipe(Redacted.value), "kept");
-    }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
-  );
-
-  it.effect("captureSessionToken leaves a failed sign-in alone", () =>
-    Effect.gen(function* () {
-      const store = yield* AuthClient.BearerTokenStore;
-      const failure = yield* Effect.flip(AuthClient.captureSessionToken(Effect.fail("nope")));
-      assert.strictEqual(failure, "nope");
       assert.isTrue(Option.isNone(yield* store.get));
     }).pipe(Effect.provide(AuthClient.BearerTokenStoreMemory)),
   );

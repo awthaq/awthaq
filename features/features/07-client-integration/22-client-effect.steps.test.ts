@@ -1,5 +1,6 @@
 import { describeFeature, loadFeature } from "@effect-cucumber/vitest";
 import { fileURLToPath } from "node:url";
+import { bearerLifecycleSteps } from "../../step-definitions/BearerLifecycleSteps.ts";
 import { clientEffectSteps } from "../../step-definitions/ClientEffectSteps.ts";
 import { WorldLive } from "../../step-definitions/ClientEffectWorld.ts";
 
@@ -9,4 +10,5 @@ const feature = await loadFeature(
 
 describeFeature(feature, WorldLive, ({ use }) => {
   use(clientEffectSteps);
+  use(bearerLifecycleSteps);
 });

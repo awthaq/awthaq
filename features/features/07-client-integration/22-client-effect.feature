@@ -168,6 +168,19 @@ Feature: The Effect Client
       Then it is expressed through "transformClient"/"transformResponse"
       And no generated per-endpoint method is wrapped, shadowed, or re-exported to implement it
 
+    # ADR-EA-045: every declared response says what it did to the session in headers the transform follows.
+    @REQ-EA-1326
+    Scenario: A bearer client that changes its password stays signed in
+      Given a bearer client signed up through the README's transform
+      When the client changes its password without wrapping the call
+      Then the client's next two session reads both succeed
+
+    @REQ-EA-1327
+    Scenario: A bearer client forgets a token whose session ended
+      Given a bearer client signed up through the README's transform
+      When the client signs out
+      Then the client's token store is empty
+
   # BEH-EA-176 — spec/behaviors/22-client-effect.md
   @BEH-EA-176
   Rule: A Promise facade is opt-in, never a second client
