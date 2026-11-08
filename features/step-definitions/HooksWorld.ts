@@ -13,6 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
@@ -119,6 +120,18 @@ export class AcmeInvite extends AuthPlugin.Service<AcmeInvite, Record<string, ne
     apiVersion: 1,
     contract: InviteApi,
     tables: { "acme.invite_invitation": AuthPlugin.Table.global("test fixture") },
+    // Its own prefixed table, standalone: no foreign key or cascade into core. The scenario keeps
+    // its rows in memory, but the declared table must exist in the migrated schema (plan 22, D3).
+    migrations: [
+      {
+        name: "create_acme_invite_invitation",
+        up: Effect.flatMap(SqlClient.SqlClient, (sql) =>
+          sql`CREATE TABLE "acme.invite_invitation" (id TEXT PRIMARY KEY, "userId" TEXT NOT NULL)`.pipe(
+            Effect.asVoid,
+          ),
+        ),
+      },
+    ],
   },
 ) {
   static readonly layer = AuthPlugin.layer(AcmeInvite, {
