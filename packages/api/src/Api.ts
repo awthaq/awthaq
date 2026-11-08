@@ -178,6 +178,13 @@ export const ROTATED_TOKEN_HEADER = "set-auth-token";
 export const TOKEN_DELIVERY_HEADER = "x-awthaq-token-delivery";
 
 /**
+ * ADR-EA-045: the response header a declared `SessionLifecycle.Ends` endpoint sets when the caller's own
+ * session ended (sign-out, revoke-all, account deletion). A bearer client clears its stored token on it; it
+ * wins over a `ROTATED_TOKEN_HEADER` on the same response.
+ */
+export const SESSION_ENDED_HEADER = "x-awthaq-session-ended";
+
+/**
  * MNA-001: `TOKEN_DELIVERY_HEADER` carried a value other than `bearer`. Explicit
  * rather than a silent cookie fallback: a native client that typo'd the header
  * would otherwise be handed a `Set-Cookie` it can never read and a session it

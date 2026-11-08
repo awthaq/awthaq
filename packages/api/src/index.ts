@@ -19,4 +19,5 @@ export * as Api from "./Api.ts";
 export * as AuthCore from "./AuthCore.ts";
 export * as EmailContract from "./Email.ts";
 export * as SessionContract from "./Session.ts";
+export * as SessionLifecycle from "./SessionLifecycle.ts";
 export * as SubjectContract from "./Subject.ts";
