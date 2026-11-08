@@ -174,3 +174,7 @@ entries:
     file: "043-federated-identity-resolution.md"
     title: "Federated Identity Resolution Is a Core Module; a Lost Linking Race Resolves to the Anchor's User"
     status: "Accepted — implemented"
+  - id: "ADR-EA-044"
+    file: "044-host-composition.md"
+    title: "The Servable Composition Is Derived From Auth.make by One Host Module; the Host Provides Only What It Owns"
+    status: "Accepted — implemented"

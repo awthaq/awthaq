@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-05 |
-> | Revision | 1.8 |
+> | Revision | 1.9 |
 > | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) <br> 1.3 (2026-10-13): BEH-EA-324 (sealed columns) and BEH-EA-325 (plugin records fail with StoreUnavailable) (plan 05) <br> 1.4 (2026-10-13): BEH-EA-325: every first-party plugin records module is converted (plan 05 phase 11) <br> 1.5 (2026-10-14): BEH-EA-324: the legacy-AAD read is removed (ADR-EA-019 revision 1.2); an envelope under a retired key still re-seals, one under an old AAD spelling is `Unreadable` <br> 1.6 (2026-10-18): BEH-EA-034 names the canonical AADs and `Persistence.sql({ encryptPii })`; BEH-EA-324 covers core's six columns and the third treatment (a typed domain failure); BEH-EA-339 (a composition's sealed columns are swept as one list) (ADR-EA-019 revision 1.3, plan 17) <br> 1.7 (2026-10-18): BEH-EA-035 retitled: a core store adapter owns its statements over the ambient `SqlClient` and a multi-statement primitive opens one unit (no repository layer beneath the store ports); BEH-EA-036 retitled: no store port accepts an offset, `UserStore.listPage` is the keyset subject; BEH-EA-033/034/325 name the store adapters (ADR-EA-041 revision 1.3, plan 16) <br> 1.8 (2026-11-08): BEH-EA-039: the key-level ledger check is core's `Migrations.status`, shared by `awthaq migration apply` and the host composition's SQL mode; snapshot diffing and checksums stay a deferred CLI feature (plan 15) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) <br> 1.3 (2026-10-13): BEH-EA-324 (sealed columns) and BEH-EA-325 (plugin records fail with StoreUnavailable) (plan 05) <br> 1.4 (2026-10-13): BEH-EA-325: every first-party plugin records module is converted (plan 05 phase 11) <br> 1.5 (2026-10-14): BEH-EA-324: the legacy-AAD read is removed (ADR-EA-019 revision 1.2); an envelope under a retired key still re-seals, one under an old AAD spelling is `Unreadable` <br> 1.6 (2026-10-18): BEH-EA-034 names the canonical AADs and `Persistence.sql({ encryptPii })`; BEH-EA-324 covers core's six columns and the third treatment (a typed domain failure); BEH-EA-339 (a composition's sealed columns are swept as one list) (ADR-EA-019 revision 1.3, plan 17) <br> 1.7 (2026-10-18): BEH-EA-035 retitled: a core store adapter owns its statements over the ambient `SqlClient` and a multi-statement primitive opens one unit (no repository layer beneath the store ports); BEH-EA-036 retitled: no store port accepts an offset, `UserStore.listPage` is the keyset subject; BEH-EA-033/034/325 name the store adapters (ADR-EA-041 revision 1.3, plan 16) <br> 1.8 (2026-11-08): BEH-EA-039: the key-level ledger check is core's `Migrations.status`, shared by `awthaq migration apply` and the host composition's SQL mode; snapshot diffing and checksums stay a deferred CLI feature (plan 15) <br> 1.9 (2026-11-08): BEH-EA-341, a SQL host composition never serves a schema that is behind it (ADR-EA-044, plan 15) |
 
 ---
 
@@ -183,6 +183,32 @@ REQUIREMENT: A plugin's migrations MUST create or alter only tables named
 **As shipped (SEA-001/SSMS-002, ADR-EA-033):** the schema is deliberately foreign-key-less. No table declares a `FOREIGN KEY` into `users` (or into any other plugin's table), so there is no database-level `ON DELETE CASCADE` to rely on and none is intended: a cascade would be invisible to the audit trail and to a plugin's own transaction, and would tie table ownership together. A user's data is removed by `Erasure.AccountErasure`, which runs every plugin's registered erasure contribution, the core deletes and the audit pseudonymization in one transaction (BEH-EA-095), so referential cleanup is application-level and atomic. A plugin that adds a table keyed by user id MUST contribute an erasure for it (`AuthPlugin.layer(Self, { contributes: Erasure.contribute(...) })`).
 
 **As shipped (SAM-004, ADR-EA-035): the declared extension point is `userFields`.** A plugin declares typed scalar fields on `users` in its `AuthPlugin.Service` options; it writes no DDL. `Auth.make` generates one `ALTER TABLE users ADD COLUMN "<plugin id>_<field>"` migration per field (nullable, unbackfilled, dialect-neutral, named `NNNN_<plugin>_add_user_field_<field>` and appended after every plugin's own migrations), and refuses a declaration whose schema does not encode to one scalar, a name that is not a plain identifier, a column name over 63 characters, and two declarations that would share a column. `Session` and `Account` have no such extension point.
+
+
+## BEH-EA-341: A SQL host composition never serves a schema that is behind it
+
+> **See:** [ADR-EA-044](../decisions/044-host-composition.md)
+
+```ts
+AuthHost.layer(auth, { persistence: { records: "sql", client: SqlLive, migrations: "apply" }, csrf })
+// "verify": a host whose deploy step is `awthaq migration apply`
+```
+
+```text
+REQUIREMENT: With `records: "sql"`, `migrations` MUST be required. `"apply"`
+             MUST run core's pending migrations and then the composition's
+             (user-field columns included) before any service is built over
+             the client, and MUST NOT call the migrator when nothing is
+             pending. `"verify"` MUST apply nothing and MUST refuse the build
+             with `Migrations/Pending`, naming every pending migration. Both
+             MUST refuse a ledger that disagrees with the linker
+             (`Migrations/LedgerDrift`), by the same check `awthaq migration
+             apply` uses.
+```
+
+The migrations are the one part of a composition the compiler cannot guard: they are an effect someone must run, not a service anything requires. A host that ran only core's migrations type-checked with nothing left in `RIn` and answered `503 StoreUnavailable` (`no such table`) for every request to a table-owning plugin; a host that ran `Migrator` and then `Migrations.run` at boot had no drift guard, so a plugin inserted before an already-applied one was silently skipped. `AuthHost`'s SQL mode reaches the client only through a layer that first runs `Migrations.onBuild(mode, built.migrations)` ([BEH-EA-039](#beh-ea-039-schema-diffing-snapshot-comparison-and-destructive-change-guardrails-are-a-deferred-cli-feature-not-a-v1-runtime-requirement)), so nothing is built over a schema behind the composition. Which process migrates is the host's decision, so there is no default: two replicas booting with `"apply"` are serialized by the migrator's own ledger lock, and `"verify"` is for a separate deploy step.
+
+*Implementation* (`packages/core/src/Migrations.ts` `apply`/`verify`/`onBuild`; `packages/server/src/AuthHost.ts`; `packages/server/test/AuthHost.test.ts` "AuthHost.layer migrations (sql)", and `packages/core/test/Migrations.test.ts` on SQLite and, under `pnpm test:pg`, Postgres).
 
 _Previous: [BEH-EA-032](04-contract-stratum.md#beh-ea-032-authapi-merges-contracts-and-refuses-a-duplicate-group-id)_
 _Next: [BEH-EA-041](06-domain-users-accounts.md#beh-ea-041-a-user-is-identified-by-a-case-insensitively-unique-email)_

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-02 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-10-13 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): BEH-EA-329, `AuthPlugin.layer`'s `exposes` option and `Validate<P>`'s `ExposerNotDependedOn` problem (ADR-EA-040, architecture plan 04) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): BEH-EA-329, `AuthPlugin.layer`'s `exposes` option and `Validate<P>`'s `ExposerNotDependedOn` problem (ADR-EA-040, architecture plan 04) <br> 1.3 (2026-11-08): BEH-EA-340, `AuthHost.layer` derives the servable layer from `Auth.make` and its requirements are exactly what the host owns; BEH-EA-014 *As shipped* (ADR-EA-044, architecture plan 15) |
 
 ---
 
@@ -137,6 +137,8 @@ REQUIREMENT: `Layer.launch` (or any `Effect.provide` expecting `never`
 
 > **Invariant:** [INV-EA-002](../invariants.md#inv-ea-002-a-port-with-no-implementation-keeps-the-application-from-compiling)
 
+*As shipped (ADR-EA-044):* `AuthHost.layer` carries the guarantee to the whole servable pipeline: its `RIn` lists only host-owned services, and the migrations, which are not a service, are run or verified by the layer itself ([BEH-EA-341](05-persistence-stratum.md#beh-ea-341-a-sql-host-composition-never-serves-a-schema-that-is-behind-it)).
+
 This is a distinct failure site from `Auth.make` itself: `Auth.make`'s own diagnostics are the curated, readable strings `Validate<P>` produces (duplicate id, missing dependency, slot conflict); a missing port instead surfaces as Effect's ordinary "`X` is not assignable to `never`" `Layer` diagnostic, naming the unsatisfied services directly (`archive/design/plugins-as-layers.md` §9, "Error messages"). Removing a single `Layer.provide(Mailer.layerSes)` line from an application's wiring is designed to be exactly this: a compile error at the call to `Layer.launch`, not an incident discovered when a password-reset email silently fails to send in production.
 
 ## BEH-EA-015: A plugin definition itself, not `Auth.make`, is where a namespace violation is caught
@@ -201,6 +203,35 @@ REQUIREMENT: A plugin MAY expose domain services beside its own service through
 ```
 
 Exposure exists so that trusted callers (another plugin, a job) reach a plugin's invariants, hooks, events and transactions through an interface of their own instead of writing its records ([ADR-EA-040](../decisions/040-plugin-exposes-domain-services.md)). The namespace rule is what keeps two plugins from ever exposing one tag; the `dependsOn` rule is what keeps the dependency visible to the topological sort and to `plugin list --graph`, since a requirement on `awthaq/plugin/<id>/<name>` alone would otherwise be satisfied by whichever plugin happened to appear earlier in the tuple.
+
+## BEH-EA-340: `AuthHost.layer` derives the servable layer from `Auth.make`, and its requirements are exactly what the host owns
+
+> **See:** [ADR-EA-044](../decisions/044-host-composition.md)
+
+```ts
+const auth = Auth.make([Password.Password, Organization.Organization])
+const App = AuthHost.layer(auth, {
+  persistence: { records: "sql", client: SqlLive, migrations: "apply" },
+  csrf: Csrf.layerConfig,
+}).pipe(Layer.provide(Ports))  // RIn: what Ports does not cover, by name
+```
+
+```text
+REQUIREMENT: `AuthHost.layer(built, options)` MUST serve `built.api` (or the
+             selected tier) with core's handlers, every composed plugin's
+             records bundle for the chosen persistence and its declared hook
+             points, core's services and registries, the host middleware the
+             groups declare and the composition's user-field registry,
+             without the host providing any of them. Its `RIn` MUST be
+             exactly the ports, adapters and platform services the
+             composition requires that are not composition-owned, so omitting
+             one MUST fail to compile. `persistence` and `csrf` MUST be
+             required options.
+```
+
+`Auth.make` returns a value (`api`, `layer`, `plugins`, `migrations`, `userFieldsLayer`), not something a host can serve, and a host used to assemble the rest by hand: the routes and core's handlers, each plugin's records and hook points, the core services over a store bundle, the registries, the derived middleware, the user-field registry and, over SQL, the migrations. The compiler guards most of that list (a missing record store, hook point or middleware stays in `RIn`), but not the two items that are not services: the migrations and the user-field registry (a `Context.Reference` with an empty default). The hand-written SQL example missed both and answered 503 for every request to a table-owning plugin. `AuthHost` is the one derivation: the composition-owned elements are a function of the plugin tuple and are assembled once; the host passes what only it can choose (`persistence`, `csrf`, an optional `principalResolver`, `services`, `taps`, `decorate`, `tier`, the `requestContext` and `bodyLimit` dials, the documentation paths) and provides its ports. A tap on a point no composed plugin declares stays in `RIn` (INV-EA-005). The module requires `HttpRouter` rather than providing it, so a host merges its own routes onto the same router, and host jobs and edge middleware (`Retention.layerScheduled`, `SecuritySignals.layer`, `SecurityHeaders.layer`, `AuthHttp.cors`) stay beside it.
+
+*Implementation* (`packages/server/src/AuthHost.ts`; `test/AuthHost.test.ts` over the `Ledger` fixture in both persistence modes, `test/AuthHost.types.test.ts` pins `RIn` for core plus the fixture as `RateLimiter | SecureRandom | Digest | Mac | AuthHost.Serving`, adding `Encryption` in SQL mode, and checks the required options with `@ts-expect-error`).
 
 _Previous: [BEH-EA-008](01-plugin-contract.md#beh-ea-008-dependson-declares-both-ordering-and-a-typed-requirement-in-one-static-array)_
 _Next: [BEH-EA-017](03-ports-slots-hooks-registries.md#beh-ea-017-configuration-is-a-contextreference-with-a-default-value)_

@@ -502,9 +502,6 @@ importers:
       '@awthaq/server':
         specifier: workspace:*
         version: link:../server
-      '@awthaq/sql':
-        specifier: workspace:*
-        version: link:../sql
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.1.2(effect@4.1.2)(redis@6.2.1)
@@ -521,6 +518,9 @@ importers:
       '@awthaq/password':
         specifier: workspace:*
         version: link:../password
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../sql
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test
@@ -1239,10 +1239,16 @@ importers:
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
+      '@awthaq/sql':
+        specifier: workspace:*
+        version: link:../sql
     devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.1.2(effect@4.1.2)(redis@6.2.1)
+      '@effect/sql-sqlite-node':
+        specifier: 'catalog:'
+        version: 4.1.2(effect@4.1.2)
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.1.2(effect@4.1.2)(vitest@5.0.2)

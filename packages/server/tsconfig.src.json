@@ -11,7 +11,8 @@
       "@/*": ["./src/*"],
       "@awthaq/core": ["../core/src/index.ts"],
       "@awthaq/ports": ["../ports/src/index.ts"],
-      "@awthaq/api": ["../api/src/index.ts"]
+      "@awthaq/api": ["../api/src/index.ts"],
+      "@awthaq/sql": ["../sql/src/index.ts"]
     }
   },
   "references": [
@@ -23,6 +24,9 @@
     },
     {
       "path": "../api/tsconfig.src.json"
+    },
+    {
+      "path": "../sql/tsconfig.src.json"
     }
   ]
 }

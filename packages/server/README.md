@@ -2,7 +2,7 @@
 
 HTTP stratum (5). Middleware implementations, core handlers, AuthHttp — the mechanism that registers a composed HttpApi with a router.
 
-**Shipped**: `Authentication` / `OptionalAuthentication` (cookie first, bearer second, per-request session memoization, rotated-secret delivery — BEH-EA-065–072), `Csrf` (double-submit cookie — BEH-EA-073–080), `Session` (the core `session` group handlers), `Account` (the core account group, including `deleteUser`'s transactional erasure cascade) and `AuthHttp` (`routes`/`docs`, the error-to-status mapping — BEH-EA-081–088).
+**Shipped**: `Authentication` / `OptionalAuthentication` (cookie first, bearer second, per-request session memoization, rotated-secret delivery — BEH-EA-065–072), `Csrf` (double-submit cookie — BEH-EA-073–080), `Session` (the core `session` group handlers), `Account` (the core account group, including `deleteUser`'s transactional erasure cascade) `AuthHttp` (`routes`/`docs`, the error-to-status mapping — BEH-EA-081–088) and `AuthHost` (the servable layer derived from `Auth.make` — BEH-EA-340/341, ADR-EA-044).
 
 See [`spec/overview.md`](../../spec/overview.md) for the full package map this fits into.
 
@@ -10,9 +10,46 @@ See [`spec/overview.md`](../../spec/overview.md) for the full package map this f
 
 The server delivers a rotated bearer token in the `set-auth-token` response header (a long-lived secret, `Cache-Control: no-store`). Effect's default redacted header names do not include it, so provide `AuthHttp.layerRedactedHeaders` (which adds `set-auth-token` and `x-jwt-token` to Effect's defaults) wherever requests or responses are logged or traced, and make sure any proxy preserves the header. A host-supplied logger that does not read `Headers.CurrentRedactedNames` must redact those names itself.
 
+## Serving a composition (`AuthHost`)
+
+`AuthHost.layer(auth, options)` turns an `Auth.make` result into the layer you serve. It derives everything that is a function of the plugin tuple, so you never write it; you pass what only you can choose and provide your ports.
+
+| `AuthHost` derives (composition-owned) | You provide (host-owned) |
+|---|---|
+| routes for `api` / `publicApi` / `adminApi` (`tier`), core's `session`/`account` handlers, OpenAPI/Scalar at `openapiPath`/`docsPath` | `persistence` (required): `{ records: "memory" }`, or `{ records: "sql", client, migrations, options? }` |
+| `auth.layer`, each plugin's `records` bundle for the mode, each plugin's declared `hookPoints` | `csrf` (required): `Csrf.layerConfig` or a `CsrfConfig` layer |
+| core's services over `Persistence.memory` / `Persistence.sql(options)`: `Users`, `Accounts`, `Sessions`, `Verification`, `AuditLog`, `AuthEvents`, `AuditChain`, erasure, export | `principalResolver` (default `Credentials.PrincipalResolverLive`) |
+| the registries: `Hooks.HooksLive`, `RateLimits.layer`, `Slots.layer`, `Credentials.CredentialResolversLive` | `services`: plugin configuration, extra-group handlers, adapters, gates |
+| the host middleware the groups declare (`AuthHttp.middlewareFor`) and the resolver | `taps`: your hook taps, built over the composition's own points |
+| `auth.userFieldsLayer` | `decorate`: wrap a composition-owned service in place (metrics, a fault) |
+| SQL: core's migrations then `auth.migrations`, with the ledger-drift refusal | ports, left in `RIn`: `PasswordHasher`, `Mailer`, `RateLimiter`, `ClientAddress`, `Encryption`, `SecureRandom`/`Digest`/`Mac`, `HttpClient`, ... |
+| `RequestContext.layer` and `BodyLimit.layer` (dials `requestContext`, `bodyLimit`, both default `true`) | platform, left in `RIn`: `HttpRouter`, `HttpPlatform`, `Etag.Generator`, `FileSystem`, `Path` (`HttpServer.layerServices` + `HttpRouter.layer`, or `HttpRouter.serve`/`toWebHandler`) |
+
+```ts
+const auth = Auth.make([Password.Password, Organization.Organization])
+
+const App = AuthHost.layer(auth, {
+  persistence: { records: "sql", client: SqlLive, migrations: "apply" },
+  csrf: Csrf.layerConfig,
+}).pipe(
+  Layer.provide(Layer.mergeAll(PasswordHasher.layerArgon2id, Mailer.layerConsole, RateLimiterLive, ClientAddress.layerDirect, EncryptionLive, FetchHttpClient.layer)),
+  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(HttpServer.layerServices),
+  Layer.provideMerge(HttpRouter.layer),
+)
+```
+
+**`RIn` is your to-do list.** Whatever the compiler still lists in the layer's requirements is a port, an adapter or a platform service only you can choose; `Layer.launch` does not compile until it is empty. Nothing composition-owned is ever left there.
+
+**Migrations (`records: "sql"`).** `migrations` is required. `"apply"` runs core's pending migrations, then the composition's (user-field columns included), when the layer is built and before anything is built over the client; with nothing pending it calls no migrator. `"verify"` applies nothing and refuses to build (`Migrations/Pending`, naming each pending migration): use it when `awthaq migration apply` is your deploy step, and for a CLI `app`, which must never migrate behind `migration apply --yes`. Either mode refuses a ledger that disagrees with the linker (`Migrations/LedgerDrift`, the CLI's check). Two replicas booting with `"apply"` are serialized by the migrator's ledger lock.
+
+**Beside it, not inside it.** Host jobs and edge middleware stay in your code, merged next to the layer: `Retention.layerScheduled`, `SecuritySignals.layer`, `SecurityHeaders.layer()`, `AuthHttp.cors(...)`, `AuthHttp.layerRedactedHeaders`, the SQL rate limiter's own store and ledger. A worker or a CLI command that needs the services without serving builds the same layer with `HttpRouter.layer` provided.
+
+**`services` versus `decorate`.** A `services` layer sits closest to the plugins and is merged into the output, so `yield*` returns the instance the plugins used. For a key the composition also provides, the plugins see yours but the output holds the composition's; `decorate` (built over the composition's service, shadowing it above) replaces one for everyone. `bodyLimit: false` (or `BodyLimit.config({ maxBytes })` in `services`) when a route of yours on the same router takes larger bodies.
+
 ## Request context (`RequestContext.layer`)
 
-`RequestContext.layer` is an **opt-in** global `HttpRouter` middleware: merge it beside `AuthHttp.routes(...)` (`Layer.mergeAll(BodyLimit.layer, RequestContext.layer)` over your app layer, as `examples/memory-server` and `examples/sql-server` do). It fills core's `AuthRequestContext` once per request with a correlation id (a sane `x-request-id`, else the `traceparent` trace id, else a fresh uuidv7), the client address (what the `ClientAddress` port resolves) and the user agent. Without it a session minted over HTTP records no address or user agent (the device list in `GET /session` is empty) and events carry no correlation id.
+`AuthHost.layer` installs `RequestContext.layer` by default (`requestContext: false` opts out). For a hand-wired composition it is an **opt-in** global `HttpRouter` middleware: merge it beside `AuthHttp.routes(...)`. It fills core's `AuthRequestContext` once per request with a correlation id (a sane `x-request-id`, else the `traceparent` trace id, else a fresh uuidv7), the client address (what the `ClientAddress` port resolves) and the user agent. Without it a session minted over HTTP records no address or user agent (the device list in `GET /session` is empty) and events carry no correlation id.
 
 `AuthHttp.coreHandlers` logs one warning at layer build when it finds a router without the middleware. A composition that runs without it on purpose (the in-process `@awthaq/test` harness does) silences the warning by providing `RequestContext.warnWhenAbsent` as `false`.
 

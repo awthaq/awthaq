@@ -13,6 +13,7 @@
 
 export * as Account from "./Account.ts";
 export * as Authentication from "./Authentication.ts";
+export * as AuthHost from "./AuthHost.ts";
 export * as AuthHttp from "./AuthHttp.ts";
 export * as BodyLimit from "./BodyLimit.ts";
 export * as Credentials from "./Credentials.ts";
