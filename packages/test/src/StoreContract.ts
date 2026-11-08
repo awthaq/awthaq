@@ -720,7 +720,8 @@ export const accounts: ReadonlyArray<AccountCase> = [
     run: Effect.gen(function* () {
       const store = yield* AccountStore.AccountStore;
       const transaction = yield* SqlTransaction.SqlTransaction;
-      const key = { providerId: "password", subject: "u1" };
+      // Any provider: the conflict is on (providerId, subject), the password one included.
+      const key = { providerId: "gitlab", subject: "u1" };
       yield* store.insertIfAbsent(newAccount("a1", "u1", key));
       yield* transaction.withTransaction(
         Effect.gen(function* () {
@@ -729,7 +730,7 @@ export const accounts: ReadonlyArray<AccountCase> = [
             true,
           );
           // A statement after the refused insert still runs: the transaction was not aborted.
-          assert.equal(Option.isSome(yield* store.getByKey("password", "u1", "")), true);
+          assert.equal(Option.isSome(yield* store.getByKey("gitlab", "u1", "")), true);
           assert.equal(
             Option.isSome(
               yield* store.insertIfAbsent(

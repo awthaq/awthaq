@@ -28,7 +28,7 @@
 //     re-enable an account Firebase had turned off).
 // and a password hash with no `hash_config` is unmappable too, since the hash cannot be verified.
 
-import type { UserImport } from "@awthaq/core";
+import { Accounts, type UserImport } from "@awthaq/core";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
@@ -216,7 +216,7 @@ export const mapUser = (
       }
       // `subject` omitted: a password account is keyed by the new user's own id (`Password.signUp`).
       credentials.push({
-        providerId: "password",
+        providerId: Accounts.PASSWORD_PROVIDER_ID,
         credentialHash: Redacted.make(
           FirebaseScryptVerifier.encodeHash({
             passwordHash: user.passwordHash,
@@ -228,6 +228,7 @@ export const mapUser = (
     }
 
     for (const info of user.providerUserInfo ?? []) {
+      // Firebase's own provider id for an email/password sign-in (handled above), not awthaq's.
       if (info.providerId === "password") continue;
       const subject = info.rawId ?? info.federatedId;
       const providerId = providerIdFor(info.providerId);
