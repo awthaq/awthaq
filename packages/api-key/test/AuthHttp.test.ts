@@ -86,6 +86,27 @@ const suite = (store: HarnessOptions["store"]) =>
       }
     });
 
+    // ADR-EA-047 (plan 26 ticket 20): the wiring probe. The resolver's throttle reads the request context the claim
+    // receives, so presentations from one address count against one bucket.
+    it("x-api-key presentations from one address count against one resolveByIp bucket", async () => {
+      const at = (clientAddress: string) =>
+        newApp({
+          rateLimiter: "enforcing",
+          clientAddress,
+          config: { resolveRateLimit: { limit: 2, window: Duration.minutes(1) } },
+        });
+      const app = at("198.51.100.21");
+      const key = await createKey(await app.signIn("probe-key"));
+      const present = (target: typeof app) =>
+        target
+          .request("GET", "/probe/machine", { headers: { "x-api-key": key.key } })
+          .then((response) => response.status);
+      assert.strictEqual(await present(app), 200);
+      assert.strictEqual(await present(app), 200);
+      // A throttled address is refused like a bad key (the machine tier declares only 401).
+      assert.strictEqual(await present(app), 401);
+    });
+
     it("revoking over HTTP kills the key on its very next request", async () => {
       const app = newApp();
       const user = await app.signIn("user-1");

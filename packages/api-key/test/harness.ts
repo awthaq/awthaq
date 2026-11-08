@@ -55,11 +55,14 @@ export interface HarnessOptions {
   readonly suite?: string;
   readonly config?: Partial<ApiKey.ApiKeyConfigShape>;
   readonly rateLimiter?: "permissive" | "enforcing";
+  /** ADR-EA-047: the address every request resolves to. */
+  readonly clientAddress?: string;
 }
 
 export const buildLayer = (options: HarnessOptions) => {
   const common = {
     rateLimiter: options.rateLimiter ?? "permissive",
+    ...(options.clientAddress === undefined ? {} : { clientAddress: options.clientAddress }),
     services: Layer.mergeAll(
       ProbeHandlers,
       ApiKey.config(options.config ?? {}),
