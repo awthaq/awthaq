@@ -34,6 +34,7 @@ import { SessionDelivery } from "@awthaq/server";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Mac from "effect/crypto/Mac";
 import * as Duration from "effect/Duration";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Layer from "effect/Layer";
@@ -880,11 +881,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               // the same on the response path (BEH-EA-064).
               const to = Users.emailOf(user);
               if (Option.isNone(to)) return;
-              const account = yield* accounts.findByProviderSubject(
-                Accounts.PASSWORD_PROVIDER_ID,
-                user.id,
-              );
-              if (Option.isNone(account)) {
+              if (!(yield* credential.has(user.id))) {
                 yield* mailer.send({ to: to.value, template: "reset-password-unavailable" });
                 return;
               }
@@ -968,6 +965,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // check, token budget, then the policy below, then the claim. A refusal inside `use` (a
         // veto, `SecondFactorRequired`, a crash) gives the token back; an outage of the
         // transaction itself is the typed `StoreUnavailable` (ADR-EA-028), never a defect.
+        //
+        // The policy's verdict, decided in `beforeClaim` (before the token is touched) and written
+        // in `use` (once it is consumed). The redeemer always runs `beforeClaim` first.
+        const accepted = yield* Deferred.make<PasswordCredential.Accepted>();
         const userId = yield* resetLinks(
           { token: input.token },
           ({ userId }) =>
@@ -998,30 +999,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                   ),
                 );
 
-              const account = yield* accounts
-                .findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, userId)
-                .pipe(
-                  Effect.flatMap(
-                    Option.match({
-                      // ARF-004: `requestReset` no longer mints a token for a
-                      // credential-less account, but one issued before that
-                      // fix (or a credential unlinked since) can still land
-                      // here — a dead token, not a defect.
-                      onNone: () => Effect.fail(new PasswordApi.TokenConsumed()),
-                      onSome: Effect.succeed,
-                    }),
-                  ),
-                );
-              const hash = yield* hasher.hash(input.password);
-              // ADR-EA-028: an outage is `StoreUnavailable` (503) and rolls the consume back; a
-              // credential unlinked since the lookup above is the same dead token as none at all.
-              yield* accounts
-                .updateCredentialHash(account.id, Redacted.make(hash))
-                .pipe(
-                  Effect.catchTag("AccountNotFound", () =>
-                    Effect.fail(new PasswordApi.TokenConsumed()),
-                  ),
-                );
+              // ARF-004: `requestReset` mints no token for a credential-less account, but one issued
+              // before that fix (or a credential unlinked since) can still land here: a dead token,
+              // not a defect. The new password is hashed only now that the token is consumed, so an
+              // unknown token costs no KDF. An outage is `StoreUnavailable` (503, ADR-EA-028) and
+              // rolls the consume back.
+              if (!(yield* credential.replace(userId, yield* Deferred.await(accepted)))) {
+                return yield* Effect.fail(new PasswordApi.TokenConsumed());
+              }
 
               // ARF-008: consuming a token mailed to the address proves the same mailbox control
               // `verifyEmail` demands: otherwise a user who resets is still refused at `signIn`.
@@ -1044,7 +1029,10 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             // ARF-002: the policy (including the breach check's network call) is decided before
             // the token is touched, so a weak password never burns the single-use token under any
             // `Verification` store, and no network I/O happens while the transaction is open.
-            beforeClaim: Effect.asVoid(credential.accept(input.password)),
+            beforeClaim: credential.accept(input.password).pipe(
+              Effect.flatMap((password) => Deferred.succeed(accepted, password)),
+              Effect.asVoid,
+            ),
           },
         ).pipe(Effect.catchTag("VerificationLink/Refused", refusedToken));
         // ALF-004: published only after the transaction above has actually committed, mirroring

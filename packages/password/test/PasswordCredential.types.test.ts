@@ -79,6 +79,12 @@ export const cannotLinkARawCandidate = (credential: PasswordCredential.PasswordC
   // @ts-expect-error - a raw `Redacted` is not an `Accepted`
   credential.linkFor(Redacted.make("x"));
 
+export const cannotReplaceWithARawCandidate = (
+  credential: PasswordCredential.PasswordCredentialShape,
+) =>
+  // @ts-expect-error - `replace` takes only an `Accepted`
+  credential.replace(Users.UserId("u-1"), Redacted.make("x"));
+
 // `verify` takes any claimant effect whose value carries the user id: a `Users.findByEmail`
 // lookup (`U = UserRecord`, `E = StoreUnavailable`) and a known id alike, with no annotation.
 export const verifiesALookup = (

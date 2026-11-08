@@ -588,3 +588,101 @@ describe("PasswordCredential.linkFor", () => {
     }).pipe(Effect.provide(layerWith(hasher)));
   });
 });
+
+describe("PasswordCredential.replace and has", () => {
+  /** An accepted candidate (the test config screens nothing). */
+  const acceptedSecret = Effect.flatMap(PasswordCredential.PasswordCredential, (credential) =>
+    credential.accept(secret),
+  );
+
+  it.effect(
+    "W3: replace for a user with none answers false, writes nothing, hashes nothing",
+    () => {
+      const hasher = recordingHasher();
+      return Effect.gen(function* () {
+        const credential = yield* PasswordCredential.PasswordCredential;
+        const accounts = yield* Accounts.Accounts;
+        const user = yield* userWith(undefined);
+        assert.isFalse(yield* credential.replace(user.id, yield* acceptedSecret));
+        assert.isTrue(
+          Option.isNone(
+            yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, user.id),
+          ),
+        );
+        assert.deepStrictEqual(hasher.hashed, ["awthaq/password/dummy"]);
+      }).pipe(Effect.provide(layerWith(hasher)));
+    },
+  );
+
+  it.effect("W4, W7: replace rewrites the stored hash, computing exactly one", () => {
+    const hasher = recordingHasher();
+    return Effect.gen(function* () {
+      const credential = yield* PasswordCredential.PasswordCredential;
+      const user = yield* userWith("h:the old password");
+      assert.isTrue(yield* credential.replace(user.id, yield* acceptedSecret));
+      assert.strictEqual(
+        Option.getOrThrow(yield* storedHash(user.id)),
+        `h:${Redacted.value(secret)}`,
+      );
+      assert.deepStrictEqual(hasher.hashed, ["awthaq/password/dummy", Redacted.value(secret)]);
+    }).pipe(Effect.provide(layerWith(hasher)));
+  });
+
+  it.effect("W5: has answers whether the user has a password credential", () => {
+    const hasher = recordingHasher();
+    return Effect.gen(function* () {
+      const credential = yield* PasswordCredential.PasswordCredential;
+      const accounts = yield* Accounts.Accounts;
+      const user = yield* userWith(undefined);
+      yield* accounts.link({ userId: user.id, providerId: "github", subject: "gh-1" });
+      assert.isFalse(yield* credential.has(user.id));
+      yield* accounts.link({
+        userId: user.id,
+        providerId: Accounts.PASSWORD_PROVIDER_ID,
+        subject: user.id,
+      });
+      assert.isTrue(yield* credential.has(user.id));
+    }).pipe(Effect.provide(layerWith(hasher)));
+  });
+
+  it.effect("W8: an Accounts outage during replace or has is StoreUnavailable", () => {
+    const hasher = recordingHasher();
+    const down = { now: false };
+    const flaky = accountsWith((real) => ({
+      findByProviderSubject: (...args) =>
+        down.now
+          ? Effect.fail(
+              new Errors.StoreUnavailable({ operation: "Accounts.findByProviderSubject" }),
+            )
+          : real.findByProviderSubject(...args),
+      updateCredentialHash: () =>
+        Effect.fail(new Errors.StoreUnavailable({ operation: "Accounts.updateCredentialHash" })),
+    }));
+    return Effect.gen(function* () {
+      const credential = yield* PasswordCredential.PasswordCredential;
+      const user = yield* userWith("h:the old password");
+      const password = yield* acceptedSecret;
+      // The write itself fails...
+      const writing = yield* credential.replace(user.id, password).pipe(Effect.flip);
+      assert.strictEqual(writing._tag, "StoreUnavailable");
+      // ...and so does the read before it.
+      down.now = true;
+      assert.strictEqual(
+        (yield* credential.replace(user.id, password).pipe(Effect.flip))._tag,
+        "StoreUnavailable",
+      );
+      assert.strictEqual(
+        (yield* credential.has(user.id).pipe(Effect.flip))._tag,
+        "StoreUnavailable",
+      );
+    }).pipe(
+      Effect.provide(
+        makeTestLayer({
+          config: { signInTimingFloor: "off" },
+          hasher: hasher.layer,
+          coreOverride: flaky,
+        }),
+      ),
+    );
+  });
+});

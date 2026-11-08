@@ -82,6 +82,17 @@ export interface PasswordCredentialShape {
   readonly linkFor: (
     password: Accepted,
   ) => Effect.Effect<(user: Users.UserRecord) => SignUp.LinkInput>;
+  /**
+   * Replaces the user's password credential with `password`; `false`, with nothing written and no
+   * hash computed, when there is none (ARF-004: a reset never links one). Runs inside the caller's
+   * unit of work.
+   */
+  readonly replace: (
+    userId: Users.UserId,
+    password: Accepted,
+  ) => Effect.Effect<boolean, Errors.StoreUnavailable>;
+  /** Whether the user has a password credential (ARF-004: which reset mail to send). */
+  readonly has: (userId: Users.UserId) => Effect.Effect<boolean, Errors.StoreUnavailable>;
 }
 
 interface Stored {
@@ -292,7 +303,62 @@ const make = Effect.gen(function* () {
       credentialHash: Redacted.make(hash),
     }));
 
-  return { verify, rehashIfStale, accept, linkFor };
+  /**
+   * Find, then update (or, under `"link"`, link one when there is none). The KDF runs at most once,
+   * and only once a write is certain. An account linked or unlinked by someone else between the
+   * read and the write is read again (the SQL `AccountStore`'s insert is `ON CONFLICT DO NOTHING`,
+   * so a lost race never aborts the caller's transaction); three lost races in a row are
+   * contention, reported as `StoreUnavailable`.
+   */
+  const write = (userId: Users.UserId, password: Accepted, ifAbsent: "link" | "refuse") =>
+    Effect.gen(function* () {
+      const hashed = yield* Effect.cached(
+        Effect.map(hasher.hash(password.candidate), Redacted.make),
+      );
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const account = yield* accounts.findByProviderSubject(
+          Accounts.PASSWORD_PROVIDER_ID,
+          userId,
+        );
+        if (Option.isNone(account) && ifAbsent === "refuse") return false;
+        const written = yield* Option.match(account, {
+          onSome: (found) =>
+            hashed.pipe(
+              Effect.flatMap((hash) => accounts.updateCredentialHash(found.id, hash)),
+              Effect.as(true),
+              Effect.catchTag("AccountNotFound", () => Effect.succeed(false)),
+            ),
+          onNone: () =>
+            hashed.pipe(
+              Effect.flatMap((hash) =>
+                accounts.link({
+                  userId,
+                  providerId: Accounts.PASSWORD_PROVIDER_ID,
+                  subject: userId,
+                  credentialHash: hash,
+                }),
+              ),
+              Effect.as(true),
+              Effect.catchTag("AccountAlreadyLinked", () => Effect.succeed(false)),
+            ),
+        });
+        if (written) return true;
+      }
+      return yield* Effect.fail(
+        new Errors.StoreUnavailable({ operation: "PasswordCredential.write" }),
+      );
+    });
+
+  const replace: PasswordCredentialShape["replace"] = (userId, password) =>
+    write(userId, password, "refuse");
+
+  const has: PasswordCredentialShape["has"] = (userId) =>
+    Effect.map(
+      accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, userId),
+      Option.isSome,
+    );
+
+  return { verify, rehashIfStale, accept, linkFor, replace, has };
 });
 
 /** The password credential module, exposed by `Password.layer` (ADR-EA-040) under the plugin's namespace. */
