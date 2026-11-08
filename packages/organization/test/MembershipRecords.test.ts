@@ -137,13 +137,31 @@ const suite = (
     it.effect("remove deletes the membership; a second remove fails", () =>
       Effect.gen(function* () {
         const records = yield* MembershipRecords.MembershipRecords;
-        yield* records.create({ userId: userA, organizationId: orgId, role: ["owner"] });
+        yield* records.create({ userId: userA, organizationId: orgId, role: ["member"] });
         yield* records.remove(userA, orgId);
         const found = yield* records.findByUserAndOrg(userA, orgId);
         assert.isTrue(Option.isNone(found));
         const failure = yield* records.remove(userA, orgId).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "MembershipRecordNotFound");
       }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "updateRole and remove refuse to leave the organization without an owner (MembershipRecords/LastOwner)",
+      () =>
+        Effect.gen(function* () {
+          const records = yield* MembershipRecords.MembershipRecords;
+          yield* records.create({ userId: userA, organizationId: orgId, role: ["owner"] });
+          yield* records.create({ userId: userB, organizationId: orgId, role: ["admin"] });
+          const demoted = yield* records.updateRole(userA, orgId, ["admin"]).pipe(Effect.flip);
+          assert.strictEqual(demoted._tag, "MembershipRecords/LastOwner");
+          const removed = yield* records.remove(userA, orgId).pipe(Effect.flip);
+          assert.strictEqual(removed._tag, "MembershipRecords/LastOwner");
+          // Keeping owner among other roles, and a non-owner's own writes, are not refused.
+          yield* records.updateRole(userA, orgId, ["admin", "owner"]);
+          yield* records.remove(userB, orgId);
+          assert.strictEqual(yield* records.countOwners(orgId), 1);
+        }).pipe(Effect.provide(layer)),
     );
 
     // BEH-EA-285 (plan 25 tickets 02–03): the owner count and the write are one step on every adapter.
@@ -230,6 +248,12 @@ const isolationCase: TestAuth.TableCase<
     const organizationId = yield* ambientOrganization;
     const userId = Users.UserId(`isolation-user-${isolationCounter}`);
     yield* records.create({ userId, organizationId, role: ["owner"] });
+    // A second owner, so removing or demoting the row is not refused as its organization's last owner (BEH-EA-285).
+    yield* records.create({
+      userId: Users.UserId(`isolation-co-owner-${isolationCounter}`),
+      organizationId,
+      role: ["owner"],
+    });
     return { userId, organizationId };
   }),
   methods: {

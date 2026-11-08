@@ -61,9 +61,9 @@ describe("organization decision reads stay on the primary (RRC-003)", () => {
         yield* Migrations.run(Organization.Organization.migrations).pipe(
           Effect.provideService(SqlClient.SqlClient, replicaClient.value),
         );
-        yield* staleRecords.create({ userId: member, organizationId: orgId, role: ["owner"] });
+        yield* staleRecords.create({ userId: member, organizationId: orgId, role: ["member"] });
 
-        yield* primary.create({ userId: member, organizationId: orgId, role: ["owner"] });
+        yield* primary.create({ userId: member, organizationId: orgId, role: ["member"] });
         yield* primary.remove(member, orgId);
 
         // Sanity: the replica really is stale.
