@@ -8,7 +8,6 @@ import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import { Admin } from "@awthaq/admin";
 import { ApiKey } from "@awthaq/api-key";
-import { Migration } from "@awthaq/cli";
 import { Auth, Migrations, UserFields } from "@awthaq/core";
 import { Jwt } from "@awthaq/jwt";
 import { Organization } from "@awthaq/organization";
@@ -383,14 +382,13 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
     yield* put(strings, [...Object.keys(built), ...Object.keys(Migrations), ...Object.keys(Auth)]);
   });
 
-  Then(
-    "it does not depend on a snapshot-diff planner, a checksum ledger, or a live-database drift check",
-    function* () {
-      for (const name of yield* take(strings)) {
-        assert.doesNotMatch(name, /snapshot|checksum|drift|planner|diff/i, name);
-      }
-    },
-  );
+  Then("it does not depend on a snapshot-diff planner or a checksum ledger", function* () {
+    // Plan 15: the key-level ledger check is core's `Migrations.status` (shared by the CLI and `AuthHost`),
+    // which `Auth.make` never calls; snapshot diffing and checksums remain a deferred CLI feature.
+    for (const name of yield* take(strings)) {
+      assert.doesNotMatch(name, /snapshot|checksum|planner/i, name);
+    }
+  });
 
   Given("a CLI schema-diff feature that will need the composed migration set", function* () {
     yield* Effect.void; // an assertion-only step: nothing to await
@@ -400,15 +398,14 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   When("the CLI feature is built", function* () {
     const built = Auth.make([MigPassword, MigOauth]);
     const report = yield* Effect.gen(function* () {
-      // The runner's two steps (what `migration apply` does): core first, then the linker's list.
-      yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
-      yield* Migrations.run(built.migrations);
-      return yield* Migration.inspect(built);
+      // The runner `migration apply` writes through: core first, then the linker's list.
+      yield* Migrations.apply(built.migrations);
+      return yield* Migrations.status(built.migrations);
     }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" })), Effect.scoped);
     const plugins = report.ledgers.find((entry) => entry.ledger === "plugins");
     yield* put(strings, [
       built.migrations.map((migration) => migration.name).join(","),
-      Migration.pluginKnown(built)
+      Migrations.pluginKnown(built.migrations)
         .map((entry) => entry.name)
         .join(","),
       String(plugins?.pending.length),

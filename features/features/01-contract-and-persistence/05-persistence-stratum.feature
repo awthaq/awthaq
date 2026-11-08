@@ -155,15 +155,16 @@ Feature: The Persistence Stratum
       When the linker composes the migration sequence
       Then "password"'s migration creating its table runs before "oauth"'s migration that references it
 
-  # BEH-EA-039 — spec/behaviors/05-persistence-stratum.md
+  # BEH-EA-039 — spec/behaviors/05-persistence-stratum.md. The key-level ledger check is core's
+  # `Migrations.status`, shared by `awthaq migration apply` and `AuthHost` (plan 15).
   @BEH-EA-039
   Rule: Schema diffing, snapshot comparison, and destructive-change guardrails are a deferred CLI feature, not a v1 runtime requirement
 
     @REQ-EA-103
-    Scenario: Auth.make functions without a snapshot-diff planner, checksum ledger, or drift check
+    Scenario: Auth.make functions without a snapshot-diff planner or a checksum ledger
       Given an application composing "Auth.make", "auth.layer", and "auth.migrations"
       When the application boots
-      Then it does not depend on a snapshot-diff planner, a checksum ledger, or a live-database drift check
+      Then it does not depend on a snapshot-diff planner or a checksum ledger
 
     @REQ-EA-104
     Scenario: A future CLI schema-diff feature consumes the runtime's existing auth.migrations value

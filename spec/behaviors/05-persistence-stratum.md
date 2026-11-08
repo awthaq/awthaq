@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-05 |
-> | Revision | 1.7 |
-> | Effective Date | 2026-10-18 |
+> | Revision | 1.8 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) <br> 1.3 (2026-10-13): BEH-EA-324 (sealed columns) and BEH-EA-325 (plugin records fail with StoreUnavailable) (plan 05) <br> 1.4 (2026-10-13): BEH-EA-325: every first-party plugin records module is converted (plan 05 phase 11) <br> 1.5 (2026-10-14): BEH-EA-324: the legacy-AAD read is removed (ADR-EA-019 revision 1.2); an envelope under a retired key still re-seals, one under an old AAD spelling is `Unreadable` <br> 1.6 (2026-10-18): BEH-EA-034 names the canonical AADs and `Persistence.sql({ encryptPii })`; BEH-EA-324 covers core's six columns and the third treatment (a typed domain failure); BEH-EA-339 (a composition's sealed columns are swept as one list) (ADR-EA-019 revision 1.3, plan 17) <br> 1.7 (2026-10-18): BEH-EA-035 retitled: a core store adapter owns its statements over the ambient `SqlClient` and a multi-statement primitive opens one unit (no repository layer beneath the store ports); BEH-EA-036 retitled: no store port accepts an offset, `UserStore.listPage` is the keyset subject; BEH-EA-033/034/325 name the store adapters (ADR-EA-041 revision 1.3, plan 16) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): the OHS-002 note names `SqlTransaction.transactional` (ADR-EA-037, plan 10 item 5) <br> 1.3 (2026-10-13): BEH-EA-324 (sealed columns) and BEH-EA-325 (plugin records fail with StoreUnavailable) (plan 05) <br> 1.4 (2026-10-13): BEH-EA-325: every first-party plugin records module is converted (plan 05 phase 11) <br> 1.5 (2026-10-14): BEH-EA-324: the legacy-AAD read is removed (ADR-EA-019 revision 1.2); an envelope under a retired key still re-seals, one under an old AAD spelling is `Unreadable` <br> 1.6 (2026-10-18): BEH-EA-034 names the canonical AADs and `Persistence.sql({ encryptPii })`; BEH-EA-324 covers core's six columns and the third treatment (a typed domain failure); BEH-EA-339 (a composition's sealed columns are swept as one list) (ADR-EA-019 revision 1.3, plan 17) <br> 1.7 (2026-10-18): BEH-EA-035 retitled: a core store adapter owns its statements over the ambient `SqlClient` and a multi-statement primitive opens one unit (no repository layer beneath the store ports); BEH-EA-036 retitled: no store port accepts an offset, `UserStore.listPage` is the keyset subject; BEH-EA-033/034/325 name the store adapters (ADR-EA-041 revision 1.3, plan 16) <br> 1.8 (2026-11-08): BEH-EA-039: the key-level ledger check is core's `Migrations.status`, shared by `awthaq migration apply` and the host composition's SQL mode; snapshot diffing and checksums stay a deferred CLI feature (plan 15) |
 
 ---
 
@@ -150,15 +150,20 @@ Core and plugin migrations are two id spaces and keep two ledgers (N11): `@awtha
 
 ```text
 REQUIREMENT: The runtime (`Auth.make`, `auth.layer`, `auth.migrations`) MUST
-             NOT depend on a snapshot-diff planner, a checksum ledger, or a
-             live-database drift check to function; those capabilities, when
-             built, MUST live in the CLI, consuming the same `auth.migrations`
-             value the runtime already produces.
+             NOT depend on a snapshot-diff planner or a checksum ledger. The
+             key-level ledger check (an applied id the linker does not
+             produce, a pending id that sorts before an applied one) is
+             core's `Migrations.status`, shared by `awthaq migration apply`
+             and a host composition's SQL mode; snapshot diffing and
+             checksums remain a deferred CLI feature, consuming the same
+             `auth.migrations` value the runtime already produces.
 ```
 
 `archive/PRD.md` §12 states this scoping decision directly: "Snapshot-diff planning with a checksum ledger and destructive-change guardrails (research 10) is a CLI feature layered on top, not a v1 runtime requirement." `research/10-schema-migrations.md`'s own recommended defaults describe the eventual shape (Drizzle-kit-style snapshot diff, Atlas-style destructive-change lint and plan files, Prisma-style drift detection) precisely as tooling built *on* `@effect/sql`, never as something `Auth.make` itself must compute before an application can boot.
 
 **First CLI guardrails (ECS-009).** The ordered-plan preview and the key-level drift refusal of [BEH-EA-204](26-cli.md#beh-ea-204-migration-status-and-apply-read-and-advance-the-ledger) are the first, minimum part of this CLI feature: `migration apply` prints the pending set, refuses on an applied id the linker does not know or a pending id that sorts before an applied one, and `migration status` fails with the drift exit code. Checksums and snapshot diffing remain deferred.
+
+*As shipped (plan 15).* The key-level check is not CLI-only any more: it is core's `Migrations.status` (read-only, never creates a ledger table), and the runner is `Migrations.apply` (refuses drift with `Migrations/LedgerDrift`, then applies core's pending batch and the plugins', calling no `Migrator` when nothing is pending) and `Migrations.verify` (applies nothing; refuses drift, and refuses a pending migration with `Migrations/Pending`). `awthaq migration apply` writes through `Migrations.apply`; a boot-time run that called `Migrator` and `Migrations.run` directly had no drift guard and silently skipped a plugin inserted before an applied one. `Auth.make` itself still calls none of them.
 
 ## BEH-EA-040: A plugin migration may only alter tables under its own prefix; shared tables are altered only through a declared extension point
 

@@ -25,7 +25,7 @@
 // it): `import --yes` creates it with `CREATE TABLE IF NOT EXISTS` (portable across the two dialects),
 // and plan mode only reads it when it exists.
 
-import { Accounts, AuthEvents, UserImport, Users } from "@awthaq/core";
+import { Accounts, AuthEvents, Migrations, UserImport, Users } from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -37,7 +37,6 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { requireService, withApplication } from "./Application.ts";
 import { ImportFailed, UsageError } from "./CliErrors.ts";
 import type { CliConfig } from "./Config.ts";
-import * as Migration from "./Migration.ts";
 import * as Output from "./Output.ts";
 import * as Sources from "./Sources.ts";
 
@@ -105,7 +104,7 @@ const ensureLedger = Effect.gen(function* () {
 const doneIds = (source: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    if (!(yield* Migration.tableExists(ledgerTable).pipe(Effect.orDie))) return new Set<string>();
+    if (!(yield* Migrations.tableExists(ledgerTable).pipe(Effect.orDie))) return new Set<string>();
     const rows = yield* sql<{
       readonly source_row_id: string;
     }>`SELECT source_row_id FROM ${sql(ledgerTable)} WHERE source = ${source} AND status = 'done'`.pipe(

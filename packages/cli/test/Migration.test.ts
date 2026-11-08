@@ -77,38 +77,16 @@ describe("Migration.status", () => {
       }).pipe(Effect.provide(Sql)),
   );
 
-  it.effect(
-    "reports drift (exit 7) when a ledger holds an applied id the linker does not know",
-    () =>
-      Effect.gen(function* () {
-        yield* run(Migration.apply(passwordAndRoles, yes));
-        const sql = yield* SqlClient.SqlClient;
-        yield* sql`INSERT INTO awthaq_plugin_migrations (migration_id, name) VALUES (99, '0099_gone_plugin_migration')`;
-        const { exit, stdout } = yield* run(Migration.status(passwordAndRoles));
-        assert.strictEqual(failureCode(exit), 7);
-        assert.isTrue(stdout.some((line) => line.includes("DRIFT")));
-      }).pipe(Effect.provide(Sql)),
-  );
-
-  it.effect(
-    "reports drift when a same-id row carries a different name (the plugin set changed under the ledger)",
-    () =>
-      Effect.gen(function* () {
-        yield* run(Migration.apply(passwordAndRoles, yes));
-        const sql = yield* SqlClient.SqlClient;
-        yield* sql`UPDATE awthaq_plugin_migrations SET name = '0001_other_plugin_create_x' WHERE migration_id = 1`;
-        const { exit } = yield* run(Migration.status(passwordAndRoles));
-        assert.strictEqual(failureCode(exit), 7);
-      }).pipe(Effect.provide(Sql)),
-  );
-
-  it.effect("reports drift when a pending id sorts before an applied one", () =>
+  // The detection itself (unknown id, renamed id, pending before applied) is core's `Migrations.status`
+  // (`packages/core/test/Migrations.test.ts`); here, how the command reports it.
+  it.effect("a drifted ledger exits 7 and prints DRIFT", () =>
     Effect.gen(function* () {
       yield* run(Migration.apply(passwordAndRoles, yes));
       const sql = yield* SqlClient.SqlClient;
       yield* sql`DELETE FROM awthaq_plugin_migrations WHERE migration_id = 1`;
       const { exit, stdout } = yield* run(Migration.status(passwordAndRoles));
       assert.strictEqual(failureCode(exit), 7);
+      assert.isTrue(stdout.some((line) => line.includes("DRIFT")));
       assert.isTrue(stdout.some((line) => line.includes("would be skipped")));
     }).pipe(Effect.provide(Sql)),
   );
