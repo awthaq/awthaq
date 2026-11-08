@@ -106,6 +106,15 @@ Feature: Admin and Impersonation
       And no new session is issued for the target user
       And the impersonation audit trail is still empty
 
+    # ADR-EA-045: the impersonation endpoints declare `SessionLifecycle.Swaps`, which delivers by cookie only.
+    @REQ-EA-1331
+    Scenario: A bearer request to impersonate is refused before anything is minted
+      Given a signed-in admin permitted to impersonate
+      When the admin calls "admin.impersonate" for a target user asking for bearer delivery
+      Then the call is rejected with "400 Bad Request"
+      And no new session is issued for the target user
+      And the impersonation audit trail is still empty
+
   # BEH-EA-214 — spec/behaviors/27-admin-impersonation.md
   @BEH-EA-214
   Rule: Self-impersonation and nested impersonation are refused

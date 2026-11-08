@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-026 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-11-08 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (TMS-005, TSS-007) |
+> | Change History | 1.0 (2026-09-29): Initial release (TMS-005, TSS-007) <br> 1.1 (2026-11-08): item 4: the concealed branch declines the endpoint's `SessionLifecycle.Mints` declaration (ADR-EA-045, architecture plan 21) |
 
 ---
 
@@ -25,7 +25,7 @@ Most applications want the plain experience (immediate feedback that an address 
 1. **The posture is a configuration choice:** `PasswordConfig.signUpEnumeration`, `"reveal"` (the default) or `"conceal"`.
 2. **`"reveal"` is BEH-EA-086's deliberate, documented exception.** `signUp` keeps `409 EmailAlreadyExists` and the immediate session. Its compensating controls are the per-source and per-address rate limits on `signUp` (`signUpByIp`, `signUp`), which bound enumeration by volume; it is not an unmetered oracle.
 3. **`"conceal"` answers `202` with an empty body for a fresh and an existing address alike, and issues no session.** A fresh address gets its account created (unverified) and the verification mail; an existing address's owner gets an `account-exists` mail carrying no token. The password is hashed in both branches, the transaction is attempted in both, and both mails are dispatched in the background, so status, body and the dominant cost match. The account is usable after the mailbox is proven, through `signIn`'s verified-email gate (`requireVerifiedEmail`, on by default); disabling that gate while concealing gives up the "no session until the mailbox is proven" property.
-4. **Contract:** `POST /password/sign-up` declares two success shapes, `200 SessionDto` and `202` empty, so a client written against either posture type-checks against both. `PasswordShape.signUp` is the reveal operation; `signUpConcealed` is the conceal one, and the HTTP handler picks by configuration.
+4. **Contract:** `POST /password/sign-up` declares two success shapes, `200 SessionDto` and `202` empty, so a client written against either posture type-checks against both. `PasswordShape.signUp` is the reveal operation; `signUpConcealed` is the conceal one, and the HTTP handler picks by configuration. The endpoint declares `SessionLifecycle.Mints` ([ADR-EA-045](045-session-lifecycle-on-the-contract.md)); the concealed branch mints nothing and settles the declaration with `SessionDelivery.decline(SessionLifecycle.MintGrant)`, after the marker has already validated the delivery header.
 
 ## Alternatives considered
 

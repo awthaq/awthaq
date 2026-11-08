@@ -1162,6 +1162,9 @@ importers:
       '@awthaq/ports':
         specifier: workspace:*
         version: link:../ports
+      '@awthaq/server':
+        specifier: workspace:*
+        version: link:../server
       '@awthaq/sql':
         specifier: workspace:*
         version: link:../sql
@@ -1172,9 +1175,6 @@ importers:
         specifier: 6.3.2
         version: 6.3.2
     devDependencies:
-      '@awthaq/server':
-        specifier: workspace:*
-        version: link:../server
       '@awthaq/test':
         specifier: workspace:*
         version: link:../test

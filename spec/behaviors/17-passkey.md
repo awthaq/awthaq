@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-17 |
-> | Revision | 1.5 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.6 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Amended BEH-EA-130/131's requirements with the user-presence and config-gated user-verification policy; added BEH-EA-255 (registration requires a fresh session), BEH-EA-256 (Conditional Create) and BEH-EA-257 (one stable random user handle), which the shipped code already enforced; banner replaced with implementation pointers (BPAS-007, CCR-EA-006) <br> 1.2 (2026-10-13): `POST /passkey/reauthenticate/verify` answers 401 when the session ended mid-request (BEH-EA-319, plan 10 item 3) <br> 1.3 (2026-10-13): BEH-EA-255 names `Sessions.requireFresh` as the gate (BEH-EA-320) <br> 1.4 (2026-10-18): BEH-EA-132 states the step order: every ceremony spends its challenge first, even when the client data is unreadable; admission refusals precede the attempt; a refused challenge outranks every other refusal (architecture plan 12) <br> 1.5 (2026-10-18): one implementation (`PasskeyCeremony`) for registration, sign-in and step-up; step-up pays the TSS-004 decoy verification; each endpoint's mapping from refusal to wire error is one total record (architecture plan 12) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Amended BEH-EA-130/131's requirements with the user-presence and config-gated user-verification policy; added BEH-EA-255 (registration requires a fresh session), BEH-EA-256 (Conditional Create) and BEH-EA-257 (one stable random user handle), which the shipped code already enforced; banner replaced with implementation pointers (BPAS-007, CCR-EA-006) <br> 1.2 (2026-10-13): `POST /passkey/reauthenticate/verify` answers 401 when the session ended mid-request (BEH-EA-319, plan 10 item 3) <br> 1.3 (2026-10-13): BEH-EA-255 names `Sessions.requireFresh` as the gate (BEH-EA-320) <br> 1.4 (2026-10-18): BEH-EA-132 states the step order: every ceremony spends its challenge first, even when the client data is unreadable; admission refusals precede the attempt; a refused challenge outranks every other refusal (architecture plan 12) <br> 1.5 (2026-10-18): one implementation (`PasskeyCeremony`) for registration, sign-in and step-up; step-up pays the TSS-004 decoy verification; each endpoint's mapping from refusal to wire error is one total record (architecture plan 12) <br> 1.6 (2026-11-08): `authenticateVerify` declares `Mints`, `reauthenticateVerify` `Refreshes` (ADR-EA-045, architecture plan 21) |
 ---
 
 > Status: implemented in `packages/passkey` (`Passkey.ts`, `PasskeyCeremony.ts`, `PasskeyConfig.ts`, `ChallengeStore.ts`, `PasskeyApi.ts`, `PasskeyCredentials.ts`, `PasskeyUserHandles.ts`; tests `packages/passkey/test`, `packages/ports/test/WebAuthn.test.ts`; the Gherkin scenarios are wired). The `@awthaq/passkey` plugin, the `WebAuthn` port (`@awthaq/ports`, `layerSimpleWebAuthn` over `@simplewebauthn/server`) and the browser layer (`@awthaq/client`'s `passkeyClient`) are implemented and tested against every behavior below; the requirements state what the shipped code enforces. Known remaining gaps are listed in `packages/passkey/README.md` ("Limits").
@@ -273,5 +273,7 @@ REQUIREMENT: The `user.id` placed in every registration's creation options
 ```
 
 A discoverable credential's assertion returns the handle it was created with, and a credential manager keys its whole per-account view on it, so re-randomizing it per ceremony (as a first implementation did, persisting a value the authenticator never bound) breaks discoverable sign-in and the signals surface. It is random rather than derived from the user id or email so the value an authenticator stores cannot be used to identify the account elsewhere (`PasskeyUserHandles`, table `passkey_user_handle`).
+
+`passkey.authenticateVerify` declares `SessionLifecycle.Mints` and `passkey.reauthenticateVerify` `Refreshes` ([ADR-EA-045](../decisions/045-session-lifecycle-on-the-contract.md)).
 
 _Previous: [BEH-EA-256](17-passkey.md#beh-ea-256-conditional-create-is-a-separate-config-gated-ceremony-with-its-own-challenge-scope) | Next: [BEH-EA-137](18-roles-subject-resolver.md#beh-ea-137-the-subjectresolver-slot-defaults-to-identity-only)_

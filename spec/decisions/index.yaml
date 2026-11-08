@@ -178,3 +178,7 @@ entries:
     file: "044-host-composition.md"
     title: "The Servable Composition Is Derived From Auth.make by One Host Module; the Host Provides Only What It Owns"
     status: "Accepted — implemented"
+  - id: "ADR-EA-045"
+    file: "045-session-lifecycle-on-the-contract.md"
+    title: "An Endpoint's Effect on the Caller's Session Is Declared on the HttpApi Contract"
+    status: "Accepted — implemented"

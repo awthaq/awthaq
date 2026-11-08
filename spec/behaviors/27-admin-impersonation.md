@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-27 |
-> | Revision | 1.6 |
-> | Effective Date | 2026-10-13 |
+> | Revision | 1.7 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-13): Initial release, replacing [MOD-EA-015](../models/15-admin-impersonation.md)'s non-normative sketch (CCR-EA-004) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, IDS-009, CCR-EA-006) <br> 1.2 (2026-10-13): `deleteUser` passes an `ErasureInitiator.Admin({ adminUserId })` to `eraseAccount` (architecture plan 03) <br> 1.3 (2026-10-13): the ban note is declared personal data of its event: blanked when the banned person is erased and never delivered in a webhook (architecture plan 09) <br> 1.4 (2026-10-13): IDS-002: a CrossTenant witness replaces the anyTenant boolean; the store filters and fails with StoreUnavailable (plan 05 phase 5) <br> 1.5 (2026-10-18): BEH-EA-221: every predicate receives `tenantId` and each operation names its one predicate; BEH-EA-221 no longer says `BeforeCredentialReset` is unconsulted; BEH-EA-224: `actionDenied` covers all five predicates and names its target; BEH-EA-212: predicates are read per request (plan 13) <br> 1.6 (2026-10-18): BEH-EA-211 is titled after `Credentials`' session resolution, not the removed `resolvePrincipal` (plan 11) |
+> | Change History | 1.0 (2026-09-13): Initial release, replacing [MOD-EA-015](../models/15-admin-impersonation.md)'s non-normative sketch (CCR-EA-004) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, IDS-009, CCR-EA-006) <br> 1.2 (2026-10-13): `deleteUser` passes an `ErasureInitiator.Admin({ adminUserId })` to `eraseAccount` (architecture plan 03) <br> 1.3 (2026-10-13): the ban note is declared personal data of its event: blanked when the banned person is erased and never delivered in a webhook (architecture plan 09) <br> 1.4 (2026-10-13): IDS-002: a CrossTenant witness replaces the anyTenant boolean; the store filters and fails with StoreUnavailable (plan 05 phase 5) <br> 1.5 (2026-10-18): BEH-EA-221: every predicate receives `tenantId` and each operation names its one predicate; BEH-EA-221 no longer says `BeforeCredentialReset` is unconsulted; BEH-EA-224: `actionDenied` covers all five predicates and names its target; BEH-EA-212: predicates are read per request (plan 13) <br> 1.6 (2026-10-18): BEH-EA-211 is titled after `Credentials`' session resolution, not the removed `resolvePrincipal` (plan 11) <br> 1.7 (2026-11-08): the impersonation endpoints declare `SessionLifecycle.Swaps`; bearer delivery is refused (ADR-EA-045, architecture plan 21) |
 ---
 
 > Implemented in `@awthaq/admin` (`Admin.ts`, `AdminApi.ts`, `ImpersonationRecords.ts`, `AdminTenants.ts`; tests `packages/admin/test`); BEH-EA-209 through 211 also extend `@awthaq/core`'s `Sessions` (`packages/core/test/Sessions.test.ts`) and `@awthaq/server`'s `Authentication`; the Gherkin scenarios in `features/features/09-admin-and-impersonation/27-admin-impersonation.feature` are wired; the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
@@ -440,5 +440,7 @@ REQUIREMENT: `Admin` MUST publish `auth.admin.actionDenied { adminUserId,
 ```
 
 Denials, changes and revocations are exactly the events a security review reconstructs "who did what to whom" from; making them `AuthEvent`s (rather than logs) puts them on the durable audit path BEH-EA-100 already guarantees, with no per-plugin persistence.
+
+`admin.impersonate`, `admin.stopImpersonating` and `admin.forceStop` declare `SessionLifecycle.Swaps` ([ADR-EA-045](../decisions/045-session-lifecycle-on-the-contract.md)): a request asking `X-Awthaq-Token-Delivery: bearer` is refused `400 InvalidTokenDelivery` before anything is minted, `SessionDelivery.swapIn` sets the impersonation cookie, `swapOut` expires it, and a `forceStop` of another admin's episode declines.
 
 _Previous: [BEH-EA-223](27-admin-impersonation.md#beh-ea-223-an-admin-manages-a-users-own-sessions-never-an-impersonation-episodes) | Next: [BEH-EA-230](28-tenancy.md#beh-ea-230-the-tenant-is-an-ambient-reference-that-defaults-to-none)_

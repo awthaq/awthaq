@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-GLOSSARY |
-> | Revision | 1.11 |
+> | Revision | 1.12 |
 > | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) <br> 1.7 (2026-10-18): External identity, Email trust and Federated identity resolution (architecture plan 14) <br> 1.8 (2026-10-18): Credential carrier and Tier; CurrentPrincipal names `CurrentUser.current` as the user-tier read (architecture plan 11) <br> 1.9 (2026-10-18): Link purpose; VerificationToken names `VerificationLink.redeemer` (architecture plan 18) <br> 1.10 (2026-10-18): Sealed column (architecture plan 17) <br> 1.11 (2026-11-08): AuthHost; Port: what the composition owns is not a port; Auth.make is served with `AuthHost.layer`; TestAuth is `AuthHost.layer` over test ports (ADR-EA-044, architecture plan 15) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) <br> 1.7 (2026-10-18): External identity, Email trust and Federated identity resolution (architecture plan 14) <br> 1.8 (2026-10-18): Credential carrier and Tier; CurrentPrincipal names `CurrentUser.current` as the user-tier read (architecture plan 11) <br> 1.9 (2026-10-18): Link purpose; VerificationToken names `VerificationLink.redeemer` (architecture plan 18) <br> 1.10 (2026-10-18): Sealed column (architecture plan 17) <br> 1.11 (2026-11-08): AuthHost; Port: what the composition owns is not a port; Auth.make is served with `AuthHost.layer`; TestAuth is `AuthHost.layer` over test ports (ADR-EA-044, architecture plan 15) <br> 1.12 (2026-11-08): Session lifecycle (ADR-EA-045, architecture plan 21) |
 
 ---
 
@@ -69,6 +69,10 @@ qadi's environment value carrying the current request's `AuthSubject`, the thing
 ### Session
 
 A `Model.Class` entity representing one authenticated device or client instance. Sessions are opaque `id.secret` tokens; only `SHA-256(secret)` is stored at rest, never the secret itself. A session carries absolute and idle expiry, refreshes on a throttled sliding schedule, and is reissued (not extended) at sign-in and at privilege change. See: [BEH-EA-049](behaviors/07-sessions.md#beh-ea-049-a-session-token-is-an-opaque-idsecret-pair).
+
+### Session lifecycle
+
+What a successful response of an endpoint does to the caller's own session, declared on the contract with one of five `SessionLifecycle` markers ([ADR-EA-045](decisions/045-session-lifecycle-on-the-contract.md), [BEH-EA-343](behaviors/04-contract-stratum.md#beh-ea-343-an-endpoint-declares-what-it-does-to-the-callers-session-on-the-contract)): `Mints` (a new session), `Rotates` (the credential is replaced), `Ends` (the caller's session ends), `Swaps` (impersonation shadows the caller's cookie and back) and `Refreshes` (the session's view or subject changes, the credential does not). The first four provide a **grant** (`MintGrant`, `EndGrant`, `SwapGrant`), the capability `SessionDelivery`'s functions require, which the handler settles by delivering or declining.
 
 ### VerificationToken
 

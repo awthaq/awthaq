@@ -9,13 +9,14 @@
 // always checked (BEH-EA-012, MA-005), and the runtime cycle detection and
 // migration ordering (BEH-EA-016) — all exercised by `test/AuthPlugin.test.ts`.
 
-import { AuthCore } from "@awthaq/api";
+import { AuthCore, SessionLifecycle } from "@awthaq/api";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as Layer from "effect/Layer";
 import type * as Types from "effect/Types";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as OpenApi from "effect/http-api/OpenApi";
 import type * as SqlClient from "effect/sql/SqlClient";
 import { type SealedColumn, TenantScope, type TenantScoped } from "@awthaq/sql";
 import * as AuthPlugin from "./AuthPlugin.ts";
@@ -973,6 +974,17 @@ const contributionsOf = (
 ];
 
 /**
+ * ADR-EA-045: validates the composed contract's session-lifecycle declarations (`inventory` throws, at
+ * composition time, on an endpoint declaring two kinds, like a duplicate route) and documents them in the
+ * OpenAPI document (`x-awthaq-session`, `no-store`, `set-auth-token`, `x-awthaq-session-ended`). An
+ * application that sets its own api-level `OpenApi.Transform` replaces this one; compose the two by calling
+ * `SessionLifecycle.openApi(SessionLifecycle.inventory(api))` inside its own.
+ */
+const lifecycleDocumented = <Groups extends HttpApiGroup.Constraint>(
+  api: HttpApi.HttpApi<"auth", Groups>,
+) => api.annotate(OpenApi.Transform, SessionLifecycle.openApi(SessionLifecycle.inventory(api)));
+
+/**
  * Every contributed group, added in one call —
  * `HttpApiGroup.Constraint` values, read straight off each `HttpApi`, prove
  * `.add`'s non-empty-tuple parameter through the `firstGroup === undefined`
@@ -1033,7 +1045,7 @@ const composeApi = (
   if (firstGroup === undefined) {
     throw new EmptyPluginTuple({ message: "awthaq: Auth.make requires at least one plugin" });
   }
-  return HttpApi.make("auth").add(firstGroup, ...restGroups);
+  return lifecycleDocumented(HttpApi.make("auth").add(firstGroup, ...restGroups));
 };
 
 /**
@@ -1054,7 +1066,7 @@ const composeTier = (
   const [firstGroup, ...restGroups] = groups;
   return firstGroup === undefined
     ? HttpApi.make("auth")
-    : HttpApi.make("auth").add(firstGroup, ...restGroups);
+    : lifecycleDocumented(HttpApi.make("auth").add(firstGroup, ...restGroups));
 };
 
 /**

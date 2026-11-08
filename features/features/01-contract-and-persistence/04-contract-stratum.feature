@@ -253,3 +253,26 @@ Feature: The Contract Stratum
       When "Auth.make" composes the tuple
       Then the composed api's groups are "session", "account" and "password"
       And a plugin contributing a group id "session" is rejected as "E_GROUP_CONFLICT" naming "core"
+
+  # BEH-EA-343 — spec/behaviors/04-contract-stratum.md (ADR-EA-045). The compiler-checked half is the two
+  # `// type-gate:` blocks in features/step-definitions/CompileTimeGates.ts.
+  @BEH-EA-343 @compile-time
+  Rule: An endpoint declares what it does to the caller's session on the contract
+
+    @REQ-EA-1328
+    Scenario: A handler of an undeclared endpoint that calls SessionDelivery cannot be served
+      Given an endpoint that declares no session lifecycle
+      When its handler calls "SessionDelivery.decline(SessionLifecycle.MintGrant)"
+      Then the group layer still requires "SessionLifecycle.MintGrant"
+
+    @REQ-EA-1329
+    Scenario: A declared endpoint's handler receives its grant
+      Given an endpoint declaring "SessionLifecycle.Mints"
+      When its handler calls "SessionDelivery.decline(SessionLifecycle.MintGrant)"
+      Then the group layer requires nothing more
+
+    @REQ-EA-1330
+    Scenario: The composed contract states the session lifecycle of each endpoint
+      Given a plugin tuple containing "password"
+      When "Auth.make" composes the tuple
+      Then the composed contract declares "password.signIn" as "mints" and "session.signOut" as "ends"

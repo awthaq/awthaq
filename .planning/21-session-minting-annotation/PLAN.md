@@ -875,3 +875,40 @@ New REQ ids are the next free ones at execution time (above `REQ-EA-1306` today;
 6. **JWT session-mirror cookie.** Should an `Ends` response also expire the JWT mirror cookie (today it is re-minted on sign-out and lives out its `ttl`, `jwt/src/Jwt.ts:367-372`)? Recommended: a follow-up ticket, not this plan.
 7. **Password reset and email-change confirmation** revoke all of the user's sessions from a request that carries no session. Declare them `Ends` (the browser that opened the link may hold one of those sessions, and would then get its cookie expired), or leave them undeclared (recommended: the request presents no credential, so there is nothing of the caller's to end)?
 8. **Delivery validation order.** Is it acceptable that a request with both an invalid delivery header and no session may answer `400` or `401` depending on middleware order (recommended: yes; both refuse before anything is minted)?
+
+---
+
+## Decisions taken (implementation, 2026-11-08, effect 4.1.2)
+
+Every open question took the plan's recommended default (approved by the user):
+
+1. **Q1 — body `token`:** kept. A bearer delivery carries the token in the body **and** in `set-auth-token`.
+2. **Q2 — bearer impersonation:** refused. `Swaps` resolves delivery `cookieOnly`: `X-Awthaq-Token-Delivery: bearer` answers `400 InvalidTokenDelivery` before the handler runs (BDD REQ-EA-1331).
+3. **Q3 — the `Refreshes` set:** exactly the recommended six (`password.account.reauthenticate`, `passkey.reauthenticate.reauthenticateVerify`, `organization.setActive`, `.setActiveTeam`, `.leave`, `.acceptInvitation`). Role assignment, `organization.create`/`delete` and `updateMemberRole` are not declared (REQ-EA-698's examples changed from "role assignment" to "switching the active organization" accordingly).
+4. **Q4 — unsettled declared endpoint:** dies (`Defects/InvariantViolation`, invariant `SessionLifecycleUnsettled`, 500) in every environment.
+5. **Q5 — core's cookie writers:** moved. `SessionCookie.set`/`expire`/`expireImpersonation` live in `packages/server/src/internal/SessionCookie.ts`; core keeps `render`/`renderAt` and now exports `baseOptions` (the expiry needs the mode attributes).
+6. **Q6 — JWT session-mirror cookie on `Ends`:** not done; a follow-up (no ticket written: `.scratch/` is never staged).
+7. **Q7 — password reset / email-change confirmation:** left undeclared.
+8. **Q8 — 400 vs 401 ordering:** accepted. The endpoint-level marker is the innermost middleware (effect 4.1.2 applies an endpoint's middleware set first-to-innermost), so `Authentication`/`CsrfProtection` run first and a request with no session answers 401/403 before the delivery check.
+
+Ids allocated: ADR-EA-045, BEH-EA-343, REQ-EA-1326..1331.
+
+What differs from the plan text (stale against effect 4.1.2 or the tree after plans 11–19, 15):
+
+- **Module paths:** `effect/http-api/*`, `effect/http/*`, `effect/reactivity/*` (the plan's `effect/unstable/...`).
+- **`Sessions.IssuedSession`** (plan 11) is used directly; no local `Issued` interface.
+- **Rotation delivery** is `Credentials.ts`'s `rotationDelivery`, registered through `HttpEffect.appendPreResponseHandler` with the request provided (`httpScope.deliver`). `SessionDelivery.end` removes `set-auth-token` in a handler registered later, so it wins; a real integration case pins it (`Authentication.test.ts`, "a bearer sign-out after a verify-time rotation drops set-auth-token"), besides the unit case in `SessionLifecycle.test.ts`.
+- **`Ends` declares no error,** so the server half takes a delivery *resolver* (`deliveryOf(rule)` or `noDelivery`) instead of the plan's `rule: "none"` branch, whose static type still carried `InvalidTokenDelivery` and did not fit the marker's `unhandled` error channel.
+- **`SessionLifecycle.openApi`** is typed `(spec: Record<string, unknown>) => Record<string, unknown>` (oxlint forbids `any`); it is assignable to `OpenApi.Transform`. Effect 4.1.2's generator does document middleware-declared errors, so the 400 stays in the document without help (pinned).
+- **Marker keys** are `awthaq/api/SessionLifecycle/<Kind>` (the plan's sketch used `awthaq/SessionLifecycle/<Kind>`).
+- **`toSessionDto`** moved to `server/src/internal/SessionDto.ts` (re-exported as `Session.toSessionDto`): `Session.ts` now imports `SessionDelivery`, which imported `toSessionDto` from `Session.ts` (a cycle `pnpm circular` would refuse).
+- **TS2883:** handler files whose inferred types name a marker they never mention export a type alias of it (`MagicLinkLifecycle`, `PasskeyLifecycle`, `SamlLifecycle`, ..., `Account.AccountLifecycle`, and `OrganizationHandlersLifecycle` tagged `@public` for knip), the repo's existing convention for declaration emit.
+- **Phase 2's transitional `respond(request, mint)`** was an overload typed through `ReturnType<typeof f<E, R>>`; removed in phase 4 as planned.
+- **`SessionDelivery.test.ts` and `SessionDelivery.seam.test.ts`** were both deleted; `server/test/SessionLifecycle.test.ts` (12 cases, one served `HttpApi`) covers §5.1 items 5–13 and the delivery cases they held.
+- **Hand-wired compositions** that needed `AuthHttp.sessionLifecycle`: `server/test/AuthHttp.test.ts`, `Cors.test.ts`, `cli/test/support/TestServer.ts`, `features/step-definitions/SessionServer.ts`, `web/test/CookieJar.test.ts` (its login endpoint now declares `Mints`). The three qadi tests' login endpoints declare `Mints` and answer through `SessionDelivery.respond` instead of moving to `TestAuth.signInAs` (smaller change, same proof).
+- **Phase 0:** the pins are `it.effect.fails`/`it.fails` cases (password wire test, client, React) rather than a BDD scenario: effect-cucumber has no expected-fail form. The bearer `changePassword` BDD scenario (REQ-EA-1326) and the sign-out one (REQ-EA-1327) landed with phase 5. The password pin flipped in phase 4 (the server fix alone repairs it: the transport already stored `set-auth-token`), the client pins in phase 5, the React pin in phase 6.
+- **Spike S2 held:** a `layerClient` built with `Layer.provide(Reactivity.layer)` beside the transport reaches the registry's `Reactivity`; the fallback was not needed.
+- **`Auth.make`** annotates `api` and both tiers (`publicApi`, `adminApi`) with the transform, and `inventory` runs there (a double declaration is refused at composition, pinned in `core/test/AuthPlugin.test.ts`).
+- **Plugin contract pins** live in each plugin's existing `test/Contract.test.ts` (a `session lifecycle` describe beside the harness), operation ids as Effect derives them (`passkey.authenticate.authenticateVerify`, `password.account.changePassword`, `device_authorization.token`, `saml.account.logout`, ...).
+- **`spec/README.md`'s decisions table** still stops at ADR-EA-040 (stale before this plan; not extended).
+- **No `.scratch/session-minting-annotation/issues/` tickets** were written (`.scratch/` is never staged).

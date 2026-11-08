@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-003 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-11-08 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006); Core groups inventory added (`session` incl. `revokeAll`, `account` incl. `updateProfile`, `deleteUser`, `exportData`; `subject` owned by `@awthaq/qadi`); the `Auth.api`/`addHttpApi` sentence replaced with `Auth.make`'s composition (AVS-008) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Status flipped from "design; implementation deferred" to implemented — the decision is visible in `packages/` (AVS-008, DTWS-001, CCR-EA-006); Core groups inventory added (`session` incl. `revokeAll`, `account` incl. `updateProfile`, `deleteUser`, `exportData`; `subject` owned by `@awthaq/qadi`); the `Auth.api`/`addHttpApi` sentence replaced with `Auth.make`'s composition (AVS-008) <br> 1.2 (2026-11-08): Consequences: the contract also carries each endpoint's session lifecycle (ADR-EA-045, architecture plan 21) |
 
 ---
 
@@ -42,7 +42,7 @@ subject: current
 
 ## Consequences
 
-**Positive**: One typed value produces both the server implementation and every client (`HttpApiClient.make` for plain Effect clients, `AtomHttpApi.Service` for reactive React/Next.js clients, PRD §16); error codes for i18n catalogs derive from the same contract; adding a plugin's group to `auth.api` automatically extends every downstream client's type with zero hand-written glue.
+**Positive**: One typed value produces both the server implementation and every client (`HttpApiClient.make` for plain Effect clients, `AtomHttpApi.Service` for reactive React/Next.js clients, PRD §16); error codes for i18n catalogs derive from the same contract; adding a plugin's group to `auth.api` automatically extends every downstream client's type with zero hand-written glue. The contract also carries each endpoint's session lifecycle (`SessionLifecycle` markers, [ADR-EA-045](045-session-lifecycle-on-the-contract.md)), which the server's delivery, the bearer client, React and the OpenAPI document all read.
 
 **Negative**: `HttpApi` in the v3 line is officially "Unstable" with a known middleware-skipping bug class and no dedicated web guide (research/01-effect-ecosystem.md: "officially 'Unstable' ... a known middleware-skipping bug class (#6121), and no streaming/SSE in v3"); awthaq's public contract surface is therefore coupled to the stability trajectory of one still-evolving Effect module, mitigated in v1 by targeting v4 where `HttpApi` streaming and the more mature `addHttpApi`/multi-scheme middleware land (ADR-EA-007).
 

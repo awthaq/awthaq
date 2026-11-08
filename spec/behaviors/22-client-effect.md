@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-22 |
-> | Revision | 1.0 |
-> | Effective Date | 2026-09-12 |
+> | Revision | 1.1 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-11-08): BEH-EA-175 MNA-005: the bearer store follows `set-auth-token` and `x-awthaq-session-ended`; `captureSessionToken` is removed (ADR-EA-045, architecture plan 21) |
 ---
 
 > Implemented in `@awthaq/client` — the code and tests behind each BEH id are mapped in [`spec/traceability.md`](../traceability.md). Some of its BDD scenarios are still `@skip @unwired`.
@@ -147,7 +147,7 @@ REQUIREMENT: A client-side policy that needs to modify every outgoing request
 
 `usage-examples-v4.md` §11.3 shows a native client reading a token from `Keychain` and attaching it via exactly this hook. Because `transformClient` composes with the CSRF middleware seam (BEH-EA-170) rather than replacing it, an application can add its own cross-cutting client behavior without touching, wrapping, or shadowing any of the generated per-endpoint methods.
 
-**Bearer clients get the same seam, shipped (MNA-005).** Because `Sessions.verify` rotates the session secret on its throttled touch and the replaced secret survives only `SessionConfig.rotationGrace` ([BEH-EA-052](07-sessions.md#beh-ea-052-idle-window-refresh-is-throttled-to-at-most-one-write-per-touchevery)), a bearer client that never reads the `set-auth-token` response header (`Api.ROTATED_TOKEN_HEADER`) is silently logged out within the touch interval. `@awthaq/client` therefore ships the contract rather than leaving it to every application: a `BearerTokenStore` service (`get`/`set`/`clear`; `BearerTokenStoreMemory` is process-local, durable Keychain/Keystore storage is the application's own implementation of the service) and `bearerTransformClient(store)`, passed as `transformClient`, which attaches `Authorization: Bearer <token>` from the store and persists a rotated token from every response that carries the header. An idle-expired or revoked token surfaces as the typed `Unauthenticated`; the client contract is to re-authenticate and `set` a fresh token. Deployments MUST preserve the `set-auth-token` header through proxies and, cross-origin, expose it via CORS; the token is a long-lived secret and MUST NOT be logged (request loggers must redact `set-auth-token` and `authorization`).
+**Bearer clients get the same seam, shipped (MNA-005).** Because `Sessions.verify` rotates the session secret on its throttled touch and the replaced secret survives only `SessionConfig.rotationGrace` ([BEH-EA-052](07-sessions.md#beh-ea-052-idle-window-refresh-is-throttled-to-at-most-one-write-per-touchevery)), a bearer client that never reads the `set-auth-token` response header (`Api.ROTATED_TOKEN_HEADER`) is silently logged out within the touch interval. `@awthaq/client` therefore ships the contract rather than leaving it to every application: a `BearerTokenStore` service (`get`/`set`/`clear`; `BearerTokenStoreMemory` is process-local, durable Keychain/Keystore storage is the application's own implementation of the service) and `bearerTransformClient(store)`, passed as `transformClient`, which attaches `Authorization: Bearer <token>` from the store and follows the headers every declared response carries ([ADR-EA-045](../decisions/045-session-lifecycle-on-the-contract.md)): it persists the token of every response that carries `set-auth-token` (every bearer mint sends it, not only a rotation) and clears the store on `x-awthaq-session-ended`, which wins over a `set-auth-token` on the same response. No call is wrapped by hand; the former `captureSessionToken` is gone. An idle-expired or revoked token surfaces as the typed `Unauthenticated`; the client contract is to re-authenticate and `set` a fresh token. Deployments MUST preserve the `set-auth-token` header through proxies and, cross-origin, expose it via CORS; the token is a long-lived secret and MUST NOT be logged (request loggers must redact `set-auth-token` and `authorization`).
 
 _Previous: [BEH-EA-174](22-client-effect.md#beh-ea-174-session-helpers-are-the-hand-written-remainder) | Next: [BEH-EA-176](22-client-effect.md#beh-ea-176-a-promise-facade-is-opt-in-never-a-second-client)_
 

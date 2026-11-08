@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-33 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (SOS-001, BCR-005, SOS-004, MLO-002; wayfinder ticket 05 §3), replacing [MOD-EA-005](../models/05-email-otp.md)'s non-normative sketch <br> 1.1 (2026-10-13): BEH-EA-273: the sign-in half of the channel step is `SignIn.complete` (ADR-EA-038, architecture plan 01) <br> 1.2 (2026-10-13): BEH-EA-273 redeems the code through `Verification.redeem`: an outage while completing leaves it usable with its attempt budget unchanged (ADR-EA-039, plan 07) |
+> | Change History | 1.0 (2026-09-29): Initial release (SOS-001, BCR-005, SOS-004, MLO-002; wayfinder ticket 05 §3), replacing [MOD-EA-005](../models/05-email-otp.md)'s non-normative sketch <br> 1.1 (2026-10-13): BEH-EA-273: the sign-in half of the channel step is `SignIn.complete` (ADR-EA-038, architecture plan 01) <br> 1.2 (2026-10-13): BEH-EA-273 redeems the code through `Verification.redeem`: an outage while completing leaves it usable with its attempt budget unchanged (ADR-EA-039, plan 07) <br> 1.3 (2026-11-08): `verify` declares `SessionLifecycle.Mints` (ADR-EA-045, architecture plan 21) |
 ---
 
 > Status: the `EmailOtp` plugin in `@awthaq/magic-link` and the `Verification` numeric-value and attempt-budget support it needs are implemented and tested (`packages/magic-link/test/EmailOtp.test.ts`, `packages/core/test/Verification.test.ts`). SMS is deferred ([ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md)).
@@ -99,5 +99,7 @@ REQUIREMENT: The plugin MUST declare no table: the code is a `Verification`
 ```
 
 The sign-in half of the shared channel step is core's `SignIn.complete` (BEH-EA-322, ADR-EA-038). `EmailOtp` is the channel-OTP substrate the SMS plugin would build on: the same code minting, budget, resend window and shared sign-in step, with the `Mailer` port replaced by an SMS gateway.
+
+`emailOtp.verify` declares `SessionLifecycle.Mints` ([ADR-EA-045](../decisions/045-session-lifecycle-on-the-contract.md)).
 
 _Previous: [BEH-EA-273](33-email-otp.md#beh-ea-273-a-correct-code-signs-in-once-and-every-failure-is-the-one-invalidemailotp)_

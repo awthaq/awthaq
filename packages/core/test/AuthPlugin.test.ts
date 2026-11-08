@@ -14,6 +14,8 @@ import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
+import * as OpenApi from "effect/http-api/OpenApi";
+import { SessionLifecycle } from "@awthaq/api";
 import * as Auth from "../src/Auth.ts";
 import * as AuthPlugin from "../src/AuthPlugin.ts";
 import * as Slots from "../src/Slots.ts";
@@ -183,6 +185,27 @@ class SessionImposter extends AuthPlugin.Service<
     make: Effect.succeed({ imposter: () => Effect.succeed("x") }),
     handlers: HttpApiBuilder.group(SessionImposterApi, "session", (handlers) =>
       handlers.handle("imposter", () => Effect.succeed("x")),
+    ),
+  });
+}
+
+// ADR-EA-045: an endpoint declaring two session lifecycles, which `Auth.make` refuses.
+const DoublyDeclaredApi = HttpApi.make("auth").add(
+  HttpApiGroup.make("twice").add(
+    HttpApiEndpoint.post("both", "/twice", { success: Schema.String })
+      .middleware(SessionLifecycle.Mints)
+      .middleware(SessionLifecycle.Ends),
+  ),
+);
+
+class DoublyDeclared extends AuthPlugin.Service<
+  DoublyDeclared,
+  { readonly both: () => Effect.Effect<string> }
+>()("twice", { apiVersion: 1, contract: DoublyDeclaredApi }) {
+  static readonly layer = AuthPlugin.layer(DoublyDeclared, {
+    make: Effect.succeed({ both: () => Effect.succeed("x") }),
+    handlers: HttpApiBuilder.group(DoublyDeclaredApi, "twice", (handlers) =>
+      handlers.handle("both", () => Effect.succeed("x")),
     ),
   });
 }
@@ -415,6 +438,37 @@ describe("Auth.make", () => {
     // Typed, not just runtime: `session` is a group id of `api`.
     const ids: keyof typeof auth.api.groups = "session";
     assert.strictEqual(ids, "session");
+  });
+
+  // ADR-EA-045: the composed api documents each declared operation's session lifecycle, and only those.
+  it("the composed api's OpenAPI document states the session lifecycle of declared operations only", () => {
+    const spec = OpenApi.fromApi(Auth.make([Ping]).api);
+    const signOut = spec.paths["/session/sign-out"]?.post;
+    assert.strictEqual(
+      signOut === undefined ? undefined : Reflect.get(signOut, "x-awthaq-session"),
+      "ends",
+    );
+    assert.deepStrictEqual(Object.keys(signOut?.responses[204]?.headers ?? {}).sort(), [
+      "Cache-Control",
+      "x-awthaq-session-ended",
+    ]);
+    const current = spec.paths["/session"]?.get;
+    assert.isUndefined(
+      current === undefined ? "missing" : Reflect.get(current, "x-awthaq-session"),
+    );
+    const publicSignOut = OpenApi.fromApi(Auth.make([Ping]).publicApi).paths["/session/sign-out"]
+      ?.post;
+    assert.strictEqual(
+      publicSignOut === undefined ? undefined : Reflect.get(publicSignOut, "x-awthaq-session"),
+      "ends",
+    );
+  });
+
+  it("a contract endpoint declaring two session lifecycles is refused at Auth.make", () => {
+    assert.throws(
+      () => Auth.make([DoublyDeclared]),
+      /twice\.both declares more than one session lifecycle/,
+    );
   });
 
   it("MW-002: extraGroups joins the composed api, typed", () => {

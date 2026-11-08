@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-23 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): BEH-EA-177's example replaced with `Providers`' real props (`initialSession`, `initialSubject`, `decisions`, `atoms`) and the two-atom design noted; banner given implementation pointers; requirement texts unchanged (RSC-008, CCR-EA-006) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): BEH-EA-177's example replaced with `Providers`' real props (`initialSession`, `initialSubject`, `decisions`, `atoms`) and the two-atom design noted; banner given implementation pointers; requirement texts unchanged (RSC-008, CCR-EA-006) <br> 1.2 (2026-11-08): BEH-EA-178 reworded: a mutation against a declared endpoint refetches the session with no `reactivityKeys` (ADR-EA-045, architecture plan 21) |
 ---
 
 > Implemented in `@awthaq/react` (`AuthClientAtom.ts`, `Subject.ts`, `Providers.tsx`; tests `packages/react/test`) — the code and tests behind each BEH id are mapped in [`spec/traceability.md`](../traceability.md) §5. BEH-EA-177, 178 and 179 are the package's own; BEH-EA-180 through 184 are `@qadi/react` re-exports. Its BDD scenarios are `@skip @unwired`.
@@ -39,17 +39,19 @@ _Previous: [BEH-EA-176](22-client-effect.md#beh-ea-176-a-promise-facade-is-opt-i
 ## BEH-EA-178: Mutations invalidate the session reactivity key
 
 ```ts
-run({ payload: { email, password }, reactivityKeys: ["session"] })
+run({ payload: { email, password } }) // password.signIn declares SessionLifecycle.Mints
 ```
 
 ```text
-REQUIREMENT: A mutation that changes the current session (sign-in, sign-out,
-             role assignment, accepting an invite) MUST pass `["session"]` as
-             its `reactivityKeys`; `sessionAtom` MUST NOT require an explicit
-             manual refetch call from application code after such a mutation.
+REQUIREMENT: A mutation against an endpoint the contract declares with a
+             session lifecycle MUST refetch `sessionAtom` without application
+             code passing `reactivityKeys`; a mutation outside the composed
+             contract that changes the session passes `["session"]`.
+             `sessionAtom` MUST NOT require an explicit manual refetch call
+             from application code after such a mutation.
 ```
 
-`usage-examples-v4.md` §12.3 shows the mechanism: `sessionAtom = AuthClient.query("session", "current", { reactivityKeys: ["session"] })`, and any mutation tagged with the same key triggers its refetch automatically. This is what makes "sign-in invalidates `[\"session\"]`; the session atom refetches; `subject` changes; every `Can` re-decides" (§12.4) true without application code wiring the refetch itself.
+`usage-examples-v4.md` §12.3 shows the mechanism: `sessionAtom = AuthClient.query("session", "current", { reactivityKeys: ["session"] })`, and any mutation tagged with the same key triggers its refetch automatically. This is what makes "sign-in invalidates `[\"session\"]`; the session atom refetches; `subject` changes; every `Can` re-decides" (§12.4) true without application code wiring the refetch itself. *As shipped* ([ADR-EA-045](../decisions/045-session-lifecycle-on-the-contract.md)): `makeReactClient` always installs `ReactClient.sessionInvalidation`, the client half of the five `SessionLifecycle` markers, which invalidates `["session"]` on the registry's own `Reactivity` after a 2xx response of a declared endpoint (a failed mutation invalidates nothing), beside the default transport or a caller-supplied `httpClient`.
 
 _Previous: [BEH-EA-177](23-react.md#beh-ea-177-registryprovider-seeds-the-session-atom-for-ssr) | Next: [BEH-EA-179](23-react.md#beh-ea-179-qadiprovider-is-fed-by-the-sessions-subject-field)_
 

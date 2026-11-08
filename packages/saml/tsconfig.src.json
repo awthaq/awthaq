@@ -14,7 +14,8 @@
       "@awthaq/ports": ["../ports/src/index.ts"],
       "@awthaq/api": ["../api/src/index.ts"],
       "@awthaq/organization": ["../organization/src/index.ts"],
-      "@awthaq/organization/records": ["../organization/src/records.ts"]
+      "@awthaq/organization/records": ["../organization/src/records.ts"],
+      "@awthaq/server": ["../server/src/index.ts"]
     }
   },
   "references": [
@@ -32,6 +33,9 @@
     },
     {
       "path": "../organization/tsconfig.src.json"
+    },
+    {
+      "path": "../server/tsconfig.src.json"
     }
   ]
 }

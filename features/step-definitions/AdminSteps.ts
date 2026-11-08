@@ -259,6 +259,19 @@ export const adminSteps = defineSteps<World>(({ Given, When, Then }) => {
     }),
   );
 
+  // ADR-EA-045: `admin.impersonate` declares `SessionLifecycle.Swaps`, which is cookie only.
+  When(
+    "the admin calls {string} for a target user asking for bearer delivery",
+    Effect.fn(function* (_endpoint: string) {
+      const adminCookie = (yield* getOutcome("adminCookie")) as string;
+      const response = yield* request("POST", "/admin/impersonate/target-1", {
+        body: { reason: "support ticket 42" },
+        headers: { cookie: adminCookie, "x-awthaq-token-delivery": "bearer" },
+      });
+      yield* setOutcome("impersonateResponse", response);
+    }),
+  );
+
   When(
     "the admin calls {string} for a target user with a reason over 1000 characters long",
     Effect.fn(function* (_endpoint: string) {
