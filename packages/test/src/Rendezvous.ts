@@ -41,3 +41,23 @@ export const anchorReadsMeet = (parties: number) =>
       });
     }),
   );
+
+/**
+ * Plan 25: a veto-tap handler that holds every caller until `parties` of them have arrived, then lets them all
+ * through, so each caller's early check has run before any of them writes. A deterministic interleaving, not a
+ * timing race: the domain regression tests use it to prove that a system module relies on the store primitive
+ * (the authority), not on its own pre-check. `Rendezvous.held(8)` passed to `Point.tap(...)`.
+ */
+export const held = (parties: number) => {
+  const arrived = Ref.makeUnsafe(0);
+  const open = Deferred.makeUnsafe<void>();
+  return <A>(input: A) =>
+    Effect.as(
+      Effect.flatMap(
+        Ref.updateAndGet(arrived, (n) => n + 1),
+        (n) =>
+          n >= parties ? Effect.asVoid(Deferred.succeed(open, undefined)) : Deferred.await(open),
+      ),
+      input,
+    );
+};

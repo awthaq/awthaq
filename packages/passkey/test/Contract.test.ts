@@ -2,7 +2,7 @@
 // for `Passkey` (its `WebAuthn` port is the test double the suites use).
 import { SessionLifecycle } from "@awthaq/api";
 import * as PasskeyApi from "../src/PasskeyApi.ts";
-import { TestAuth } from "@awthaq/test";
+import { RecordsContract, TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Passkey from "../src/Passkey.ts";
 import { mockWebAuthn } from "./passkeyTestFixtures.ts";
@@ -11,6 +11,7 @@ const framework = TestAuth.throwingFramework(describe, it);
 
 TestAuth.runPluginContractTests(framework, () => Passkey.Passkey, {
   options: [{}],
+  records: { suite: "passkey_records_contract", suites: RecordsContract.pending("18") },
   build: { services: mockWebAuthn() },
 });
 

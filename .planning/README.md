@@ -306,7 +306,8 @@ Wave E: the deepenings
 | Wave 0 · 27 ticket 04 | Landed, PR #50 |
 | Wave 0 · 28 tickets 01–02 | Landed, PR #48 |
 | 30 ticket 21 | Done: plan 17 verified on the merged base, no regression; R1 NO-GO (no pre-1.3 environment), so 22–23 are closed |
-| Wave E | Not started |
+| Wave E · 25 | Phase 2 (tickets 04, 06–09) and the organization package (10–14) on `feat/record-store-contract`, with 28 ticket 03; tickets 15–25 left on `RecordsContract.pending` (see plan 25 "Decisions taken") |
+| Wave E (rest) | Not started |
 
 Each plan's "Decisions taken" section records what its Wave 0 PR decided and where the plan was stale. Numbers
 taken since this batch was written: BEH-EA-340–342 (plan 15), 343 (21), 344 (20); ADR-EA-044 (15), 045 (21);

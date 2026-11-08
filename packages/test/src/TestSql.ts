@@ -47,15 +47,26 @@ export const regclassTypes = () => {
   return registry;
 };
 
+/**
+ * Postgres truncates identifiers to 63 bytes, and a plain cut drops the tail that tells two schemas
+ * apart (a case number, the worker id). A longer name keeps a prefix and ends in a hash of the whole.
+ */
+const schemaName = (name: string): string => {
+  if (name.length <= 63) return name;
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < name.length; index++) {
+    hash = Math.imul(hash ^ name.charCodeAt(index), 0x01000193) >>> 0;
+  }
+  return `${name.slice(0, 54)}_${hash.toString(16).padStart(8, "0")}`;
+};
+
 const postgres = (url: string, suite: string) => {
   // Vitest runs files in parallel workers: files sharing a suite name (BDD worlds) must not drop each
   // other's schema, so the worker's pool id joins the name (stable and bounded, unlike a pid).
   const worker = process.env["VITEST_POOL_ID"] ?? "";
-  const schema =
-    `t_${suite.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}${worker === "" ? "" : `_w${worker}`}`.slice(
-      0,
-      63,
-    );
+  const schema = schemaName(
+    `t_${suite.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}${worker === "" ? "" : `_w${worker}`}`,
+  );
   const client = PgClient.layer({
     url: Redacted.make(url),
     // Every statement resolves unqualified names in this suite's own schema.

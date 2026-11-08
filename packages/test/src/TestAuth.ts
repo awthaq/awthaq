@@ -64,17 +64,13 @@
 import type { TestFramework } from "./TestFramework.ts";
 import { Api } from "@awthaq/api";
 import {
-  AuditChain,
-  AuditLog,
   Auth,
-  AuthEvents,
+  type AuthEvents,
   AuthPlugin,
   type DataExport,
   type Erasure,
   HookPoint,
-  Hooks,
   Migrations,
-  Persistence,
   type Retention,
   SessionCookie,
   Sessions,
@@ -84,6 +80,8 @@ import { ClientAddress, type Encryption, Mailer, PasswordHasher, RateLimiter } f
 import { AuthHost, Credentials, Csrf } from "@awthaq/server";
 import { CoreMigrations } from "@awthaq/sql";
 import { UserAgent } from "@awthaq/web";
+import { memoryFoundation } from "./internal/foundation.ts";
+import * as RecordsContract from "./RecordsContract.ts";
 import * as RedactionGuard from "./RedactionGuard.ts";
 import * as TestEncryption from "./TestEncryption.ts";
 import * as TestSql from "./TestSql.ts";
@@ -134,33 +132,14 @@ const TestHasher = PasswordHasher.layerArgon2id.pipe(
 export type RetentionRegistryService = Retention.RetentionRegistry;
 /** Named for the same reason: the registries `Hooks.HooksLive` provides, and the test ports' fixed key. */
 export type FoundationServices =
+  | AuthEvents.AuthEvents
   | DataExport.DataExportRegistry
   | Erasure.ErasureRegistry
   | Encryption.Encryption;
 
-/**
- * ELC-004: what every memory layer (`Users`/`Accounts`/`Sessions`/`Verification`, each plugin's
- * record stores) needs beneath it, as one layer: the platform crypto services (ids, secrets, hashes, MACs),
- * `AuthEvents` over an in-memory `AuditLog`, and every hook point's default (no-tap) layer.
- * `Users.layer.pipe(Layer.provideMerge(TestAuth.memoryFoundation))` replaces the four
- * `Layer.provideMerge(NodeCrypto.layer | AuthEvents.layer | AuditLog.layer |
- * Hooks.HooksLive)` lines each suite used to repeat. The services stay in the output, so a test
- * can `yield*` the very instances the stores were built over. Raw layers stay available for a
- * suite that injects its own crypto services or hook taps. It is the low-level seam for a store suite
- * that builds one store alone; a whole composition goes through `TestAuth.layer`.
- */
-export const memoryFoundation = AuthEvents.layer.pipe(
-  // BEH-EA-100: `AuthEvents.layer` needs `AuditLog` — see its own header comment.
-  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
-  // AOMS-006/BCR-004/CSG-002/THS-002 (wayfinder ticket 03): every hook point's own default
-  // (no-tap) layer — `Users.layer` and every plugin's own `make` consult one directly. See
-  // `Hooks.HooksLive`'s own doc comment.
-  Layer.provideMerge(Hooks.HooksLive),
-  // Plan 08: the hash chain `Admin`'s impersonation records link their rows with (unkeyed unless a test
-  // provides `AuditChain.config`); it needs only `Digest` and `Mac`, so it rides here, beside the other things stores read.
-  Layer.provideMerge(AuditChain.layer),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+// ELC-004: `memoryFoundation`, what every memory layer needs beneath it (defined in `internal/foundation.ts`,
+// shared with `RecordsContract`).
+export { memoryFoundation } from "./internal/foundation.ts";
 
 /**
  * The test ports: a cheap real hasher, a capturing mailer, a permissive (or the real) limiter, the socket peer, a fixed
@@ -768,6 +747,18 @@ export const throwingFramework = (
 // BEH-EA-198/199 (second half): runPluginContractTests
 // ---------------------------------------------------------------------------
 
+/**
+ * Plan 25 (BEH-EA-334, ADR-EA-041 decision 9): the record-store contract, required exactly when the
+ * plugin's bundle provides a store (`RecordsContract.Suites<P>` then names every one), forbidden for a
+ * plugin whose bundle provides none, and optional for a hand-built `AuthPlugin.Any` (whose stores the
+ * compiler cannot see; the runner's coverage check is its half).
+ */
+export type RecordsOption<P> = P extends { readonly records: infer B extends AuthPlugin.AnyRecords }
+  ? [AuthPlugin.RecordKeysOf<Layer.Success<B["memory"]>>] extends [never]
+    ? { readonly records?: never }
+    : { readonly records: RecordsContract.RunConfig<P> }
+  : { readonly records?: RecordsContract.RunConfig<P> };
+
 export interface ContractTestOptions<O, R = never> {
   readonly options: ReadonlyArray<O>;
   /**
@@ -1128,16 +1119,16 @@ const recordsParityProblems = (
  * factory with no dependency on `@awthaq/*`'s own test files — only on
  * this package and their own `AuthPlugin.Any`-shaped plugin classes.
  */
-export const runPluginContractTests = <O, R = never>(
+export const runPluginContractTests = <O, P extends AuthPlugin.Any, R = never>(
   framework: TestFramework,
-  makePlugin: (options: O) => AuthPlugin.Any,
-  config: ContractTestOptions<O, R>,
+  makePlugin: (options: O) => P,
+  config: ContractTestOptions<O, R> & RecordsOption<P>,
 ): void => {
   framework.describe("runPluginContractTests", () => {
     let previousContract: AuthPlugin.Any["contract"] | undefined;
 
     for (const [optionIndex, options] of config.options.entries()) {
-      const plugin = makePlugin(options);
+      const plugin: AuthPlugin.Any = makePlugin(options);
       const host = config.host ?? dependencyClosure(plugin);
       const hostIds = new Set(host.map((installed) => installed.id));
       const label = JSON.stringify(options);
@@ -1506,6 +1497,15 @@ export const runPluginContractTests = <O, R = never>(
         }
         previousContract = plugin.contract;
       });
+    }
+
+    // Plan 25 (ADR-EA-041 decision 9): every store the plugin's bundle provides passes its RecordsContract
+    // suite on memory and SQL. Run once, over the first option value (the suites do not depend on options).
+    const records = config.records;
+    const [firstOptions] = config.options;
+    if (records !== undefined && firstOptions !== undefined) {
+      const plugin = makePlugin(firstOptions);
+      RecordsContract.run(framework, plugin, config.host ?? dependencyClosure(plugin), records);
     }
   });
 };

@@ -2,7 +2,7 @@
 // for every plugin class this package ships (`Admin`, `AdminAccounts`, `AdminTenants`).
 import { SessionLifecycle } from "@awthaq/api";
 import * as AdminApi from "../src/AdminApi.ts";
-import { TestAuth } from "@awthaq/test";
+import { RecordsContract, TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Layer from "effect/Layer";
 import * as Admin from "../src/Admin.ts";
@@ -13,6 +13,7 @@ const framework = TestAuth.throwingFramework(describe, it);
 
 TestAuth.runPluginContractTests(framework, () => Admin.Admin, {
   options: [{}],
+  records: { suite: "admin_records_contract", suites: RecordsContract.pending("15") },
   build: { services: Layer.empty },
 });
 TestAuth.runPluginContractTests(framework, () => AdminAccounts.AdminAccounts, {

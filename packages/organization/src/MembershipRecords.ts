@@ -6,8 +6,7 @@
 // JSON-serialized `TEXT` column under `layerSql`, a plain array in memory.
 
 import { Defects, Users } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
-import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
+import { Models as SqlModels, SqlStore, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -62,6 +61,42 @@ export class MembershipRecordLastOwner extends Data.TaggedError("MembershipRecor
   readonly organizationId: string;
 }> {}
 
+/** BEH-EA-287: the organization already has `limit` members (`create`'s `within`). */
+export class MembershipRecordLimitReached extends Data.TaggedError(
+  "MembershipRecords/LimitReached",
+)<{
+  readonly organizationId: string;
+  readonly limit: number;
+}> {}
+
+/** BEH-EA-283: the user already holds the role in `limit` organizations (`create`'s `ownedWithin`). */
+export class MembershipRecordOwnedLimitReached extends Data.TaggedError(
+  "MembershipRecords/OwnedLimitReached",
+)<{
+  readonly userId: string;
+  readonly limit: number;
+}> {}
+
+/**
+ * Plan 25 (ADR-EA-041 decision 9): the bounds `create` decides atomically, with the insert. A system module
+ * keeps its earlier check only to order errors (before the veto); these are the authority.
+ */
+export interface CreateMembershipOptions {
+  /** BEH-EA-287: refuse with `MembershipRecordLimitReached` when the organization already has this many members. */
+  readonly within?: number | undefined;
+  /**
+   * BEH-EA-283 (`organizationLimit`): refuse with `MembershipRecordOwnedLimitReached` when the user already holds
+   * `role` in `limit` organizations, counted across tenants (hence the witness).
+   */
+  readonly ownedWithin?:
+    | {
+        readonly role: string;
+        readonly limit: number;
+        readonly grant: TenantScoped.CrossTenant;
+      }
+    | undefined;
+}
+
 export interface ListMembersInput {
   readonly limit?: number | undefined;
   readonly offset?: number | undefined;
@@ -70,19 +105,27 @@ export interface ListMembersInput {
 }
 
 export interface MembershipRecordsShape {
-  readonly create: (input: {
-    readonly userId: Users.UserId;
-    readonly organizationId: string;
-    readonly role: ReadonlyArray<string>;
-  }) => Effect.Effect<
+  /** Atomic (plan 25): the bounds in `options` are counted and the row inserted as one step on every adapter. */
+  readonly create: (
+    input: {
+      readonly userId: Users.UserId;
+      readonly organizationId: string;
+      readonly role: ReadonlyArray<string>;
+    },
+    options?: CreateMembershipOptions,
+  ) => Effect.Effect<
     MembershipRecord,
-    MembershipRecordAlreadyExists | StoreFailure.StoreUnavailable
+    | MembershipRecordAlreadyExists
+    | MembershipRecordLimitReached
+    | MembershipRecordOwnedLimitReached
+    | StoreFailure.StoreUnavailable
   >;
   /** RRC-003 (BEH-EA-162): a decision read — always the primary, never `ReadRouting`-eligible, so a removal is visible on the very next decision. */
   readonly findByUserAndOrg: (
     userId: Users.UserId,
     organizationId: string,
   ) => Effect.Effect<Option.Option<MembershipRecord>, StoreFailure.StoreUnavailable>;
+  /** Ordered by `(createdAt, id)` in `sortDirection` (default ascending), then paged (plan 24 R1/R2). */
   readonly listByOrganization: (
     organizationId: string,
     input?: ListMembersInput,
@@ -145,13 +188,16 @@ export class MembershipRecords extends Context.Service<MembershipRecords, Member
 const notFound = (userId: Users.UserId, organizationId: string): MembershipRecordNotFound =>
   new MembershipRecordNotFound({ userId, organizationId });
 
+/** `(createdAt, id)` ascending, reversed for `desc`: the SQL adapter's `ORDER BY` (plan 24 R1/R2). */
 const applySort = (
   records: ReadonlyArray<MembershipRecord>,
   input?: ListMembersInput,
 ): ReadonlyArray<MembershipRecord> => {
   const direction = input?.sortDirection ?? "asc";
   const sorted = [...records].sort(
-    (a, b) => DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt),
+    (a, b) =>
+      DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
   return direction === "desc" ? sorted.reverse() : sorted;
 };
@@ -192,7 +238,7 @@ export const layerMemory = Layer.effect(
     const state = yield* Ref.make<State>(HashMap.empty());
     const random = yield* SecureRandom.SecureRandom;
 
-    const create: MembershipRecordsShape["create"] = Effect.fnUntraced(function* (input) {
+    const create: MembershipRecordsShape["create"] = Effect.fnUntraced(function* (input, options) {
       const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
       const record = brandMembership({
@@ -203,20 +249,65 @@ export const layerMemory = Layer.effect(
         createdAt: now,
       });
       const key = keyOf(input.userId, input.organizationId);
+      const within = options?.within;
+      const ownedWithin = options?.ownedWithin;
+      // Plan 25: the bounds are counted inside the one `Ref.modify` that inserts.
       return yield* Ref.modify(
         state,
-        (s): readonly [Result.Result<MembershipRecord, MembershipRecordAlreadyExists>, State] =>
-          HashMap.has(s, key)
-            ? ([
-                Result.fail(
-                  new MembershipRecordAlreadyExists({
-                    userId: input.userId,
-                    organizationId: input.organizationId,
-                  }),
-                ),
-                s,
-              ] as const)
-            : ([Result.succeed(record), HashMap.set(s, key, record)] as const),
+        (
+          s,
+        ): readonly [
+          Result.Result<
+            MembershipRecord,
+            | MembershipRecordAlreadyExists
+            | MembershipRecordLimitReached
+            | MembershipRecordOwnedLimitReached
+          >,
+          State,
+        ] => {
+          if (HashMap.has(s, key)) {
+            return [
+              Result.fail(
+                new MembershipRecordAlreadyExists({
+                  userId: input.userId,
+                  organizationId: input.organizationId,
+                }),
+              ),
+              s,
+            ];
+          }
+          const rows = Array.from(HashMap.values(s));
+          if (
+            within !== undefined &&
+            rows.filter((row) => row.organizationId === input.organizationId).length >= within
+          ) {
+            return [
+              Result.fail(
+                new MembershipRecordLimitReached({
+                  organizationId: input.organizationId,
+                  limit: within,
+                }),
+              ),
+              s,
+            ];
+          }
+          if (
+            ownedWithin !== undefined &&
+            rows.filter((row) => row.userId === input.userId && row.role.includes(ownedWithin.role))
+              .length >= ownedWithin.limit
+          ) {
+            return [
+              Result.fail(
+                new MembershipRecordOwnedLimitReached({
+                  userId: input.userId,
+                  limit: ownedWithin.limit,
+                }),
+              ),
+              s,
+            ];
+          }
+          return [Result.succeed(record), HashMap.set(s, key, record)];
+        },
       ).pipe(Effect.flatMap(Effect.fromResult));
     });
 
@@ -387,11 +478,21 @@ export const layerSql = Layer.effect(
         sql`SELECT * FROM organization_membership WHERE "userId" = ${r.userId} AND "organizationId" = ${r.organizationId}`,
     });
 
+    // Plan 24 R1/R2: ordered and paged in SQL, by `("createdAt", id)` in the requested direction.
     const listByOrganizationQuery = SqlSchema.findAll({
-      Request: Schema.String,
+      Request: Schema.Struct({
+        organizationId: Schema.String,
+        descending: Schema.Boolean,
+        limit: Schema.Number,
+        offset: Schema.Number,
+      }),
       Result: MembershipRow,
-      execute: (organizationId) =>
-        sql`SELECT * FROM organization_membership WHERE "organizationId" = ${organizationId} ORDER BY "createdAt" ASC`,
+      execute: (r) =>
+        r.descending
+          ? sql`SELECT * FROM organization_membership WHERE "organizationId" = ${r.organizationId}
+              ORDER BY "createdAt" DESC, id DESC LIMIT ${r.limit} OFFSET ${r.offset}`
+          : sql`SELECT * FROM organization_membership WHERE "organizationId" = ${r.organizationId}
+              ORDER BY "createdAt" ASC, id ASC LIMIT ${r.limit} OFFSET ${r.offset}`,
     });
 
     const listByUserQuery = SqlSchema.findAll({
@@ -450,16 +551,68 @@ export const layerSql = Layer.effect(
         sql`DELETE FROM organization_membership WHERE "userId" = ${r.userId} AND "organizationId" = ${r.organizationId} RETURNING *`,
     });
 
-    const create: MembershipRecordsShape["create"] = Effect.fnUntraced(function* (input) {
+    /**
+     * Plan 25 (ADR-EA-041 decision 9): each bound is counted under its scope's lock, in the transaction that
+     * inserts (a savepoint inside a caller's): the user's lock first, then the organization's, always in that
+     * order. Without a bound the insert is one statement and the unique index decides.
+     */
+    const create: MembershipRecordsShape["create"] = Effect.fnUntraced(function* (input, options) {
       const id = yield* random.uuidV7();
       const now = yield* DateTime.now;
-      const row = yield* insert({
+      const within = options?.within;
+      const ownedWithin = options?.ownedWithin;
+      const write = insert({
         id,
         userId: input.userId,
         organizationId: input.organizationId,
         role: JSON.stringify(input.role),
         createdAt: now,
-      }).pipe(
+      });
+      const withinOrganization =
+        within === undefined
+          ? write
+          : SqlStore.atomically(
+              sql,
+              `organization_membership:org:${input.organizationId}`,
+            )(
+              Effect.gen(function* () {
+                if ((yield* countByOrganizationQuery(input.organizationId)).count >= within) {
+                  return yield* Effect.fail(
+                    new MembershipRecordLimitReached({
+                      organizationId: input.organizationId,
+                      limit: within,
+                    }),
+                  );
+                }
+                return yield* write;
+              }),
+            );
+      const guarded =
+        ownedWithin === undefined
+          ? withinOrganization
+          : SqlStore.atomically(
+              sql,
+              `organization_membership:owner:${input.userId}`,
+            )(
+              Effect.gen(function* () {
+                const held = yield* listByUserQuery(input.userId).pipe(
+                  TenantScoped.liftOn(sql, ownedWithin.grant),
+                );
+                const owned = held.filter((row) =>
+                  parseRoleArray(row.role).includes(ownedWithin.role),
+                ).length;
+                if (owned >= ownedWithin.limit) {
+                  return yield* Effect.fail(
+                    new MembershipRecordOwnedLimitReached({
+                      userId: input.userId,
+                      limit: ownedWithin.limit,
+                    }),
+                  );
+                }
+                return yield* withinOrganization;
+              }),
+            );
+      const row = yield* guarded.pipe(
         StoreFailure.orConflict(
           "MembershipRecords.create",
           () =>
@@ -482,8 +635,14 @@ export const layerSql = Layer.effect(
       organizationId,
       input,
     ) =>
-      listByOrganizationQuery(organizationId).pipe(
-        Effect.map((rows) => applyPage(rows.map(toRecord), input)),
+      listByOrganizationQuery({
+        organizationId,
+        descending: input?.sortDirection === "desc",
+        // SQLite takes an OFFSET only after a LIMIT, so "no limit" is the largest safe integer on both dialects.
+        limit: input?.limit ?? Number.MAX_SAFE_INTEGER,
+        offset: input?.offset ?? 0,
+      }).pipe(
+        Effect.map((rows) => rows.map(toRecord)),
         unavailable("listByOrganization"),
       );
 
@@ -516,19 +675,7 @@ export const layerSql = Layer.effect(
     const lockedForOrganization = <A, E, R>(
       organizationId: string,
       effect: Effect.Effect<A, E, R>,
-    ) =>
-      SqlTransaction.transactional(sql)(
-        Effect.andThen(
-          sql.onDialectOrElse({
-            pg: () =>
-              Effect.asVoid(
-                sql`SELECT pg_advisory_xact_lock(hashtextextended(${`organization_membership:org:${organizationId}`}, 0))`,
-              ),
-            orElse: () => Effect.void,
-          }),
-          effect,
-        ),
-      );
+    ) => SqlStore.atomically(sql, `organization_membership:org:${organizationId}`)(effect);
 
     const updateRole: MembershipRecordsShape["updateRole"] = (userId, organizationId, role) =>
       lockedForOrganization(

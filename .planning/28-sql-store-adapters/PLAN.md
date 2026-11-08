@@ -290,3 +290,9 @@ One phase. The tickets are independent of each other. Track them as `.scratch/28
 - Q2 (recommended): the message rule stays in `isUniqueViolation`. Q3 (recommended): the sealed runner covers SQLite and Postgres only.
 - Deviations: §3.2's snippet would narrow `SqlError` out of the error type (type guard in a ternary), so the fix uses `Effect.catchIf((e) => StoreFailure.isUniqueViolation(e), …)`. §5 said not to add libSQL to organization; `@effect/sql-libsql` became a dev dependency to reproduce the 503. The SAML table has no foreign key, so its case uses `TestSql.injectFailure` (red on SQLite only; Postgres already answered `StoreUnavailable`).
 - Ticket 03 is still open and lands with plan 25.
+
+### Ticket 03, with plan 25 (branch `feat/record-store-contract`)
+
+- ADR-EA-041 decision 5 rewritten as §3.3 ("one adapter substrate, one adapter shape"), in revision 1.5, the same revision that adds plan 25's decision 9 (1.4 had been taken by plan 15). It also names `SqlStore.atomically` as the multi-row variant of the transactional rule, and says which plugin stores already follow the shape (organization) while the rest still pipe through `orStoreUnavailable`.
+- `docs/plugin-authoring.md` § Contract keeps `orStoreUnavailable` (most plugins still use it, as the ticket's condition requires); the record-store and multi-statement sections teach `SqlStore.atomically`.
+

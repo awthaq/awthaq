@@ -12,7 +12,7 @@
 // long-lived decision cache never keeps answering for a suspended organization (BEH-EA-237).
 
 import { AuthEvents, Errors, HookPoint, Users } from "@awthaq/core";
-import { Defects, SqlTransaction, Tenant } from "@awthaq/ports";
+import { SqlTransaction, Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -223,6 +223,8 @@ export class OrganizationDirectory extends Context.Service<
           const { owner, name, slug, logo, metadata, homeRegion } = input;
           const orgConfig = yield* configNow;
           yield* requireKnownRegion(homeRegion);
+          // An early check, so the refusal comes before the veto (BEH-EA-283). The authority is `create`'s
+          // `ownedWithin` below, decided with the insert: two concurrent creations can both pass this count.
           const owned = yield* members.listByUser(ownMembershipsGrant, owner);
           const ownedCount = owned.filter((m) => m.role.includes(orgConfig.creatorRole)).length;
           if (ownedCount >= orgConfig.organizationLimit) {
@@ -244,14 +246,29 @@ export class OrganizationDirectory extends Context.Service<
                     ),
                   );
                 const first = yield* members
-                  .create({
-                    userId: owner,
-                    organizationId: created.id,
-                    role: [orgConfig.creatorRole],
-                  })
+                  .create(
+                    {
+                      userId: owner,
+                      organizationId: created.id,
+                      role: [orgConfig.creatorRole],
+                    },
+                    {
+                      ownedWithin: {
+                        role: orgConfig.creatorRole,
+                        limit: orgConfig.organizationLimit,
+                        grant: ownMembershipsGrant,
+                      },
+                    },
+                  )
                   .pipe(
-                    // A brand-new organization has no memberships, so this cannot collide.
-                    Effect.catchTag("MembershipRecordAlreadyExists", Effect.die),
+                    Effect.catchTags({
+                      // A brand-new organization has no memberships, so this cannot collide, nor be full.
+                      MembershipRecordAlreadyExists: Effect.die,
+                      "MembershipRecords/LimitReached": Effect.die,
+                      // A concurrent creation by the same owner won (BEH-EA-283): the unit rolls back.
+                      "MembershipRecords/OwnedLimitReached": () =>
+                        Effect.fail(new OrganizationErrors.OrganizationLimitReached()),
+                    }),
                     // A backend without transactions (`layerNoop`) cannot roll back: remove the
                     // organization again so a failed creation leaves nothing behind.
                     Effect.onError(() => Effect.ignore(orgs.delete(created.id))),
@@ -302,11 +319,9 @@ export class OrganizationDirectory extends Context.Service<
           const record = yield* orgs
             .update(organizationId, { ...changes, name: vetoed.name, slug: vetoed.slug })
             .pipe(
+              // A concurrent deletion won: the sequential answer, not a defect (plan 25, F9).
               Effect.catchTag("OrganizationRecordNotFound", () =>
-                Defects.invariantViolation(
-                  "RowVanished",
-                  "awthaq: organization vanished between check and write",
-                ),
+                Effect.fail(new OrganizationErrors.OrganizationNotFound()),
               ),
               Effect.catchTag("OrganizationRecordSlugTaken", () =>
                 Effect.fail(new OrganizationErrors.OrganizationSlugTaken()),
@@ -348,16 +363,12 @@ export class OrganizationDirectory extends Context.Service<
                 for (const contribution of contributions) {
                   yield* contribution.handler.inTransaction(organizationId);
                 }
-                yield* orgs
-                  .delete(organizationId)
-                  .pipe(
-                    Effect.catchTag("OrganizationRecordNotFound", () =>
-                      Defects.invariantViolation(
-                        "RowVanished",
-                        "awthaq: organization vanished between check and write",
-                      ),
-                    ),
-                  );
+                yield* orgs.delete(organizationId).pipe(
+                  // A concurrent deletion won: the sequential answer, not a defect (plan 25, F9).
+                  Effect.catchTag("OrganizationRecordNotFound", () =>
+                    Effect.fail(new OrganizationErrors.OrganizationNotFound()),
+                  ),
+                );
               }),
             )
             .pipe(Effect.catchTag("SqlError", Effect.die));

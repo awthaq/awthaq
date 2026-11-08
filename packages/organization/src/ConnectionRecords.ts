@@ -156,6 +156,10 @@ interface StoredConnection extends Omit<ConnectionRecord, "clientSecret" | "secr
 }
 
 /** `patch` applied over `stored`; `updatedAt` is stamped by the caller and `secret` is the already-sealed new value (`undefined` leaves it, `null` clears it). */
+/** Plan 24 R4 (Q2 default): a connection's `emailDomains` are answered sorted ascending, by both adapters, everywhere. */
+const sortedDomains = (domains: ReadonlyArray<string>): ReadonlyArray<string> =>
+  [...domains].sort();
+
 const applyPatch = (
   stored: StoredConnection,
   patch: ConnectionPatch,
@@ -178,7 +182,8 @@ const applyPatch = (
     clientId: patch.clientId ?? stored.clientId,
     clientSecret: nullable(stored.clientSecret, secret),
     scopes: patch.scopes ?? stored.scopes,
-    emailDomains: patch.emailDomains ?? stored.emailDomains,
+    emailDomains:
+      patch.emailDomains === undefined ? stored.emailDomains : sortedDomains(patch.emailDomains),
     updatedAt,
   };
 };
@@ -269,7 +274,7 @@ export const layerMemory: Layer.Layer<
             clientId: input.clientId,
             clientSecret: secret,
             scopes: input.scopes,
-            emailDomains: input.emailDomains,
+            emailDomains: sortedDomains(input.emailDomains),
             createdAt: now,
             updatedAt: now,
           };
@@ -488,6 +493,22 @@ export const layerSql: Layer.Layer<
         `,
     });
 
+    // Plan 24 C6 (plan 25): an update is `UPDATE … WHERE id AND organization RETURNING *`, never the create's
+    // upsert, so an update racing a removal cannot bring the removed connection back.
+    const updateRow = SqlSchema.findOneOption({
+      Request: ConnectionRow,
+      Result: ConnectionRow,
+      execute: (r) => sql`
+          UPDATE organization_oauth_connection SET
+            name = ${r.name}, issuer = ${r.issuer}, "discoveryUrl" = ${r.discoveryUrl},
+            "authorizationEndpoint" = ${r.authorizationEndpoint}, "tokenEndpoint" = ${r.tokenEndpoint},
+            "jwksUri" = ${r.jwksUri}, "userinfoEndpoint" = ${r.userinfoEndpoint}, "clientId" = ${r.clientId},
+            "clientSecret" = ${r.clientSecret}, scopes = ${r.scopes}, "updatedAt" = ${r.updatedAt}
+          WHERE id = ${r.id} AND "organizationId" = ${r.organizationId}
+          RETURNING *
+        `,
+    });
+
     const findByIdQuery = SqlSchema.findOneOption({
       Request: Schema.Struct({ organizationId: Schema.String, id: Schema.String }),
       Result: ConnectionRow,
@@ -572,6 +593,37 @@ export const layerSql: Layer.Layer<
         }
       });
 
+    const rowOf = (record: StoredConnection) => ({
+      id: record.id,
+      organizationId: record.organizationId,
+      kind: record.kind,
+      name: record.name,
+      issuer: Option.getOrNull(record.issuer),
+      discoveryUrl: Option.getOrNull(record.discoveryUrl),
+      authorizationEndpoint: Option.getOrNull(record.authorizationEndpoint),
+      tokenEndpoint: Option.getOrNull(record.tokenEndpoint),
+      jwksUri: Option.getOrNull(record.jwksUri),
+      userinfoEndpoint: Option.getOrNull(record.userinfoEndpoint),
+      clientId: record.clientId,
+      clientSecret: Option.getOrNull(record.clientSecret),
+      scopes: record.scopes,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    });
+
+    /** C6: the row and its domains in one transaction; a connection removed meanwhile is `ConnectionRecordNotFound`. */
+    const rewrite = (record: StoredConnection) =>
+      SqlTransaction.transactional(sql)(
+        Effect.gen(function* () {
+          const row = yield* updateRow(rowOf(record)).pipe(unavailable("update"));
+          if (Option.isNone(row)) return yield* Effect.fail(notFound(record.id));
+          yield* replaceDomains(record.organizationId, record.id, record.emailDomains);
+          return toRecord(toStored(row.value, sortedDomains(record.emailDomains)));
+        }),
+      ).pipe(
+        Effect.catchTag("SqlError", StoreFailure.storeUnavailable("ConnectionRecords.update")),
+      );
+
     const write = (record: StoredConnection) =>
       SqlTransaction.transactional(sql)(
         Effect.gen(function* () {
@@ -593,9 +645,11 @@ export const layerSql: Layer.Layer<
             updatedAt: record.updatedAt,
           }).pipe(unavailable("write"));
           yield* replaceDomains(record.organizationId, record.id, record.emailDomains);
-          return toRecord(toStored(row, record.emailDomains));
+          return toRecord(toStored(row, sortedDomains(record.emailDomains)));
         }),
-      ).pipe(Effect.catchTag("SqlError", StoreFailure.storeUnavailable("ConnectionRecords.write")));
+      ).pipe(
+        Effect.catchTag("SqlError", StoreFailure.storeUnavailable("ConnectionRecords.create")),
+      );
 
     const create: ConnectionRecordsShape["create"] = Effect.fnUntraced(function* (input) {
       const now = yield* DateTime.now;
@@ -656,7 +710,7 @@ export const layerSql: Layer.Layer<
         if (Option.isNone(existing)) return yield* Effect.fail(notFound(id));
         const now = yield* DateTime.now;
         const secret = yield* patchSecret(secrets, id, patch);
-        return yield* write(applyPatch(existing.value, patch, now, secret));
+        return yield* rewrite(applyPatch(existing.value, patch, now, secret));
       },
     );
 
@@ -664,10 +718,12 @@ export const layerSql: Layer.Layer<
       function* (organizationId, id) {
         const existing = yield* findStored(organizationId, id).pipe(unavailable("remove"));
         if (Option.isNone(existing)) return yield* Effect.fail(notFound(id));
+        // C6: the connection row first, then its domains, the order `rewrite` locks them in; the opposite
+        // order deadlocks an update racing this removal on Postgres.
         yield* SqlTransaction.transactional(sql)(
           Effect.gen(function* () {
-            yield* sql`DELETE FROM organization_oauth_connection_domain WHERE "connectionId" = ${id} AND "organizationId" = ${organizationId}`;
             yield* sql`DELETE FROM organization_oauth_connection WHERE id = ${id} AND "organizationId" = ${organizationId}`;
+            yield* sql`DELETE FROM organization_oauth_connection_domain WHERE "connectionId" = ${id} AND "organizationId" = ${organizationId}`;
           }),
         ).pipe(
           Effect.catchTag("SqlError", StoreFailure.storeUnavailable("ConnectionRecords.remove")),
@@ -680,8 +736,9 @@ export const layerSql: Layer.Layer<
     ) =>
       SqlTransaction.transactional(sql)(
         Effect.gen(function* () {
-          yield* sql`DELETE FROM organization_oauth_connection_domain WHERE "organizationId" = ${organizationId}`;
+          // Rows before domains, as `remove` and `rewrite` lock them.
           yield* sql`DELETE FROM organization_oauth_connection WHERE "organizationId" = ${organizationId}`;
+          yield* sql`DELETE FROM organization_oauth_connection_domain WHERE "organizationId" = ${organizationId}`;
         }),
       ).pipe(
         Effect.catchTag(

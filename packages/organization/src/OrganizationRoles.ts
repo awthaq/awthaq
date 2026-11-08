@@ -8,7 +8,7 @@
 // event and the observe point.
 
 import { AuthEvents, Errors, HookPoint } from "@awthaq/core";
-import { Defects, Tenant } from "@awthaq/ports";
+import { Tenant } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -152,19 +152,26 @@ export class OrganizationRoles extends Context.Service<OrganizationRoles, Organi
           return yield* new OrganizationErrors.ReservedOrgRoleName();
         }
         yield* requireWithin(bound, input.permission);
+        const { maximumRolesPerOrganization } = yield* limitsOf(orgConfig, organizationId);
+        // An early check, so the refusal comes before the veto; `create`'s `within` is the authority (plan 25).
         const count = yield* orgRoles.countByOrganization(organizationId);
-        if (count >= (yield* limitsOf(orgConfig, organizationId)).maximumRolesPerOrganization) {
+        if (count >= maximumRolesPerOrganization) {
           return yield* new OrganizationErrors.RoleLimitReached();
         }
         const vetoed = yield* HookPoint.aborted(OrganizationHooks.BeforeCreateRole)(
           beforeCreate.run({ actor, organizationId, role: input.role }),
         );
         const record = yield* orgRoles
-          .create({ organizationId, role: vetoed.role, permission: input.permission })
+          .create(
+            { organizationId, role: vetoed.role, permission: input.permission },
+            { within: maximumRolesPerOrganization },
+          )
           .pipe(
-            Effect.catchTag("OrgRoleRecordNameTaken", () =>
-              Effect.fail(new OrganizationErrors.OrgRoleNameTaken()),
-            ),
+            Effect.catchTags({
+              OrgRoleRecordNameTaken: () => Effect.fail(new OrganizationErrors.OrgRoleNameTaken()),
+              "OrgRoleRecords/LimitReached": () =>
+                Effect.fail(new OrganizationErrors.RoleLimitReached()),
+            }),
           );
         yield* events.publish({
           _tag: "auth.organization.roleCreated",
@@ -184,16 +191,12 @@ export class OrganizationRoles extends Context.Service<OrganizationRoles, Organi
         yield* HookPoint.aborted(OrganizationHooks.BeforeUpdateRole)(
           beforeUpdate.run({ actor, organizationId, roleId }),
         );
-        const updated = yield* orgRoles
-          .update(organizationId, roleId, permission)
-          .pipe(
-            Effect.catchTag("OrgRoleRecordNotFound", () =>
-              Defects.invariantViolation(
-                "RowVanished",
-                "awthaq: org role vanished between check and write",
-              ),
-            ),
-          );
+        const updated = yield* orgRoles.update(organizationId, roleId, permission).pipe(
+          // A concurrent removal won: the sequential answer, not a defect (plan 25, F9).
+          Effect.catchTag("OrgRoleRecordNotFound", () =>
+            Effect.fail(new OrganizationErrors.OrgRoleNotFound()),
+          ),
+        );
         yield* events.publish({
           _tag: "auth.organization.roleUpdated",
           actorUserId: OrganizationActor.userIdOf(actor),
@@ -211,16 +214,12 @@ export class OrganizationRoles extends Context.Service<OrganizationRoles, Organi
         yield* HookPoint.aborted(OrganizationHooks.BeforeDeleteRole)(
           beforeDelete.run({ actor, organizationId, roleId }),
         );
-        yield* orgRoles
-          .remove(organizationId, roleId)
-          .pipe(
-            Effect.catchTag("OrgRoleRecordNotFound", () =>
-              Defects.invariantViolation(
-                "RowVanished",
-                "awthaq: org role vanished between check and write",
-              ),
-            ),
-          );
+        yield* orgRoles.remove(organizationId, roleId).pipe(
+          // A concurrent removal won: the sequential answer, not a defect (plan 25, F9).
+          Effect.catchTag("OrgRoleRecordNotFound", () =>
+            Effect.fail(new OrganizationErrors.OrgRoleNotFound()),
+          ),
+        );
         yield* events.publish({
           _tag: "auth.organization.roleDeleted",
           actorUserId: OrganizationActor.userIdOf(actor),

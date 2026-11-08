@@ -364,40 +364,32 @@ export const layerSql = Layer.effect(
     const findBySlug: OrganizationRecordsShape["findBySlug"] = (slug) =>
       findBySlugQuery(slug).pipe(Effect.map(Option.map(toRecord)), unavailable("findBySlug"));
 
+    const decodeOrganizations = Schema.decodeUnknownEffect(Schema.Array(OrganizationRow));
+
+    /**
+     * Plan 24 C4 (plan 25): one `UPDATE` of only the patched columns, `RETURNING *`. No read-before-write, so two
+     * administrators patching different fields both keep their change.
+     */
     const update: OrganizationRecordsShape["update"] = Effect.fnUntraced(function* (id, input) {
-      const existing = yield* findByIdQuery(id).pipe(unavailable("update"));
-      if (Option.isNone(existing)) return yield* Effect.fail(notFound(id));
-      const current = existing.value;
-      const nextSlug = input.slug ?? current.slug;
-      const nextLogo = input.logo === undefined ? current.logo : input.logo;
-      const nextMetadata = input.metadata === undefined ? current.metadata : input.metadata;
-      const nextHomeRegion = input.homeRegion === undefined ? current.homeRegion : input.homeRegion;
-      const updateQuery = SqlSchema.findOneOption({
-        Request: Schema.Struct({
-          id: Schema.String,
-          name: Schema.String,
-          slug: Schema.String,
-          logo: Schema.NullOr(Schema.String),
-          metadata: Schema.NullOr(Schema.String),
-          homeRegion: Schema.NullOr(Schema.String),
-        }),
-        Result: OrganizationRow,
-        execute: (r) => sql`
-            UPDATE organization_org SET name = ${r.name}, slug = ${r.slug}, logo = ${r.logo}, metadata = ${r.metadata}, "homeRegion" = ${r.homeRegion}
-            WHERE id = ${r.id}
-            RETURNING *
-          `,
-      });
-      const row = yield* updateQuery({
-        id,
-        name: input.name ?? current.name,
-        slug: nextSlug,
-        logo: nextLogo,
-        metadata: nextMetadata,
-        homeRegion: nextHomeRegion,
-      }).pipe(StoreFailure.orConflict("OrganizationRecords.update", () => slugTaken(nextSlug)));
-      if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
-      return toRecord(row.value);
+      const patch: Record<string, string | null> = {};
+      if (input.name !== undefined) patch["name"] = input.name;
+      if (input.slug !== undefined) patch["slug"] = input.slug;
+      if (input.logo !== undefined) patch["logo"] = input.logo;
+      if (input.metadata !== undefined) patch["metadata"] = input.metadata;
+      if (input.homeRegion !== undefined) patch["homeRegion"] = input.homeRegion;
+      if (Object.keys(patch).length === 0) {
+        const existing = yield* findByIdQuery(id).pipe(unavailable("update"));
+        if (Option.isNone(existing)) return yield* Effect.fail(notFound(id));
+        return toRecord(existing.value);
+      }
+      const rows =
+        yield* sql`UPDATE organization_org SET ${sql.update(patch)} WHERE id = ${id} RETURNING *`.pipe(
+          Effect.flatMap(decodeOrganizations),
+          StoreFailure.orConflict("OrganizationRecords.update", () => slugTaken(input.slug ?? "")),
+        );
+      const [row] = rows;
+      if (row === undefined) return yield* Effect.fail(notFound(id));
+      return toRecord(row);
     });
 
     const setSuspendedQuery = SqlSchema.findOneOption({
