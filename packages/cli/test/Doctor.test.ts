@@ -3,6 +3,7 @@
 // Layer — and every output is checked for the canary secrets the fixtures carry.
 import { Auth, SessionCookie } from "@awthaq/core";
 import { DeviceAuthorization } from "@awthaq/device-authorization";
+import { Password } from "@awthaq/password";
 import { Mailer, RateLimiter } from "@awthaq/ports";
 import { Roles } from "@awthaq/roles";
 import { BodyLimit } from "@awthaq/server";
@@ -15,6 +16,9 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Runtime from "effect/Runtime";
+import * as Schema from "effect/Schema";
+import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { role } from "@qadi/core";
 import { LinkProblem } from "../src/CliErrors.ts";
 import * as ConfigList from "../src/ConfigList.ts";
@@ -98,6 +102,26 @@ describe("doctor: graph", () => {
       const { exit } = yield* finishOutput(report, false);
       assert.strictEqual(exitCode(exit), 3);
     }),
+  );
+
+  it.effect(
+    "ADR-EA-047: warns about an endpoint whose last middleware is not RequestContext, and not about a shipped plugin",
+    () =>
+      Effect.gen(function* () {
+        const bare = HttpApiGroup.make("bare").add(
+          HttpApiEndpoint.get("ping", "/bare", { success: Schema.String }),
+        );
+        const report = yield* Doctor.diagnose(
+          configOf(Auth.make([Password.Password], { extraGroups: [bare] })),
+          development,
+        );
+        assert.deepStrictEqual(
+          report.findings
+            .filter((found) => found.code === "request-context-missing")
+            .map((found) => [found.severity, found.message]),
+          [["warning", "GET /bare does not declare RequestContext as its last middleware"]],
+        );
+      }),
   );
 
   it.effect("flags a mutating endpoint that carries no CsrfProtection", () =>

@@ -20,7 +20,7 @@ import { TwoFactor } from "@awthaq/two-factor";
 import { OAuthProvider } from "@awthaq/oauth";
 import { Password } from "@awthaq/password";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
-import { AuthHost, Csrf, SessionDelivery } from "@awthaq/server";
+import { AuthHost, Csrf, RequestContext, SessionDelivery } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { AuthorizedSubject } from "@awthaq/qadi";
@@ -324,6 +324,34 @@ export const declaredDelivery = HttpApiBuilder.group(lifecycleApi, "gate", (hand
 );
 export const declaredLeavesNothing: [
   Extract<Layer.Services<typeof declaredDelivery>, HttpRouter.Request<"Requires", unknown>>,
+] extends [never]
+  ? true
+  : false = true;
+
+// ---- 09-authentication-middleware: ADR-EA-047 (plan 26) ----
+
+const contextGroup = HttpApiGroup.make("context")
+  .add(HttpApiEndpoint.get("who", "/context", { success: Schema.String }))
+  .middleware(Api.RequestContext);
+const contextApi = HttpApi.make("auth").add(contextGroup);
+const contextHandlers = HttpApiBuilder.group(contextApi, "context", (handlers) =>
+  handlers.handle("who", () =>
+    Effect.map(Effect.service(Api.AuthRequestContext), (context) => context._tag),
+  ),
+);
+
+// type-gate: serving-without-request-context-does-not-compile
+// A group whose handler reads the request context, served without the populator, leaves `Api.RequestContext`
+// an unmet requirement: the layer cannot be launched.
+// @ts-expect-error - `Api.RequestContext` (the request context's populator) is still required
+export const servedWithoutRequestContext: Layer.Layer<never, never, never> = contextHandlers;
+export const servedWithRequestContext = contextHandlers.pipe(
+  Layer.provide(RequestContext.RequestContextLive),
+  Layer.provide(ClientAddress.layerDirect),
+  Layer.provide(NodeCrypto.layer),
+);
+export const withTheRequestContextNothingIsLeft: [
+  Layer.Services<typeof servedWithRequestContext>,
 ] extends [never]
   ? true
   : false = true;

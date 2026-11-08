@@ -2,6 +2,7 @@
 // `CsrfProtection`), and a configuration reference holding a plain-string secret next to a
 // `Redacted` one, both declared through a descriptor — so redaction is proved against a shape
 // that could leak, not against a config with nothing to hide.
+import { Api } from "@awthaq/api";
 import { Auth, AuthPlugin, ConfigDescriptor } from "@awthaq/core";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -32,7 +33,9 @@ const WidgetApi = HttpApi.make("auth").add(
   HttpApiGroup.make("widget")
     // A mutating endpoint with no CsrfProtection: the "csrf disabled" finding.
     .add(HttpApiEndpoint.post("create", "/widget", { success: Schema.String }))
-    .add(HttpApiEndpoint.get("read", "/widget", { success: Schema.String })),
+    .add(HttpApiEndpoint.get("read", "/widget", { success: Schema.String }))
+    // The request context is declared (ADR-EA-047), so the CSRF gap is this fixture's one finding.
+    .middleware(Api.RequestContext),
 );
 
 class Widget extends AuthPlugin.Service<Widget, { readonly ok: true }>()("widget", {
