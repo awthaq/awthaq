@@ -646,11 +646,8 @@ for (const options of suites) {
         () =>
           Effect.gen(function* () {
             const plugin = yield* service;
-            const bogus = {
-              deviceCode: Redacted.make("nope"),
-              clientId: CLI_CLIENT_ID,
-              ip: DEVICE_IP,
-            };
+            const bogus = { deviceCode: Redacted.make("nope"), clientId: CLI_CLIENT_ID };
+            const fromTheDevice = TestAuth.withRequest({ ip: DEVICE_IP });
             // D6: a refused failure-budget lookup used to publish the event but skip the metric.
             const counter = Metric.withAttributes(RateLimits.exceededCounter, {
               group: "device_authorization",
@@ -660,11 +657,11 @@ for (const options of suites) {
             });
             const before = (yield* Metric.value(counter)).count;
             for (let i = 0; i < 3; i++) {
-              const miss = yield* plugin.poll(bogus).pipe(Effect.flip);
+              const miss = yield* plugin.poll(bogus).pipe(fromTheDevice, Effect.flip);
               assert.strictEqual(miss._tag, "InvalidGrant");
             }
             assert.strictEqual((yield* Metric.value(counter)).count, before);
-            const refused = yield* plugin.poll(bogus).pipe(Effect.flip);
+            const refused = yield* plugin.poll(bogus).pipe(fromTheDevice, Effect.flip);
             assert.strictEqual(refused._tag, "RateLimited");
             assert.strictEqual((yield* Metric.value(counter)).count, before + 1);
           }).pipe(

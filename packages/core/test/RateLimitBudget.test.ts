@@ -11,7 +11,9 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -25,6 +27,13 @@ import * as AuthPlugin from "../src/AuthPlugin.ts";
 import * as RateLimits from "../src/RateLimits.ts";
 
 const minute = Duration.minutes(1);
+
+/** ADR-EA-047: runs a spend as if it answered a request from `ip` (an ip rule keys on the request context). */
+const fromRequest = (facts: { readonly ip?: string | undefined }) =>
+  Effect.provideService(
+    Api.AuthRequestContext,
+    Api.AuthRequestContext.request({ correlationId: "test", ...facts }),
+  );
 
 const InviteApi = HttpApi.make("auth")
   .add(
@@ -206,8 +215,11 @@ describe("RateLimits.budget registration (BEH-EA-107/111)", () => {
       );
       const opened = yield* RateLimits.budget(inviteOwner);
       const again = yield* RateLimits.budgetOf(inviteOwner);
-      yield* opened.spend("createByIp", { ip: "9.9.9.9" });
-      const refused = yield* again.spend("createByIp", { ip: "9.9.9.9" }).pipe(Effect.flip);
+      yield* opened.spend("createByIp", {}).pipe(fromRequest({ ip: "9.9.9.9" }));
+      const refused = yield* again
+        .spend("createByIp", {})
+        .pipe(fromRequest({ ip: "9.9.9.9" }))
+        .pipe(Effect.flip);
       assert.strictEqual(refused._tag, "RateLimited");
     }).pipe(Effect.provide(Live)),
   );
@@ -221,9 +233,12 @@ describe("shared buckets (BEH-EA-107)", () => {
         b: ipRuleIn("invite", "invite.shared"),
       });
       const limits = yield* RateLimits.budget(shared);
-      yield* limits.spend("a", { ip: "1.1.1.1" });
-      yield* limits.spend("b", { ip: "1.1.1.1" });
-      const refused = yield* limits.spend("a", { ip: "1.1.1.1" }).pipe(Effect.flip);
+      yield* limits.spend("a", {}).pipe(fromRequest({ ip: "1.1.1.1" }));
+      yield* limits.spend("b", {}).pipe(fromRequest({ ip: "1.1.1.1" }));
+      const refused = yield* limits
+        .spend("a", {})
+        .pipe(fromRequest({ ip: "1.1.1.1" }))
+        .pipe(Effect.flip);
       assert.strictEqual(refused._tag, "RateLimited");
     }).pipe(Effect.provide(Live)),
   );
@@ -244,9 +259,12 @@ describe("shared buckets (BEH-EA-107)", () => {
       });
       const limits = yield* RateLimits.budget(lookups);
       yield* limits.spend("bySession", { sessionId: "s1" });
-      yield* limits.spend("byIp", { ip: "1.1.1.1" });
-      yield* limits.spend("byIp", { ip: "1.1.1.1" });
-      const refused = yield* limits.spend("byIp", { ip: "1.1.1.1" }).pipe(Effect.flip);
+      yield* limits.spend("byIp", {}).pipe(fromRequest({ ip: "1.1.1.1" }));
+      yield* limits.spend("byIp", {}).pipe(fromRequest({ ip: "1.1.1.1" }));
+      const refused = yield* limits
+        .spend("byIp", {})
+        .pipe(fromRequest({ ip: "1.1.1.1" }))
+        .pipe(Effect.flip);
       assert.strictEqual(refused._tag, "RateLimited");
     }).pipe(Effect.provide(Live)),
   );
@@ -297,7 +315,8 @@ describe("spend (BEH-EA-105/106, EOTS-007)", () => {
       );
       const limits = yield* RateLimits.budget(inviteOwner).pipe(Effect.provide(recording));
       yield* limits
-        .spend(["createByIp", "createByEmail"], { ip: "1.2.3.4", email: "Alice+x@Example.com" })
+        .spend(["createByIp", "createByEmail"], { email: "Alice+x@Example.com" })
+        .pipe(fromRequest({ ip: "1.2.3.4" }))
         .pipe(Effect.provide(recording));
       assert.deepStrictEqual(consumed, [
         "ratelimit:invite.createByIp:ip:1.2.3.4",
@@ -307,7 +326,7 @@ describe("spend (BEH-EA-105/106, EOTS-007)", () => {
   );
 
   it.effect(
-    "ADR-EA-047: an ip rule spent with no ip keys on the request context's address, unknown with none",
+    "ADR-EA-047: an ip rule keys on the request context's address; unknown with none; NoRequest skips it and keeps the identity rule",
     () =>
       Effect.gen(function* () {
         const consumed: Array<string> = [];
@@ -319,20 +338,45 @@ describe("spend (BEH-EA-105/106, EOTS-007)", () => {
           }),
         );
         const limits = yield* RateLimits.budget(inviteOwner).pipe(Effect.provide(recording));
-        yield* limits
-          .spend("createByIp", {})
-          .pipe(
-            Effect.provideService(
-              Api.AuthRequestContext,
-              Api.AuthRequestContext.request({ correlationId: "c", ip: "203.0.113.7" }),
-            ),
-            Effect.provide(recording),
-          );
-        yield* limits.spend("createByIp", {}).pipe(Effect.provide(recording));
+        const both = limits
+          .spend(["createByIp", "createByEmail"], { email: "a@b.c" })
+          .pipe(Effect.provide(recording));
+        yield* both.pipe(fromRequest({ ip: "203.0.113.7" }));
+        yield* both.pipe(fromRequest({}));
+        yield* both.pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        );
         assert.deepStrictEqual(consumed, [
           "ratelimit:invite.createByIp:ip:203.0.113.7",
+          "ratelimit:invite.createByEmail:email:a@b.c",
           "ratelimit:invite.createByIp:ip:unknown",
+          "ratelimit:invite.createByEmail:email:a@b.c",
+          "ratelimit:invite.createByEmail:email:a@b.c",
         ]);
+      }).pipe(Effect.provide(Live)),
+  );
+
+  it.effect("ADR-EA-047: two request addresses get two buckets", () =>
+    Effect.gen(function* () {
+      const limits = yield* RateLimits.budget(inviteOwner);
+      yield* limits.spend("createByIp").pipe(fromRequest({ ip: "198.51.100.1" }));
+      yield* limits.spend("createByIp").pipe(fromRequest({ ip: "198.51.100.2" }));
+      const refused = yield* limits
+        .spend("createByIp")
+        .pipe(fromRequest({ ip: "198.51.100.1" }), Effect.flip);
+      assert.strictEqual(refused._tag, "RateLimited");
+    }).pipe(Effect.provide(Live)),
+  );
+
+  it.effect(
+    "ADR-EA-047: an erased handle spending an ip rule with no request context dies (the typed handle requires it)",
+    () =>
+      Effect.gen(function* () {
+        yield* RateLimits.budget(inviteOwner);
+        const registry = yield* RateLimits.RateLimitsRegistry;
+        const erased = Option.getOrThrow(yield* registry.handleOf(inviteOwner.id));
+        const defect = yield* defectOf(erased.spend("createByIp"));
+        assert.strictEqual(tagOf(defect), "Defects/InvariantViolation");
       }).pipe(Effect.provide(Live)),
   );
 
@@ -354,7 +398,8 @@ describe("spend (BEH-EA-105/106, EOTS-007)", () => {
       );
       const limits = yield* RateLimits.budget(inviteOwner).pipe(Effect.provide(refusingIp));
       const failure = yield* limits
-        .spend(["createByIp", "createByEmail"], { ip: "1.2.3.4", email: "a@b.c" })
+        .spend(["createByIp", "createByEmail"], { email: "a@b.c" })
+        .pipe(fromRequest({ ip: "1.2.3.4" }))
         .pipe(Effect.provide(refusingIp), Effect.flip);
       assert.strictEqual(failure._tag, "RateLimited");
       assert.deepStrictEqual(consumed, ["ratelimit:invite.createByIp:ip:1.2.3.4"]);
@@ -392,7 +437,16 @@ describe("spend (BEH-EA-105/106, EOTS-007)", () => {
     Effect.gen(function* () {
       const messages: Array<string> = [];
       const capture = Logger.make<unknown, void>((options) => {
-        if (options.logLevel === "Warn") messages.push(JSON.stringify(options));
+        // The message and its annotations: what reaches a log sink (the fiber's own services, the request
+        // context among them, are not logged).
+        if (options.logLevel === "Warn") {
+          messages.push(
+            JSON.stringify({
+              message: options.message,
+              annotations: options.fiber.getRef(References.CurrentLogAnnotations),
+            }),
+          );
+        }
       });
       const counter = Metric.withAttributes(RateLimits.exceededCounter, {
         group: "invite",
@@ -402,9 +456,10 @@ describe("spend (BEH-EA-105/106, EOTS-007)", () => {
       });
       const before = (yield* Metric.value(counter)).count;
       const limits = yield* RateLimits.budget(inviteOwner);
-      yield* limits.spend("createByIp", { ip: "7.7.7.7" });
+      yield* limits.spend("createByIp", {}).pipe(fromRequest({ ip: "7.7.7.7" }));
       yield* limits
-        .spend("createByIp", { ip: "7.7.7.7" })
+        .spend("createByIp", {})
+        .pipe(fromRequest({ ip: "7.7.7.7" }))
         .pipe(Effect.flip, Effect.provide(Logger.layer([capture])));
       assert.strictEqual((yield* Metric.value(counter)).count, before + 1);
       assert.strictEqual(messages.length, 1);
@@ -422,7 +477,7 @@ describe("spend (BEH-EA-105/106, EOTS-007)", () => {
       });
       const before = (yield* Metric.value(counter)).count;
       const limits = yield* RateLimits.budget(inviteOwner);
-      yield* limits.spend("createByIp", { ip: "8.8.8.8" });
+      yield* limits.spend("createByIp", {}).pipe(fromRequest({ ip: "8.8.8.8" }));
       assert.strictEqual((yield* Metric.value(counter)).count, before);
     }).pipe(Effect.provide(Live)),
   );
@@ -452,7 +507,9 @@ describe("spend (BEH-EA-105/106, EOTS-007)", () => {
   it.effect("RateLimiter.layerPermissive never refuses", () =>
     Effect.gen(function* () {
       const limits = yield* RateLimits.budget(inviteOwner);
-      const count = yield* admitted(limits.spend("createByIp", { ip: "6.6.6.6" }));
+      const count = yield* admitted(
+        limits.spend("createByIp", {}).pipe(fromRequest({ ip: "6.6.6.6" })),
+      );
       assert.strictEqual(count, 20);
     }).pipe(
       Effect.provide(
@@ -492,7 +549,7 @@ describe("guard and charge (BCR-006)", () => {
 });
 
 describe("tuning and overrides (BEH-EA-110)", () => {
-  const ip = (n: number) => ({ ip: `10.0.0.${n}` });
+  const ip = (n: number) => fromRequest({ ip: `10.0.0.${n}` });
 
   it.effect("tune is evaluated per call, so a config in force applies without a rebuild", () =>
     Effect.gen(function* () {
@@ -500,13 +557,13 @@ describe("tuning and overrides (BEH-EA-110)", () => {
       const limits = yield* RateLimits.budget(inviteOwner, {
         tune: Effect.map(Ref.get(limit), (value) => ({ createByIp: { limit: value } })),
       });
-      yield* limits.spend("createByIp", ip(4));
+      yield* limits.spend("createByIp").pipe(ip(4));
       assert.strictEqual(
-        (yield* limits.spend("createByIp", ip(4)).pipe(Effect.flip))._tag,
+        (yield* limits.spend("createByIp").pipe(ip(4)).pipe(Effect.flip))._tag,
         "RateLimited",
       );
       yield* Ref.set(limit, 3);
-      yield* limits.spend("createByIp", ip(4));
+      yield* limits.spend("createByIp").pipe(ip(4));
     }).pipe(Effect.provide(Live)),
   );
 
@@ -518,11 +575,14 @@ describe("tuning and overrides (BEH-EA-110)", () => {
       assert.strictEqual(tagOf(built), "Defects/InvalidConfiguration");
       const limits = yield* RateLimits.budget(inviteOwner);
       const fiber = yield* defectOf(
-        limits.spend("createByIp", ip(5)).pipe(
-          Effect.provideService(RateLimits.RateLimitOverrides, {
-            invite: { createByIp: { window: "0 millis" } },
-          }),
-        ),
+        limits
+          .spend("createByIp")
+          .pipe(ip(5))
+          .pipe(
+            Effect.provideService(RateLimits.RateLimitOverrides, {
+              invite: { createByIp: { window: "0 millis" } },
+            }),
+          ),
       );
       assert.strictEqual(tagOf(fiber), "Defects/InvalidConfiguration");
     }).pipe(Effect.provide(Live)),
@@ -531,7 +591,7 @@ describe("tuning and overrides (BEH-EA-110)", () => {
 
 describe("precedence of the four levels", () => {
   const spendCount = (limits: RateLimits.Budget<typeof rules>, n: number) =>
-    admitted(limits.spend("createByIp", { ip: `10.1.0.${n}` }));
+    admitted(limits.spend("createByIp", {}).pipe(fromRequest({ ip: `10.1.0.${n}` })));
 
   it.effect("declared is 1", () =>
     Effect.gen(function* () {
@@ -595,13 +655,13 @@ describe("precedence of the four levels", () => {
           ),
         ),
       );
-      const input = { ip: "10.2.0.1" };
-      yield* limits.spend("createByIp", input);
-      const first = yield* limits.spend("createByIp", input).pipe(Effect.flip);
+      const from = fromRequest({ ip: "10.2.0.1" });
+      yield* limits.spend("createByIp").pipe(from);
+      const first = yield* limits.spend("createByIp").pipe(from, Effect.flip);
       assert.isTrue(first.retryAfterMillis <= 10_000);
       yield* TestClock.adjust(Duration.seconds(10));
-      yield* limits.spend("createByIp", input);
-      const second = yield* limits.spend("createByIp", input).pipe(Effect.flip);
+      yield* limits.spend("createByIp").pipe(from);
+      const second = yield* limits.spend("createByIp").pipe(from, Effect.flip);
       assert.strictEqual(second.retryAfterMillis, 20_000);
     }).pipe(Effect.provide(Live)),
   );
@@ -661,7 +721,7 @@ describe("AuthPlugin.layer refuses a plugin that declares rules and never opens 
       ports: [RateLimiter.RateLimiter],
       make: Effect.gen(function* () {
         const limits = yield* RateLimits.budget(Diligent);
-        yield* limits.spend("pingByIp", { ip: "1.2.3.4" });
+        yield* limits.spend("pingByIp", {}).pipe(fromRequest({ ip: "1.2.3.4" }));
         return {};
       }),
     });

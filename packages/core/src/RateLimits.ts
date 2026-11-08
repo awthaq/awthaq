@@ -73,7 +73,7 @@ export { RateLimiter as Limiter };
 export * as Key from "./RateLimitKey.ts";
 
 type Table = RateLimitModel.Table;
-type AnyRule = RateLimitModel.Rule;
+type AnyRule = RateLimitModel.Rule<string, unknown, RateLimitModel.Mode, unknown>;
 type Sizing = RateLimitModel.Sizing;
 type Owner<Limits = Table> = RateLimitModel.Owner<Limits>;
 
@@ -339,14 +339,40 @@ export const budget = <Limits extends Table>(
     const events = yield* AuthEvents.AuthEvents;
     const table: Table = owner.rateLimitRules ?? {};
     const email = options.emailKey ?? Key.emailKey;
-    // ADR-EA-047: each call's keys read the request context it runs in (an ip rule keys on its address).
-    const keyContext = Effect.map(
-      Effect.serviceOption(Api.AuthRequestContext),
-      (request): Key.KeyContext => ({
-        email,
-        request: Option.getOrElse(request, () => Api.AuthRequestContext.noRequest),
-      }),
-    );
+    // ADR-EA-047: a rule whose key is `ip` reads the request context of the call. The typed handle requires it
+    // (`RequiresOf`), so its absence here is an invariant violation, never a shared bucket.
+    const keyContext = (rule: AnyRule, name: string) =>
+      rule.readsRequest
+        ? Effect.flatMap(Effect.serviceOption(Api.AuthRequestContext), (request) =>
+            Option.match(request, {
+              onNone: () =>
+                Defects.invariantViolation(
+                  "RateLimitRequestContextMissing",
+                  `awthaq: plugin "${owner.id}" spent the ip-keyed rule "${name}" with no request context`,
+                ),
+              onSome: (found): Effect.Effect<Key.KeyContext> =>
+                Effect.succeed({ email, request: found }),
+            }),
+          )
+        : Effect.succeed<Key.KeyContext>({ email, request: Api.AuthRequestContext.noRequest });
+    /** Runs `use` with the rule's bucket key, or skips the rule when it does not apply (`ip` under `NoRequest`). */
+    const withKey = <E>(
+      name: string,
+      input: unknown,
+      use: (
+        key: string,
+        resolved: { readonly rule: AnyRule; readonly sizing: Sizing },
+      ) => Effect.Effect<void, E>,
+    ) =>
+      Effect.flatMap(now(name), ({ rule, sizing, bucket }) =>
+        Effect.flatMap(keyContext(rule, name), (context) =>
+          // A spend may omit an input its keys read nothing from (`spend("xByIp")`): that is `{}`.
+          Option.match(rule.keyOf(bucket, input ?? {}, context), {
+            onNone: () => Effect.void,
+            onSome: (key) => use(key, { rule, sizing }),
+          }),
+        ),
+      );
     const tuneNow: Effect.Effect<RateLimitModel.ErasedTuning> =
       options.tune ?? Effect.succeed(noTuning);
     const builtOverrides = yield* RateLimitOverrides;
@@ -411,13 +437,8 @@ export const budget = <Limits extends Table>(
       );
 
     const spendOne = (name: string, input: unknown, spendOptions?: RateLimitModel.SpendOptions) =>
-      Effect.flatMap(Effect.all([now(name), keyContext]), ([{ rule, sizing, bucket }, context]) =>
-        refused(
-          limiter.consume({ key: rule.keyOf(bucket, input, context), ...sizing }),
-          name,
-          rule,
-          spendOptions,
-        ),
+      withKey(name, input, (key, { rule, sizing }) =>
+        refused(limiter.consume({ key, ...sizing }), name, rule, spendOptions),
       );
     const erased: RateLimitModel.ErasedBudget = {
       spend: (names, input, spendOptions) =>
@@ -427,19 +448,12 @@ export const budget = <Limits extends Table>(
           { discard: true },
         ),
       guard: (name, input, spendOptions) =>
-        Effect.flatMap(Effect.all([now(name), keyContext]), ([{ rule, sizing, bucket }, context]) =>
-          refused(
-            limiter.check({ key: rule.keyOf(bucket, input, context), ...sizing }),
-            name,
-            rule,
-            spendOptions,
-          ),
+        withKey(name, input, (key, { rule, sizing }) =>
+          refused(limiter.check({ key, ...sizing }), name, rule, spendOptions),
         ),
       charge: (name, input) =>
-        Effect.flatMap(Effect.all([now(name), keyContext]), ([{ rule, sizing, bucket }, context]) =>
-          limiter
-            .consume({ key: rule.keyOf(bucket, input, context), ...sizing })
-            .pipe(Effect.ignore),
+        withKey(name, input, (key, { sizing }) =>
+          limiter.consume({ key, ...sizing }).pipe(Effect.ignore),
         ),
     };
 
@@ -478,10 +492,12 @@ export const budgetOf = <Limits extends Table>(owner: Owner<Limits>) =>
 
 /** A rule's bucket key outside a budget (SecondFactor's failure budget). Needs an explicit `bucket`. */
 export const bucketKey = <I>(
-  rule: RateLimitModel.Rule<string, I, RateLimitModel.Mode> & { readonly bucket: string },
+  rule: RateLimitModel.Rule<string, I, RateLimitModel.Mode, never> & { readonly bucket: string },
   input: NoInfer<I>,
   context: Key.KeyContext = { email: Key.emailKey, request: Api.AuthRequestContext.noRequest },
-) => rule.keyOf(rule.bucket, input, context);
+) =>
+  // A rule whose key reads nothing of the request always applies (`R = never`: an `ip` rule is a compile error here).
+  Option.getOrElse(rule.keyOf(rule.bucket, input, context), () => `ratelimit:${rule.bucket}:n/a`);
 
 /** A hand-built owner (core's own account group, tests, BDD): groups confined to `contract`'s at compile time. */
 export const owner = <

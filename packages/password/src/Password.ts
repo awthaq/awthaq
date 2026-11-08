@@ -1221,21 +1221,21 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const resetLinks = VerificationLink.redeemer(ResetLink, {
         verification,
         budget: {
-          source: () => limits.spend("confirmResetByIp", {}),
+          source: limits.spend("confirmResetByIp"),
           token: (publicId) => limits.spend("confirmReset", { identifier: publicId }),
         },
       });
       const verifyLinks = VerificationLink.redeemer(VerifyLink, {
         verification,
         budget: {
-          source: () => limits.spend("verifyEmailByIp", {}),
+          source: limits.spend("verifyEmailByIp"),
           token: (publicId) => limits.spend("verifyEmail", { identifier: publicId }),
         },
       });
       const emailChangeLinks = VerificationLink.redeemer(EmailChange.Link, {
         verification,
         budget: {
-          source: () => limits.spend("confirmEmailChangeByIp", {}),
+          source: limits.spend("confirmEmailChangeByIp"),
           token: (publicId) => limits.spend("confirmEmailChange", { identifier: publicId }),
         },
       });

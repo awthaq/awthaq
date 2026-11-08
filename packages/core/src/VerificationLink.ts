@@ -248,8 +248,11 @@ export class LinkRefused extends Data.TaggedError("VerificationLink/Refused")<{
  * and its token is attacker-supplied, so a missing budget must be a visible decision.
  */
 export interface LinkBudget<E, R> {
-  /** Spent first, before the token is decoded (a flood of garbage), keyed on the request's source. `"caller"`: the endpoint already spent it; say where in a comment. */
-  readonly source: ((ip: string | undefined) => Effect.Effect<void, E, R>) | "caller";
+  /**
+   * Spent first, before the token is decoded (a flood of garbage), keyed on the request's source: an `ip` rule, which
+   * reads the request context's address (ADR-EA-047). `"caller"`: the endpoint already spent it; say where in a comment.
+   */
+  readonly source: Effect.Effect<void, E, R> | "caller";
   /** Spent once the token is well-formed, keyed on its public id (never the secret), before the store is touched. `"none"`: this purpose's guesses are budgeted elsewhere; say where. */
   readonly token: ((publicId: string) => Effect.Effect<void, E, R>) | "none";
 }
@@ -273,7 +276,6 @@ export const redeemer = <const Name extends string, L, IssueArgs, EB = never, RB
   return <A, E, R, EP = never, RP = never>(
     presented: {
       readonly token: Redacted.Redacted<string> & PresentedFor<Name>;
-      readonly ip?: string | undefined;
     },
     use: (link: L) => Effect.Effect<A, E, R>,
     options?: {
@@ -284,7 +286,7 @@ export const redeemer = <const Name extends string, L, IssueArgs, EB = never, RB
     },
   ) =>
     Effect.gen(function* () {
-      if (source !== "caller") yield* source(presented.ip);
+      if (source !== "caller") yield* source;
       const decoded = decode(Redacted.value(presented.token), purpose);
       if (Option.isNone(decoded)) return yield* refused("malformed");
       if (perToken !== "none") yield* perToken(decoded.value.publicId);

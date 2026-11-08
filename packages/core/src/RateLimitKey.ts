@@ -25,8 +25,11 @@ export interface KeyContext {
   readonly request: Api.RequestFacts | Api.NoRequest;
 }
 
-/** A bucket-key strategy over input `I`: a printable name, a dimension, a guard, and the key part. */
-export interface Key<I> {
+/**
+ * A bucket-key strategy over input `I`: a printable name, a dimension, a guard, and the key part. `R` is the per-call
+ * service the key reads (`Api.AuthRequestContext` for `ip`, ADR-EA-047; `never` for every other strategy).
+ */
+export interface Key<I, R = never> {
   readonly strategy:
     | "ip"
     | "email"
@@ -39,7 +42,12 @@ export interface Key<I> {
   readonly dimension: Dimension;
   /** `Schema.is` of the strategy's own input struct: narrows `unknown`, never a cast. */
   readonly accepts: (input: unknown) => input is I;
-  readonly part: (input: I, context: KeyContext) => string;
+  /** `None`: the rule does not apply to this call (only `ip`, under `NoRequest`). */
+  readonly part: (input: I, context: KeyContext) => Option.Option<string>;
+  /** Whether the budget must read the request context for this key (`ip` only). */
+  readonly readsRequest: boolean;
+  /** Phantom: the per-call service the key reads. Never assigned (the `"~input"` precedent in `RateLimitModel`). */
+  readonly "~requires"?: R;
 }
 
 const make = <S extends Schema.Constraint>(spec: {
@@ -52,7 +60,8 @@ const make = <S extends Schema.Constraint>(spec: {
     strategy: spec.strategy,
     dimension: spec.dimension,
     accepts: Schema.is(spec.input),
-    part: spec.part,
+    part: (input, context) => Option.some(spec.part(input, context)),
+    readsRequest: false,
   };
   return key;
 };
@@ -73,16 +82,30 @@ export const emailKey = (address: string) => {
 };
 
 /**
- * The request's own address, read from `Api.AuthRequestContext` (ADR-EA-047); an unresolvable address falls into one
- * shared `unknown` bucket. Transitional (plan 26 phases 3–4): an explicit `ip` field still wins.
+ * What an `ip` rule takes: nothing. `ip?: never` (not `{}`, which disables the excess-property check) makes
+ * `spend("xByIp", { ip })` a compile error.
  */
-export const ip = make({
+export interface NoInput {
+  readonly ip?: never;
+}
+const isNoInput = (input: unknown): input is NoInput =>
+  typeof input === "object" && input !== null && !("ip" in input && input.ip !== undefined);
+
+/**
+ * The request's own address, read from `Api.AuthRequestContext` (ADR-EA-047). No input field: the address is not the
+ * caller's to supply. An unresolvable address falls into one shared `unknown` bucket; work that answers no request
+ * (`noRequest`) is not throttled per source (the rule does not apply; the identity and principal rules still do).
+ */
+export const ip: Key<NoInput, Api.AuthRequestContext> = {
   strategy: "ip",
   dimension: "ip",
-  input: Schema.Struct({ ip: Schema.optional(Schema.String) }),
-  part: (input, context) =>
-    `ip:${input.ip ?? (Api.isRequest(context.request) ? Option.getOrUndefined(context.request.ip) : undefined) ?? "unknown"}`,
-});
+  accepts: isNoInput,
+  part: (_input, context) =>
+    Api.isRequest(context.request)
+      ? Option.some(`ip:${Option.getOrElse(context.request.ip, () => "unknown")}`)
+      : Option.none(),
+  readsRequest: true,
+};
 
 /** A target address (mail-bombing, enumeration). Normalised by the budget's `KeyContext.email`. */
 export const email = make({

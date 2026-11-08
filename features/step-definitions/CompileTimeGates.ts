@@ -182,11 +182,12 @@ const gatedRules = {
 };
 
 // type-gate: spend-names-only-declared-rules
+// (An `ip` rule takes no input: it reads the request context's address, ADR-EA-047.)
 export const spendsDeclared = (limits: RateLimits.Budget<typeof gatedRules>) =>
-  limits.spend("signIn", { ip: "203.0.113.7" });
+  limits.spend("signIn");
 export const spendsUndeclared = (limits: RateLimits.Budget<typeof gatedRules>) =>
   // @ts-expect-error - "signUp" is not in the table the plugin declared, so it cannot be enforced
-  limits.spend("signUp", { ip: "203.0.113.7" });
+  limits.spend("signUp");
 
 // ---- 19-qadi-bridge-path-a.feature: BEH-EA-145 (REQ-EA-406) ----
 

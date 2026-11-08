@@ -211,7 +211,7 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
       const links = VerificationLink.redeemer(MagicLinkPurpose, {
         verification,
         budget: {
-          source: () => limits.spend("verifyByIp", {}),
+          source: limits.spend("verifyByIp"),
           // Keyed on the token's public id (never its secret half): a flood of guesses at one link.
           token: (publicId) => limits.spend("verifyByToken", { identifier: publicId }),
         },
