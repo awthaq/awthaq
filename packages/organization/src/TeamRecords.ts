@@ -526,10 +526,7 @@ export const layerMemory = Layer.effect(
             (acc, [key, row]) => (row.teamId === id ? HashMap.remove(acc, key) : acc),
             s.memberships,
           );
-          return [
-            Result.succeed(undefined),
-            { teams: HashMap.remove(s.teams, id), memberships },
-          ] as const;
+          return [Result.succeed(undefined), { teams: HashMap.remove(s.teams, id), memberships }];
         },
       ).pipe(Effect.flatMap(Effect.fromResult));
 

@@ -101,7 +101,7 @@ export const runnerRequirements = () => {
   TestAuth.runPluginContractTests(framework, () => Password.Password, {
     options: [{}],
     // @ts-expect-error - Password's bundle provides no store
-    records: { suite: "types", suites: RecordsContract.pending("00") },
+    records: { suite: "types", suites: {} },
   });
   // …and a hand-built plugin may.
   const handBuilt: AuthPlugin.Any = {

@@ -191,22 +191,8 @@ export type Suites<P> = {
   readonly [S in AuthPlugin.RecordsOut<P> as AuthPlugin.RecordKeysOf<S>]: Suite<S>;
 };
 
-/**
- * Plan 25 ticket 08: the stand-in for a plugin whose stores have not been given suites yet. It registers
- * one passing test per store, naming the ticket that will replace it; ticket 25 removes it.
- */
-export interface Pending {
-  readonly _tag: "RecordsContract/Pending";
-  readonly ticket: string;
-}
-
-export const pending = (ticket: string): Pending => ({ _tag: "RecordsContract/Pending", ticket });
-
-const isPending = <S extends object>(suites: S | Pending): suites is Pending =>
-  "_tag" in suites && suites._tag === "RecordsContract/Pending";
-
 export interface RunConfig<P> {
-  readonly suites: Suites<P> | Pending;
+  readonly suites: Suites<P>;
   /** Names the Postgres schema (`TestSql.layer`); one per test file. */
   readonly suite: string;
   /** Another adapter of some of the stores (passkey's `ChallengeStore.layerCookie`), run on the suites of the keys it provides. */
@@ -305,15 +291,6 @@ export const run = <P extends AuthPlugin.Any>(
 
   framework.describe(`RecordsContract: ${plugin.id}`, () => {
     const suites = config.suites;
-    if (isPending(suites)) {
-      const ticket = suites.ticket;
-      framework.it(`every store: contract pending (plan 25 ticket ${ticket})`, async () => {
-        const keys = await providedKeys();
-        if (keys.length === 0)
-          framework.fail(`plugin "${plugin.id}" provides no store, so nothing is pending`);
-      });
-      return;
-    }
     const listed: ReadonlyArray<readonly [string, SuiteData]> = Object.entries<SuiteData>(suites);
 
     framework.it(

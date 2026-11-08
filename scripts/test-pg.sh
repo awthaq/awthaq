@@ -6,12 +6,16 @@
 #   pnpm run test:pg                                       # starts a container, runs, removes it
 #   AWTHAQ_POSTGRES_URL=postgres://... pnpm run test:pg    # use an existing server
 #
-# Two kinds of suite run:
+# Three kinds of suite run:
 #   * `*.postgres.test.ts` in @awthaq/sql (skipped without AWTHAQ_POSTGRES_URL);
-#   * every plugin record-store suite (admin, jwt, organization, passkey, roles,
-#     qadi claims, migrate-better-auth), which builds its database through
-#     `packages/test/src/TestSql.ts`: the same tests, on Postgres instead
-#     of `:memory:` SQLite, each suite in its own schema.
+#   * every plugin's record-store contract (plan 25, ADR-EA-041 decision 9): the
+#     `Contract.test.ts` of each package whose bundle provides a store runs its
+#     `RecordsContract` suites, race cases included, on a Postgres schema per
+#     build (`pnpm check:contract-tests` fails when one is missing here);
+#   * the suites that build a database through `packages/test/src/TestSql.ts`:
+#     core's stores, the domain race tests (`Rendezvous.held`) and the files
+#     that keep sealed-column or migration cases, on Postgres instead of
+#     `:memory:` SQLite, each in its own schema.
 #
 # The suites `DROP TABLE`/`DROP SCHEMA` — point the URL at a scratch database.
 set -euo pipefail
