@@ -20,16 +20,25 @@ export interface HeadersLike {
  * `undefined` for a missing header or an absent name. Never throws — this
  * is untrusted client input.
  */
-export const findCookieValue = (cookieHeader: string | null, name: string): string | undefined => {
-  if (cookieHeader === null) return undefined;
-  const prefix = `${name}=`;
-  for (const part of cookieHeader.split(";")) {
+export const findCookieValue = (cookieHeader: string | null, name: string): string | undefined =>
+  parseCookieHeader(cookieHeader).find((pair) => pair.name === name)?.value;
+
+/**
+ * The `name=value` pairs of a `Cookie` request header, in order, values still percent-encoded. A part
+ * without `=` or with an empty name is skipped. Never throws.
+ */
+export const parseCookieHeader = (
+  cookieHeader: string | null | undefined,
+): ReadonlyArray<{ readonly name: string; readonly value: string }> => {
+  const pairs: Array<{ readonly name: string; readonly value: string }> = [];
+  for (const part of (cookieHeader ?? "").split(";")) {
     const trimmed = part.trim();
-    if (trimmed.startsWith(prefix)) {
-      return trimmed.slice(prefix.length);
+    const separator = trimmed.indexOf("=");
+    if (separator > 0) {
+      pairs.push({ name: trimmed.slice(0, separator), value: trimmed.slice(separator + 1) });
     }
   }
-  return undefined;
+  return pairs;
 };
 
 /** Presence only — does a cookie named `name` appear at all? */

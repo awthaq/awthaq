@@ -31,21 +31,19 @@
 // decision): the application passes its own web `handler`, typically
 // `HttpRouter.toWebHandler` over its composed layer, built once next to its
 // pinned runtime.
-import { Api } from "@awthaq/api";
+//
+// The transport and the cookie state are `UserAgent`'s (BEH-EA-344) under the `trusted` policy: a cookie
+// expired by `Expires` or scoped to another `Path` stays off the action's later calls.
+import type { Api } from "@awthaq/api";
 import { AuthClient } from "@awthaq/client";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as HttpClient from "effect/http/HttpClient";
-import * as HttpClientError from "effect/http/HttpClientError";
-import type * as HttpClientRequest from "effect/http/HttpClientRequest";
-import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import * as HttpApiClient from "effect/http-api/HttpApiClient";
+import type * as HttpApiClient from "effect/http-api/HttpApiClient";
 import type * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import type * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
 import type { HeadersLike } from "./CookieHeader.ts";
 import type { CookieJarLike } from "./CookieJar.ts";
-import { applyResponseCookies, parseSetCookie } from "./CookieJar.ts";
+import * as UserAgent from "./UserAgent.ts";
 
 export interface InProcessClientOptions {
   /** The application's own web handler (e.g. `HttpRouter.toWebHandler(...).handler`). */
@@ -58,100 +56,20 @@ export interface InProcessClientOptions {
   readonly origin?: string | undefined;
 }
 
-/** Raw (still percent-encoded) name -> value pairs of a `Cookie` request header. */
-const parseCookieHeader = (header: string | null): Map<string, string> => {
-  const cookies = new Map<string, string>();
-  for (const part of (header ?? "").split(";")) {
-    const trimmed = part.trim();
-    const separator = trimmed.indexOf("=");
-    if (separator > 0) cookies.set(trimmed.slice(0, separator), trimmed.slice(separator + 1));
-  }
-  return cookies;
-};
-
-const decodeCookie = (raw: string): string => {
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-};
-
-/** The subset of request bodies an auth client produces (JSON/text/bytes/forms); streams are not sent through a server action. */
-const toBodyInit = (body: HttpClientRequest.HttpClientRequest["body"]): BodyInit | null => {
-  switch (body._tag) {
-    case "Empty":
-      return null;
-    case "Uint8Array":
-      // A copy: `BodyInit` wants an `ArrayBuffer`-backed view, the body's is `ArrayBufferLike`.
-      return new Uint8Array(body.body);
-    case "FormData":
-      return body.formData;
-    case "Raw": {
-      const raw = body.body;
-      if (typeof raw === "string" || raw instanceof Blob) return raw;
-      if (raw instanceof Uint8Array) return new Uint8Array(raw);
-      if (raw instanceof ArrayBuffer || raw instanceof FormData || raw instanceof URLSearchParams) {
-        return raw;
-      }
-      throw new Error("@awthaq/web: unsupported raw request body in a server action client");
-    }
-    case "Stream":
-      throw new Error(
-        "@awthaq/web: streaming request bodies are not supported in a server action client",
-      );
-  }
-};
-
 /**
- * The in-process transport plus the CSRF client half over one shared cookie
- * state: the action's incoming cookies, updated by every response's `Set-Cookie`.
+ * The action's user agent: the `trusted` policy (the handler is the application itself, addressed at
+ * `http://internal`, so `Domain`/`Secure`/`SameSite` are not enforced; expiry and `Path` are), seeded with
+ * the action's incoming cookies, mirroring every `Set-Cookie` into the framework's jar.
  */
-const makeLayers = (options: InProcessClientOptions) => {
-  const cookies = parseCookieHeader(options.headers.get("cookie"));
-
-  const transport = HttpClient.make((request, url) =>
-    Effect.tryPromise({
-      try: async () => {
-        const headers = new Headers(request.headers);
-        headers.set(
-          "cookie",
-          Array.from(cookies, ([name, value]) => `${name}=${value}`).join("; "),
-        );
-        for (const name of ["user-agent", "x-forwarded-for"]) {
-          const forwarded = options.headers.get(name);
-          if (forwarded !== null && !headers.has(name)) headers.set(name, forwarded);
-        }
-        const response = await options.handler(
-          new Request(url, { method: request.method, headers, body: toBodyInit(request.body) }),
-        );
-        // Record cookies for this action's later calls, and hand them to the framework's jar.
-        for (const header of response.headers.getSetCookie()) {
-          const { name, options: attributes } = parseSetCookie(header);
-          // Forwarded raw (still percent-encoded), exactly as a browser would send it back.
-          const raw = (header.split(";")[0] ?? "").slice(name.length + 1);
-          if (attributes.maxAge !== undefined && attributes.maxAge <= 0) cookies.delete(name);
-          else cookies.set(name, raw);
-        }
-        applyResponseCookies(response, options.jar);
-        return HttpClientResponse.fromWeb(request, response);
-      },
-      catch: (cause) =>
-        new HttpClientError.HttpClientError({
-          reason: new HttpClientError.TransportError({ request, cause }),
-        }),
-    }),
-  );
-
-  const csrf = AuthClient.csrfClientLayer({
-    readCookie: (name) => {
-      const raw = cookies.get(name);
-      return raw === undefined ? undefined : decodeCookie(raw);
-    },
+const agentFor = (options: InProcessClientOptions) =>
+  UserAgent.make({
+    handler: options.handler,
+    origin: options.origin ?? "http://internal",
+    policy: "trusted",
+    cookies: options.headers.get("cookie") ?? undefined,
+    mirror: options.jar,
+    forward: { from: options.headers, names: ["user-agent", "x-forwarded-for"] },
   });
-
-  return Layer.merge(Layer.succeed(HttpClient.HttpClient, transport), csrf);
-};
 
 /**
  * The client-middleware requirement this module discharges on the caller's
@@ -177,10 +95,7 @@ type UnsupportedClientMiddleware<Groups> = [
 export const makeInProcessClient = <ApiId extends string, Groups extends HttpApiGroup.Constraint>(
   api: HttpApi.HttpApi<ApiId, Groups>,
   options: InProcessClientOptions,
-) =>
-  HttpApiClient.make(api, { baseUrl: options.origin ?? "http://internal" }).pipe(
-    Effect.provide(makeLayers(options)),
-  );
+) => UserAgent.client(agentFor(options), api);
 
 /**
  * The Promise form, for actions that are plain `async` functions:

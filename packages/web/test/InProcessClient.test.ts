@@ -228,8 +228,8 @@ describe("inProcessClient (BO-002/NSA-008)", () => {
     }
   });
 
-  // Plan 20 phase 0: the transport drops a cookie only on `Max-Age<=0` and sends every cookie to every path.
-  it.fails("a cookie expired by `Expires` alone is not sent on the action's next call", async () => {
+  // Plan 20: `Expires` and `Path` are honoured within an action (the transport is `UserAgent`, `trusted`).
+  it("a cookie expired by `Expires` alone is not sent on the action's next call", async () => {
     const { handler, dispose } = HttpRouter.toWebHandler(AppLayer);
     try {
       const client = await inProcessClient(TestApi, {
@@ -246,7 +246,7 @@ describe("inProcessClient (BO-002/NSA-008)", () => {
     }
   });
 
-  it.fails("a `Path=/app` cookie is not sent to a route outside `/app`", async () => {
+  it("a `Path=/app` cookie is not sent to a route outside `/app`", async () => {
     const { handler, dispose } = HttpRouter.toWebHandler(AppLayer);
     try {
       const client = await inProcessClient(TestApi, {

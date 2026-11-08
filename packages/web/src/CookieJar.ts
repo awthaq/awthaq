@@ -70,6 +70,18 @@ export const setCookie = (
   jar.set(name, value, { ...options, path: options.path ?? DEFAULT_PATH });
 };
 
+/**
+ * One `decodeURIComponent` of a cookie value; a value that does not decode (a lone `%`) is returned as is.
+ * Never throws: a cookie value is untrusted input.
+ */
+export const decodeCookieValue = (raw: string): string => {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+};
+
 type MutableCookieSetOptions = { -readonly [K in keyof CookieSetOptions]?: CookieSetOptions[K] };
 
 const isSameSite = (value: string): value is "lax" | "strict" | "none" =>
@@ -85,7 +97,13 @@ const isSameSite = (value: string): value is "lax" | "strict" | "none" =>
  */
 export const parseSetCookie = (
   header: string,
-): { readonly name: string; readonly value: string; readonly options: CookieSetOptions } => {
+): {
+  readonly name: string;
+  readonly value: string;
+  /** The value exactly as the header carried it (still percent-encoded): the bytes a browser sends back. */
+  readonly rawValue: string;
+  readonly options: CookieSetOptions;
+} => {
   const segments = header.split(";").map((segment) => segment.trim());
   const [pair, ...attributes] = segments;
   const separator = (pair ?? "").indexOf("=");
@@ -96,13 +114,7 @@ export const parseSetCookie = (
   // so decoding here is its exact inverse — the invariant is "the bytes the
   // framework puts on the wire equal the original `Set-Cookie` value".
   // Passing `rawValue` verbatim would double-encode every `%`. A value that does not decode (a lone `%`) is passed as-is.
-  const value = (() => {
-    try {
-      return decodeURIComponent(rawValue);
-    } catch {
-      return rawValue;
-    }
-  })();
+  const value = decodeCookieValue(rawValue);
 
   const options: MutableCookieSetOptions = {};
   for (const attribute of attributes) {
@@ -124,6 +136,8 @@ export const parseSetCookie = (
       options.secure = true;
     } else if (key === "httponly") {
       options.httpOnly = true;
+    } else if (key === "partitioned") {
+      options.partitioned = true;
     } else if (key === "samesite" && raw !== undefined) {
       const lower = raw.toLowerCase();
       if (isSameSite(lower)) {
@@ -131,7 +145,7 @@ export const parseSetCookie = (
       }
     }
   }
-  return { name, value, options };
+  return { name, value, rawValue, options };
 };
 
 /**
