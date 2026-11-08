@@ -3,14 +3,12 @@
 // handler with a real session cookie, and aborts an operation with a veto tap, in BOTH record modes: the template's
 // `records` bundle is what makes the same suite run over memory and over a migrated database.
 import { Api } from "@awthaq/api";
-import { Auth, HookPoint, Migrations } from "@awthaq/core";
-import { Tenant } from "@awthaq/ports";
-import { TestAuth, TestSql } from "@awthaq/test";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth, HookPoint } from "@awthaq/core";
+import { Rendezvous, TestAuth } from "@awthaq/test";
 import { afterAll, assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Template from "../src/Template.ts";
 
@@ -167,83 +165,60 @@ for (const records of TestAuth.recordModes) {
   });
 }
 
-// Plan 05: the tenant-isolation conformance suite, over both adapters. The table is Partitioned: a note is
-// stamped with the ambient tenant at insert and seen only under it, identically in memory and SQL, and (on
-// Postgres, under `pnpm run test:pg`) the database confines an unfiltered statement too. A third-party plugin
-// runs this same suite over its own records.
-interface Written {
-  readonly id: string;
-  readonly owner: string;
+// The per-owner quota (ADR-EA-041 decision 9). `Notes.create` checks it early, so the refusal comes before the veto
+// hook, but the store's atomic `create(…, { within })` decides. The race holds every caller at the veto until all 8
+// have passed the early check: only the store can refuse the extra seven, on memory, SQLite and (under
+// `pnpm test:pg`) Postgres.
+for (const records of TestAuth.recordModes) {
+  describe(`plugin-template: the per-owner note quota (${records} records)`, () => {
+    const caller = new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id: "quota-user" }),
+      sessionId: "quota-session",
+    });
+    const quota = (taps: Layer.Layer<never, never, Template.BeforeCreateNote>) => {
+      const options = { taps, services: Template.config({ maxNotesPerOwner: 3 }) };
+      return records === "sql"
+        ? TestAuth.layer(built, { ...options, records, suite: "template_quota" })
+        : TestAuth.layer(built, options);
+    };
+
+    it.effect("a full quota answers NoteLimitReached before the veto runs", () =>
+      Effect.gen(function* () {
+        const notes = yield* Template.Notes;
+        for (const text of ["one", "two", "three"]) yield* notes.create(caller, text);
+        const refused = yield* Effect.flip(notes.create(caller, "forbidden"));
+        assert.strictEqual(refused._tag, "NoteLimitReached");
+      }).pipe(Effect.provide(quota(ForbiddenTap))),
+    );
+
+    it.effect("8 creates racing past the early check at max - 1 store exactly one", () =>
+      Effect.gen(function* () {
+        const notes = yield* Template.Notes;
+        // Arranged through the store, so only the racers meet at the veto.
+        const stored = yield* Template.NoteRecords;
+        for (const text of ["one", "two"]) yield* stored.create({ owner: "quota-user", text });
+        const outcomes = yield* Effect.all(
+          Array.from({ length: 8 }, () => Effect.result(notes.create(caller, "racer"))),
+          { concurrency: "unbounded" },
+        );
+        const tags = outcomes.map((outcome) =>
+          Result.isFailure(outcome) ? outcome.failure._tag : "ok",
+        );
+        assert.deepStrictEqual([...tags].sort(), [
+          "NoteLimitReached",
+          "NoteLimitReached",
+          "NoteLimitReached",
+          "NoteLimitReached",
+          "NoteLimitReached",
+          "NoteLimitReached",
+          "NoteLimitReached",
+          "ok",
+        ]);
+        assert.strictEqual((yield* notes.list(caller)).length, 3);
+      }).pipe(Effect.provide(quota(Template.BeforeCreateNote.tap(Rendezvous.held(8))))),
+    );
+  });
 }
-let isolationCounter = 0;
 
-const MemoryRecords = Template.layerMemory.pipe(Layer.provide(NodeCrypto.layer));
-
-// The conformance suite builds the records alone, over a migrated database of its own.
-const IsolationSql = TestSql.layer("template_isolation");
-const RecordsLive = Template.layerSql.pipe(
-  Layer.provide(NodeCrypto.layer),
-  Layer.provideMerge(IsolationSql),
-  Layer.provideMerge(
-    Layer.effectDiscard(Migrations.run(Template.Notes.migrations)).pipe(
-      Layer.provide(IsolationSql),
-    ),
-  ),
-);
-
-TestAuth.runTenantIsolationTests<Template.NoteRecordsShape, Written, Template.NoteRecords>(
-  {
-    describe: (name, body) => describe(name, body),
-    it: (name, body) => it(name, body),
-    fail: (message) => {
-      throw new Error(message);
-    },
-  },
-  {
-    plugin: Template.Notes,
-    adapters: [
-      { name: "layerMemory", layer: MemoryRecords },
-      { name: "layerSql", layer: RecordsLive },
-    ],
-    cases: [
-      {
-        table: "notes_note",
-        insert: Effect.gen(function* () {
-          const records = yield* Template.NoteRecords;
-          isolationCounter += 1;
-          const owner = `isolation-owner-${isolationCounter}`;
-          const created = yield* records.create({ owner, text: "isolated" });
-          return { id: created.id, owner };
-        }),
-        methods: {
-          create: { insert: true },
-          listByOwner: {
-            scoped: {
-              run: (written) =>
-                Effect.flatMap(Template.NoteRecords, (records) =>
-                  Effect.map(records.listByOwner(written.owner), (rows) =>
-                    rows.some((row) => row.id === written.id),
-                  ),
-                ),
-            },
-          },
-        },
-      },
-    ],
-    rls: { layer: RecordsLive },
-  },
-);
-
-describe("plugin-template: the records stamp the ambient tenant", () => {
-  it.effect("a note carries the tenant it was written under, and none outside a tenant", () =>
-    Effect.gen(function* () {
-      const records = yield* Template.NoteRecords;
-      const inTenant = yield* records
-        .create({ owner: "o", text: "t" })
-        .pipe(Tenant.withTenant("acme"));
-      assert.deepStrictEqual(inTenant.tenantId, Option.some("acme"));
-      const outside = yield* records.create({ owner: "o", text: "u" });
-      assert.isTrue(Option.isNone(outside.tenantId));
-    }).pipe(Effect.provide(MemoryRecords)),
-  );
-});
+// The store-level cases (the tenant stamp, tenant isolation, the atomic per-owner quota and its race) are
+// `test/contract/NoteRecords.ts`, run on both adapters by `Contract.test.ts` (plan 25).

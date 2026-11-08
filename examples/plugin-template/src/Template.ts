@@ -9,9 +9,10 @@
 import { Api } from "@awthaq/api";
 import { CurrentUser, AuthPlugin, HookPoint, Migrations, RateLimits } from "@awthaq/core";
 import { RateLimiter, Tenant } from "@awthaq/ports";
-import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
+import { Models as SqlModels, SqlStore, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -30,15 +31,19 @@ import * as TemplateApi from "./TemplateApi.ts";
 
 export interface NotesConfigShape {
   readonly maxLength: number;
+  /** How many notes one owner may keep in a tenant; the store enforces it atomically. */
+  readonly maxNotesPerOwner: number;
 }
+
+const defaultConfig: NotesConfigShape = { maxLength: 500, maxNotesPerOwner: 100 };
 
 export const NotesConfig: Context.Reference<NotesConfigShape> = Context.Reference(
   "example/notes/Config",
-  { defaultValue: () => ({ maxLength: 500 }) },
+  { defaultValue: () => defaultConfig },
 );
 
 export const config = (partial: Partial<NotesConfigShape>) =>
-  Layer.succeed(NotesConfig, { maxLength: 500, ...partial });
+  Layer.succeed(NotesConfig, { ...defaultConfig, ...partial });
 
 // ---- hook points: one veto (before) + one observe (after) --------------------------
 // A tap can amend or abort the operation (veto) or watch it (observe). The input
@@ -71,6 +76,14 @@ export const NotesHooksLive = Layer.mergeAll(BeforeCreateNote.layer, AfterCreate
 //   - a store failure is the typed `StoreUnavailable` (`StoreFailure`), never a defect;
 //   - a method that must see other tenants takes a `TenantScoped.CrossTenant` witness (this
 //     template has none: the owner's notes are tenant-local).
+//
+// And one rule (ADR-EA-041 decision 9): an invariant over several rows is enforced by the write
+// that could break it, atomically. The per-owner quota is such an invariant: `create` takes the
+// limit and refuses at it, in one `Ref.modify` in memory and inside `SqlStore.atomically` (one
+// transaction holding the owner's lock on Postgres) in SQL. Counting first and inserting second, in
+// two calls, would let two concurrent creates both pass at `limit - 1`. The service keeps an earlier
+// check, but only so the refusal comes before the veto hook; the store's answer is the authority.
+// Its contract suite (`test/contract/NoteRecords.ts`) classifies every method and races `create`.
 
 export interface NoteRecord {
   readonly id: string;
@@ -81,12 +94,21 @@ export interface NoteRecord {
   readonly tenantId: Option.Option<string>;
 }
 
+/** The owner already keeps `limit` notes in the ambient tenant. */
+export class NoteRecordLimitReached extends Data.TaggedError("NoteRecords/LimitReached")<{
+  readonly owner: string;
+  readonly limit: number;
+}> {}
+
 export interface NoteRecordsShape {
-  /** Stamped with the ambient tenant. */
-  readonly create: (input: {
-    readonly owner: string;
-    readonly text: string;
-  }) => Effect.Effect<NoteRecord, StoreFailure.StoreUnavailable>;
+  /**
+   * Stamped with the ambient tenant. Atomic: with `within`, refuses with `NoteRecordLimitReached` when
+   * the owner already keeps that many notes in the ambient tenant (the count and the insert are one step).
+   */
+  readonly create: (
+    input: { readonly owner: string; readonly text: string },
+    options?: { readonly within?: number },
+  ) => Effect.Effect<NoteRecord, NoteRecordLimitReached | StoreFailure.StoreUnavailable>;
   /** The owner's notes in the ambient tenant, oldest first. */
   readonly listByOwner: (
     owner: string,
@@ -103,10 +125,11 @@ export const layerMemory = Layer.effect(
     const random = yield* SecureRandom.SecureRandom;
     const state = yield* Ref.make<ReadonlyArray<NoteRecord>>([]);
 
-    const create: NoteRecordsShape["create"] = Effect.fnUntraced(function* (input) {
+    const create: NoteRecordsShape["create"] = Effect.fnUntraced(function* (input, options) {
       const id = yield* random.uuidV7();
       const created = yield* DateTime.now;
       const stamped = yield* TenantScoped.stamp({ tenantId: null });
+      const seen = yield* TenantScoped.visibility();
       const record: NoteRecord = {
         id,
         owner: input.owner,
@@ -114,7 +137,22 @@ export const layerMemory = Layer.effect(
         created,
         tenantId: Option.fromNullishOr(stamped.tenantId),
       };
-      yield* Ref.update(state, (rows) => [...rows, record]);
+      const limit = options?.within;
+      // The count and the insert in one `Ref.modify`: no other create can land between them.
+      const stored = yield* Ref.modify(
+        state,
+        (rows): readonly [boolean, ReadonlyArray<NoteRecord>] => {
+          const held = rows.filter(
+            (row) =>
+              row.owner === input.owner &&
+              TenantScoped.matches(Option.getOrNull(row.tenantId), seen),
+          ).length;
+          return limit !== undefined && held >= limit ? [false, rows] : [true, [...rows, record]];
+        },
+      );
+      if (!stored && limit !== undefined) {
+        return yield* Effect.fail(new NoteRecordLimitReached({ owner: input.owner, limit }));
+      }
       return record;
     });
 
@@ -172,17 +210,44 @@ export const layerSql = Layer.effect(
         Effect.flatMap(decodeNotes),
       );
 
-    const create: NoteRecordsShape["create"] = Effect.fnUntraced(function* (input) {
+    const countByOwner = (owner: string, seen: TenantScoped.Visibility) =>
+      sql<{
+        readonly n: number | string;
+      }>`SELECT COUNT(*) AS n FROM notes_note WHERE owner = ${owner} AND ${TenantScoped.predicate(sql, "tenantId", seen)}`.pipe(
+        Effect.map((rows) => Number(rows[0]?.n ?? 0)),
+      );
+
+    const create: NoteRecordsShape["create"] = Effect.fnUntraced(function* (input, options) {
       const id = yield* random.uuidV7();
       const created = yield* DateTime.now;
       const stamped = yield* TenantScoped.stamp({ tenantId: null });
-      return yield* insert({
+      const seen = yield* TenantScoped.visibility();
+      const limit = options?.within;
+      const write = insert({
         id,
         owner: input.owner,
         text: input.text,
         created,
         tenantId: stamped.tenantId,
-      }).pipe(Effect.map(toRecord), StoreFailure.orStoreUnavailable("NoteRecords.create"));
+      }).pipe(Effect.map(toRecord));
+      // One transaction holding the owner's lock (Postgres): the count and the insert are one step.
+      const guarded =
+        limit === undefined
+          ? write
+          : SqlStore.atomically(
+              sql,
+              `notes_note:owner:${input.owner}`,
+            )(
+              Effect.gen(function* () {
+                if ((yield* countByOwner(input.owner, seen)) >= limit) {
+                  return yield* Effect.fail(
+                    new NoteRecordLimitReached({ owner: input.owner, limit }),
+                  );
+                }
+                return yield* write;
+              }),
+            );
+      return yield* guarded.pipe(StoreFailure.orStoreUnavailable("NoteRecords.create"));
     });
 
     const listByOwnerOf: NoteRecordsShape["listByOwner"] = Effect.fnUntraced(function* (owner) {
@@ -247,6 +312,7 @@ export interface NotesShape {
   ) => Effect.Effect<
     NoteRecord,
     | TemplateApi.NoteTooLong
+    | TemplateApi.NoteLimitReached
     | HookPoint.HookAborted
     | Api.RateLimited
     | StoreFailure.StoreUnavailable
@@ -343,12 +409,23 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
           return yield* Effect.fail(new TemplateApi.NoteTooLong());
         }
         const owner = caller.ref.id;
+        // An early check, so the refusal comes before the veto hook runs. It is not the authority: two
+        // concurrent creates can both pass it, and the store's `within` refuses the second.
+        if ((yield* records.listByOwner(owner)).length >= settings.maxNotesPerOwner) {
+          return yield* Effect.fail(new TemplateApi.NoteLimitReached());
+        }
         // BEH-EA-090: a veto abort reaches the caller as the typed `HookAborted`, naming the point,
         // never as a defect. `HookPoint.aborted` translates it right where the point is run.
         const vetoed = yield* HookPoint.aborted(BeforeCreateNote)(
           beforeCreate.run({ owner, text }),
         );
-        const record = yield* records.create({ owner, text: vetoed.text });
+        const record = yield* records
+          .create({ owner, text: vetoed.text }, { within: settings.maxNotesPerOwner })
+          .pipe(
+            Effect.catchTag("NoteRecords/LimitReached", () =>
+              Effect.fail(new TemplateApi.NoteLimitReached()),
+            ),
+          );
         yield* afterCreate.run({ owner, text: vetoed.text, noteId: record.id });
         return record;
       });

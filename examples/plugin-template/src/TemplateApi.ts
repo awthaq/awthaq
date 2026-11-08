@@ -19,6 +19,13 @@ export class NoteTooLong extends Schema.TaggedError<NoteTooLong>()(
   { httpApiStatus: 422 },
 ) {}
 
+/** The caller already keeps as many notes as `NotesConfig.maxNotesPerOwner` allows. */
+export class NoteLimitReached extends Schema.TaggedError<NoteLimitReached>()(
+  "NoteLimitReached",
+  {},
+  { httpApiStatus: 409 },
+) {}
+
 export const CreateNotePayload = Schema.Struct({ text: Schema.String });
 export type CreateNotePayload = typeof CreateNotePayload.Type;
 
@@ -35,7 +42,7 @@ export const NotesGroup = HttpApiGroup.make("notes")
       payload: CreateNotePayload,
       success: NoteDto,
       // A veto hook can abort the operation and a rate limit can refuse it, so the endpoint must declare both.
-      error: [NoteTooLong, HookPoint.HookAborted, Api.RateLimited],
+      error: [NoteTooLong, NoteLimitReached, HookPoint.HookAborted, Api.RateLimited],
     }),
   )
   .add(HttpApiEndpoint.get("list", "/notes", { success: Schema.Array(NoteDto) }))
