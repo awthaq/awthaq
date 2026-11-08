@@ -1,29 +1,10 @@
 // AR-003 / BEH-EA-071: the admin group is an admin-tier group, so a host can serve it on
 // its own listener (and behind its own authentication) without forking the contract.
 import { Api } from "@awthaq/api";
-import {
-  Accounts,
-  Auth,
-  DataExport,
-  Erasure,
-  Persistence,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
-import { RateLimiter, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Credentials, AuthHttp, Csrf } from "@awthaq/server";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Auth } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
-import * as Redacted from "effect/Redacted";
-import * as Etag from "effect/http/Etag";
-import * as HttpPlatform from "effect/http/HttpPlatform";
-import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
 import * as Admin from "../src/Admin.ts";
@@ -74,63 +55,30 @@ describe("AR-003: the admin tier", () => {
     }),
   );
 
-  // Hand-wired on purpose: which API tier a listener serves (`AuthHttp.routes(auth.publicApi)` alone) is the wiring
-  // under test, and `TestAuth.layer` always serves the whole composition (plan 08 exemption). Nothing here
-  // authenticates, so the principal resolver is a stub.
-  it.effect("a listener serving only publicApi answers /admin with 404", () =>
-    Effect.gen(function* () {
-      const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
-        Layer.provideMerge(FileSystem.layerNoop({})),
-      );
-      const CoreLive = Layer.mergeAll(
-        Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-        Users.layer.pipe(Layer.provide(Persistence.memory)),
-      ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
-      const CsrfProtectionLive = Csrf.CsrfProtectionLive.pipe(
-        Layer.provide(
-          Layer.succeed(Csrf.CsrfConfig, {
-            secret: Redacted.make("admin-tier-test-csrf-secret-padded-to-thirty-two-bytes"),
-            allowedOrigins: [] as ReadonlyArray<string>,
+  // AR-003 through the harness (plan 15): `tier: "public"` is `AuthHost`'s, so the listener under test is the one a
+  // production host serves. The admin group is not routed; core's groups still are.
+  it.effect(
+    "a listener serving only publicApi answers /admin with 404 and still serves /session",
+    () =>
+      Effect.gen(function* () {
+        const app = TestAuth.app(
+          TestAuth.layer(auth, {
+            tier: "public",
+            services: Admin.config({ canImpersonate: () => Effect.succeed(true) }),
           }),
-        ),
-        Layer.provide(NodeCrypto.layer),
-      );
-      const AuthenticationLive = Authentication.AuthenticationLive.pipe(
-        Layer.provide(
-          Layer.succeed(
-            Credentials.PrincipalResolver,
-            Credentials.PrincipalResolver.of({ resolve: () => Effect.die("not used") }),
-          ),
-        ),
-      );
-      const { handler } = HttpRouter.toWebHandler(
-        AuthHttp.routes(auth.publicApi).pipe(
-          Layer.provide(AuthHttp.coreHandlers),
-          // CSG-001/CSG-005: the account handlers call core's erasure and export, and rate limit the export.
-          Layer.provide(
-            Layer.mergeAll(
-              Erasure.layer,
-              DataExport.layer,
-              RateLimiter.layerPermissive,
-              RateLimits.layer,
-            ),
-          ),
-          Layer.provide(AuthenticationLive),
-          Layer.provide(CsrfProtectionLive),
-          // The account group's erasure cascade and data export (CSG-001/CSG-005), and its limiter.
-          Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer)),
-          Layer.provideMerge(RateLimiter.layerPermissive),
-          Layer.provideMerge(SqlTransaction.layerNoop),
-          Layer.provideMerge(Accounts.layer.pipe(Layer.provide(Persistence.memory))),
-          Layer.provideMerge(Verification.layer.pipe(Layer.provide(Persistence.memory))),
-          Layer.provideMerge(CoreLive),
-          Layer.provideMerge(TestServices),
-          Layer.provideMerge(HttpRouter.layer),
-        ),
-      );
-      const response = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/admin`)));
-      assert.strictEqual(response.status, 404);
-    }),
+          { baseUrl: ORIGIN },
+        );
+        try {
+          const admin = yield* Effect.promise(() => app.handler(new Request(`${ORIGIN}/admin`)));
+          assert.strictEqual(admin.status, 404);
+          const session = yield* Effect.promise(() =>
+            app.handler(new Request(`${ORIGIN}/session`)),
+          );
+          assert.strictEqual(session.status, 401);
+        } finally {
+          yield* Effect.promise(() => app.dispose());
+        }
+      }),
   );
 
   it.effect("the admin listener with a swapped AdminAuthentication authenticates its own way", () =>

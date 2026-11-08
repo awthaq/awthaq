@@ -1,7 +1,7 @@
 // Shared composition for the password plugin's newer test files: `Auth.make([Password])` through `TestAuth.layer`
 // (plan 08), parameterised over the pieces a test wants to swap (HIBP transport, config, mailer, hasher, limiter, a
 // wrapped core service).
-import { Auth } from "@awthaq/core";
+import { Auth, Hooks } from "@awthaq/core";
 import type { Accounts, Sessions, Users } from "@awthaq/core";
 import type { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
@@ -24,6 +24,8 @@ const built = Auth.make([Password.Password]);
 
 export const makeTestLayer = <
   Wrapped extends Sessions.Sessions | Accounts.Accounts | Users.Users = never,
+  // Core's points (`Hooks.HooksLive`): a tap on any other point would not compile through `TestAuth.layer`.
+  Tapped extends Layer.Success<typeof Hooks.HooksLive> = never,
 >(
   options: {
     readonly httpClient?: Layer.Layer<HttpClient.HttpClient>;
@@ -31,8 +33,8 @@ export const makeTestLayer = <
     readonly mailer?: Layer.Layer<Mailer.Mailer>;
     readonly limiter?: Layer.Layer<RateLimiter.RateLimiter>;
     readonly hasher?: Layer.Layer<PasswordHasher.PasswordHasher, never, SecureRandom.SecureRandom>;
-    /** Application taps on the composition's hook points (a veto or an observer). */
-    readonly taps?: Layer.Layer<never, never, unknown>;
+    /** Application taps on the composition's hook points (a veto or an observer); each must be a point the composition declares. */
+    readonly taps?: Layer.Layer<never, never, Tapped>;
     /** Wraps a core service the plugin captures at construction (for example to simulate a store outage). */
     readonly coreOverride?: Layer.Layer<Wrapped, never, Wrapped>;
   } = {},

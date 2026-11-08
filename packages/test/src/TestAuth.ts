@@ -64,36 +64,24 @@
 import type { TestFramework } from "./TestFramework.ts";
 import { Api } from "@awthaq/api";
 import {
-  Accounts,
   AuditChain,
   AuditLog,
   Auth,
   AuthEvents,
   AuthPlugin,
-  DataExport,
-  Erasure,
+  type DataExport,
+  type Erasure,
   HookPoint,
   Hooks,
   Migrations,
   Persistence,
-  RateLimits,
   type Retention,
   Sessions,
-  Slots,
   Users,
-  Verification,
 } from "@awthaq/core";
-import {
-  ClientAddress,
-  type Encryption,
-  Mailer,
-  PasswordHasher,
-  RateLimiter,
-  RelayCursorStore,
-  SqlTransaction,
-} from "@awthaq/ports";
-import { AuthHttp, Credentials, Csrf, RequestContext } from "@awthaq/server";
-import { CoreMigrations, RelayCursorStoreSql } from "@awthaq/sql";
+import { ClientAddress, type Encryption, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { AuthHost, Credentials, Csrf } from "@awthaq/server";
+import { CoreMigrations } from "@awthaq/sql";
 import * as RedactionGuard from "./RedactionGuard.ts";
 import * as TestEncryption from "./TestEncryption.ts";
 import * as TestSql from "./TestSql.ts";
@@ -141,6 +129,11 @@ const TestHasher = PasswordHasher.layerArgon2id.pipe(
 
 /** Named so the foundations' inferred types can be emitted (declaration emit needs the namespace in scope). */
 export type RetentionRegistryService = Retention.RetentionRegistry;
+/** Named for the same reason: the registries `Hooks.HooksLive` provides, and the test ports' fixed key. */
+export type FoundationServices =
+  | DataExport.DataExportRegistry
+  | Erasure.ErasureRegistry
+  | Encryption.Encryption;
 
 /**
  * ELC-004: what every memory layer (`Users`/`Accounts`/`Sessions`/`Verification`, each plugin's
@@ -166,105 +159,23 @@ export const memoryFoundation = AuthEvents.layer.pipe(
   Layer.provideMerge(NodeCrypto.layer),
 );
 
-/** Plan 02's SQL stores over the ambient `SqlClient`, sealing provider tokens with the test `Encryption`. */
-const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
-
-/** The same foundation over a SQL audit log (`sqlBase`): `AuthEvents` writes through the one `SqlClient`. */
-const sqlFoundation = AuthEvents.layer.pipe(
-  Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(SqlStores))),
-  Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(AuditChain.layer),
-  Layer.provideMerge(NodeCrypto.layer),
-);
-
 /**
- * The ports and registries both bases carry. `rateLimiter` is `RateLimiter.layerPermissive` (BEH-EA-112,
- * a test that signs in fifty times in a loop should not fail for a reason unrelated to what it tests)
- * unless a suite asks for `"enforcing"`: the real limiter over the in-memory store, so lockout and
- * throttle behaviour is the production behaviour. `RateLimits.layer` (the per-plugin rule registry),
- * `Slots.layer` and the credential-resolver registry are not ports but every composition needs them.
+ * The test ports: a cheap real hasher, a capturing mailer, a permissive (or the real) limiter, the socket peer, a fixed
+ * key, and the platform crypto services. `rateLimiter` is `RateLimiter.layerPermissive` (BEH-EA-112: a test that signs
+ * in fifty times in a loop should not fail for a reason unrelated to what it tests) unless a suite asks for
+ * `"enforcing"`: the real limiter over the in-memory store, so lockout and throttle behaviour is the production one.
+ * The registries (`RateLimits.layer`, `Slots.layer`, the credential-resolver registry) are not ports: `AuthHost`
+ * provides them.
  */
 const testPorts = (rateLimiter: "permissive" | "enforcing" | undefined) =>
   Layer.mergeAll(
     TestHasher,
     Mailer.layerMemory,
     rateLimiter === "enforcing" ? RateLimiter.layerMemory : RateLimiter.layerPermissive,
-    RateLimits.layer,
-    // MA-005: `Auth.make` provides its own `SlotsRegistry`; this one is for a plugin layer a
-    // test composes standalone (outside `Auth.make`), whose `Slots.override` requires one.
-    Slots.layer,
     // AGA-001/NHS-003: the raw-`remoteAddress` passthrough every zero-config app gets by default.
     ClientAddress.layerDirect,
-    // ADR-EA-012: the one registry plugins contribute credential resolvers to and `Authentication` reads.
-    Credentials.CredentialResolversLive,
     TestEncryption.layer,
-  );
-
-/** `Users`, `Accounts`, `Sessions` and `Verification`, written once over whichever stores sit beneath them. */
-const coreServices = Layer.mergeAll(
-  Users.layer,
-  Accounts.layer,
-  Sessions.layer,
-  // ETVS-004/MW-002: what every password-style composition needs beyond the core stores
-  // (also `AuthHttp.coreHandlers`' always-served `account` group).
-  Verification.layer,
-);
-
-/**
- * BEH-EA-193: the whole base over memory: plan 02's `Persistence.memory` bundle (the five stores and the
- * no-op transaction), the core services over it, the test ports, and CSG-001's `AccountErasure` /
- * `AccountExport` built over those same stores and over the registries `Hooks.HooksLive` provides (the ones
- * every plugin's erasure contribution registers into), so a plugin installed in a composition is erased like
- * any other.
- */
-const memoryBase = (rateLimiter: "permissive" | "enforcing" | undefined) =>
-  Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-    Layer.provideMerge(
-      Layer.mergeAll(
-        coreServices,
-        testPorts(rateLimiter),
-        SqlTransaction.layerNoop,
-        // Plan 23: the relay's position is an application layer's input, so the base exposes it.
-        RelayCursorStore.layerMemory,
-      ).pipe(Layer.provide(Persistence.memory)),
-    ),
-    // RRS-003: `Sessions.layer` also needs `AuthEvents`.
-    Layer.provideMerge(memoryFoundation),
-  );
-
-/**
- * BEH-EA-T2: the same services over a database migrated with core's migrations and then the composition's
- * (`built.migrations`): SQLite `:memory:` by default, a per-suite Postgres schema under `AWTHAQ_POSTGRES_URL`
- * (`TestSql.layer(suite)`). The migrations run before anything is built over the client, because everything
- * is provided through the one `Ready` layer.
- */
-const sqlBase = (
-  rateLimiter: "permissive" | "enforcing" | undefined,
-  migrations: Auth.Built<ReadonlyArray<AuthPlugin.Any>>["migrations"],
-  suite: string,
-) => {
-  const Ready = Layer.effectDiscard(
-    Effect.gen(function* () {
-      yield* Migrator.make({})({
-        loader: CoreMigrations.coreMigrations,
-        table: "effect_sql_migrations",
-      });
-      yield* Migrations.run(migrations);
-    }),
-  ).pipe(Layer.provideMerge(TestSql.layer(suite)));
-  return Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-    Layer.provideMerge(
-      Layer.mergeAll(
-        coreServices,
-        testPorts(rateLimiter),
-        SqlTransaction.layerSql,
-        RelayCursorStoreSql.layer,
-      ).pipe(Layer.provide(SqlStores)),
-    ),
-    Layer.provideMerge(sqlFoundation),
-    Layer.provideMerge(Ready),
-  );
-};
+  ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 const GuardLive = RedactionGuard.layerEvents.pipe(Layer.provideMerge(RedactionGuard.layer));
 
@@ -282,7 +193,7 @@ export const TestCsrfConfig: Csrf.CsrfConfigShape = {
 export const recordModes: readonly ["memory", "sql"] = ["memory", "sql"];
 
 /** Options every mode shares. */
-export interface CommonOptions<S, SE, SR, D, DR> {
+export interface CommonOptions<S, SE, SR, D, DR, T = never> {
   /**
    * What is genuinely the test's own: plugin configuration (`Plugin.config(...)`), adapters (`XmlSignature`,
    * `WebAuthn`, `HttpClient`, a fake fetcher, a transport), and doubles. It is **merged into the output**, so
@@ -298,8 +209,11 @@ export interface CommonOptions<S, SE, SR, D, DR> {
    * the base service for the plugins and for the test alike.
    */
   readonly decorate?: Layer.Layer<D, never, DR>;
-  /** Application taps. They receive the same point instances the plugins run (core's and the declared `hookPoints`). */
-  readonly taps?: Layer.Layer<never, never, unknown>;
+  /**
+   * Application taps. They receive the same point instances the plugins run (core's and the declared `hookPoints`); a
+   * tap on a point no composed plugin declares stays in `RIn` and does not compile (INV-EA-005).
+   */
+  readonly taps?: Layer.Layer<never, never, T>;
   /** Overrides fields of `TestCsrfConfig`. */
   readonly csrf?: Partial<Csrf.CsrfConfigShape>;
   /** Defaults to `Credentials.PrincipalResolverLive`; `PrincipalResolverWithUserFactsLive` opts into `emailVerified`. */
@@ -314,100 +228,94 @@ export interface CommonOptions<S, SE, SR, D, DR> {
   readonly openapiPath?: `/${string}`;
   /** P20a (BEH-EA-084): serve the Scalar docs page at this path. */
   readonly docsPath?: `/${string}`;
+  /** AR-003: the groups this composition serves (`AuthHost`'s `tier`). Default `"all"`. */
+  readonly tier?: "all" | "public" | "admin";
 }
 
 /** BEH-EA-T2: `records: "sql"` needs a `suite` (one distinct name per test file; it names the Postgres schema). */
 export type SqlMode = { readonly records: "sql"; readonly suite: string };
 export type MemoryMode = { readonly records?: "memory" };
 
-/** Named so the bases' inferred types can be emitted (TS2883 needs the `Encryption` namespace in scope). */
-export type BaseEncryption = Encryption.Encryption;
-type MemoryBaseOut = Layer.Success<ReturnType<typeof memoryBase>>;
-type SqlBaseOut = Layer.Success<ReturnType<typeof sqlBase>>;
-type BaseOut<M extends "memory" | "sql"> = M extends "memory" ? MemoryBaseOut : SqlBaseOut;
+/** What `TestAuth` adds beneath `AuthHost.layer`: the test ports and the HTTP platform. */
+type TestProvided =
+  | Layer.Success<ReturnType<typeof testPorts>>
+  | Layer.Success<typeof HttpServer.layerServices>
+  | Layer.Success<typeof HttpRouter.layer>;
+
+/** The recording guard rides in `AuthHost`'s `decorate` slot (above the base, beneath the records). */
+type Guarded<D> = D | Layer.Success<typeof GuardLive>;
+type GuardIn<DR> = DR | Layer.Services<typeof GuardLive>;
 
 /** Everything a composition provides beneath its plugins, besides the middleware it derives. */
 type Provided<P extends ReadonlyArray<AuthPlugin.Any>, M extends "memory" | "sql", S, D> =
-  | BaseOut<M>
-  | Layer.Success<typeof GuardLive>
-  | Layer.Success<typeof HttpServer.layerServices>
-  | Layer.Success<typeof HttpRouter.layer>
-  | Csrf.CsrfConfig
-  | Credentials.PrincipalResolver
-  | AuthPlugin.RecordsOut<P[number]>
-  | AuthPlugin.HookPointsOut<P[number]>
-  | S
-  | D;
+  | AuthHost.Provided<P, M, S, Guarded<D>>
+  | TestProvided;
+
+/** What a composition still requires: `AuthHost`'s host-owned remainder minus the test ports and the platform. */
+type Requires<
+  P extends ReadonlyArray<AuthPlugin.Any>,
+  Extra extends HttpApiGroup.Constraint,
+  M extends "memory" | "sql",
+  S,
+  SR,
+  T,
+  D,
+  DR,
+> = Exclude<
+  AuthHost.Requires<P, Extra, M, S, SR, T, Guarded<D>, GuardIn<DR>, never, never, never>,
+  TestProvided
+>;
 
 /**
  * The one implementation behind every `layer` overload, over the widest shapes. Contract tests use it directly
- * (`runPluginContractTests`' `build` check), where the plugin tuple is only known as `AuthPlugin.Any`.
+ * (`runPluginContractTests`' `build` check), where the plugin tuple is only known as `AuthPlugin.Any`. BEH-EA-342:
+ * it is `AuthHost.layer` over the test ports, the redaction guard and the HTTP platform, nothing else.
  */
 const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpApiGroup.Constraint>(
   built: Auth.Built<P, Extra>,
-  options: CommonOptions<never, unknown, unknown, never, unknown> & (MemoryMode | SqlMode) = {},
+  options: CommonOptions<never, unknown, unknown, never, unknown, unknown> &
+    (MemoryMode | SqlMode) = {},
 ): Layer.Layer<never, unknown, unknown> => {
-  const sqlSuite = options.records === "sql" && "suite" in options ? options.suite : undefined;
-  const select = (plugin: AuthPlugin.Any) =>
-    sqlSuite === undefined ? plugin.records?.memory : plugin.records?.sql;
-  const records = built.plugins.reduce<Layer.Layer<never, unknown, unknown>>((acc, plugin) => {
-    const bundle = select(plugin);
-    return bundle === undefined ? acc : Layer.merge(acc, bundle);
-  }, Layer.empty);
-  const points = built.plugins.reduce<Layer.Layer<never, unknown, unknown>>(
-    (acc, plugin) => (plugin.hookPoints === undefined ? acc : Layer.merge(acc, plugin.hookPoints)),
-    Layer.empty,
-  );
-  // The one `CsrfConfig` layer: the derived `CsrfProtection` reads it, and it is also merged into the
-  // output so `TestAuth.app` can mint a token against the very secret the composition checks.
-  const csrf = Layer.succeed(Csrf.CsrfConfig, { ...TestCsrfConfig, ...options.csrf });
-  const middleware = AuthHttp.middlewareFor(built.api, {
-    csrf,
+  const shared = {
+    // The one `CsrfConfig` layer: the derived `CsrfProtection` reads it, and it is merged into the output so
+    // `TestAuth.app` can mint a token against the very secret the composition checks.
+    csrf: Layer.succeed(Csrf.CsrfConfig, { ...TestCsrfConfig, ...options.csrf }),
     ...(options.principalResolver === undefined
       ? {}
       : { principalResolver: options.principalResolver }),
-  });
-  const base =
-    sqlSuite === undefined
-      ? memoryBase(options.rateLimiter)
-      : sqlBase(options.rateLimiter, built.migrations, sqlSuite);
-  // MW-002: `built.api` always carries core's session/account groups, so their handlers are part of every
-  // test pipeline. BEH-EA-084: the docs page (when asked for) is mounted on the same router, over the same api.
-  const docs =
-    options.docsPath === undefined
-      ? Layer.empty
-      : AuthHttp.docs(built.api, { path: options.docsPath });
-  return Layer.merge(AuthHttp.routes(built.api, { openapiPath: options.openapiPath }), docs).pipe(
-    // The in-process harness deliberately serves without `RequestContext.layer` (E1), so `coreHandlers`' build-time
-    // warning that it is absent would fire on every test app.
-    Layer.provide(
-      AuthHttp.coreHandlers.pipe(
-        Layer.provide(Layer.succeed(RequestContext.warnWhenAbsent, false)),
-      ),
-    ),
-    // The plugins' own services stay in the output (`provideMerge`), so a test can
-    // `yield* Password.Password` from the same composition it serves over HTTP.
-    Layer.provideMerge(built.layer),
-    // `services` sit closest to the plugins, so they override the derived middleware and the base for the
-    // plugins, and are *merged*, so the output holds the very instances the plugins used.
-    Layer.provideMerge(options.services ?? Layer.empty),
-    Layer.provide(middleware),
-    // The resolver the derived middleware uses is part of the output too, so a test that calls
-    // `Credentials.make` directly reads it instead of hand-building `PrincipalResolverLive`.
-    Layer.provideMerge(options.principalResolver ?? Credentials.PrincipalResolverLive),
-    Layer.provideMerge(csrf),
-    Layer.provideMerge((options.taps ?? Layer.empty).pipe(Layer.provideMerge(points))),
-    Layer.provideMerge(records),
-    Layer.provideMerge(options.decorate ?? Layer.empty),
-    // EOTS-002: the recording tracer/logger (and the `AuthEvents` inspector) are part of every
-    // `TestAuth` composition; they only record, `assertNoLeaks` is what fails.
-    Layer.provideMerge(GuardLive),
-    Layer.provideMerge(base),
-    Layer.provideMerge(HttpServer.layerServices),
-    Layer.provideMerge(HttpRouter.layer),
-    // SAM-004: the composition's declared user fields, last so `Users` and the account handler both see it.
-    Layer.provideMerge(built.userFieldsLayer),
-  );
+    services: options.services ?? Layer.empty,
+    taps: options.taps ?? Layer.empty,
+    // EOTS-002: the recording tracer/logger (and the `AuthEvents` inspector) ride in the decorate slot, above the
+    // base and beneath the records, where they always sat; they only record, `assertNoLeaks` is what fails.
+    decorate: (options.decorate ?? Layer.empty).pipe(Layer.provideMerge(GuardLive)),
+    tier: options.tier ?? "all",
+    // The in-process harness serves without both on purpose, as it always has (`RequestContext` E1; `BodyLimit`
+    // has its own suite), and so `coreHandlers`' warning that `RequestContext.layer` is absent stays silent.
+    requestContext: false,
+    bodyLimit: false,
+    openapiPath: options.openapiPath,
+    docsPath: options.docsPath,
+  };
+  const platform = <A, E, R>(host: Layer.Layer<A, E, R>) =>
+    host.pipe(
+      Layer.provideMerge(testPorts(options.rateLimiter)),
+      Layer.provideMerge(HttpServer.layerServices),
+      Layer.provideMerge(HttpRouter.layer),
+    );
+  // BEH-EA-T2: SQLite `:memory:` by default, a per-suite Postgres schema under `AWTHAQ_POSTGRES_URL`, migrated with
+  // core's migrations and then the composition's before anything is built over the client (`Migrations.apply`).
+  return options.records === "sql" && "suite" in options
+    ? platform(
+        AuthHost.layer(built, {
+          ...shared,
+          persistence: {
+            records: "sql",
+            client: TestSql.layer(options.suite),
+            migrations: "apply",
+          },
+        }),
+      )
+    : platform(AuthHost.layer(built, { ...shared, persistence: { records: "memory" } }));
 };
 
 /**
@@ -421,14 +329,13 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
  * is a plain interface, so ordinary generic inference works and the caller gets `Validate<P>`'s real
  * compile-time checking exactly where they call `Auth.make`.
  *
- * What it builds, so a test does not:
- * - the host middleware the composed groups declare (`AuthHttp.middlewareFor`): `Authentication`,
- *   `OptionalAuthentication`, `MachineAuthentication`, `AdminAuthentication`, `CsrfProtection` over
- *   `TestCsrfConfig` (BEH-EA-T1);
- * - every composed plugin's `records` bundle for the chosen mode and its declared `hookPoints` (BEH-EA-T4/T5);
- * - the core services over `Persistence.memory` / `Persistence.sql()`, the test ports (a cheap argon2id hasher,
- *   `Mailer.layerMemory`, a permissive `RateLimiter`, `Encryption` over a fixed key, `ClientAddress`), the
- *   erasure and export services, and the recording `RedactionGuard` (EOTS-002).
+ * What it builds, so a test does not (BEH-EA-342): `AuthHost.layer` plus the test ports, the redaction guard and the
+ * HTTP platform. `AuthHost` derives the host middleware the composed groups declare (`CsrfProtection` over
+ * `TestCsrfConfig`, BEH-EA-T1), every composed plugin's `records` bundle for the chosen mode and its declared
+ * `hookPoints` (BEH-EA-T4/T5), the core services over `Persistence.memory` / `Persistence.sql()` with the
+ * migrations applied, the registries, erasure and export; `TestAuth` adds a cheap argon2id hasher,
+ * `Mailer.layerMemory`, a permissive `RateLimiter`, `Encryption` over a fixed key, `ClientAddress`, the platform
+ * crypto services and the recording `RedactionGuard` (EOTS-002). `RequestContext.layer` and `BodyLimit.layer` are off.
  * Its `RIn` is `never` exactly when the composition is complete, and every service in its `ROut` is present
  * at runtime (including everything `services` provides).
  *
@@ -443,20 +350,14 @@ export function layer<
   SR = never,
   D = never,
   DR = never,
+  T = never,
 >(
   built: Auth.Built<P, Extra>,
-  options?: CommonOptions<S, SE, SR, D, DR> & MemoryMode,
+  options?: CommonOptions<S, SE, SR, D, DR, T> & MemoryMode,
 ): Layer.Layer<
   Provided<P, "memory", S, D> | Layer.Success<Auth.Built<P, Extra>["layer"]>,
   SE,
-  Exclude<
-    | Layer.Services<Auth.Built<P, Extra>["layer"]>
-    | Layer.Services<typeof AuthHttp.coreHandlers>
-    | AuthPlugin.RecordsIn<P[number], "memory">
-    | SR
-    | DR,
-    Provided<P, "memory", S, D> | AuthHttp.DeclaredMiddleware<Auth.AllGroups<P, Extra>>
-  >
+  Requires<P, Extra, "memory", S, SR, T, D, DR>
 >;
 export function layer<
   P extends ReadonlyArray<AuthPlugin.Any>,
@@ -466,24 +367,19 @@ export function layer<
   SR = never,
   D = never,
   DR = never,
+  T = never,
 >(
   built: Auth.Built<P, Extra>,
-  options: CommonOptions<S, SE, SR, D, DR> & SqlMode,
+  options: CommonOptions<S, SE, SR, D, DR, T> & SqlMode,
 ): Layer.Layer<
   Provided<P, "sql", S, D> | Layer.Success<Auth.Built<P, Extra>["layer"]>,
   SE,
-  Exclude<
-    | Layer.Services<Auth.Built<P, Extra>["layer"]>
-    | Layer.Services<typeof AuthHttp.coreHandlers>
-    | AuthPlugin.RecordsIn<P[number], "sql">
-    | SR
-    | DR,
-    Provided<P, "sql", S, D> | AuthHttp.DeclaredMiddleware<Auth.AllGroups<P, Extra>>
-  >
+  Requires<P, Extra, "sql", S, SR, T, D, DR>
 >;
 export function layer(
   built: Auth.Built<ReadonlyArray<AuthPlugin.Any>, HttpApiGroup.Constraint>,
-  options: CommonOptions<never, unknown, unknown, never, unknown> & (MemoryMode | SqlMode) = {},
+  options: CommonOptions<never, unknown, unknown, never, unknown, unknown> &
+    (MemoryMode | SqlMode) = {},
 ): Layer.Layer<never, unknown, unknown> {
   return makeLayer(built, options);
 }

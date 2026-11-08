@@ -42,6 +42,7 @@ suites=(
   packages/webhooks/test/Contract.test.ts
   examples/plugin-template/test/Contract.test.ts
   packages/test/test/TestAuthRecords.test.ts
+  packages/test/test/TestAuthHost.test.ts
   packages/test/test/TestSqlSchema.test.ts
   examples/plugin-template/test/Template.test.ts
   packages/admin/test/ImpersonationRecords.test.ts
