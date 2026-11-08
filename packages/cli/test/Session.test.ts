@@ -2,6 +2,7 @@
 // server on a real socket (`test/support/TestServer.ts`: core's session group, real handlers,
 // real bearer authentication and CSRF), through the real command tree and the generated
 // `HttpApiClient`. The credential store is the in-memory one — a test never touches the keychain.
+import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { assert, describe, it, vi } from "@effect/vitest";
@@ -44,7 +45,7 @@ describe("login --token", () => {
         assert.strictEqual(stored.value.baseUrl, server.baseUrl);
         assert.strictEqual(Redacted.value(stored.value.token), token);
       }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("rejects an invalid token (exit 8) and stores nothing", () =>
@@ -62,7 +63,7 @@ describe("login --token", () => {
         assert.isTrue(Option.isNone(yield* Ref.get(creds.ref)));
         assert.notInclude(everything(result), "not-a-real-token");
       }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("AWTHAQ_TOKEN and AWTHAQ_BASE_URL make it fully non-interactive", () =>
@@ -77,7 +78,7 @@ describe("login --token", () => {
         assert.strictEqual(result.code, 0);
         assert.strictEqual(yield* Ref.get(creds.writes), 1);
       }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("needs to know the server: no --base-url and none stored is a usage error", () =>
@@ -125,7 +126,7 @@ describe("whoami", () => {
           assert.strictEqual(doc.baseUrl, server.baseUrl);
           assert.notInclude(json.stdout.join("\n"), token);
         }),
-      ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+      ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("exits 8 when not logged in", () =>
@@ -150,7 +151,7 @@ describe("whoami", () => {
         assert.strictEqual(result.code, 8);
         assert.include(everything(result), "rejected the token");
       }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("AWTHAQ_TOKEN wins over the stored credential and is never persisted", () =>
@@ -173,7 +174,7 @@ describe("whoami", () => {
         // ... and nothing was written to the store.
         assert.strictEqual(yield* Ref.get(creds.writes), 0);
       }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("persists a token the server rotated (there is no grace window)", () =>
@@ -246,7 +247,7 @@ describe("logout", () => {
         });
         assert.strictEqual(again.code, 8);
       }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("clears locally even when the server cannot be reached, and says so", () =>
@@ -292,6 +293,6 @@ describe("session commands never start a listener (BEH-EA-208)", () => {
           listen.mockRestore();
         }
       }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
   );
 });

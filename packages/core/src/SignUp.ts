@@ -21,6 +21,7 @@
 // Operator migrations (`UserImport.importUser`, `awthaq seed admin`) are not sign-ups and do not
 // come through here. A plugin resolves this once inside its `make` (`SignUp.make`), like `SignIn`.
 
+import type { Api } from "@awthaq/api";
 import { Defects, SqlTransaction } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Data from "effect/Data";
@@ -103,10 +104,11 @@ export interface SignUpShape {
   readonly createSignedIn: (
     application: Vetted,
     options: CreateOptions & { readonly amr: ReadonlyArray<Sessions.AuthMethod> },
-    request?: SignIn.SessionRequest,
   ) => Effect.Effect<
     SignIn.IssuedSession,
-    IdentityTaken | HookPoint.HookAborted | Hooks.TwoFactorRequired | Errors.StoreUnavailable
+    IdentityTaken | HookPoint.HookAborted | Hooks.TwoFactorRequired | Errors.StoreUnavailable,
+    /** ADR-EA-047: the first session records the request's facts. */
+    Api.AuthRequestContext
   >;
 }
 
@@ -258,7 +260,7 @@ export const make = Effect.gen(function* () {
     issued,
   });
 
-  const createSignedIn: SignUpShape["createSignedIn"] = (application, options, request) =>
+  const createSignedIn: SignUpShape["createSignedIn"] = (application, options) =>
     Effect.gen(function* () {
       // Inside the unit: clear (a veto aborts, which rolls the account back; a divert becomes a value
       // so the account and the owner's challenge commit), then mint. `runCreate` announces the
@@ -266,7 +268,7 @@ export const make = Effect.gen(function* () {
       const { value } = yield* runCreate(application, options, (fresh) =>
         steps.clear({ userId: fresh.id, strategy: application.strategy, amr: options.amr }).pipe(
           Effect.flatMap((cleared) =>
-            Effect.map(steps.mint(cleared, request), (issued) => minted(cleared, issued)),
+            Effect.map(steps.mint(cleared), (issued) => minted(cleared, issued)),
           ),
           Effect.catchTags({
             "SignIn/UserGone": (gone) => Defects.invariantViolation("SignUpUserGone", gone.message),

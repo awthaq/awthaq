@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-27 |
-> | Revision | 1.8 |
+> | Revision | 1.9 |
 > | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-13): Initial release, replacing [MOD-EA-015](../models/15-admin-impersonation.md)'s non-normative sketch (CCR-EA-004) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, IDS-009, CCR-EA-006) <br> 1.2 (2026-10-13): `deleteUser` passes an `ErasureInitiator.Admin({ adminUserId })` to `eraseAccount` (architecture plan 03) <br> 1.3 (2026-10-13): the ban note is declared personal data of its event: blanked when the banned person is erased and never delivered in a webhook (architecture plan 09) <br> 1.4 (2026-10-13): IDS-002: a CrossTenant witness replaces the anyTenant boolean; the store filters and fails with StoreUnavailable (plan 05 phase 5) <br> 1.5 (2026-10-18): BEH-EA-221: every predicate receives `tenantId` and each operation names its one predicate; BEH-EA-221 no longer says `BeforeCredentialReset` is unconsulted; BEH-EA-224: `actionDenied` covers all five predicates and names its target; BEH-EA-212: predicates are read per request (plan 13) <br> 1.6 (2026-10-18): BEH-EA-211 is titled after `Credentials`' session resolution, not the removed `resolvePrincipal` (plan 11) <br> 1.7 (2026-11-08): the impersonation endpoints declare `SessionLifecycle.Swaps`; bearer delivery is refused (ADR-EA-045, architecture plan 21) <br> 1.8 (2026-11-08): BEH-EA-215: an episode row and its ledger link are written as one step on every adapter, and `verifyChain` reads both under the writers' lock (plan 25 ticket 15) |
+> | Change History | 1.0 (2026-09-13): Initial release, replacing [MOD-EA-015](../models/15-admin-impersonation.md)'s non-normative sketch (CCR-EA-004) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, IDS-009, CCR-EA-006) <br> 1.2 (2026-10-13): `deleteUser` passes an `ErasureInitiator.Admin({ adminUserId })` to `eraseAccount` (architecture plan 03) <br> 1.3 (2026-10-13): the ban note is declared personal data of its event: blanked when the banned person is erased and never delivered in a webhook (architecture plan 09) <br> 1.4 (2026-10-13): IDS-002: a CrossTenant witness replaces the anyTenant boolean; the store filters and fails with StoreUnavailable (plan 05 phase 5) <br> 1.5 (2026-10-18): BEH-EA-221: every predicate receives `tenantId` and each operation names its one predicate; BEH-EA-221 no longer says `BeforeCredentialReset` is unconsulted; BEH-EA-224: `actionDenied` covers all five predicates and names its target; BEH-EA-212: predicates are read per request (plan 13) <br> 1.6 (2026-10-18): BEH-EA-211 is titled after `Credentials`' session resolution, not the removed `resolvePrincipal` (plan 11) <br> 1.7 (2026-11-08): the impersonation endpoints declare `SessionLifecycle.Swaps`; bearer delivery is refused (ADR-EA-045, architecture plan 21) <br> 1.8 (2026-11-08): BEH-EA-215: an episode row and its ledger link are written as one step on every adapter, and `verifyChain` reads both under the writers' lock (plan 25 ticket 15) <br> 1.9 (2026-11-08): request facts are read from `Api.AuthRequestContext` (ADR-EA-047, architecture plan 26) |
 ---
 
 > Implemented in `@awthaq/admin` (`Admin.ts`, `AdminApi.ts`, `ImpersonationRecords.ts`, `AdminTenants.ts`; tests `packages/admin/test`); BEH-EA-209 through 211 also extend `@awthaq/core`'s `Sessions` (`packages/core/test/Sessions.test.ts`) and `@awthaq/server`'s `Authentication`; the Gherkin scenarios in `features/features/09-admin-and-impersonation/27-admin-impersonation.feature` are wired; the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
@@ -19,7 +19,6 @@
 ```ts
 interface IssueInput {
   readonly userId: UserId
-  readonly request?: { readonly ip?: string; readonly userAgent?: string }
   readonly supersedes?: SessionId
   readonly actingAs?: { readonly type: string; readonly id: string }
 }
@@ -37,6 +36,8 @@ REQUIREMENT: `Sessions.issue` MUST accept an optional `actingAs` reference;
 **Self-act-as is refused in the primitive (IDS-008).** `Sessions.issue` (both layers) MUST die with `InvalidActingAs` when `actingAs` names the session's own user (`type: "user"`, `id === userId`) — a programming error in the producing plugin, so a defect, leaving `issue`'s public error channel unchanged. The nesting rule ([BEH-EA-214](27-admin-impersonation.md#beh-ea-214-self-impersonation-and-nested-impersonation-are-refused)) needs the *caller's* session, which `issue` never sees, so it stays with the producer; `Admin.impersonate` is the reference implementation.
 
 _Previous: [BEH-EA-229](26-cli.md#beh-ea-229-plugins-declare-their-configuration-statically-and-config-list-prints-it-redacted) | Next: [BEH-EA-210](27-admin-impersonation.md#beh-ea-210-a-session-carrying-actingas-never-idle-refreshes)_
+
+**Request facts (plan 26 Q5, [ADR-EA-047](../decisions/047-request-facts-from-auth-request-context.md)).** `Sessions.issue` reads the request context, so an impersonation session records the administrator's own address and user agent (it recorded none before); the session list shows the user agent, never the address.
 
 ## BEH-EA-210: A session carrying `actingAs` never idle-refreshes
 

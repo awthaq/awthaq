@@ -4,6 +4,7 @@
 // *expired* session's still-present cookie just as readily as a valid
 // one — the whole point being that it performs no verification at all, not
 // merely that it happens to tolerate expired sessions.
+import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -66,7 +67,9 @@ describe("hasSessionCookie (BEH-EA-188)", () => {
             identity: { _tag: "Email", email: "stale@example.com" },
             name: "Stale",
           });
-          const { token } = yield* sessions.issue({ userId: user.id });
+          const { token } = yield* sessions
+            .issue({ userId: user.id })
+            .pipe(TestAuth.withoutRequest);
           return token;
         }),
       );

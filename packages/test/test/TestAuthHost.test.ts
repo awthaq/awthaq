@@ -37,11 +37,8 @@ const hostOwned = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
   );
 
 const csrf = Layer.succeed(Csrf.CsrfConfig, TestAuth.TestCsrfConfig);
-/** What the harness serves without, on purpose: the edge middleware. */
-const dials: { readonly requestContext: false; readonly bodyLimit: false } = {
-  requestContext: false,
-  bodyLimit: false,
-};
+/** What the harness serves without, on purpose: the body limit (the request context is derived, ADR-EA-047). */
+const dials: { readonly bodyLimit: false } = { bodyLimit: false };
 
 const keysOf = <A, E>(layer: Layer.Layer<A, E>) =>
   Effect.runPromise(

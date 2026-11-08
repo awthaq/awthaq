@@ -42,7 +42,8 @@ const TestApi = HttpApi.make("test")
       .add(
         HttpApiEndpoint.get("whoAmI", "/who", { headers: RequestHeaders, success: Schema.String }),
       )
-      .middleware(Api.Authentication),
+      .middleware(Api.Authentication)
+      .middleware(Api.RequestContext),
   )
   .add(
     HttpApiGroup.make("optional")
@@ -52,7 +53,8 @@ const TestApi = HttpApi.make("test")
           success: Schema.String,
         }),
       )
-      .middleware(Api.OptionalAuthentication),
+      .middleware(Api.OptionalAuthentication)
+      .middleware(Api.RequestContext),
   )
   .add(
     HttpApiGroup.make("machine")
@@ -62,7 +64,8 @@ const TestApi = HttpApi.make("test")
           success: Schema.String,
         }),
       )
-      .middleware(Api.MachineAuthentication),
+      .middleware(Api.MachineAuthentication)
+      .middleware(Api.RequestContext),
   );
 
 const whoAmI = () =>
@@ -116,6 +119,7 @@ const layerWith = (...contributions: ReadonlyArray<ReturnType<typeof contributio
     Layer.provideMerge(Authentication.OptionalAuthenticationLive),
     Layer.provideMerge(Authentication.MachineAuthenticationLive),
     Layer.provide(Wiring.resolver),
+    Layer.provideMerge(Wiring.requestContextLive),
     Layer.provideMerge(registry),
     Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(AuthEvents.layer),

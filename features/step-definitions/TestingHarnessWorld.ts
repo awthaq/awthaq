@@ -56,7 +56,8 @@ class Whoami extends Schema.Class<Whoami>("HarnessWhoami")({ userId: Schema.Stri
 const WhoamiApi = HttpApi.make("auth").add(
   HttpApiGroup.make("harnesswhoami")
     .add(HttpApiEndpoint.get("get", "/whoami", { success: Whoami }))
-    .middleware(Api.Authentication),
+    .middleware(Api.Authentication)
+    .middleware(Api.RequestContext),
 );
 
 /** The handler body, callable directly with a fabricated principal (REQ-EA-559) or reached through the middleware chain. */

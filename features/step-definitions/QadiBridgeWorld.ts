@@ -17,6 +17,7 @@
 // Path B group (`RequirePermission`); the reference handlers in it are the documented handler
 // patterns (BEH-EA-146..152) written out once, over real `@qadi/core` calls, so the scenarios can
 // drive them over real HTTP. They are fixtures for those patterns, not shipped awthaq code.
+import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import {
   Accounts,
@@ -32,7 +33,8 @@ import {
 } from "@awthaq/core";
 import { AuthorizedSubject, SubjectApi, SubjectExtractor, SubjectResolver } from "@awthaq/qadi";
 import { Roles } from "@awthaq/roles";
-import { Authentication, Credentials, AuthHttp } from "@awthaq/server";
+import { ClientAddress } from "@awthaq/ports";
+import { Authentication, Credentials, AuthHttp, RequestContext } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   AttributeResolver,
@@ -208,7 +210,8 @@ const PathAGroup = HttpApiGroup.make("authz")
     }),
   )
   .middleware(AuthorizedSubject.AuthorizedSubject)
-  .middleware(Api.Authentication);
+  .middleware(Api.Authentication)
+  .middleware(Api.RequestContext);
 
 /**
  * Path B: `RequirePermission` alone — no awthaq contract middleware in front, so the
@@ -391,6 +394,8 @@ export const CoreLive = Layer.mergeAll(
   Layer.provideMerge(Slots.layer),
   Layer.provideMerge(Erasure.registryLayer),
   Layer.provideMerge(DataExport.registryLayer),
+  // ADR-EA-047: the topology the request context (and Path B's own capture) resolves addresses with.
+  Layer.provideMerge(ClientAddress.layerDirect),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -740,6 +745,7 @@ const buildApp = (world: WorldShape, options: BridgeOptions) => {
   const appLayer = routes.pipe(
     Layer.provide(Authentication.AuthenticationLive),
     Layer.provide(Authentication.OptionalAuthenticationLive),
+    Layer.provide(RequestContext.RequestContextLive),
     Layer.provideMerge(requestServices),
     Layer.provideMerge(captureLogs(world)),
     Layer.provideMerge(HttpServer.layerServices),
@@ -939,7 +945,10 @@ export const mintActor = Effect.fn("features.qadiBridge.mintActor")(function* (
           for (const roleName of roles)
             yield* installed.value.assign(user.id, roleName).pipe(Effect.orDie);
         }
-        const { token } = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
+        const { token } = yield* sessions
+          .issue({ userId: user.id })
+          .pipe(TestAuth.withoutRequest)
+          .pipe(Effect.orDie);
         return {
           userId: user.id,
           cookie: `${Sessions.SESSION_COOKIE_NAME}=${encodeURIComponent(Redacted.value(token))}`,

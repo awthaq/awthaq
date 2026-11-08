@@ -202,11 +202,25 @@ export const tryBuild = Effect.fn("features.oauth.tryBuild")(function* (options:
   return yield* Layer.build(buildLayer(options)).pipe(Effect.exit);
 });
 
+/**
+ * ADR-EA-047: a step calls the plugin in-process, answering no HTTP request, so each operation runs under
+ * `TestAuth.withoutRequest` (the per-source rules do not apply; the identity rules still do).
+ */
+const answeringNoRequest = (oauth: OAuth.OAuthShape) => ({
+  ...oauth,
+  authorize: (...args: Parameters<OAuth.OAuthShape["authorize"]>) =>
+    TestAuth.withoutRequest(oauth.authorize(...args)),
+  callback: (...args: Parameters<OAuth.OAuthShape["callback"]>) =>
+    TestAuth.withoutRequest(oauth.callback(...args)),
+  exchange: (...args: Parameters<OAuth.OAuthShape["exchange"]>) =>
+    TestAuth.withoutRequest(oauth.exchange(...args)),
+});
+
 export const oauthService = Effect.fn("features.oauth.oauthService")(function* () {
   const { oauth } = yield* World;
   const found = yield* Ref.get(oauth);
   if (found === undefined) throw new Error("OAuth not configured yet — call configure() first");
-  return found;
+  return answeringNoRequest(found);
 });
 
 export const accountsService = Effect.fn("features.oauth.accountsService")(function* () {

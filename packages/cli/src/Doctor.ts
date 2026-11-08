@@ -11,7 +11,8 @@
 //      core (`EffectiveConfig.core`) and of the server (`BodyLimit.descriptor`), read against the
 //      configuration Layer the module exports — built on its own, which needs no port and no
 //      database (a Layer that is not exported audits the defaults);
-//   3. a mutating endpoint with no `CsrfProtection`, walked off the composed contract;
+//   3. a mutating endpoint with no `CsrfProtection`, and an endpoint whose last (outermost) middleware is not
+//      `RequestContext` (ADR-EA-047: its events carry no request facts), walked off the composed contract;
 //   4. with `--build` only (a database-backed command, BEH-EA-208): the application Layer built
 //      once in a scope that closes straight away — an unprovided port or a malformed `Config`
 //      value becomes a finding instead of a crash at first boot — and the built services checked
@@ -121,7 +122,19 @@ const graphFindings = (config: CliConfig) =>
           `${route.method} ${route.path} has no CsrfProtection middleware`,
         ),
       );
-    return [...missing, ...unprotected];
+    // ADR-EA-047 (plan 26 Q8): a group that reads nothing still compiles without the request context, and only loses
+    // the correlation of its events; a warning, not a refusal.
+    const uncorrelated = routes
+      .filter((route) => route.middleware.at(-1) !== "RequestContext")
+      .map((route) =>
+        finding(
+          route.plugin ?? route.group,
+          "warning",
+          "request-context-missing",
+          `${route.method} ${route.path} does not declare RequestContext as its last middleware`,
+        ),
+      );
+    return [...missing, ...unprotected, ...uncorrelated];
   });
 
 /** Every descriptor the CLI can see: the manifest's, core's and the server's. */

@@ -1,7 +1,7 @@
 // BEH-EA-T3: `TestAuth.app` serves the composition and its context together: the handler and the context
 // runner share one instance of every service, and `request` satisfies CSRF for the composition's own config.
 import { Api } from "@awthaq/api";
-import { Auth, Persistence, SessionCookie, Sessions } from "@awthaq/core";
+import { AuditLog, Auth, Persistence, SessionCookie, Sessions } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -9,12 +9,33 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Scope from "effect/Scope";
 import * as TestAuth from "../src/TestAuth.ts";
 import { Pins } from "./support/Pins.ts";
 
 describe("TestAuth.app (BEH-EA-T3)", () => {
+  it("ADR-EA-047: a request's audit row carries its correlation id with no extra wiring", async () => {
+    const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])));
+    try {
+      const alice = await app.signIn("correlated@example.com");
+      const out = await alice.request("POST", "/session/sign-out", {
+        headers: { "x-request-id": "harness-1", "user-agent": "harness/1" },
+      });
+      assert.strictEqual(out.status, 204);
+      const rows = await app.run(
+        Effect.flatMap(Effect.service(AuditLog.AuditLog), (log) =>
+          log.list({ eventTag: "auth.session.revoked" }),
+        ),
+      );
+      assert.deepStrictEqual(rows[0]?.correlationId, Option.some("harness-1"));
+      assert.deepStrictEqual(rows[0]?.userAgent, Option.some("harness/1"));
+    } finally {
+      await app.dispose();
+    }
+  });
+
   it("a session minted through `run` authenticates a request through `handler`", async () => {
     const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])));
     try {

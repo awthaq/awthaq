@@ -29,15 +29,7 @@ import {
   Verification,
   VerificationLink,
 } from "@awthaq/core";
-import {
-  ClientAddress,
-  Defects,
-  Hmac,
-  Mailer,
-  PasswordHasher,
-  RateLimiter,
-  SqlTransaction,
-} from "@awthaq/ports";
+import { Defects, Hmac, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -49,7 +41,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -148,13 +139,13 @@ export interface PasswordConfigShape {
 // BEH-EA-105/107/111, RBS-006: every password rate-limit rule, declared once. The static `rateLimits`
 // listing is derived from this table and the layer registers it with `RateLimits.budget`, so what
 // `plugin list --rules` prints is what is enforced. A rule's key reads only the small, secret-free
-// input its endpoint names (`{ email }`, `{ ip }`, `{ identifier }`, `{ userId }`), never a request
+// input its endpoint names (`{ email }`, `{ identifier }`, `{ userId }`), never a request
 // payload: a reset token plus the new password never becomes a "key" (ESS-005).
 //
 // CSD-006: two dimensions. Identity-keyed budgets bound brute force against one account; per-source
-// budgets bound one origin spraying across many accounts. The per-source key comes from the
-// application-provided `ClientAddress` port; an address it cannot resolve shares a single "unknown"
-// bucket rather than going unthrottled.
+// budgets bound one origin spraying across many accounts. The per-source key is the request's own
+// address, read from `Api.AuthRequestContext` (ADR-EA-047); an address that cannot be resolved shares a
+// single "unknown" bucket rather than going unthrottled.
 const minutes15 = Duration.minutes(15);
 
 const rules = {
@@ -347,14 +338,6 @@ export interface PasswordShape {
   readonly signUp: (input: {
     readonly email: string;
     readonly password: Redacted.Redacted<string>;
-    /**
-     * AGA-001/NHS-003: same per-source dimension `signIn`'s own `ip`
-     * documents below — bounds mass account creation from one source
-     * independently of the (attacker-chosen) email each attempt names.
-     */
-    readonly ip?: string;
-    /** CSD-003: recorded on the issued session (device list, forensics); capped by `Sessions.issue`. */
-    readonly userAgent?: string;
   }) => Effect.Effect<
     Sessions.IssuedSession,
     | PasswordApi.WeakPassword
@@ -362,7 +345,8 @@ export interface PasswordShape {
     | Api.RateLimited
     | HookPoint.HookAborted
     | Hooks.TwoFactorRequired
-    | Errors.StoreUnavailable
+    | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
   /**
    * TMS-005: the `signUpEnumeration: "conceal"` flavour of `signUp` — the same
@@ -375,10 +359,10 @@ export interface PasswordShape {
   readonly signUpConcealed: (input: {
     readonly email: string;
     readonly password: Redacted.Redacted<string>;
-    readonly ip?: string;
   }) => Effect.Effect<
     void,
-    PasswordApi.WeakPassword | Api.RateLimited | HookPoint.HookAborted | Errors.StoreUnavailable
+    PasswordApi.WeakPassword | Api.RateLimited | HookPoint.HookAborted | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
   /**
    * BEH-EA-114/116: uniform `InvalidCredentials`, constant real hashing cost
@@ -391,20 +375,6 @@ export interface PasswordShape {
   readonly signIn: (input: {
     readonly email: string;
     readonly password: Redacted.Redacted<string>;
-    /**
-     * RBS-001/CSD-002/AGA-001/NHS-003: the per-email budget below is
-     * keyed on a value the attacker fully controls, so it alone neither
-     * stops distributed credential spraying across many accounts nor
-     * attributes it to a source — `ip` (mirroring `OAuthShape["callback"]`'s
-     * own optional `ip`, sourced from the application-provided
-     * `ClientAddress` port rather than raw `remoteAddress`) backs a
-     * second, independent per-source budget. `undefined` when the
-     * handler's own request carries none, which the rate limiter treats
-     * as a single shared "unknown origin" bucket, never as unthrottled.
-     */
-    readonly ip?: string;
-    /** CSD-003: recorded on the issued session; see `signUp`'s own `userAgent`. */
-    readonly userAgent?: string;
   }) => Effect.Effect<
     Sessions.IssuedSession,
     | Api.InvalidCredentials
@@ -413,14 +383,13 @@ export interface PasswordShape {
     | Api.RateLimited
     | HookPoint.HookAborted
     | Hooks.TwoFactorRequired
-    | Errors.StoreUnavailable
+    | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
   /** BEH-EA-064/117: identical response whether or not `email` resolves to an account — the caller (the HTTP handler) always answers 202. */
   readonly requestReset: (input: {
     readonly email: string;
-    /** AGA-001/NHS-003: same per-source dimension as `signIn`'s own `ip`. */
-    readonly ip?: string;
-  }) => Effect.Effect<void, Api.RateLimited | Errors.StoreUnavailable>;
+  }) => Effect.Effect<void, Api.RateLimited | Errors.StoreUnavailable, Api.AuthRequestContext>;
   /**
    * Upstream-hardening ticket 04: identical response whether `email`
    * doesn't exist, the account is already verified, or a mail genuinely
@@ -428,17 +397,13 @@ export interface PasswordShape {
    */
   readonly resendVerification: (input: {
     readonly email: string;
-    /** MLO-003: same per-source dimension as `requestReset`'s own `ip`. */
-    readonly ip?: string;
-  }) => Effect.Effect<void, Api.RateLimited | Errors.StoreUnavailable>;
+  }) => Effect.Effect<void, Api.RateLimited | Errors.StoreUnavailable, Api.AuthRequestContext>;
   /** BEH-EA-117: consumes the reset token and sets the new password in one call, then revokes every other session. */
   readonly confirmReset: (input: {
     readonly token: Redacted.Redacted<string>;
     readonly password: Redacted.Redacted<string>;
     /** ARF-005: a TOTP or recovery code — needed only when a `BeforeCredentialReset` tap (the two-factor plugin) demands one. */
     readonly secondFactorCode?: Redacted.Redacted<string>;
-    /** APS-003: resolved via `ClientAddress`, like `verifyEmail`'s: the per-source budget is spent before the token is decoded. */
-    readonly ip?: string;
   }) => Effect.Effect<
     void,
     | PasswordApi.TokenConsumed
@@ -446,7 +411,8 @@ export interface PasswordShape {
     | PasswordApi.SecondFactorRequired
     | HookPoint.HookAborted
     | Api.RateLimited
-    | Errors.StoreUnavailable
+    | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
   /**
    * Shipping-gap map (.scratch/shipping-gaps), ticket 08: consumes the
@@ -457,9 +423,11 @@ export interface PasswordShape {
    */
   readonly verifyEmail: (input: {
     readonly token: Redacted.Redacted<string>;
-    /** APS-003: resolved via `ClientAddress`, mirroring `signIn`/`signUp`/`requestReset`. */
-    readonly ip?: string;
-  }) => Effect.Effect<void, PasswordApi.TokenConsumed | Api.RateLimited | Errors.StoreUnavailable>;
+  }) => Effect.Effect<
+    void,
+    PasswordApi.TokenConsumed | Api.RateLimited | Errors.StoreUnavailable,
+    Api.AuthRequestContext
+  >;
   /**
    * BAM-009: starts an address change for the signed-in user: mails a `change-email`
    * token (`EmailChange`, the purpose an administrator's `setUserEmail` shares) to
@@ -488,13 +456,13 @@ export interface PasswordShape {
    */
   readonly confirmEmailChange: (input: {
     readonly token: Redacted.Redacted<string>;
-    readonly ip?: string;
   }) => Effect.Effect<
     void,
     | PasswordApi.TokenConsumed
     | PasswordApi.EmailAlreadyExists
     | Api.RateLimited
-    | Errors.StoreUnavailable
+    | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
   /**
    * Shipping-gap map (.scratch/shipping-gaps), ticket 11: authenticated
@@ -517,12 +485,13 @@ export interface PasswordShape {
     readonly currentSessionId: Sessions.SessionId;
     readonly currentPassword: Redacted.Redacted<string>;
     readonly newPassword: Redacted.Redacted<string>;
-    /** CSD-003: the superseding session records the caller's request context too. */
-    readonly ip?: string;
-    readonly userAgent?: string;
   }) => Effect.Effect<
     Sessions.IssuedSession,
-    PasswordApi.WrongPassword | PasswordApi.WeakPassword | Api.RateLimited | Errors.StoreUnavailable
+    | PasswordApi.WrongPassword
+    | PasswordApi.WeakPassword
+    | Api.RateLimited
+    | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
   /**
    * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
@@ -630,12 +599,6 @@ const checkPolicy = (
     return hints;
   });
 
-/** CSD-003: the `request` context `Sessions.issue` records — omitted keys, not `undefined` (`exactOptionalPropertyTypes`). */
-const sessionRequest = (input: { readonly ip?: string; readonly userAgent?: string }) => ({
-  ...(input.ip !== undefined ? { ip: input.ip } : {}),
-  ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
-});
-
 /**
  * Resolves `Password` once here, in the group-builder generator itself —
  * not inside each handler body — the same `HttpApiBuilder.group` pattern
@@ -653,133 +616,50 @@ export const PasswordHandlers = HttpApiBuilder.group(
   "password",
   Effect.fnUntraced(function* (handlers) {
     const password = yield* Password;
-    const clientAddress = yield* ClientAddress.ClientAddress;
     // EP-007: the enumeration posture is per tenant too — decided in the request's own fiber.
     const builtConfig = yield* PasswordConfig;
     const configNow = Tenant.configInForce(PasswordConfig, builtConfig);
 
+    // ADR-EA-047: no handler reads the address or the user agent. The group declares `Api.RequestContext`, so every
+    // operation below records and keys on the request's facts through `Api.AuthRequestContext`.
     return handlers.handleAll({
-      signUp: Effect.fnUntraced(function* ({
-        payload,
-        request,
-      }: {
-        payload: PasswordApi.SignUpPayload;
-        request: HttpServerRequest.HttpServerRequest;
-      }) {
-        const signUpInput = Effect.gen(function* () {
-          const facts = yield* ClientAddress.facts(clientAddress, request);
-          return {
-            ...payload,
-            ...facts,
-          };
-        });
+      signUp: Effect.fnUntraced(function* ({ payload }: { payload: PasswordApi.SignUpPayload }) {
         // TMS-005: `conceal` answers 202 with no session for a fresh and an
         // existing address alike (ADR-EA-026). It mints nothing, so it declines the
         // `Mints` declaration; the marker validated the delivery header before this ran.
         if ((yield* configNow).signUpEnumeration === "conceal") {
           yield* SessionDelivery.decline(SessionLifecycle.MintGrant);
-          return yield* password.signUpConcealed(yield* signUpInput);
+          return yield* password.signUpConcealed(payload);
         }
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          Effect.flatMap(signUpInput, password.signUp),
+          password.signUp(payload),
         );
         return response;
       }),
 
-      signIn: Effect.fnUntraced(function* ({
-        payload,
-        request,
-      }: {
-        payload: PasswordApi.SignInPayload;
-        request: HttpServerRequest.HttpServerRequest;
-      }) {
+      signIn: Effect.fnUntraced(function* ({ payload }: { payload: PasswordApi.SignInPayload }) {
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          Effect.gen(function* () {
-            // AGA-001/NHS-003: resolved through the application-provided
-            // `ClientAddress` port rather than `request.remoteAddress`
-            // directly, so a trusted-proxy-aware composition gets a real
-            // client IP here too, not just for `OAuth`'s own callback.
-            const facts = yield* ClientAddress.facts(clientAddress, request);
-            return yield* password.signIn({
-              ...payload,
-              ...facts,
-            });
-          }),
+          password.signIn(payload),
         );
         return response;
       }),
 
-      requestReset: Effect.fnUntraced(function* ({
-        payload,
-        request,
-      }: {
-        payload: PasswordApi.RequestResetPayload;
-        request: HttpServerRequest.HttpServerRequest;
-      }) {
-        const address = yield* ClientAddress.address(clientAddress, request);
-        yield* password.requestReset({
-          ...payload,
-          ...address,
-        });
-      }),
+      requestReset: ({ payload }: { payload: PasswordApi.RequestResetPayload }) =>
+        password.requestReset(payload),
 
-      resendVerification: Effect.fnUntraced(function* ({
-        payload,
-        request,
-      }: {
-        payload: PasswordApi.ResendVerificationPayload;
-        request: HttpServerRequest.HttpServerRequest;
-      }) {
-        const address = yield* ClientAddress.address(clientAddress, request);
-        yield* password.resendVerification({
-          ...payload,
-          ...address,
-        });
-      }),
+      resendVerification: ({ payload }: { payload: PasswordApi.ResendVerificationPayload }) =>
+        password.resendVerification(payload),
 
-      confirmReset: Effect.fnUntraced(function* ({
-        payload,
-        request,
-      }: {
-        payload: PasswordApi.ConfirmResetPayload;
-        request: HttpServerRequest.HttpServerRequest;
-      }) {
-        const address = yield* ClientAddress.address(clientAddress, request);
-        yield* password.confirmReset({
-          ...payload,
-          ...address,
-        });
-      }),
+      confirmReset: ({ payload }: { payload: PasswordApi.ConfirmResetPayload }) =>
+        password.confirmReset(payload),
 
-      verifyEmail: Effect.fnUntraced(function* ({
-        payload,
-        request,
-      }: {
-        payload: PasswordApi.VerifyEmailPayload;
-        request: HttpServerRequest.HttpServerRequest;
-      }) {
-        const address = yield* ClientAddress.address(clientAddress, request);
-        yield* password.verifyEmail({
-          ...payload,
-          ...address,
-        });
-      }),
+      verifyEmail: ({ payload }: { payload: PasswordApi.VerifyEmailPayload }) =>
+        password.verifyEmail(payload),
 
-      confirmEmailChange: Effect.fnUntraced(function* ({
-        payload,
-        request,
-      }: {
-        payload: PasswordApi.ConfirmEmailChangePayload;
-        request: HttpServerRequest.HttpServerRequest;
-      }) {
-        const address = yield* ClientAddress.address(clientAddress, request);
-        yield* password.confirmEmailChange({
-          ...payload,
-          ...address,
-        });
-      }),
+      confirmEmailChange: ({ payload }: { payload: PasswordApi.ConfirmEmailChangePayload }) =>
+        password.confirmEmailChange(payload),
     });
   }),
 );
@@ -794,28 +674,21 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
   "password.account",
   Effect.fnUntraced(function* (handlers) {
     const password = yield* Password;
-    const clientAddress = yield* ClientAddress.ClientAddress;
 
     return handlers.handleAll({
       changePassword: Effect.fnUntraced(function* ({
         payload,
-        request,
       }: {
         payload: PasswordApi.ChangePasswordPayload;
-        request: HttpServerRequest.HttpServerRequest;
       }) {
         const { principal } = yield* CurrentUser.current;
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          Effect.gen(function* () {
-            const facts = yield* ClientAddress.facts(clientAddress, request);
-            return yield* password.changePassword({
-              userId: Users.UserId(principal.ref.id),
-              currentSessionId: Sessions.SessionId(principal.sessionId),
-              currentPassword: payload.currentPassword,
-              newPassword: payload.newPassword,
-              ...facts,
-            });
+          password.changePassword({
+            userId: Users.UserId(principal.ref.id),
+            currentSessionId: Sessions.SessionId(principal.sessionId),
+            currentPassword: payload.currentPassword,
+            newPassword: payload.newPassword,
           }),
         );
         return response;
@@ -903,7 +776,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
    */
   static readonly layer = AuthPlugin.layer(Password, {
     ports: [
-      ClientAddress.ClientAddress,
       Mailer.Mailer,
       PasswordHasher.PasswordHasher,
       RateLimiter.RateLimiter,
@@ -974,23 +846,24 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               [Observability.Field.strategy]: "password",
             }),
           );
-      /** ALF-003/CSD-004: the failure signal, with the two dimensions a stuffing detector keys on. */
-      const publishSignInFailed = Effect.fnUntraced(function* (
-        reason: "invalidCredentials" | "emailNotVerified",
-        input: { readonly email: string; readonly ip?: string },
-      ) {
-        yield* events.publish({
-          _tag: "auth.user.signInFailed",
-          strategy: "password",
-          reason,
-          identifierDigest: yield* identifierDigest(input.email),
-          ...(input.ip === undefined ? {} : { clientIp: input.ip }),
-        });
-      });
       // AOMS-006/BCR-004 (.issues/high, wayfinder ticket 03): the mechanism
       // an Auth0-Rule-style sign-up policy, and the MFA divert point a
       // future `TwoFactor` plugin taps, both attach through.
       const completion = yield* SignIn.make;
+      /**
+       * ALF-003/CSD-004: the failure signal, with the two dimensions a stuffing detector keys on. Core's
+       * `SignIn.failed` publishes it and stamps the request's address (ADR-EA-047); this adds the digest.
+       */
+      const publishSignInFailed = Effect.fnUntraced(function* (
+        reason: "invalidCredentials" | "emailNotVerified",
+        input: { readonly email: string },
+      ) {
+        yield* completion.failed({
+          strategy: "password",
+          reason,
+          identifierDigest: yield* identifierDigest(input.email),
+        });
+      });
       const creation = yield* SignUp.make;
       // ARF-005: consulted by `confirmReset` inside its transaction (the two-factor plugin taps it).
       const beforeCredentialReset = yield* Hooks.BeforeCredentialReset;
@@ -1082,7 +955,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const prepareSignUp = Effect.fnUntraced(function* (input: {
         readonly email: string;
         readonly password: Redacted.Redacted<string>;
-        readonly ip?: string;
       }) {
         const config = yield* configNow;
         // AGA-001/NHS-003: per-IP first, cheaper to enforce, bounds mass
@@ -1124,7 +996,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // `createSignedIn` is that unit, and the first session is a cleared sign-in like any other
         // (the sign-in veto and divert apply, `auth.user.signedIn` is published).
         const issued = yield* creation
-          .createSignedIn(vetted, { link: passwordLink(hash), amr: ["pwd"] }, sessionRequest(input))
+          .createSignedIn(vetted, { link: passwordLink(hash), amr: ["pwd"] })
           .pipe(
             Effect.catchTag("SignUp/IdentityTaken", (taken) =>
               taken.kind === "Email"
@@ -1253,7 +1125,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // divert (BCR-004/THS-002), the session and its announcement. An erasure can run between
         // the proof and here; the user is then refused like any wrong credential.
         return yield* completion
-          .complete({ userId: user.id, strategy: "password", amr: ["pwd"] }, sessionRequest(input))
+          .complete({ userId: user.id, strategy: "password", amr: ["pwd"] })
           .pipe(
             Effect.catchTag("SignIn/UserGone", () =>
               publishSignInFailed("invalidCredentials", input).pipe(
@@ -1349,21 +1221,21 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const resetLinks = VerificationLink.redeemer(ResetLink, {
         verification,
         budget: {
-          source: (ip) => limits.spend("confirmResetByIp", { ip }),
+          source: limits.spend("confirmResetByIp"),
           token: (publicId) => limits.spend("confirmReset", { identifier: publicId }),
         },
       });
       const verifyLinks = VerificationLink.redeemer(VerifyLink, {
         verification,
         budget: {
-          source: (ip) => limits.spend("verifyEmailByIp", { ip }),
+          source: limits.spend("verifyEmailByIp"),
           token: (publicId) => limits.spend("verifyEmail", { identifier: publicId }),
         },
       });
       const emailChangeLinks = VerificationLink.redeemer(EmailChange.Link, {
         verification,
         budget: {
-          source: (ip) => limits.spend("confirmEmailChangeByIp", { ip }),
+          source: limits.spend("confirmEmailChangeByIp"),
           token: (publicId) => limits.spend("confirmEmailChange", { identifier: publicId }),
         },
       });
@@ -1388,7 +1260,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // veto, `SecondFactorRequired`, a crash) gives the token back; an outage of the
         // transaction itself is the typed `StoreUnavailable` (ADR-EA-028), never a defect.
         const userId = yield* resetLinks(
-          { token: input.token, ip: input.ip },
+          { token: input.token },
           ({ userId }) =>
             Effect.gen(function* () {
               // ARF-005 (BEH-EA-259): mailbox possession alone must not rewrite the credential of
@@ -1627,7 +1499,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         const issued = yield* sessions.issue({
           userId: input.userId,
           supersedes: input.currentSessionId,
-          request: sessionRequest(input),
           amr: ["pwd"],
         });
         return issued;

@@ -1,6 +1,7 @@
 // BEH-EA-299 to BEH-EA-306, spec/models/13-device-authorization.md "Design constraints": the plugin at the
 // service level, over both record stores (memory, and a real migrated database), under `TestClock` so an expiry
 // or an interval is a `TestClock.adjust`, never a sleep.
+import { TestAuth } from "@awthaq/test";
 import {
   Accounts,
   AuditLog,
@@ -65,14 +66,15 @@ const requestCode = (overrides?: {
 }) =>
   Effect.gen(function* () {
     const plugin = yield* service;
-    return yield* plugin.requestCode(
-      {
-        clientId: overrides?.clientId ?? CLI_CLIENT_ID,
-        scope: overrides?.scope ?? [],
-        ip: overrides?.ip ?? DEVICE_IP,
-      },
-      { verificationBase: VERIFICATION_BASE },
-    );
+    return yield* plugin
+      .requestCode(
+        {
+          clientId: overrides?.clientId ?? CLI_CLIENT_ID,
+          scope: overrides?.scope ?? [],
+        },
+        { verificationBase: VERIFICATION_BASE },
+      )
+      .pipe(TestAuth.withRequest({ ip: overrides?.ip ?? DEVICE_IP }));
   });
 
 const poll = (
@@ -81,14 +83,17 @@ const poll = (
 ) =>
   Effect.gen(function* () {
     const plugin = yield* service;
-    return yield* plugin.poll(
-      {
+    return yield* plugin
+      .poll({
         deviceCode: issued.deviceCode,
         clientId: overrides?.clientId ?? CLI_CLIENT_ID,
-        ip: DEVICE_IP,
-      },
-      { userAgent: overrides?.userAgent ?? "awthaq-cli/0.1" },
-    );
+      })
+      .pipe(
+        TestAuth.withRequest({
+          ip: DEVICE_IP,
+          userAgent: overrides?.userAgent ?? "awthaq-cli/0.1",
+        }),
+      );
   });
 
 const verify = (
@@ -98,7 +103,9 @@ const verify = (
 ) =>
   Effect.gen(function* () {
     const plugin = yield* service;
-    return yield* plugin.verify({ userCode, ip: "198.51.100.20" }, caller);
+    return yield* plugin
+      .verify({ userCode }, caller)
+      .pipe(TestAuth.withRequest({ ip: "198.51.100.20" }));
   });
 
 const approve = (
@@ -108,13 +115,17 @@ const approve = (
 ) =>
   Effect.gen(function* () {
     const plugin = yield* service;
-    return yield* plugin.approve({ userCode, ip: "198.51.100.20" }, caller);
+    return yield* plugin
+      .approve({ userCode }, caller)
+      .pipe(TestAuth.withRequest({ ip: "198.51.100.20" }));
   });
 
 const deny = (issued: DeviceAuthorization.CodeIssued, caller: DeviceAuthorization.Caller) =>
   Effect.gen(function* () {
     const plugin = yield* service;
-    return yield* plugin.deny({ userCode: issued.userCode, ip: "198.51.100.20" }, caller);
+    return yield* plugin
+      .deny({ userCode: issued.userCode }, caller)
+      .pipe(TestAuth.withRequest({ ip: "198.51.100.20" }));
   });
 
 /** The stored grant for a code the device holds. */
@@ -163,7 +174,7 @@ for (const options of suites) {
             issued.verificationUriComplete,
             `${VERIFICATION_BASE}?user_code=${encodeURIComponent(issued.userCode)}`,
           );
-        }).pipe(Effect.provide(layer())),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect("stores only SHA-256 hashes of the two codes, never a code", () =>
@@ -183,7 +194,7 @@ for (const options of suites) {
           assert.match(found.value.userCodeHash, /^[0-9a-f]{64}$/);
           assert.strictEqual(found.value.status, "pending");
           assert.isTrue(Option.isNone(found.value.userId));
-        }).pipe(Effect.provide(layer())),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
@@ -199,7 +210,7 @@ for (const options of suites) {
             const flipped = `${issued.userCode.slice(0, -1)}${issued.userCode.endsWith("B") ? "C" : "B"}`;
             const miss = yield* verify(issued, Option.some(caller), flipped).pipe(Effect.flip);
             assert.strictEqual(miss._tag, "InvalidUserCode");
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
@@ -223,7 +234,7 @@ for (const options of suites) {
             assert.strictEqual(revoked._tag, "InvalidClient");
             // Revoking twice, or a client that never existed, revokes nothing.
             assert.isFalse(yield* plugin.revokeClient(registered.clientId));
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect("registerClient refuses a duplicate id, a configured id and unusable input", () =>
@@ -252,7 +263,7 @@ for (const options of suites) {
               ["tv-app", "registered"],
             ],
           );
-        }).pipe(Effect.provide(layer())),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
     });
 
@@ -278,7 +289,7 @@ for (const options of suites) {
             const again = yield* poll(issued).pipe(Effect.flip);
             assert.strictEqual(again._tag, "InvalidGrant");
             assert.isTrue(Option.isNone(yield* grantOf(issued)));
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
@@ -304,7 +315,7 @@ for (const options of suites) {
             yield* TestClock.adjust(Duration.seconds(15));
             const later = yield* poll(issued).pipe(Effect.flip);
             assert.strictEqual(later._tag, "AuthorizationPending");
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
@@ -320,7 +331,7 @@ for (const options of suites) {
             // ...so an immediate retry is slow_down rather than another free pending.
             const third = yield* poll(issued).pipe(Effect.flip);
             assert.strictEqual(third._tag, "SlowDown");
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect("a denied grant answers access_denied and its row is deleted on observation", () =>
@@ -333,7 +344,7 @@ for (const options of suites) {
           const answer = yield* poll(issued).pipe(Effect.flip);
           assert.strictEqual(answer._tag, "AccessDenied");
           assert.isTrue(Option.isNone(yield* grantOf(issued)));
-        }).pipe(Effect.provide(layer())),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
@@ -345,7 +356,7 @@ for (const options of suites) {
             const answer = yield* poll(issued).pipe(Effect.flip);
             assert.strictEqual(answer._tag, "ExpiredToken");
             assert.isTrue(Option.isNone(yield* grantOf(issued)));
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect("the verification page rejects an expired code without deleting it", () =>
@@ -356,7 +367,7 @@ for (const options of suites) {
           const refused = yield* verify(issued, Option.some(caller)).pipe(Effect.flip);
           assert.strictEqual(refused._tag, "InvalidUserCode");
           assert.isTrue(Option.isSome(yield* grantOf(issued)));
-        }).pipe(Effect.provide(layer())),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
@@ -369,10 +380,11 @@ for (const options of suites) {
             const foreign = yield* poll(issued, { clientId: "other-client" }).pipe(Effect.flip);
             assert.strictEqual(foreign._tag, "InvalidGrant");
             const forged = yield* plugin
-              .poll({ deviceCode: Redacted.make("nope"), clientId: CLI_CLIENT_ID, ip: DEVICE_IP })
+              .poll({ deviceCode: Redacted.make("nope"), clientId: CLI_CLIENT_ID })
+              .pipe(TestAuth.withRequest({ ip: DEVICE_IP }))
               .pipe(Effect.flip);
             assert.strictEqual(forged._tag, "InvalidGrant");
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
@@ -410,23 +422,21 @@ for (const options of suites) {
               Sessions.SessionId(caller.sessionId),
             )).length;
             assert.strictEqual(after, before + 1, "exactly one session was minted for the grant");
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
-        "the issued session records the device's address and user agent, and inherits the approver's amr",
+        "the issued session inherits the approver's amr (its request facts are core's, ADR-EA-047)",
         () =>
           Effect.gen(function* () {
             const { issued } = yield* approvedGrant("meta@example.com", ["pwd", "otp", "mfa"]);
-            const redeemed = yield* poll(issued, { userAgent: "smart-tv/9.1" });
-            assert.deepStrictEqual(Option.getOrNull(redeemed.session.ipAddress), DEVICE_IP);
-            assert.deepStrictEqual(Option.getOrNull(redeemed.session.userAgent), "smart-tv/9.1");
+            const redeemed = yield* poll(issued);
             assert.deepStrictEqual(redeemed.session.amr, ["pwd", "otp", "mfa"]);
             // A normal session: the token verifies like any other.
             const sessions = yield* Sessions.Sessions;
             const verified = yield* sessions.verify(redeemed.token);
             assert.strictEqual(verified.session.id, redeemed.session.id);
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
     });
 
@@ -454,7 +464,7 @@ for (const options of suites) {
               Option.map(yield* grantOf(issued), (g) => g.userId),
               Option.some(Option.some(first.userId)),
             );
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
@@ -488,7 +498,7 @@ for (const options of suites) {
               );
               assert.isTrue(Option.isNone(view.context));
             }
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect("an anonymous caller never claims: the code stays unclaimed", () =>
@@ -496,7 +506,7 @@ for (const options of suites) {
           const issued = yield* requestCode();
           yield* verify(issued, Option.none());
           assert.isTrue(Option.exists(yield* grantOf(issued), (g) => Option.isNone(g.userId)));
-        }).pipe(Effect.provide(layer())),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
@@ -515,7 +525,7 @@ for (const options of suites) {
             assert.strictEqual(foreign._tag, "InvalidUserCode");
             const foreignDeny = yield* deny(issued, stranger).pipe(Effect.flip);
             assert.strictEqual(foreignDeny._tag, "InvalidUserCode");
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
@@ -535,7 +545,7 @@ for (const options of suites) {
             // A terminal state never returns to pending: deciding again is refused.
             const again = yield* approve(issued, user).pipe(Effect.flip);
             assert.strictEqual(again._tag, "InvalidUserCode");
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
@@ -553,7 +563,10 @@ for (const options of suites) {
             assert.strictEqual(weak._tag, "DeviceApprovalRefused");
             // A denial is never gated on assurance: anyone may say no.
             assert.strictEqual((yield* deny(issued, user)).status, "denied");
-          }).pipe(Effect.provide(layer({ config: { requiredAssurance: "aal2" } }))),
+          }).pipe(
+            TestAuth.withoutRequest,
+            Effect.provide(layer({ config: { requiredAssurance: "aal2" } })),
+          ),
       );
 
       it.effect("an approving session that reaches the required assurance approves", () =>
@@ -562,7 +575,10 @@ for (const options of suites) {
           const strong = yield* signedIn("strong@example.com", ["pwd", "otp", "mfa"]);
           yield* verify(issued, Option.some(strong));
           assert.strictEqual((yield* approve(issued, strong)).status, "approved");
-        }).pipe(Effect.provide(layer({ config: { requiredAssurance: "aal2" } }))),
+        }).pipe(
+          TestAuth.withoutRequest,
+          Effect.provide(layer({ config: { requiredAssurance: "aal2" } })),
+        ),
       );
     });
 
@@ -574,7 +590,7 @@ for (const options of suites) {
           assert.strictEqual(sixth._tag, "RateLimited");
           // Another source has its own budget.
           yield* requestCode({ ip: "203.0.113.99" });
-        }).pipe(Effect.provide(layer({ rateLimiter: "enforcing" }))),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(layer({ rateLimiter: "enforcing" }))),
       );
 
       it.effect(
@@ -596,6 +612,7 @@ for (const options of suites) {
             yield* TestClock.adjust(Duration.minutes(16));
             assert.strictEqual((yield* verify(issued, Option.none())).status, "pending");
           }).pipe(
+            TestAuth.withoutRequest,
             Effect.provide(
               layer({ rateLimiter: "enforcing", config: { expiresIn: Duration.hours(2) } }),
             ),
@@ -611,15 +628,17 @@ for (const options of suites) {
             const caller = yield* signedIn("rotator@example.com");
             for (let i = 0; i < 5; i++) {
               const miss = yield* plugin
-                .verify({ userCode: "BCDF-GHJK", ip: `198.51.100.${i + 1}` }, Option.some(caller))
+                .verify({ userCode: "BCDF-GHJK" }, Option.some(caller))
+                .pipe(TestAuth.withRequest({ ip: `198.51.100.${i + 1}` }))
                 .pipe(Effect.flip);
               assert.strictEqual(miss._tag, "InvalidUserCode");
             }
             const sixth = yield* plugin
-              .verify({ userCode: issued.userCode, ip: "198.51.100.200" }, Option.some(caller))
+              .verify({ userCode: issued.userCode }, Option.some(caller))
+              .pipe(TestAuth.withRequest({ ip: "198.51.100.200" }))
               .pipe(Effect.flip);
             assert.strictEqual(sixth._tag, "RateLimited");
-          }).pipe(Effect.provide(layer({ rateLimiter: "enforcing" }))),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer({ rateLimiter: "enforcing" }))),
       );
 
       it.effect(
@@ -627,11 +646,8 @@ for (const options of suites) {
         () =>
           Effect.gen(function* () {
             const plugin = yield* service;
-            const bogus = {
-              deviceCode: Redacted.make("nope"),
-              clientId: CLI_CLIENT_ID,
-              ip: DEVICE_IP,
-            };
+            const bogus = { deviceCode: Redacted.make("nope"), clientId: CLI_CLIENT_ID };
+            const fromTheDevice = TestAuth.withRequest({ ip: DEVICE_IP });
             // D6: a refused failure-budget lookup used to publish the event but skip the metric.
             const counter = Metric.withAttributes(RateLimits.exceededCounter, {
               group: "device_authorization",
@@ -641,14 +657,15 @@ for (const options of suites) {
             });
             const before = (yield* Metric.value(counter)).count;
             for (let i = 0; i < 3; i++) {
-              const miss = yield* plugin.poll(bogus).pipe(Effect.flip);
+              const miss = yield* plugin.poll(bogus).pipe(fromTheDevice, Effect.flip);
               assert.strictEqual(miss._tag, "InvalidGrant");
             }
             assert.strictEqual((yield* Metric.value(counter)).count, before);
-            const refused = yield* plugin.poll(bogus).pipe(Effect.flip);
+            const refused = yield* plugin.poll(bogus).pipe(fromTheDevice, Effect.flip);
             assert.strictEqual(refused._tag, "RateLimited");
             assert.strictEqual((yield* Metric.value(counter)).count, before + 1);
           }).pipe(
+            TestAuth.withoutRequest,
             Effect.provide(
               layer({
                 rateLimiter: "enforcing",
@@ -677,7 +694,7 @@ for (const options of suites) {
             "device_authorization/code",
             "device_authorization/token",
           ]);
-        }).pipe(Effect.provide(layer())),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
     });
 
@@ -690,7 +707,7 @@ for (const options of suites) {
           const refused = yield* poll(issued).pipe(Effect.flip);
           assert.strictEqual(refused._tag, "UserSuspended");
           assert.isTrue(Option.isSome(yield* grantOf(issued)));
-        }).pipe(Effect.provide(layer())),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
@@ -700,11 +717,11 @@ for (const options of suites) {
             const { issued, caller } = yield* approvedGrant("gone@example.com");
             yield* Erasure.AccountErasure.use((erasure) =>
               erasure.eraseAccount(caller.userId, Erasure.ErasureInitiator.Self()),
-            ).pipe(Effect.provide(OrphaningErasure), Effect.orDie);
+            ).pipe(TestAuth.withoutRequest, Effect.provide(OrphaningErasure), Effect.orDie);
             const refused = yield* poll(issued).pipe(Effect.flip);
             assert.strictEqual(refused._tag, "InvalidGrant");
             assert.isTrue(Option.isNone(yield* grantOf(issued)));
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
     });
 
@@ -730,7 +747,7 @@ for (const options of suites) {
             assert.include(text, CLI_CLIENT_ID);
             assert.notInclude(text, Redacted.value(approved.deviceCode));
             assert.notInclude(text, UserCode.normalize(approved.userCode));
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
@@ -748,7 +765,7 @@ for (const options of suites) {
                   JSON.stringify(row.payload).includes(DeviceAuthorization.STRATEGY),
               ),
             );
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect("erasing a user deletes the grants they claimed or decided, and only theirs", () =>
@@ -770,7 +787,7 @@ for (const options of suites) {
           assert.isTrue(Option.isNone(yield* grantOf(mine)));
           assert.isTrue(Option.isSome(yield* grantOf(theirs)));
           assert.isTrue(Option.isSome(yield* grantOf(unclaimed)));
-        }).pipe(Effect.provide(layer())),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect("the data export lists the person's grants, and never a code or a hash", () =>
@@ -789,7 +806,7 @@ for (const options of suites) {
           assert.include(text, "pending");
           assert.notInclude(text, Redacted.value(issued.deviceCode));
           assert.notMatch(text, /[0-9a-f]{64}/);
-        }).pipe(Effect.provide(layer())),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect(
@@ -808,7 +825,7 @@ for (const options of suites) {
             );
             assert.isTrue(Option.isNone(yield* grantOf(old)));
             assert.isTrue(Option.isSome(yield* grantOf(fresh)));
-          }).pipe(Effect.provide(layer())),
+          }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
 
       it.effect("purgeExpired deletes only rows past their expiry, and reports how many", () =>
@@ -823,7 +840,7 @@ for (const options of suites) {
           assert.isTrue(Option.isNone(yield* grantOf(old)));
           assert.isTrue(Option.isSome(yield* grantOf(fresh)));
           assert.strictEqual(yield* plugin.purgeExpired(), 0);
-        }).pipe(Effect.provide(layer())),
+        }).pipe(TestAuth.withoutRequest, Effect.provide(layer())),
       );
     });
   });

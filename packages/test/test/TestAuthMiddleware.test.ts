@@ -19,28 +19,32 @@ const who = Effect.map(
 );
 
 const MwApi = HttpApi.make("auth").add(
-  HttpApiGroup.make("mw").add(
-    HttpApiEndpoint.get("user", "/mw/user", { success: Schema.String }).middleware(
-      Api.Authentication,
-    ),
-    HttpApiEndpoint.get("optional", "/mw/optional", { success: Schema.String }).middleware(
-      Api.OptionalAuthentication,
-    ),
-    HttpApiEndpoint.get("machine", "/mw/machine", { success: Schema.String }).middleware(
-      Api.MachineAuthentication,
-    ),
-    HttpApiEndpoint.post("write", "/mw/write", { success: Schema.String }).middleware(
-      Api.CsrfProtection,
-    ),
-  ),
+  HttpApiGroup.make("mw")
+    .add(
+      HttpApiEndpoint.get("user", "/mw/user", { success: Schema.String }).middleware(
+        Api.Authentication,
+      ),
+      HttpApiEndpoint.get("optional", "/mw/optional", { success: Schema.String }).middleware(
+        Api.OptionalAuthentication,
+      ),
+      HttpApiEndpoint.get("machine", "/mw/machine", { success: Schema.String }).middleware(
+        Api.MachineAuthentication,
+      ),
+      HttpApiEndpoint.post("write", "/mw/write", { success: Schema.String }).middleware(
+        Api.CsrfProtection,
+      ),
+    )
+    .middleware(Api.RequestContext),
 );
 
 const MwAdminApi = HttpApi.make("auth").add(
-  HttpApiGroup.make("mw.admin").add(
-    HttpApiEndpoint.get("admin", "/mw/admin", { success: Schema.String }).middleware(
-      Api.AdminAuthentication,
-    ),
-  ),
+  HttpApiGroup.make("mw.admin")
+    .add(
+      HttpApiEndpoint.get("admin", "/mw/admin", { success: Schema.String }).middleware(
+        Api.AdminAuthentication,
+      ),
+    )
+    .middleware(Api.RequestContext),
 );
 
 const MwHandlers = HttpApiBuilder.group(MwApi, "mw", (handlers) =>

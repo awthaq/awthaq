@@ -40,7 +40,6 @@ export * as Assurance from "./Assurance.ts";
 export * as AuditLog from "./AuditLog.ts";
 export * as AuthEvents from "./AuthEvents.ts";
 export * as AuthPlugin from "./AuthPlugin.ts";
-export * as AuthRequestContext from "./AuthRequestContext.ts";
 export * as ConfigDescriptor from "./ConfigDescriptor.ts";
 export * as CurrentUser from "./CurrentUser.ts";
 export * as DataExport from "./DataExport.ts";

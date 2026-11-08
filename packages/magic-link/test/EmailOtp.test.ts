@@ -1,5 +1,6 @@
 // SOS-001, BCR-005, SOS-004, MLO-002, SAM-009 (BEH-EA-271 to BEH-EA-274): the EmailOtp plugin at the
 // domain level — a six-digit code that is hashed, single-use, attempt-budgeted and resend-windowed.
+import { TestAuth } from "@awthaq/test";
 import { AuditLog, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { SignInProbe } from "@awthaq/test";
@@ -64,7 +65,10 @@ describe("EmailOtp.requestCode (BEH-EA-272)", () => {
           (yield* mailer.sent).map((sent) => sent.to),
           ["ada@example.com"],
         );
-      }).pipe(Effect.provide(buildLayer({ emailOtp: { allowSignUp: false } }))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer({ emailOtp: { allowSignUp: false } })),
+      ),
   );
 
   it.effect(
@@ -82,7 +86,7 @@ describe("EmailOtp.requestCode (BEH-EA-272)", () => {
           code: Redacted.make(code),
         });
         assert.isDefined(issued.session);
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("after the window a new code supersedes the old one (one live code per address)", () =>
@@ -103,7 +107,7 @@ describe("EmailOtp.requestCode (BEH-EA-272)", () => {
         code: Redacted.make(second.code),
       });
       assert.isDefined(ok.session);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("is rate limited per address, `+tag` variants sharing one budget", () =>
@@ -115,7 +119,7 @@ describe("EmailOtp.requestCode (BEH-EA-272)", () => {
         .requestCode({ email: "victim+9@example.com" })
         .pipe(Effect.flip);
       assert.strictEqual(limited._tag, "RateLimited");
-    }).pipe(Effect.provide(buildLayer({ limiter: realLimiter }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ limiter: realLimiter }))),
   );
 });
 
@@ -145,7 +149,7 @@ describe("EmailOtp.verify (BEH-EA-273)", () => {
           .verify({ email: "ada@example.com", code: Redacted.make(code) })
           .pipe(Effect.flip);
         assert.strictEqual(replay._tag, "InvalidEmailOtp");
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -165,7 +169,10 @@ describe("EmailOtp.verify (BEH-EA-273)", () => {
           recorded.beforeSessionIssue.map((input) => [input.strategy, input.amr]),
           [["emailOtp", ["otp", "email"]]],
         );
-      }).pipe(Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(buildLayer())))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(buildLayer()))),
+      ),
   );
 
   it.effect("SOS-004: three wrong guesses burn the code — the correct one no longer works", () =>
@@ -182,7 +189,7 @@ describe("EmailOtp.verify (BEH-EA-273)", () => {
         .verify({ email: "guess@example.com", code: Redacted.make(code) })
         .pipe(Effect.flip);
       assert.strictEqual(late._tag, "InvalidEmailOtp");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("two wrong guesses leave the code usable", () =>
@@ -196,7 +203,7 @@ describe("EmailOtp.verify (BEH-EA-273)", () => {
       }
       const ok = yield* emailOtp.verify({ email: "two@example.com", code: Redacted.make(code) });
       assert.isDefined(ok.session);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -220,7 +227,7 @@ describe("EmailOtp.verify (BEH-EA-273)", () => {
           .verify({ email: "late@example.com", code: Redacted.make(code) })
           .pipe(Effect.flip);
         assert.strictEqual(expired._tag, "InvalidEmailOtp");
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -238,7 +245,7 @@ describe("EmailOtp.verify (BEH-EA-273)", () => {
         const created = Option.getOrThrow(yield* users.findByEmail("new@example.com"));
         assert.strictEqual(issued.session.userId, created.id);
         assert.isTrue(Users.isEmailVerified(created));
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -254,7 +261,7 @@ describe("EmailOtp.verify (BEH-EA-273)", () => {
           if (failure._tag === "RateLimited") limited = true;
         }
         assert.isTrue(limited);
-      }).pipe(Effect.provide(buildLayer({ limiter: realLimiter }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ limiter: realLimiter }))),
   );
 
   it.effect(
@@ -284,7 +291,10 @@ describe("EmailOtp.verify (BEH-EA-273)", () => {
           .verify({ email: "mfa@example.com", code: Redacted.make(code) })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "TwoFactorRequired");
-      }).pipe(Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer)))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer))),
+      ),
   );
 });
 
@@ -310,6 +320,6 @@ describe("EmailOtp.verify redeems the code (ADR-EA-039)", () => {
           code: Redacted.make(code),
         });
         assert.isDefined(ok.session);
-      }).pipe(Effect.provide(buildLayer({ failSessionIssue: flag }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ failSessionIssue: flag }))),
   );
 });

@@ -340,7 +340,9 @@ export const PasswordGroup = HttpApiGroup.make("password")
   // and `CsrfProtection` doesn't require an authenticated principal, so it
   // applies at the group level. The authenticated endpoints are in
   // `PasswordAccountGroup`.
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 /**
  * EHA-007: the endpoints that need a live session, in a dotted sub-id group of
@@ -394,6 +396,8 @@ export const PasswordAccountGroup = HttpApiGroup.make("password.account")
     }).middleware(SessionLifecycle.Refreshes),
   )
   .middleware(Api.Authentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const PasswordApi = HttpApi.make("auth").add(PasswordGroup).add(PasswordAccountGroup);

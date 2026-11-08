@@ -50,15 +50,17 @@ const { toHex } = Hmac;
 /** BEH-EA-050: the one hash both `Layer`s persist in place of the plaintext secret (OCM-002: shared with `@awthaq/api-key`). */
 const hashSecret = SecretHash.digest;
 
-/**
- * CSD-003: the persisted `userAgent` is caller-supplied (a request header), so
- * it is capped at the persistence boundary — every issuing plugin benefits,
- * none has to remember.
- */
-export const MAX_USER_AGENT_LENGTH = 512;
+/** CSD-003: what a session row records of the request that minted it. The user agent is capped by its brand. */
+interface Recorded {
+  readonly ipAddress: Option.Option<string>;
+  readonly userAgent: Option.Option<Api.UserAgentHeader>;
+}
 
-const cappedUserAgent = (userAgent: string | undefined): string | undefined =>
-  userAgent?.slice(0, MAX_USER_AGENT_LENGTH);
+/** ADR-EA-047: a session records the facts of the request that minted it; `NoRequest` records none. */
+const recordedFrom = (context: Api.RequestFacts | Api.NoRequest): Recorded =>
+  Api.isRequest(context)
+    ? { ipAddress: context.ip, userAgent: context.userAgent }
+    : { ipAddress: Option.none(), userAgent: Option.none() };
 
 /**
  * SMS-003: an opt-in cap on one user's simultaneously live sessions. Absent by
@@ -318,7 +320,6 @@ export interface SessionsShape {
    */
   readonly issue: (input: {
     readonly userId: UserId;
-    readonly request?: { readonly ip?: string; readonly userAgent?: string };
     readonly supersedes?: SessionId;
     /**
      * BEH-EA-209/210: sets a hard expiry (`idleExpiresAt = absoluteExpiresAt`) and disables idle-refresh for this session's whole lifetime.
@@ -334,7 +335,12 @@ export interface SessionsShape {
     readonly amr?: ReadonlyArray<AuthMethod>;
     /** BEH-EA-212: overrides `SessionConfig.absolute` for this one call — e.g. `@awthaq/admin`'s own `AdminConfig.maxDuration`, generally shorter than an ordinary session's absolute lifetime. */
     readonly absoluteDuration?: Duration.Duration;
-  }) => Effect.Effect<IssuedSession, StoreUnavailable>;
+  }) => Effect.Effect<
+    IssuedSession,
+    StoreUnavailable,
+    /** ADR-EA-047/CSD-003: the session records the address and user agent of the request that minted it. */
+    Api.AuthRequestContext
+  >;
   /**
    * Plan 19: what a presented credential means (refused, replayed, expired, accepted, due for rotation,
    * a lost rotation) is the pure `internal/sessionVerdict.ts`; this is the contract it is executed for.
@@ -671,7 +677,10 @@ export const layer = Layer.effect(
     const events = yield* AuthEvents.AuthEvents;
     const bridge = yield* LegacySessionBridge.LegacySessionBridge;
 
-    const issue: SessionsShape["issue"] = Effect.fnUntraced(function* (input) {
+    const issueRecording = Effect.fnUntraced(function* (
+      input: Parameters<SessionsShape["issue"]>[0],
+      recorded: Recorded,
+    ) {
       const config = yield* configNow;
       yield* refuseSelfActingAs(input);
       const id = SessionId(yield* random.uuidV7());
@@ -701,8 +710,8 @@ export const layer = Layer.effect(
           at: now,
           absoluteExpiresAt,
           idleExpiresAt,
-          ipAddress: Option.fromNullishOr(input.request?.ip),
-          userAgent: Option.fromNullishOr(cappedUserAgent(input.request?.userAgent)),
+          ipAddress: recorded.ipAddress,
+          userAgent: recorded.userAgent,
           actingAs: Option.fromNullishOr(input.actingAs),
           amr: input.amr ?? [],
         },
@@ -735,7 +744,13 @@ export const layer = Layer.effect(
       const view = yield* toView(inserted);
       yield* publishIssued(events, view, inserted.familyId, view.actingAs);
       return { session: view, token: Redacted.make(SessionVerdict.format(id, secret)) };
-    }, relabel("Sessions.issue"));
+    });
+
+    // ADR-EA-047: the facts come from `Api.AuthRequestContext` and nowhere else.
+    const issue: SessionsShape["issue"] = (input) =>
+      Effect.flatMap(Effect.service(Api.AuthRequestContext), (context) =>
+        issueRecording(input, recordedFrom(context)),
+      ).pipe(relabel("Sessions.issue"));
 
     /**
      * BAM-003 (.issues/high): consulted only on a primary-store miss: a still-live legacy (e.g.
@@ -749,13 +764,14 @@ export const layer = Layer.effect(
       const resolved = yield* bridge.resolve(rawToken);
       if (Option.isNone(resolved)) return Option.none();
       const legacy = resolved.value;
-      const minted = yield* issue({
-        userId: UserId(legacy.userId),
-        request: {
-          ...(Option.isSome(legacy.ipAddress) ? { ip: legacy.ipAddress.value } : {}),
-          ...(Option.isSome(legacy.userAgent) ? { userAgent: legacy.userAgent.value } : {}),
+      // A migrated session keeps its own facts, whatever request presented it.
+      const minted = yield* issueRecording(
+        { userId: UserId(legacy.userId) },
+        {
+          ipAddress: legacy.ipAddress,
+          userAgent: Option.map(legacy.userAgent, Api.toUserAgentHeader),
         },
-      });
+      );
       yield* bridge.consume(rawToken);
       return Option.some({ session: minted.session, rotated: Option.some(minted.token) });
     });

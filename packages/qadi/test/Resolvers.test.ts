@@ -37,7 +37,7 @@ describe("UserAttributes (BEH-EA-161)", () => {
       assert.strictEqual(email, "attrs@example.com");
       assert.strictEqual(emailVerified, false);
       assert.strictEqual(name, "Attrs");
-    }).pipe(Effect.provide(AttributesLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(AttributesLayer)),
   );
 
   it.effect("an unrecognized attribute name resolves to undefined, not an error", () =>
@@ -50,7 +50,7 @@ describe("UserAttributes (BEH-EA-161)", () => {
       });
       const value = yield* attributeResolver.resolve(makeSubjectId(`user:${user.id}`), "plan");
       assert.isUndefined(value);
-    }).pipe(Effect.provide(AttributesLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(AttributesLayer)),
   );
 
   it.effect("a non-`user:` subject resolves to undefined — not this resolver's concern", () =>
@@ -58,7 +58,7 @@ describe("UserAttributes (BEH-EA-161)", () => {
       const attributeResolver = yield* AttributeResolver;
       const value = yield* attributeResolver.resolve(makeSubjectId("apikey:key-1"), "email");
       assert.isUndefined(value);
-    }).pipe(Effect.provide(AttributesLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(AttributesLayer)),
   );
 
   it.effect(
@@ -69,7 +69,7 @@ describe("UserAttributes (BEH-EA-161)", () => {
         const gone = Users.UserId(crypto.randomUUID());
         const value = yield* attributeResolver.resolve(makeSubjectId(`user:${gone}`), "email");
         assert.isUndefined(value);
-      }).pipe(Effect.provide(AttributesLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(AttributesLayer)),
   );
 });
 
@@ -91,7 +91,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
       yield* Resolvers.ObligationHandlers.reauth([Resolvers.reauth(300)]).pipe(
         Effect.provideService(Api.CurrentPrincipal, principal),
       );
-    }).pipe(Effect.provide(CoreLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(CoreLive)),
   );
 
   it.effect("a session older than maxAgeSeconds fails with ReauthRequired", () =>
@@ -116,7 +116,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
       );
       if (failure._tag !== "ReauthRequired") return assert.fail(failure._tag);
       assert.strictEqual(failure.maxAgeSeconds, 300);
-    }).pipe(Effect.provide(CoreLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(CoreLive)),
   );
 
   // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
@@ -148,7 +148,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
         yield* Resolvers.ObligationHandlers.reauth([Resolvers.reauth(300)]).pipe(
           Effect.provideService(Api.CurrentPrincipal, principal),
         );
-      }).pipe(Effect.provide(CoreLive)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(CoreLive)),
   );
 
   it.effect("an ApiKey principal (no session at all) fails with ReauthRequired", () =>
@@ -162,7 +162,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
         Effect.flip,
       );
       assert.strictEqual(failure._tag, "ReauthRequired");
-    }).pipe(Effect.provide(CoreLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(CoreLive)),
   );
 
   it.effect("no reauth obligation among the given obligations is a no-op", () =>
@@ -174,7 +174,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
       yield* Resolvers.ObligationHandlers.reauth([]).pipe(
         Effect.provideService(Api.CurrentPrincipal, principal),
       );
-    }).pipe(Effect.provide(CoreLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(CoreLive)),
   );
 });
 
@@ -193,7 +193,7 @@ describe("ObligationHandlers.reauth fails closed on a malformed obligation (TS-0
     Effect.gen(function* () {
       const exit = yield* Effect.exit(run([obligation(Resolvers.REAUTH_OBLIGATION_ID, {})]));
       assert.isTrue(exit._tag === "Failure" && exit.cause.reasons.some((r) => r._tag === "Die"));
-    }).pipe(Effect.provide(CoreLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(CoreLive)),
   );
 
   it.effect("a non-numeric, negative or non-finite maxAgeSeconds dies", () =>
@@ -207,7 +207,7 @@ describe("ObligationHandlers.reauth fails closed on a malformed obligation (TS-0
           `maxAgeSeconds ${String(maxAgeSeconds)}`,
         );
       }
-    }).pipe(Effect.provide(CoreLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(CoreLive)),
   );
 
   it.effect("two reauth duties enforce the smaller maxAgeSeconds", () =>
@@ -236,7 +236,7 @@ describe("ObligationHandlers.reauth fails closed on a malformed obligation (TS-0
         if (failure._tag !== "ReauthRequired") return assert.fail(failure._tag);
         assert.strictEqual(failure.maxAgeSeconds, 60);
       }
-    }).pipe(Effect.provide(CoreLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(CoreLive)),
   );
 
   it("the reauth(...) builder refuses to author a malformed obligation", () => {
@@ -276,7 +276,10 @@ describe("UserAttributes maps a Users outage to AttributeResolveError (TS-002)",
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "AttributeResolveError");
       assert.strictEqual(failure.attribute, "emailVerified");
-    }).pipe(Effect.provide(Resolvers.UserAttributes.pipe(Layer.provide(DyingUsers)))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(Resolvers.UserAttributes.pipe(Layer.provide(DyingUsers))),
+    ),
   );
 });
 
@@ -338,7 +341,7 @@ describe("UserAttributes memoizes the user record per request (AAPS-004)", () =>
       );
       assert.strictEqual(counter.lookups, 2);
       assert.strictEqual(emailVerified, true);
-    }).pipe(Effect.provide(CountingAttributes)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(CountingAttributes)),
   );
 
   it.effect("outside any HTTP request there is no memo (every read looks up)", () =>
@@ -354,7 +357,7 @@ describe("UserAttributes memoizes the user record per request (AAPS-004)", () =>
       yield* attributeResolver.resolve(subjectId, "email");
       yield* attributeResolver.resolve(subjectId, "name");
       assert.strictEqual(counter.lookups, 2);
-    }).pipe(Effect.provide(CountingAttributes)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(CountingAttributes)),
   );
 });
 
@@ -402,6 +405,6 @@ describe("typed user attribute names (AAPS-003)", () => {
         const value = yield* attributeResolver.resolve(subjectId, name);
         Schema.decodeUnknownSync(Resolvers.UserAttributeSchemas[name])(value);
       }
-    }).pipe(Effect.provide(AttributesLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(AttributesLayer)),
   );
 });

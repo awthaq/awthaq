@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-037 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-10-18 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-13): Initial release (plan 10 item 5) <br> 1.1 (2026-10-18): decision 7 names `AuditLogStoreSql.append` (plan 16) |
+> | Change History | 1.0 (2026-10-13): Initial release (plan 10 item 5) <br> 1.1 (2026-10-18): decision 7 names `AuditLogStoreSql.append` (plan 16) <br> 1.2 (2026-11-08): Related: ADR-EA-047, request facts are read from `AuthRequestContext` (architecture plan 26) |
 
 ---
 
@@ -56,3 +56,5 @@ The same placement also erased the wrong thing. An event that records an *attemp
 ## Related
 
 [ADR-EA-030](030-event-delivery-outbox-relay.md) (the relay reads committed rows, unchanged), [ADR-EA-031](031-erasure-registry-and-retention.md) (erasure in one transaction), [ADR-EA-028](028-infrastructure-error-policy.md) (audit-write policy; the Postgres aborted-transaction hazard), [ADR-EA-029](029-event-pii-posture.md) (event definitions carry their metadata).
+
+[ADR-EA-047](047-request-facts-from-auth-request-context.md): the request context a deferred observe tap sees is the one `Api.RequestContext` captured, read optionally (a job publishes with none).

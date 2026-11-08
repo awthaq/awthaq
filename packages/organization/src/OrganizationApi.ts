@@ -783,6 +783,8 @@ export const OrganizationGroup = HttpApiGroup.make("organization")
   // See `@awthaq/api`'s `Session.ts`: `CsrfProtection` declared last so it
   // runs first.
   .middleware(Api.Authentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const OrganizationApi = HttpApi.make("auth").add(OrganizationGroup);

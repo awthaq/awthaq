@@ -1469,3 +1469,74 @@ populator (Phase 2) can stay.
 
 ## Decisions taken (implementation record)
 
+### Implementation (2026-11-08, `main` @ `e8540343`, effect 4.1.2)
+
+Every open question took the plan's recommended default (the user said "take the recommended default"):
+
+1. **Q1, make the request context required through the type:** yes. ADR-EA-047 supersedes plan 01's decision 7.
+2. **Q2, `ClientAddress` required by the populator:** yes; `ClientAddress.layerDirect` restores the socket peer.
+3. **Q3, an ip-keyed rule under `NoRequest`:** (a) not applied; the identity and principal rules still are.
+4. **Q4, which middlewares require the context:** (a) all four authentication middlewares.
+5. **Q5, impersonation sessions record the administrator's request facts:** yes.
+6. **Q6, `auth.user.signInFailed.clientIp`:** (a) kept, stamped by `SignIn.failed` from the context.
+7. **Q7, an unresolvable address:** (a) the shared `ip:unknown` bucket stays; the web-handler caveat is documented.
+8. **Q8, a composed group without `Api.RequestContext`:** (a) `awthaq doctor` warns.
+9. **Q9, correlation for host routes outside awthaq's contracts:** (a) accepted; `RequestContext.capture` or a
+   declared `Api.RequestContext` on the host's own group.
+
+Numbers: ADR-EA-047; new REQ-EA ids start at 1400 (plan 25 runs in parallel from 1500). BEH-EA-345 is plan 27's.
+
+What was stale when work started (the plan's §2.8 "dp2" column is the shipped tree, plus batch-2 plans 15, 20, 21):
+
+- **Plan 15 landed:** `AuthHost.layer` installs `RequestContext.layer` by default (`requestContext: false` turns it
+  off, and `TestAuth` turns it off) and builds `middlewareFor`. Phase 2 removes the dial with the global middleware.
+- **Plan 21 landed:** the five `SessionLifecycle` markers sit in the `HostMiddleware` table and on the session-changing
+  endpoints; `Api.RequestContext` is declared after them, outermost.
+- **Plan 20 landed:** `UserAgent` is `@awthaq/web`'s in-process client, so the header brand is `Api.UserAgentHeader`.
+- **Counts** (`.scratch/26-request-context/baseline.md`): 31 resolutions (24 helper calls of plan 11's
+  `ClientAddress.facts`/`address` plus 7 raw), 33 `readonly ip?`, 28 ip-keyed rules, 4 explicit core request arguments
+  (`VerificationLink`'s `presented.ip` included), 82 + 51 sweep files.
+- **Ticket 02's spike** was not written as local declarations first: the type tests were written against the real
+  classes in the ticket that introduces each one (04, 06, 08, 23).
+
+Phase 2 (tickets 06–08, one commit):
+
+- **`AuthHost`'s `requestContext` dial is gone** with the global middleware; `TestAuth`, which turned it off, now serves
+  with the derived request context like production. `AuthHost.Requires` names `ClientAddress` explicitly (as it names
+  `SecureRandom` for `middlewareFor`), so core alone now leaves the client-address topology to the host (Q2).
+- **`runPluginContractTests`' new case** reflects `Auth.make([...host, plugin]).api` and checks the plugin's own groups:
+  `AuthPlugin.Any["contract"]` is `ContractData`, which `HttpApi.reflect` does not accept.
+- **qadi's helpers** (`withAuthorizedSubject`, `withOptionalAuthorizedSubject`) add `Api.RequestContext` after the
+  authentication middleware, so a group built with them still compiles; `RequestDecisionCache`'s doc puts it before
+  `Api.RequestContext`.
+- **`SubjectExtractorLive` requires `ClientAddress | SecureRandom`** (the fallback `RequestContext.capture`).
+- **Hand-wired compositions** (server suites through `Wiring.requestContextLive`, cli `TestServer`, jwt suites, the
+  `Sso` suite and world, the BDD worlds `Authentication`, `ContractStratum`, `QadiBridge`, `SessionServer`) provide
+  `RequestContext.RequestContextLive`; 17 test files' groups that declare an authentication middleware gained
+  `.middleware(Api.RequestContext)`.
+- The OpenAPI document of `examples/memory-server` is byte-identical to the baseline.
+
+Phases 3–6:
+
+- **Ticket 09** split `Sessions.issue` into a private `issueRecording(input, recorded)` already in phase 3, so the legacy
+  bridge passed the legacy row's facts exactly (not merged with the presenting request's) from the start.
+- **Tickets 13–20 declare `Api.AuthRequestContext` in each plugin member's `R`** while core still read the context
+  optionally (phase 4), so plan 27's module is born with the requirement and the in-process tests changed once. The
+  plugin probes are one `ADR-EA-047` case in each package's HTTP suite (`AuthHttp.test.ts`, `SamlHttp.test.ts` for
+  SAML). The api-key probe proves one bucket per address, not two addresses (one app has one fixed `clientAddress`).
+- **`Channel.failed`** (magic-link) carries `SignIn.failed` to both plugins; **SamlSlo's `rateLimit` dep** is an
+  `Effect`; **DeviceAuthorization's `Source`** type is gone.
+- **Ticket 23:** `Key.ip`'s input is `{ readonly ip?: never }`, not `Schema.Struct({})`: an empty object type disables
+  the excess-property check, so `spend("xByIp", { ip })` would still have compiled. The erased runtime treats an
+  omitted input as `{}`, and an ip rule spent with no context dies `RateLimitRequestContextMissing` (unreachable
+  through the typed handle). `bucketKey` returns a string still (`R = never` rules always apply).
+- **No new BEH ids.** `spec:verify:strict` requires contiguous BEH ids and BEH-EA-345 is reserved for plan 27, so the
+  plan's BEH-EA-RC1/RC2/RC3 are paragraphs of BEH-EA-065 (09), BEH-EA-054 (07), BEH-EA-193 (25), with BEH-EA-101,
+  108, 209 and 322 revised. ADR-EA-047 is written; 010, 012, 037, 038 and 042 gained a Related line; the glossary has
+  **Request context** and **No request**.
+- **BDD:** five scenarios, REQ-EA-1400..1404, in `09-authentication-middleware.feature` under one `@BEH-EA-065` Rule
+  (correlation, the session's address and user agent, the compile gate, a `noRequest` session, a `noRequest` job not
+  throttled per source). The "fails with a fixed context" check of ticket 27 was not run.
+- **Doctor (Q8):** `request-context-missing`, a warning per endpoint; the CLI's Widget fixture declares the
+  middleware so its one finding stays the CSRF gap.
+- **Postgres** was down for the whole run (`127.0.0.1:55499` refused); `pnpm test:pg` was not run locally.

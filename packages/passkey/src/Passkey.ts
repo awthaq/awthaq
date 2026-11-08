@@ -29,7 +29,6 @@ import { Api, SessionContract, type SessionLifecycle } from "@awthaq/api";
 import {
   CurrentUser,
   Accounts,
-  AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
   DataExport,
@@ -46,7 +45,7 @@ import {
   Tenant,
   Users,
 } from "@awthaq/core";
-import { ClientAddress, Defects, RateLimiter, WebAuthn } from "@awthaq/ports";
+import { Defects, RateLimiter, WebAuthn } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Mac from "effect/crypto/Mac";
@@ -58,7 +57,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ChallengeStore from "./ChallengeStore.ts";
@@ -235,21 +233,18 @@ export interface PasskeyShape {
     | Api.Unauthenticated
     | Errors.StoreUnavailable
   >;
-  readonly authenticateOptions: (input: {
-    readonly email?: string | undefined;
-    /** TC-001/WPS-005: the caller's address (via the `ClientAddress` port) for the per-source budget; `undefined` shares one "unknown origin" bucket, never unthrottled. */
-    readonly ip?: string | undefined;
-  }) => Effect.Effect<
+  /** TC-001/WPS-005: the per-source budget keys on the request's address (ADR-EA-047). */
+  readonly authenticateOptions: (input: { readonly email?: string | undefined }) => Effect.Effect<
     {
       readonly ceremonyId: string;
       readonly options: PasskeyApi.PublicKeyCredentialRequestOptions;
     },
-    Api.RateLimited | Errors.StoreUnavailable
+    Api.RateLimited | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
+  /** CSD-003: the session records the request's address and user agent, read by core from the request context. */
   readonly authenticateVerify: (
-    input: PasskeyApi.AuthenticateVerifyPayload & { readonly ip?: string | undefined },
-    /** CSD-003: extra request context recorded on the issued session (its `User-Agent`; capped by `Sessions.issue`). The address is `input.ip`. */
-    context?: { readonly userAgent?: string },
+    input: PasskeyApi.AuthenticateVerifyPayload,
   ) => Effect.Effect<
     Sessions.IssuedSession,
     | Api.InvalidCredentials
@@ -260,7 +255,8 @@ export interface PasskeyShape {
     | HookPoint.HookAborted
     | Users.UserSuspended
     | Hooks.TwoFactorRequired
-    | Errors.StoreUnavailable
+    | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
   readonly listCredentials: (
     userId: Users.UserId,
@@ -335,38 +331,18 @@ export const PasskeyHandlers = Layer.mergeAll(
     "passkey.authenticate",
     Effect.fnUntraced(function* (handlers) {
       const passkey = yield* Passkey;
-      const clientAddress = yield* ClientAddress.ClientAddress;
+      // ADR-EA-047: the group declares `Api.RequestContext`; the address and user agent are read from it by core.
       return handlers.handleAll({
-        authenticateOptions: Effect.fnUntraced(function* ({
-          payload,
-          request,
-        }: {
-          payload: PasskeyApi.AuthenticateOptionsPayload;
-          request: HttpServerRequest.HttpServerRequest;
-        }) {
-          // Resolved through the application-provided `ClientAddress` port
-          // (AGA-001/NHS-003), like `@awthaq/password`'s own sign-in.
-          const resolvedAddress = yield* clientAddress.resolve(request);
-          return yield* passkey.authenticateOptions({
-            email: payload.email,
-            ip: Option.getOrUndefined(resolvedAddress),
-          });
-        }),
+        authenticateOptions: ({ payload }: { payload: PasskeyApi.AuthenticateOptionsPayload }) =>
+          passkey.authenticateOptions({ email: payload.email }),
         authenticateVerify: Effect.fnUntraced(function* ({
           payload,
-          request,
         }: {
           payload: PasskeyApi.AuthenticateVerifyPayload;
-          request: HttpServerRequest.HttpServerRequest;
         }) {
-          // CSD-003: address via the application-provided `ClientAddress`
-          // port (trusted-proxy aware), user agent from the header.
           // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
           const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-            Effect.gen(function* () {
-              const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
-              return yield* passkey.authenticateVerify({ ...payload, ip }, context);
-            }),
+            passkey.authenticateVerify(payload),
           );
           return response;
         }),
@@ -788,14 +764,13 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
   ],
 }) {
   static readonly layer = AuthPlugin.layer(Passkey, {
-    ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter, WebAuthn.WebAuthn],
+    ports: [RateLimiter.RateLimiter, WebAuthn.WebAuthn],
     handlers: PasskeyHandlers,
     contributes: Layer.mergeAll(passkeyErasure, passkeyExport, passkeyChallengeRetention),
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
       const accounts = yield* Accounts.Accounts;
-      const events = yield* AuthEvents.AuthEvents;
       const webAuthn = yield* WebAuthn.WebAuthn;
       const challengeStore = yield* ChallengeStore.ChallengeStore;
       const credentials = yield* PasskeyCredentials.PasskeyCredentials;
@@ -1054,9 +1029,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
         });
 
       const authenticateOptions: PasskeyShape["authenticateOptions"] = Effect.fnUntraced(
-        function* ({ email, ip }) {
+        function* ({ email }) {
           const config = yield* configNow;
-          yield* limits.spend("authenticateOptionsByIp", { ip });
+          yield* limits.spend("authenticateOptionsByIp", {});
           if (email !== undefined) {
             yield* limits.spend("authenticateOptionsByEmail", { email });
           }
@@ -1094,11 +1069,11 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       );
 
       const authenticateCeremony: PasskeyShape["authenticateVerify"] = Effect.fnUntraced(
-        function* (input, context) {
+        function* (input) {
           const config = yield* configNow;
           // Admission (plan 06): the per-source budget first: cheap to enforce, bounds signature
           // work and challenge probing from one address, and spent before the attempt starts.
-          yield* limits.spend("authenticateVerifyByIp", { ip: input.ip });
+          yield* limits.spend("authenticateVerifyByIp", {});
           const { credential, amr } = yield* ceremonies
             .verifyAssertion({
               ceremony: PasskeyCeremony.Ceremony.SignIn({ ceremonyId: input.ceremonyId }),
@@ -1119,10 +1094,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // ceremony (BEH-EA-136). THS-003/HSK-005: `amr` is the kind of key (hardware-bound or
           // synced), plus user verification when the authenticator performed it.
           return yield* signIn
-            .complete(
-              { userId: credential.userId, strategy: "passkey", amr },
-              { ip: input.ip, userAgent: context?.userAgent },
-            )
+            .complete({ userId: credential.userId, strategy: "passkey", amr })
             .pipe(
               Effect.catchTag("SignIn/UserGone", () => Effect.fail(new Api.InvalidCredentials())),
             );
@@ -1135,19 +1107,14 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
        * strategy. Only the ceremony's own refusals count; a rate-limit, a
        * `BeforeSignIn` veto or a second-factor divert are not failed assertions.
        */
-      const authenticateVerify: PasskeyShape["authenticateVerify"] = (input, context) =>
-        authenticateCeremony(input, context).pipe(
+      const authenticateVerify: PasskeyShape["authenticateVerify"] = (input) =>
+        authenticateCeremony(input).pipe(
           Effect.tapError((error) =>
             error._tag === "InvalidCredentials" ||
             error._tag === "PasskeyChallengeInvalid" ||
             error._tag === "PasskeyUserVerificationRequired" ||
             error._tag === "PasskeyCounterAnomaly"
-              ? events.publish({
-                  _tag: "auth.user.signInFailed",
-                  strategy: "passkey",
-                  reason: "assertionInvalid",
-                  ...(input.ip === undefined ? {} : { clientIp: input.ip }),
-                })
+              ? signIn.failed({ strategy: "passkey", reason: "assertionInvalid" })
               : Effect.void,
           ),
           // EOTS-001: `awthaq.passkey.authenticateVerify`.

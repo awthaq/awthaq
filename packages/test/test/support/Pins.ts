@@ -50,17 +50,19 @@ export class PinRecords extends Context.Service<PinRecords, PinRecordsShape>()(
 }
 
 const PinsApi = HttpApi.make("auth").add(
-  HttpApiGroup.make("pins").add(
-    HttpApiEndpoint.get("list", "/pins", { success: Schema.Array(Schema.String) }).middleware(
-      Api.Authentication,
-    ),
-    HttpApiEndpoint.post("add", "/pins", {
-      payload: Schema.Struct({ label: Schema.String }),
-      success: Schema.String,
-    })
-      .middleware(Api.Authentication)
-      .middleware(Api.CsrfProtection),
-  ),
+  HttpApiGroup.make("pins")
+    .add(
+      HttpApiEndpoint.get("list", "/pins", { success: Schema.Array(Schema.String) }).middleware(
+        Api.Authentication,
+      ),
+      HttpApiEndpoint.post("add", "/pins", {
+        payload: Schema.Struct({ label: Schema.String }),
+        success: Schema.String,
+      })
+        .middleware(Api.Authentication)
+        .middleware(Api.CsrfProtection),
+    )
+    .middleware(Api.RequestContext),
 );
 
 const PinsHandlers = HttpApiBuilder.group(

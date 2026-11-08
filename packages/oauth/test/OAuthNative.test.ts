@@ -80,14 +80,14 @@ describe("native callbackURL allowlist (MNA-004, BEH-EA-128)", () => {
     Effect.gen(function* () {
       const outcome = yield* runFlow({}, NATIVE_REDIRECT);
       assert.match(outcome.callbackURL, /^myapp:\/\/oauth\/callback\?code=/);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("an RFC 8252 single-slash private-use URI works too", () =>
     Effect.gen(function* () {
       const outcome = yield* runFlow({}, "com.example.app:/cb");
       assert.match(outcome.callbackURL, /^com\.example\.app:\/cb\?code=/);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("the allowlist matches on a path boundary, never a bare string prefix", () =>
@@ -102,7 +102,7 @@ describe("native callbackURL allowlist (MNA-004, BEH-EA-128)", () => {
       assert.strictEqual(traversal.callbackURL.includes("evil"), false);
       const userinfo = yield* runFlow({}, "myapp://attacker@oauth/callback");
       assert.strictEqual(userinfo.callbackURL.includes("attacker"), false);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -113,7 +113,7 @@ describe("native callbackURL allowlist (MNA-004, BEH-EA-128)", () => {
         assert.strictEqual(js.callbackURL.startsWith("javascript"), false);
         const other = yield* runFlow({}, "otherapp://oauth/callback");
         assert.strictEqual(other.callbackURL.startsWith("otherapp"), false);
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -123,7 +123,7 @@ describe("native callbackURL allowlist (MNA-004, BEH-EA-128)", () => {
         const outcome = yield* runFlow(undefined, NATIVE_REDIRECT);
         assert.strictEqual(outcome.callbackURL, "/");
         assert.isDefined(outcome.session);
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("a discarded callbackURL logs exactly one warning naming the reason", () =>
@@ -142,16 +142,17 @@ describe("native callbackURL allowlist (MNA-004, BEH-EA-128)", () => {
           link: undefined,
           native: {},
         });
-      }).pipe(Effect.provide(Logger.layer([capture])));
+      }).pipe(TestAuth.withoutRequest, Effect.provide(Logger.layer([capture])));
       assert.strictEqual(warnings.length, 1);
       assert.match(warnings[0] ?? "", /callbackURL discarded: untrusted-native-scheme/);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("an https/javascript entry in nativeRedirectURLs fails at boot", () =>
     Effect.gen(function* () {
       for (const bad of ["https://evil.example.com/cb", "javascript:alert(1)", "not a url"]) {
         const exit = yield* Effect.void.pipe(
+          TestAuth.withoutRequest,
           Effect.provide(buildLayer({ nativeRedirectURLs: [bad] })),
           Effect.exit,
         );
@@ -173,7 +174,7 @@ describe("native exchange code (MNA-003, wayfinder ticket 17)", () => {
       const redeemed = yield* oauth.exchange({ code });
       assert.isString(redeemed.token);
       assert.strictEqual(outcome.callbackURL.includes(redeemed.token ?? ""), false);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("POST /oauth/token redeems the code once for a working bearer token", () =>
@@ -186,7 +187,7 @@ describe("native exchange code (MNA-003, wayfinder ticket 17)", () => {
       const verified = yield* sessions.verify(Redacted.make(redeemed.token ?? ""));
       assert.strictEqual(verified.session.id, redeemed.id);
       assert.deepStrictEqual(verified.session.amr, ["fed"]);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("a second redemption of the same code fails", () =>
@@ -197,7 +198,7 @@ describe("native exchange code (MNA-003, wayfinder ticket 17)", () => {
       yield* oauth.exchange({ code });
       const second = yield* Effect.flip(oauth.exchange({ code }));
       assert.strictEqual(second._tag, "OAuthCallbackFailed");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("a code older than the exchange TTL fails", () =>
@@ -207,7 +208,7 @@ describe("native exchange code (MNA-003, wayfinder ticket 17)", () => {
       yield* TestClock.adjust(Duration.seconds(61));
       const late = yield* Effect.flip(oauth.exchange({ code: codeOf(outcome.callbackURL) }));
       assert.strictEqual(late._tag, "OAuthCallbackFailed");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -229,7 +230,7 @@ describe("native exchange code (MNA-003, wayfinder ticket 17)", () => {
           cookieState: state,
         });
         assert.isDefined(outcome.session);
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("garbage codes fail uniformly", () =>
@@ -239,7 +240,7 @@ describe("native exchange code (MNA-003, wayfinder ticket 17)", () => {
         const failed = yield* Effect.flip(oauth.exchange({ code }));
         assert.strictEqual(failed._tag, "OAuthCallbackFailed");
       }
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("a code bound to a challenge needs the matching verifier", () =>
@@ -263,7 +264,7 @@ describe("native exchange code (MNA-003, wayfinder ticket 17)", () => {
       yield* Effect.flip(oauth.exchange({ code: spent, codeVerifier: "wrong" }));
       const retry = yield* Effect.flip(oauth.exchange({ code: spent, codeVerifier: verifier }));
       assert.strictEqual(retry._tag, "OAuthCallbackFailed");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("browser mode is unchanged: a session comes back, no exchange code", () =>
@@ -271,7 +272,7 @@ describe("native exchange code (MNA-003, wayfinder ticket 17)", () => {
       const outcome = yield* runFlow(undefined, "/dashboard");
       assert.isDefined(outcome.session);
       assert.strictEqual(outcome.callbackURL, "/dashboard");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("the exchange record does not persist the session token in the clear", () =>
@@ -291,6 +292,6 @@ describe("native exchange code (MNA-003, wayfinder ticket 17)", () => {
       assert.isString(sessionId);
       // A live token is `<session id>.<secret>`; the stored value is an Encryption envelope.
       assert.isFalse(String(sealed).startsWith(`${sessionId}.`));
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 });

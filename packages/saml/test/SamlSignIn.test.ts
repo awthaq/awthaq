@@ -1,6 +1,7 @@
 // ADR-EA-038, BEH-EA-315/316: what the SAML plugin hands the core `SignIn` module, and the sign-in continuation that keeps the
 // Single Logout record, the role mapping and the connection's tenant on a sign-in that a second factor finishes. Policy (gate,
 // veto, divert, announcement, outages) is tested once at `SignIn`.
+import { TestAuth } from "@awthaq/test";
 import { Hooks, SignIn, Users } from "@awthaq/core";
 import { MembershipRecords } from "@awthaq/organization/records";
 import { SignInProbe } from "@awthaq/test";
@@ -56,7 +57,10 @@ describe("SAML sign-in wiring (ADR-EA-038)", () => {
           recorded.beforeSignUp.map((input) => input.strategy),
           [strategy],
         );
-      }).pipe(Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(SamlLive())))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(SamlLive()))),
+      ),
   );
 
   it.effect(
@@ -68,6 +72,7 @@ describe("SAML sign-in wiring (ADR-EA-038)", () => {
         const failure = yield* signInThrough(connection.id).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "SamlAssertionRejected");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           SamlLive(
             {},
@@ -145,6 +150,9 @@ describe("a SAML sign-in finished by a second factor keeps what the first factor
           ),
           Option.some(["admin"]),
         );
-      }).pipe(Effect.provide(diverting.pipe(Layer.provideMerge(SamlLive())))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(diverting.pipe(Layer.provideMerge(SamlLive()))),
+      ),
   );
 });

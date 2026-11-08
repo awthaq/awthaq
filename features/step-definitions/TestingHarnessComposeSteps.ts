@@ -67,7 +67,6 @@ const keysOf = <A, E>(layer: Layer.Layer<A, E>) =>
 const hostedLedger = AuthHost.layer(ledgerBuilt, {
   persistence: { records: "memory" },
   csrf: Layer.succeed(Csrf.CsrfConfig, TestAuth.TestCsrfConfig),
-  requestContext: false,
   bodyLimit: false,
 }).pipe(
   Layer.provideMerge(

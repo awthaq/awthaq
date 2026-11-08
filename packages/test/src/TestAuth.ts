@@ -94,6 +94,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -107,6 +108,7 @@ import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
+import * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -149,15 +151,49 @@ export { memoryFoundation } from "./internal/foundation.ts";
  * The registries (`RateLimits.layer`, `Slots.layer`, the credential-resolver registry) are not ports: `AuthHost`
  * provides them.
  */
-const testPorts = (rateLimiter: "permissive" | "enforcing" | undefined) =>
+const testPorts = (
+  rateLimiter: "permissive" | "enforcing" | undefined,
+  clientAddress: string | undefined,
+) =>
   Layer.mergeAll(
     TestHasher,
     Mailer.layerMemory,
     rateLimiter === "enforcing" ? RateLimiter.layerMemory : RateLimiter.layerPermissive,
-    // AGA-001/NHS-003: the raw-`remoteAddress` passthrough every zero-config app gets by default.
-    ClientAddress.layerDirect,
+    // AGA-001/NHS-003: the raw-`remoteAddress` passthrough every zero-config app gets by default (a web handler
+    // reports none); ADR-EA-047: a suite that needs a known address over HTTP fixes one.
+    clientAddress === undefined ? ClientAddress.layerDirect : fixedClientAddress(clientAddress),
     TestEncryption.layer,
   ).pipe(Layer.provideMerge(NodeCrypto.layer));
+
+/** A `ClientAddress` that resolves every request to `address`, so a wire test records and keys on a known one. */
+const fixedClientAddress = (address: string) =>
+  Layer.succeed(
+    ClientAddress.ClientAddress,
+    ClientAddress.ClientAddress.of({ resolve: () => Effect.succeed(Option.some(address)) }),
+  );
+
+/**
+ * ADR-EA-047: runs `self` as if it answered an HTTP request with these facts: an in-process unit test of a plugin
+ * operation that records or keys on the request. The correlation id defaults to `"test"`.
+ */
+export const withRequest =
+  (
+    facts: {
+      readonly ip?: string | undefined;
+      readonly userAgent?: string | undefined;
+      readonly correlationId?: string | undefined;
+    } = {},
+  ) =>
+  <A, E, R>(self: Effect.Effect<A, E, R>) =>
+    Effect.provideService(
+      self,
+      Api.AuthRequestContext,
+      Api.AuthRequestContext.request({ ...facts, correlationId: facts.correlationId ?? "test" }),
+    );
+
+/** ADR-EA-047: runs `self` as in-process work that answers no request (a job, a CLI command). */
+export const withoutRequest = <A, E, R>(self: Effect.Effect<A, E, R>) =>
+  Effect.provideService(self, Api.AuthRequestContext, Api.AuthRequestContext.noRequest);
 
 const GuardLive = RedactionGuard.layerEvents.pipe(Layer.provideMerge(RedactionGuard.layer));
 
@@ -206,6 +242,11 @@ export interface CommonOptions<S, SE, SR, D, DR, T = never> {
   >;
   /** `"permissive"` (default) never refuses; `"enforcing"` is the real limiter over the in-memory store. */
   readonly rateLimiter?: "permissive" | "enforcing";
+  /**
+   * ADR-EA-047: the address every request resolves to (a fixed `ClientAddress`). By default the socket peer, which a
+   * web handler never reports, so a wire test that asserts a recorded address or a per-address limit sets one.
+   */
+  readonly clientAddress?: string;
   /** P20a (BEH-EA-084): serve the generated OpenAPI document at this path. */
   readonly openapiPath?: `/${string}`;
   /** P20a (BEH-EA-084): serve the Scalar docs page at this path. */
@@ -271,16 +312,14 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
     // base and beneath the records, where they always sat; they only record, `assertNoLeaks` is what fails.
     decorate: (options.decorate ?? Layer.empty).pipe(Layer.provideMerge(GuardLive)),
     tier: options.tier ?? "all",
-    // The in-process harness serves without both on purpose, as it always has (`RequestContext` E1; `BodyLimit`
-    // has its own suite), and so `coreHandlers`' warning that `RequestContext.layer` is absent stays silent.
-    requestContext: false,
+    // `BodyLimit` has its own suite. The request context is derived with the middleware (ADR-EA-047).
     bodyLimit: false,
     openapiPath: options.openapiPath,
     docsPath: options.docsPath,
   };
   const platform = <A, E, R>(host: Layer.Layer<A, E, R>) =>
     host.pipe(
-      Layer.provideMerge(testPorts(options.rateLimiter)),
+      Layer.provideMerge(testPorts(options.rateLimiter, options.clientAddress)),
       Layer.provideMerge(HttpServer.layerServices),
       Layer.provideMerge(HttpRouter.layer),
     );
@@ -317,7 +356,8 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
  * `hookPoints` (BEH-EA-T4/T5), the core services over `Persistence.memory` / `Persistence.sql()` with the
  * migrations applied, the registries, erasure and export; `TestAuth` adds a cheap argon2id hasher,
  * `Mailer.layerMemory`, a permissive `RateLimiter`, `Encryption` over a fixed key, `ClientAddress`, the platform
- * crypto services and the recording `RedactionGuard` (EOTS-002). `RequestContext.layer` and `BodyLimit.layer` are off.
+ * crypto services and the recording `RedactionGuard` (EOTS-002). `BodyLimit.layer` is off; the request context is derived
+ * with the host middleware, as in production (ADR-EA-047).
  * Its `RIn` is `never` exactly when the composition is complete, and every service in its `ROut` is present
  * at runtime (including everything `services` provides).
  *
@@ -408,6 +448,8 @@ export const signInAs = (input: {
   readonly onSignedUp?: (userId: Users.UserId) => Effect.Effect<void>;
   /** How the session says the user authenticated (`["pwd"]`, `["fed"]`, ...); none by default. */
   readonly amr?: ReadonlyArray<Sessions.AuthMethod>;
+  /** ADR-EA-047: the request the session records (`withRequest`'s facts); by default none (`noRequest`). */
+  readonly request?: Parameters<typeof withRequest>[0];
 }): Effect.Effect<SignedInSession, never, Users.Users | Sessions.Sessions> =>
   Effect.gen(function* () {
     const users = yield* Users.Users;
@@ -420,7 +462,10 @@ export const signInAs = (input: {
     }
     const issued = yield* sessions
       .issue({ userId: user.id, ...(input.amr === undefined ? {} : { amr: input.amr }) })
-      .pipe(Effect.orDie);
+      .pipe(
+        input.request === undefined ? withoutRequest : withRequest(input.request),
+        Effect.orDie,
+      );
     return { userId: user.id, token: issued.token, setCookie: yield* sessionSetCookie(issued) };
   });
 
@@ -504,8 +549,13 @@ export interface SignedInAgent extends UserAgent.UserAgent {
 export interface App<A, E = never> {
   /** The raw `(Request) => Promise<Response>` the composition serves. */
   readonly handler: (request: Request) => Promise<Response>;
-  /** Runs an effect against the composition's own context (the instances the plugins use). */
-  readonly run: <X, XE, XR extends A>(effect: Effect.Effect<X, XE, XR>) => Promise<X>;
+  /**
+   * Runs an effect against the composition's own context (the instances the plugins use). ADR-EA-047: it runs as
+   * in-process work that answers no request (`noRequest`) unless `app`'s `request` option names one.
+   */
+  readonly run: <X, XE, XR extends A | Api.AuthRequestContext>(
+    effect: Effect.Effect<X, XE, XR>,
+  ) => Promise<X>;
   /**
    * BEH-EA-333: a fresh browser (or native client) over this composition: its own cookie store, the
    * composition's clock, and a `__Host-csrf` cookie already held (minted from the composition's own
@@ -574,6 +624,8 @@ export const app = <A, E>(
     readonly testClock?: boolean;
     /** An existing memo map to build into, so several apps (or a hand-made router) share the instances they have in common. */
     readonly memoMap?: Layer.MemoMap;
+    /** ADR-EA-047: the request `run` answers (`withRequest`'s facts); by default none (`noRequest`). */
+    readonly request?: Parameters<typeof withRequest>[0];
   } = {},
 ): App<A | AppNeeds, E> => {
   const baseUrl = options.baseUrl ?? "http://localhost";
@@ -589,8 +641,9 @@ export const app = <A, E>(
     context ??= Effect.runPromise(Layer.buildWithMemoMap(appLayer, memoMap, scope));
     return context;
   };
+  const inRequest = options.request === undefined ? withoutRequest : withRequest(options.request);
   const run: App<A | AppNeeds, E>["run"] = (effect) =>
-    built().then((services) => Effect.runPromiseWith(services)(effect));
+    built().then((services) => Effect.runPromiseWith(services)(inRequest(effect)));
   const runtime = ManagedRuntime.make(appLayer, { memoMap });
   const handler = (request: Request) => web.handler(request);
 
@@ -1138,6 +1191,36 @@ export const runPluginContractTests = <O, P extends AuthPlugin.Any, R = never>(
           framework.fail(`E_PLUGIN_DUPLICATE_ID: "${plugin.id}" also names a host plugin`);
         }
       });
+
+      // ADR-EA-047: the request context is captured outermost on every endpoint the plugin contributes, so every
+      // middleware and handler of the endpoint reads its facts.
+      framework.it(
+        `${label}: every endpoint declares Api.RequestContext as its last middleware`,
+        () => {
+          const missing: Array<string> = [];
+          const [first, ...rest] = [...host, plugin];
+          if (first === undefined) return;
+          const own = new Set(
+            Object.values(plugin.contract.groups).map((group) => group.identifier),
+          );
+          HttpApi.reflect(Auth.make([first, ...rest]).api, {
+            onGroup: () => {},
+            onEndpoint: ({ group, endpoint, middleware }) => {
+              if (
+                own.has(group.identifier) &&
+                [...middleware].at(-1)?.key !== Api.RequestContext.key
+              ) {
+                missing.push(`${group.identifier}.${endpoint.identifier}`);
+              }
+            },
+          });
+          if (missing.length > 0) {
+            framework.fail(
+              `plugin "${plugin.id}": these endpoints do not declare Api.RequestContext last: ${missing.join(", ")}`,
+            );
+          }
+        },
+      );
 
       framework.it(`${label}: every declared table carries this plugin's own id prefix`, () => {
         const prefix = TABLE_PREFIX_PATTERN(plugin.id);

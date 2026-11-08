@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Api } from "@awthaq/api";
 import { Auth, AuditLog, Errors, Migrations, Sessions, Users } from "@awthaq/core";
-import { RateLimiter } from "@awthaq/ports";
+import { ClientAddress, RateLimiter } from "@awthaq/ports";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
@@ -16,7 +16,6 @@ import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Scope from "effect/Scope";
@@ -43,9 +42,14 @@ const serve = <A, E>(layer: Layer.Layer<A, E>) => {
   const scope = Scope.makeUnsafe();
   const web = HttpRouter.toWebHandler(layer, { memoMap, disableLogger: true });
   let context: Promise<Context.Context<A>> | undefined;
-  const run = <X, XE>(effect: Effect.Effect<X, XE, A>) => {
+  // In-process work answers no request (ADR-EA-047).
+  const run = <X, XE>(effect: Effect.Effect<X, XE, A | Api.AuthRequestContext>) => {
     context ??= Effect.runPromise(Layer.buildWithMemoMap(layer, memoMap, scope));
-    return context.then((services) => Effect.runPromiseWith(services)(effect));
+    return context.then((services) =>
+      Effect.runPromiseWith(services)(
+        Effect.provideService(effect, Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      ),
+    );
   };
   const request = (
     method: string,
@@ -256,10 +260,12 @@ for (const records of recordModes) {
 
 describe("AuthHost.layer requirements", () => {
   it("BEH-EA-340: the host-owned set the compiler reports is all the layer needs at runtime", async () => {
-    // Exactly `RIn` for core plus `Ledger` (pinned in AuthHost.types.test.ts): no mailer, hasher or key.
+    // Exactly `RIn` for core plus `Ledger` (pinned in AuthHost.types.test.ts): no mailer, hasher or key; the client
+    // address topology is the request context's (ADR-EA-047).
     const app = serve(
       AuthHost.layer(built, { persistence: { records: "memory" }, csrf }).pipe(
         Layer.provideMerge(RateLimiter.layerPermissive),
+        Layer.provideMerge(ClientAddress.layerDirect),
         Layer.provideMerge(HostPorts.Crypto),
         Layer.provideMerge(HostPorts.Platform),
       ),
@@ -294,7 +300,12 @@ describe("AuthHost.layer migrations (sql)", () => {
     );
   /** Reads the database directly, beside the app, to see what a build did to it. */
   const inspect = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
-    Effect.runPromise(effect.pipe(Effect.provide(SqliteClient.layer({ filename }))));
+    Effect.runPromise(
+      effect.pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(SqliteClient.layer({ filename })),
+      ),
+    );
   const ledgerRows = (table: string) =>
     Effect.gen(function* () {
       if (!(yield* Migrations.tableExists(table))) return -1;
@@ -379,43 +390,26 @@ describe("AuthHost.layer migrations (sql)", () => {
 });
 
 describe("AuthHost.layer dials", () => {
-  it("requestContext (default) stamps the request on the events it causes; false stamps none and logs no warning", async () => {
-    const warnings: Array<string> = [];
-    const CaptureWarnings = Logger.layer([
-      Logger.make<unknown, void>((options) => {
-        if (String(options.message).includes("RequestContext.layer is not installed")) {
-          warnings.push(String(options.message));
-        }
-      }),
-    ]);
-    const signOut = async (requestContext: boolean) => {
-      const app = serve(
-        provided(
-          AuthHost.layer(built, { persistence: { records: "memory" }, csrf, requestContext }),
-        ).pipe(Layer.provideMerge(CaptureWarnings)),
+  it("ADR-EA-047: the request context is always derived, so every event a request causes carries its facts", async () => {
+    const app = serve(
+      provided(AuthHost.layer(built, { persistence: { records: "memory" }, csrf })),
+    );
+    try {
+      const { cookie } = await app.run(signIn("rc@example.com"));
+      const out = await app.request("POST", "/session/sign-out", {
+        cookie,
+        headers: { "x-request-id": "req-4242", "user-agent": "probe/1" },
+      });
+      assert.strictEqual(out.status, 204);
+      const rows = await app.run(
+        Effect.flatMap(Effect.service(AuditLog.AuditLog), (log) => log.list()),
       );
-      try {
-        const { cookie } = await app.run(signIn("rc@example.com"));
-        const out = await app.request("POST", "/session/sign-out", {
-          cookie,
-          headers: { "x-request-id": "req-4242", "user-agent": "probe/1" },
-        });
-        assert.strictEqual(out.status, 204);
-        const rows = await app.run(
-          Effect.flatMap(Effect.service(AuditLog.AuditLog), (log) => log.list()),
-        );
-        return rows.find((row) => row.eventTag === "auth.session.revoked");
-      } finally {
-        await app.dispose();
-      }
-    };
-    const stamped = await signOut(true);
-    assert.deepStrictEqual(stamped?.correlationId, Option.some("req-4242"));
-    assert.deepStrictEqual(stamped?.userAgent, Option.some("probe/1"));
-    const bare = await signOut(false);
-    assert.deepStrictEqual(bare?.correlationId, Option.none());
-    assert.deepStrictEqual(bare?.userAgent, Option.none());
-    assert.deepStrictEqual(warnings, []);
+      const stamped = rows.find((row) => row.eventTag === "auth.session.revoked");
+      assert.deepStrictEqual(stamped?.correlationId, Option.some("req-4242"));
+      assert.deepStrictEqual(stamped?.userAgent, Option.some("probe/1"));
+    } finally {
+      await app.dispose();
+    }
   });
 
   it("bodyLimit (default) refuses a body over the limit with 413; bodyLimit: false lets it through", async () => {

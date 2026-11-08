@@ -48,13 +48,14 @@ describe("AuthCoreApi (BEH-EA-031)", () => {
     ]);
   });
 
-  it("every core endpoint is behind Authentication, with CsrfProtection declared last (outermost, runs first)", () => {
+  it("every core endpoint is behind Authentication and CsrfProtection, with RequestContext declared last (outermost, ADR-EA-047)", () => {
     for (const group of [Session.SessionGroup, Account.AccountGroup]) {
       for (const keys of middlewareKeysOf(group)) {
         // An endpoint-level `SessionLifecycle` marker (ADR-EA-045) sits innermost, beneath both.
         expect(keys.filter((key) => !key.startsWith("awthaq/api/SessionLifecycle/"))).toEqual([
           "Authentication",
           "CsrfProtection",
+          "RequestContext",
         ]);
       }
     }

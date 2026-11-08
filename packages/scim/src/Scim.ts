@@ -49,6 +49,7 @@ import {
   OrganizationMembers,
   OrganizationTeams,
 } from "@awthaq/organization";
+import type { Api } from "@awthaq/api";
 import { Defects, SqlTransaction } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
@@ -61,6 +62,9 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ScimApi from "./ScimApi.ts";
 import * as ScimConnections from "./ScimConnections.ts";
 import * as ScimRecords from "./ScimRecords.ts";
+
+/** ADR-EA-047: the request-context middleware the group declares; named so the inferred layer types can be emitted (TS2883). */
+export type ScimRequestContext = Api.RequestContext;
 
 // ---- config ---------------------------------------------------------------------------------
 

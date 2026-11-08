@@ -70,7 +70,9 @@ export const sessionAssuranceSteps = defineSteps<World>(({ Given, When, Then }) 
           const sessions = yield* Sessions.Sessions;
           const user = yield* users.findByEmail(actor.email);
           if (Option.isNone(user)) return yield* Effect.die(`no user ${actor.email}`);
-          const issued = yield* sessions.issue({ userId: user.value.id, amr: methodsOf(methods) });
+          const issued = yield* sessions
+            .issue({ userId: user.value.id, amr: methodsOf(methods) })
+            .pipe(TestAuth.withoutRequest);
           return issued.session;
         }),
       );

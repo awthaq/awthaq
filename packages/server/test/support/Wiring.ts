@@ -4,16 +4,24 @@
 // authentication scheme, a CORS origin list, a CSRF origin rule) stays in that suite.
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { createHmac, randomBytes } from "node:crypto";
+import { ClientAddress } from "@awthaq/ports";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Credentials from "../../src/Credentials.ts";
 import * as Csrf from "../../src/Csrf.ts";
+import * as RequestContext from "../../src/RequestContext.ts";
 
 /** At least 32 bytes, as `Csrf.layerConfig` requires. */
 const TEST_CSRF_SECRET = "server-test-csrf-secret-padded-to-thirty-two-bytes";
 
 /** The resolver every suite here uses: `Sessions` -> `PrincipalResolver`, no user facts. */
 export const resolver = Credentials.PrincipalResolverLive;
+
+/** ADR-EA-047: the request context every group declares outermost, over the socket peer (`layerDirect`). */
+export const requestContextLive = RequestContext.RequestContextLive.pipe(
+  Layer.provide(ClientAddress.layerDirect),
+  Layer.provide(NodeCrypto.layer),
+);
 
 /** A fixed `CsrfConfig`; `allowedOrigins` is what the origin check (and `AuthHttp.cors`) reads. */
 export const csrfConfig = (

@@ -24,7 +24,6 @@
 import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
 import {
   Accounts,
-  AuthEvents,
   AuthPlugin,
   Errors,
   FederatedIdentity,
@@ -40,14 +39,7 @@ import {
   Verification,
   VerificationLink,
 } from "@awthaq/core";
-import {
-  ClientAddress,
-  Defects,
-  Encryption,
-  Hmac,
-  RateLimiter,
-  SqlTransaction,
-} from "@awthaq/ports";
+import { Defects, Encryption, Hmac, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { Session, SessionDelivery } from "@awthaq/server";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Digest from "effect/crypto/Digest";
@@ -442,18 +434,15 @@ const OAuthFlowHandlers = HttpApiBuilder.group(
   "oauth",
   Effect.fnUntraced(function* (handlers) {
     const oauth = yield* OAuth;
-    const clientAddress = yield* ClientAddress.ClientAddress;
     const configNow = Tenant.configInForce(OAuthConfig, yield* OAuthConfig);
 
     return handlers.handleAll({
       authorize: Effect.fnUntraced(function* ({
         params,
         query,
-        request,
       }: {
         params: OAuthApi.AuthorizeParams;
         query: OAuthApi.AuthorizeQuery;
-        request: HttpServerRequest.HttpServerRequest;
       }) {
         yield* noReferrer;
         const principal = yield* Api.CurrentPrincipal;
@@ -472,8 +461,7 @@ const OAuthFlowHandlers = HttpApiBuilder.group(
         ) {
           return yield* new OAuthApi.InvalidNativeRequest();
         }
-        // OAP-008: resolved through the same `ClientAddress` port as `callback`.
-        const address = yield* ClientAddress.address(clientAddress, request);
+        // OAP-008: the per-source budget keys on the request's address (ADR-EA-047).
         const url = yield* oauth.authorize(params.provider, {
           callbackURL: query.callbackURL,
           link,
@@ -483,7 +471,6 @@ const OAuthFlowHandlers = HttpApiBuilder.group(
                   query.code_challenge === undefined ? {} : { codeChallenge: query.code_challenge },
               }
             : {}),
-          ...address,
         });
         const response = HttpServerResponse.redirect(url.location);
         return yield* HttpServerResponse.setCookie(response, OAUTH_STATE_COOKIE, url.state, {
@@ -510,13 +497,7 @@ const OAuthFlowHandlers = HttpApiBuilder.group(
         yield* noReferrer;
         yield* expireStateCookie;
         const cookieState = request.cookies[OAUTH_STATE_COOKIE];
-        // AGA-001/NHS-003: resolved through the application-provided
-        // `ClientAddress` port rather than `request.remoteAddress`
-        // directly — behind an L7 gateway/load balancer that's the
-        // proxy's own address, collapsing every client into one shared
-        // rate-limit bucket unless the composition opts into
-        // `ClientAddress.layerTrustedProxy`.
-        const facts = yield* ClientAddress.facts(clientAddress, request);
+        // ADR-EA-047: the address and user agent are the request context's, read by core.
         const outcome = yield* oauth.callback(params.provider, {
           code: query.code,
           state: query.state,
@@ -526,7 +507,6 @@ const OAuthFlowHandlers = HttpApiBuilder.group(
             ? {}
             : { errorDescription: query.error_description }),
           cookieState,
-          ...facts,
         });
         // PV-016: a browser landing (never the native deep link) behind a `SameSite=Strict` session
         // cookie goes through the same-site interstitial so its first request carries the session.
@@ -556,21 +536,12 @@ const OAuthExchangeHandlers = HttpApiBuilder.group(
   "oauth.exchange",
   Effect.fnUntraced(function* (handlers) {
     const oauth = yield* OAuth;
-    const clientAddress = yield* ClientAddress.ClientAddress;
     return handlers.handleAll({
-      token: Effect.fnUntraced(function* ({
-        payload,
-        request,
-      }: {
-        payload: OAuthApi.ExchangePayload;
-        request: HttpServerRequest.HttpServerRequest;
-      }) {
-        const address = yield* ClientAddress.address(clientAddress, request);
+      token: Effect.fnUntraced(function* ({ payload }: { payload: OAuthApi.ExchangePayload }) {
         // Typed local so declaration emit can name `SessionDto` (TS2883).
         const session: SessionContract.SessionDto = yield* oauth.exchange({
           code: payload.code,
           ...(payload.codeVerifier === undefined ? {} : { codeVerifier: payload.codeVerifier }),
-          ...address,
         });
         // MNA-003/ADR-EA-045: the token rides `set-auth-token` too; `SessionLifecycle.Mints` makes it `no-store`.
         const delivered: SessionContract.SessionDto =
@@ -589,8 +560,6 @@ export interface OAuthShape {
     input: {
       readonly callbackURL: string | undefined;
       readonly link: { readonly userId: string } | undefined;
-      /** OAP-008: the rate-limit key, exactly as for `callback` — `undefined` shares one "unknown origin" bucket. */
-      readonly ip?: string;
       /**
        * MNA-003: present for a native flow — the callback then returns to the
        * (allowlisted) deep link with a one-time exchange code rather than
@@ -601,7 +570,9 @@ export interface OAuthShape {
     },
   ) => Effect.Effect<
     { readonly location: string; readonly state: string },
-    OAuthApi.ProviderNotFound | OAuthApi.ProviderUnavailable | Api.RateLimited
+    OAuthApi.ProviderNotFound | OAuthApi.ProviderUnavailable | Api.RateLimited,
+    /** OAP-008: the per-source budget keys on the request's address (ADR-EA-047). */
+    Api.AuthRequestContext
   >;
   readonly callback: (
     providerId: string,
@@ -615,17 +586,6 @@ export interface OAuthShape {
       readonly error?: string;
       /** Provider-controlled free text: logged at debug level only, never echoed. */
       readonly errorDescription?: string;
-      /**
-       * Shipping-gap map (.scratch/shipping-gaps), ticket 13: the
-       * rate-limit key — no identity exists yet at this point in the
-       * flow, so IP is the only sensible strategy (ticket 02's own
-       * decision). `undefined` when the handler's own `HttpServerRequest`
-       * carries none, which the rate limiter treats as a single shared
-       * bucket for "unknown origin" requests, never as unthrottled.
-       */
-      readonly ip?: string;
-      /** CSD-003: the callback request's `User-Agent`, recorded on the issued session (capped by `Sessions.issue`). */
-      readonly userAgent?: string;
     },
   ) => Effect.Effect<
     {
@@ -645,7 +605,12 @@ export interface OAuthShape {
     | Api.RateLimited
     | HookPoint.HookAborted
     | Hooks.TwoFactorRequired
-    | Errors.StoreUnavailable
+    | Errors.StoreUnavailable,
+    /**
+     * Shipping-gap ticket 13: the rate-limit key is the request's address (no identity exists yet); CSD-003: the
+     * session records the callback request's address and user agent (ADR-EA-047).
+     */
+    Api.AuthRequestContext
   >;
   /**
    * MNA-003: redeems the exchange code a native callback put in its deep link.
@@ -656,10 +621,10 @@ export interface OAuthShape {
   readonly exchange: (input: {
     readonly code: string;
     readonly codeVerifier?: string;
-    readonly ip?: string;
   }) => Effect.Effect<
     SessionContract.SessionDto,
-    OAuthApi.OAuthCallbackFailed | Api.RateLimited | Errors.StoreUnavailable
+    OAuthApi.OAuthCallbackFailed | Api.RateLimited | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
 }
 
@@ -707,17 +672,11 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
   tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(OAuth, {
-    ports: [
-      ClientAddress.ClientAddress,
-      Encryption.Encryption,
-      RateLimiter.RateLimiter,
-      SqlTransaction.SqlTransaction,
-    ],
+    ports: [Encryption.Encryption, RateLimiter.RateLimiter, SqlTransaction.SqlTransaction],
     handlers: OAuthHandlers,
     make: Effect.gen(function* () {
       const accounts = yield* Accounts.Accounts;
       const verification = yield* Verification.Verification;
-      const events = yield* AuthEvents.AuthEvents;
       // EP-007 (ADR-EA-018 Decision 8): the per-request policy — trusted origins, auto-link list,
       // timeouts, clock skew, rate-limit budgets — is decided per operation, so a tenant's
       // `OAuth.config(...)` provided in the calling fiber applies to that request; with none, the
@@ -829,7 +788,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
 
       const authorize: OAuthShape["authorize"] = Effect.fnUntraced(function* (providerId, input) {
         const config = yield* configNow;
-        yield* limits.spend("authorize", { ip: input.ip });
+        yield* limits.spend("authorize", {});
         const provider = yield* providers.get(providerId);
         const nativeChallenge = input.native?.codeChallenge;
         const resolved = resolveCallbackURL(input.callbackURL, {
@@ -903,7 +862,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
 
       const callbackFlow: OAuthShape["callback"] = Effect.fnUntraced(function* (providerId, input) {
         const config = yield* configNow;
-        yield* limits.spend("callback", { ip: input.ip });
+        yield* limits.spend("callback", {});
         const provider = yield* providers.get(providerId);
         // BEH-EA-122: the correlation cookie and the returned `state` must
         // agree before the (single-use) Verification entry is even
@@ -1115,10 +1074,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         // so its address and user agent are what the device list should show. An erasure can run
         // between the proof and here: the one opaque callback failure, not a server error.
         const issued = yield* completion
-          .complete(
-            { userId: targetUserId, strategy: providerId, amr: ["fed"] },
-            { ip: input.ip, userAgent: input.userAgent },
-          )
+          .complete({ userId: targetUserId, strategy: providerId, amr: ["fed"] })
           .pipe(
             Effect.catchTag("SignIn/UserGone", () =>
               CallbackFailure.callbackFailed("account-missing"),
@@ -1183,12 +1139,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         callbackFlow(providerId, input).pipe(
           Effect.tapError((error) =>
             error._tag === "OAuthCallbackFailed"
-              ? events.publish({
-                  _tag: "auth.user.signInFailed",
-                  strategy: providerId,
-                  reason: "callbackRejected",
-                  ...(input.ip === undefined ? {} : { clientIp: input.ip }),
-                })
+              ? completion.failed({ strategy: providerId, reason: "callbackRejected" })
               : Effect.void,
           ),
           // EOTS-001: `awthaq.oauth.callback`, with the provider id (a configured, bounded label).
@@ -1199,7 +1150,7 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
         );
 
       const exchange: OAuthShape["exchange"] = Effect.fnUntraced(function* (input) {
-        yield* limits.spend("token", { ip: input.ip });
+        yield* limits.spend("token", {});
         // The purpose is checked BEFORE `consume`: consuming is destructive, and this endpoint
         // must never burn (or redeem) a `Verification` value issued for another purpose, such as
         // an in-flight OAuth flow's own `state`.

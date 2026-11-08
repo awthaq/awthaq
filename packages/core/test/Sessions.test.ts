@@ -98,7 +98,10 @@ const suite = (
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "Sessions/NotFound");
         assert.notInclude(failure.message, "enumerable-session-id");
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect(
@@ -114,7 +117,10 @@ const suite = (
           const { session: view } = yield* sessions.verify(token);
           assert.strictEqual(view.id, session.id);
           assert.strictEqual(view.userId, userId);
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     // DRS-001 (ADR-EA-018): a session carries the tenant it was issued under,
@@ -131,7 +137,10 @@ const suite = (
           .verify(tenanted.token)
           .pipe(Tenant.withTenant("tenant-2"));
         assert.deepStrictEqual(session.tenantId, Option.some("tenant-1"));
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     // RSC-001: a `SessionView` must never carry the stored secret hash (or
@@ -165,7 +174,10 @@ const suite = (
         const { session: verified } = yield* sessions.verify(token);
         assert.deepStrictEqual(Object.keys(verified).sort(), expectedKeys);
         assert.notProperty(verified, "secretHash");
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     // TIR-002: `isLive` must apply the exact same idle+absolute logic
@@ -179,7 +191,10 @@ const suite = (
         const { session } = yield* sessions.issue({ userId });
         yield* TestClock.adjust(Duration.millis(600));
         assert.isFalse(yield* sessions.isLive(userId, session.id));
-      }).pipe(Effect.provide(shortLivedLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(shortLivedLayer),
+      ),
     );
 
     it.effect("isLive is true for a freshly issued, unexpired session", () =>
@@ -187,7 +202,10 @@ const suite = (
         const sessions = yield* Sessions.Sessions;
         const { session } = yield* sessions.issue({ userId });
         assert.isTrue(yield* sessions.isLive(userId, session.id));
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect("isLive is false for a session belonging to a different userId", () =>
@@ -197,14 +215,20 @@ const suite = (
         assert.isFalse(
           yield* sessions.isLive(Users.UserId("22222222-2222-2222-2222-222222222222"), session.id),
         );
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect("isLive is false for an unknown session id", () =>
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         assert.isFalse(yield* sessions.isLive(userId, Sessions.SessionId("does-not-exist")));
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     // Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
@@ -218,7 +242,10 @@ const suite = (
           DateTime.toEpochMillis(session.authenticatedAt),
           DateTime.toEpochMillis(session.createdAt),
         );
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect(
@@ -245,7 +272,10 @@ const suite = (
           // never rotate it (unlike `verify`'s own throttled touch).
           const { session: verified } = yield* sessions.verify(token);
           assert.strictEqual(verified.id, session.id);
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect("reauthenticate fails with SessionNotFound for an unknown session id", () =>
@@ -255,7 +285,10 @@ const suite = (
           .reauthenticate(userId, Sessions.SessionId("does-not-exist"))
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     // BEH-EA-319: reauthenticate advances only a live session the caller owns.
@@ -267,7 +300,10 @@ const suite = (
         yield* TestClock.adjust(Duration.seconds(30));
         const failure = yield* sessions.reauthenticate(userId, a.session.id).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect("BEH-EA-319: reauthenticate refuses an expired session", () =>
@@ -278,7 +314,10 @@ const suite = (
         yield* TestClock.adjust(Duration.millis(600));
         const failure = yield* sessions.reauthenticate(userId, session.id).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(shortLivedLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(shortLivedLayer),
+      ),
     );
 
     it.effect(
@@ -302,7 +341,10 @@ const suite = (
             );
             assert.deepStrictEqual(owned.value.amr, []);
           }
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     // BEH-EA-320: the one fresh-session gate, identical on both layers.
@@ -316,7 +358,10 @@ const suite = (
         // Exactly `maxAge` old is still fresh (`isStale` is strictly greater-than).
         const boundary = yield* sessions.requireFresh(userId, session.id, Duration.seconds(30));
         assert.strictEqual(boundary.id, session.id);
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect("BEH-EA-320: requireFresh fails stale past maxAge until a reauthenticate", () =>
@@ -333,7 +378,10 @@ const suite = (
         yield* sessions.reauthenticate(userId, session.id);
         const item = yield* sessions.requireFresh(userId, session.id, Duration.seconds(60));
         assert.strictEqual(item.id, session.id);
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect(
@@ -358,7 +406,10 @@ const suite = (
             ),
             ["notLive", "notLive", "notLive"],
           );
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect(
@@ -387,7 +438,10 @@ const suite = (
           const rotatedToken = Option.getOrThrow(touched.rotated);
           const { session: newView } = yield* sessions.verify(rotatedToken);
           assert.strictEqual(newView.id, touched.session.id);
-        }).pipe(Effect.provide(shortLivedLayer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(shortLivedLayer),
+        ),
     );
 
     it.effect(
@@ -405,14 +459,31 @@ const suite = (
           assert.strictEqual(newWorks.session.id, second.session.id);
           const oldFails = yield* sessions.verify(first.token).pipe(Effect.flip);
           assert.strictEqual(oldFails._tag, "Sessions/NotFound");
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect("BEH-EA-054: list/revoke/revokeOthers", () =>
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        const a = yield* sessions.issue({ userId, request: { userAgent: "device-a" } });
-        const b = yield* sessions.issue({ userId, request: { userAgent: "device-b" } });
+        const a = yield* sessions
+          .issue({ userId })
+          .pipe(
+            Effect.provideService(
+              Api.AuthRequestContext,
+              Api.AuthRequestContext.request({ correlationId: "test", userAgent: "device-a" }),
+            ),
+          );
+        const b = yield* sessions
+          .issue({ userId })
+          .pipe(
+            Effect.provideService(
+              Api.AuthRequestContext,
+              Api.AuthRequestContext.request({ correlationId: "test", userAgent: "device-b" }),
+            ),
+          );
 
         const listed = yield* sessions.list(userId, a.session.id);
         assert.strictEqual(listed.length, 2);
@@ -428,7 +499,10 @@ const suite = (
         yield* sessions.revoke(a.session.id, "signOut");
         const aFails = yield* sessions.verify(a.token).pipe(Effect.flip);
         assert.strictEqual(aFails._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect(
@@ -436,8 +510,22 @@ const suite = (
       () =>
         Effect.gen(function* () {
           const sessions = yield* Sessions.Sessions;
-          const a = yield* sessions.issue({ userId, request: { userAgent: "device-a" } });
-          const b = yield* sessions.issue({ userId, request: { userAgent: "device-b" } });
+          const a = yield* sessions
+            .issue({ userId })
+            .pipe(
+              Effect.provideService(
+                Api.AuthRequestContext,
+                Api.AuthRequestContext.request({ correlationId: "test", userAgent: "device-a" }),
+              ),
+            );
+          const b = yield* sessions
+            .issue({ userId })
+            .pipe(
+              Effect.provideService(
+                Api.AuthRequestContext,
+                Api.AuthRequestContext.request({ correlationId: "test", userAgent: "device-b" }),
+              ),
+            );
 
           yield* sessions.revokeAll(userId, "userRevoked");
 
@@ -445,7 +533,10 @@ const suite = (
           assert.strictEqual(aFails._tag, "Sessions/NotFound");
           const bFails = yield* sessions.verify(b.token).pipe(Effect.flip);
           assert.strictEqual(bFails._tag, "Sessions/NotFound");
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect("BEH-EA-209: actingAs round-trips through issue/verify", () =>
@@ -464,7 +555,10 @@ const suite = (
         // Ticket 01: an actingAs session never touches the touch/rotation
         // path at all — its hard expiry is the whole security model.
         assert.deepStrictEqual(verified.rotated, Option.none());
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect("an ordinary session issued with no actingAs carries none", () =>
@@ -472,7 +566,10 @@ const suite = (
         const sessions = yield* Sessions.Sessions;
         const { session } = yield* sessions.issue({ userId });
         assert.deepStrictEqual(session.actingAs, Option.none());
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect(
@@ -488,7 +585,10 @@ const suite = (
             DateTime.toEpochMillis(session.idleExpiresAt),
             DateTime.toEpochMillis(session.absoluteExpiresAt),
           );
-        }).pipe(Effect.provide(shortLivedLayer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(shortLivedLayer),
+        ),
     );
 
     it.effect(
@@ -505,7 +605,10 @@ const suite = (
             DateTime.toEpochMillis(session.absoluteExpiresAt),
             DateTime.toEpochMillis(now) + 50,
           );
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     // EP-007 (ADR-EA-018 Decision 8): the lifetimes are decided per operation, so one layer instance
@@ -519,7 +622,10 @@ const suite = (
             const issued = sessions.issue({ userId });
             const { session } = yield* tenantId === undefined
               ? issued
-              : issued.pipe(Effect.provide(TenantSessionConfig.get(tenantId)));
+              : issued.pipe(
+                  Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+                  Effect.provide(TenantSessionConfig.get(tenantId)),
+                );
             return {
               absolute:
                 DateTime.toEpochMillis(session.absoluteExpiresAt) -
@@ -539,7 +645,10 @@ const suite = (
           absolute: Duration.toMillis(Duration.days(30)),
           idle: Duration.toMillis(Duration.days(7)),
         });
-      }).pipe(Effect.provide(Layer.merge(layer, TenantSessionConfig.layer))),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(Layer.merge(layer, TenantSessionConfig.layer)),
+      ),
     );
 
     it.effect("EP-007: a tenant's touchEvery decides whether verify rotates the secret", () =>
@@ -552,9 +661,15 @@ const suite = (
         assert.isTrue(Option.isNone(untouched.rotated));
         const touched = yield* sessions
           .verify(token)
-          .pipe(Effect.provide(TenantSessionConfig.get("strict")));
+          .pipe(
+            Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+            Effect.provide(TenantSessionConfig.get("strict")),
+          );
         assert.isTrue(Option.isSome(touched.rotated));
-      }).pipe(Effect.provide(Layer.merge(layer, TenantSessionConfig.layer))),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(Layer.merge(layer, TenantSessionConfig.layer)),
+      ),
     );
 
     // IDS-008: the self-act-as invariant lives in the primitive, not only in
@@ -571,7 +686,10 @@ const suite = (
         assert.instanceOf(Cause.squash(exit.cause), Sessions.InvalidActingAs);
         // A different actor is still fine.
         yield* sessions.issue({ userId, actingAs: { type: "user", id: "admin-1" } });
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     // THS-003/APS-007: RFC 8176 `amr` — recorded at issue, monotone within a session.
@@ -584,7 +702,10 @@ const suite = (
         assert.deepStrictEqual((yield* sessions.list(userId))[0]?.amr, ["hwk", "user"]);
         const owned = yield* sessions.findOwned(userId, session.id);
         assert.deepStrictEqual(Option.getOrThrow(owned).amr, ["hwk", "user"]);
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect("THS-003: a session issued without amr records none", () =>
@@ -592,7 +713,10 @@ const suite = (
         const sessions = yield* Sessions.Sessions;
         const { session } = yield* sessions.issue({ userId });
         assert.deepStrictEqual(session.amr, []);
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect(
@@ -605,7 +729,10 @@ const suite = (
           assert.deepStrictEqual(stepped.amr, ["pwd", "otp", "mfa"]);
           const plain = yield* sessions.reauthenticate(userId, session.id);
           assert.deepStrictEqual(plain.amr, ["pwd", "otp", "mfa"]);
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     // ESS-005/SMS-002: `list` is exactly the live sessions, newest activity
@@ -617,7 +744,10 @@ const suite = (
         // idle is 500ms, absolute 1000ms: past idle only.
         yield* TestClock.adjust(Duration.millis(600));
         assert.strictEqual((yield* sessions.list(userId)).length, 0);
-      }).pipe(Effect.provide(shortLivedLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(shortLivedLayer),
+      ),
     );
 
     it.effect("BEH-EA-054: list excludes absolute-expired sessions", () =>
@@ -633,7 +763,10 @@ const suite = (
         assert.strictEqual((yield* sessions.list(userId)).length, 1);
         yield* TestClock.adjust(Duration.millis(300));
         assert.strictEqual((yield* sessions.list(userId)).length, 0);
-      }).pipe(Effect.provide(shortLivedLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(shortLivedLayer),
+      ),
     );
 
     it.effect("BEH-EA-054: list orders newest activity first and flags the current row", () =>
@@ -656,7 +789,10 @@ const suite = (
           listed.map((row) => row.current),
           [false, false, true],
         );
-      }).pipe(Effect.provide(shortLivedLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(shortLivedLayer),
+      ),
     );
 
     // TIR-003: the keyed ownership lookup every point query goes through.
@@ -682,7 +818,10 @@ const suite = (
         assert.isTrue(Option.isSome(yield* sessions.findOwned(userId, next.session.id)));
         yield* TestClock.adjust(Duration.millis(600));
         assert.isTrue(Option.isNone(yield* sessions.findOwned(userId, next.session.id)));
-      }).pipe(Effect.provide(shortLivedLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(shortLivedLayer),
+      ),
     );
 
     // GC-005: ownership enforced atomically in the domain operation.
@@ -693,7 +832,10 @@ const suite = (
         yield* sessions.revokeOwned(userId, mine.session.id, "userRevoked");
         const failure = yield* sessions.verify(mine.token).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect(
@@ -708,7 +850,10 @@ const suite = (
             .pipe(Effect.flip);
           assert.strictEqual(failure._tag, "Sessions/NotFound");
           yield* sessions.verify(theirs.token);
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect("GC-005: revokeOwned on an unknown id fails SessionNotFound", () =>
@@ -718,7 +863,10 @@ const suite = (
           .revokeOwned(userId, Sessions.SessionId("missing"), "userRevoked")
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     // THS-003: `amr` is monotone. Two step-ups landing together must both be recorded; a
@@ -737,7 +885,10 @@ const suite = (
         const stored = yield* sessions.findOwned(userId, session.id);
         const amr = Option.match(stored, { onNone: () => [], onSome: (item) => item.amr });
         assert.sameMembers([...amr], ["pwd", "otp", "hwk"]);
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
   });
 };
@@ -823,7 +974,10 @@ const reuseSuite = (
             assert.strictEqual(revoked.scope, "family");
             assert.isNull(revoked.sessionId);
           }
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     // ESR-002: the supersede is one atomic step, and only a still-live row can
@@ -847,7 +1001,10 @@ const reuseSuite = (
           Effect.exit(sessions.verify(y.token)),
         ]);
         assert.strictEqual(outcomes.filter(Exit.isSuccess).length, 1);
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     // RRS-003 ("published once"): the check, the mark and the family revocation are one atomic
@@ -884,7 +1041,10 @@ const reuseSuite = (
           const tags = yield* Ref.get(seen);
           assert.strictEqual(tags.filter((tag) => tag === "auth.session.reuse").length, 1);
           assert.strictEqual(tags.filter((tag) => tag === "auth.session.revoked").length, 1);
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     // INV-EA-018: an id alone never acts on a session. `supersedes` naming another user's session
@@ -912,7 +1072,10 @@ const reuseSuite = (
           assert.isTrue(yield* sessions.isLive(userId, victim.session.id));
           for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
           assert.strictEqual(yield* Ref.get(superseded), 0);
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect("Sessions.list excludes a tombstoned (superseded) row", () =>
@@ -924,7 +1087,10 @@ const reuseSuite = (
         const listed = yield* sessions.list(userId);
         assert.strictEqual(listed.length, 1);
         assert.isUndefined(listed.find((row) => row.id === a.session.id));
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
   });
 };
@@ -936,7 +1102,9 @@ const eventsSuite = (
   layer: Layer.Layer<Sessions.Sessions | AuthEvents.AuthEvents, unknown, never>,
 ): void => {
   /** Runs `body`, returning every session-lifecycle event published while it ran, in order. */
-  const collecting = <A, E>(body: Effect.Effect<A, E, Sessions.Sessions>) =>
+  const collecting = <A, E>(
+    body: Effect.Effect<A, E, Sessions.Sessions | Api.AuthRequestContext>,
+  ) =>
     Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;
       const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
@@ -977,7 +1145,10 @@ const eventsSuite = (
           assert.strictEqual(event.userId, userId);
           assert.isUndefined(event.actingAs);
         }
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect(
@@ -1001,7 +1172,10 @@ const eventsSuite = (
           if (rotated?._tag === "auth.session.issued") {
             assert.strictEqual(rotated.familyId, a.session.id);
           }
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect("TIR-008: revoke publishes one auth.session.revoked with sessionId and reason", () =>
@@ -1018,7 +1192,10 @@ const eventsSuite = (
             reason: "signOut",
           },
         ]);
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect(
@@ -1047,7 +1224,10 @@ const eventsSuite = (
             assert.strictEqual(superseded.supersededBy, successorId);
             assert.strictEqual(superseded.familyId, a.session.id);
           }
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect(
@@ -1062,7 +1242,10 @@ const eventsSuite = (
             seen.map((event) => event._tag),
             ["auth.session.issued"],
           );
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect(
@@ -1092,7 +1275,10 @@ const eventsSuite = (
             assert.strictEqual(rotated.sessionId, a.session.id);
             assert.strictEqual(rotated.familyId, a.session.id);
           }
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect(
@@ -1126,7 +1312,10 @@ const eventsSuite = (
                 : "other",
             "NotFound",
           );
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect("RRS-008: auth.session.superseded.userId is the superseded row's user", () =>
@@ -1139,7 +1328,10 @@ const eventsSuite = (
         if (event?._tag === "auth.session.superseded") {
           assert.strictEqual(event.userId, userId);
         }
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect("TIR-008: a failed revoke (unknown id) publishes nothing", () =>
@@ -1149,7 +1341,10 @@ const eventsSuite = (
           sessions.revoke(Sessions.SessionId("missing"), "admin").pipe(Effect.ignore),
         );
         assert.deepStrictEqual(seen, []);
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect(
@@ -1179,7 +1374,10 @@ const eventsSuite = (
               ["all", null, "userDeleted"],
             ],
           );
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect(
@@ -1198,7 +1396,10 @@ const eventsSuite = (
             assert.strictEqual(event.sessionId, a.session.id);
             assert.strictEqual(event.kind, "idle");
           }
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
   });
 };
@@ -1271,7 +1472,10 @@ const capSuite = (
               reason: "limitEvicted",
             },
           ]);
-        }).pipe(Effect.provide(cappedLayer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(cappedLayer),
+        ),
     );
 
     it.effect("SMS-003: an actingAs session neither counts toward nor triggers the cap", () =>
@@ -1284,7 +1488,10 @@ const capSuite = (
         // Both ordinary sessions survive: impersonation never evicted them.
         yield* sessions.verify(a.token);
         yield* sessions.verify(b.token);
-      }).pipe(Effect.provide(cappedLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(cappedLayer),
+      ),
     );
 
     it.effect("BEH-EA-047: the default config never evicts", () =>
@@ -1293,7 +1500,10 @@ const capSuite = (
         const issued = [];
         for (let i = 0; i < 5; i++) issued.push(yield* sessions.issue({ userId }));
         assert.strictEqual((yield* sessions.list(userId)).length, 5);
-      }).pipe(Effect.provide(uncappedLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(uncappedLayer),
+      ),
     );
   });
 };
@@ -1331,7 +1541,9 @@ const graceSuite = (
     rotationGrace?: Duration.Duration,
   ) => Layer.Layer<Sessions.Sessions | AuthEvents.AuthEvents, unknown, never>,
 ): void => {
-  const collecting = <A, E>(body: Effect.Effect<A, E, Sessions.Sessions>) =>
+  const collecting = <A, E>(
+    body: Effect.Effect<A, E, Sessions.Sessions | Api.AuthRequestContext>,
+  ) =>
     Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;
       const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
@@ -1382,7 +1594,10 @@ const graceSuite = (
           yield* TestClock.adjust(Duration.minutes(5));
           const { rotated } = yield* sessions.verify(recovered);
           assert.isTrue(Option.isNone(rotated));
-        }).pipe(Effect.provide(layerFor())),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layerFor()),
+        ),
     );
 
     it.effect(
@@ -1402,7 +1617,10 @@ const graceSuite = (
             const { session } = yield* sessions.verify(held);
             assert.strictEqual(session.id, outcome.session.id);
           }
-        }).pipe(Effect.provide(layerFor())),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layerFor()),
+        ),
     );
   });
 };
@@ -1473,7 +1691,14 @@ describe("Sessions infrastructure failures (MA-004)", () => {
           ),
         );
       const id = Sessions.SessionId("some-id");
-      assert.strictEqual(yield* operationOf(sessions.issue({ userId })), "Sessions.issue");
+      assert.strictEqual(
+        yield* operationOf(
+          sessions
+            .issue({ userId })
+            .pipe(Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest)),
+        ),
+        "Sessions.issue",
+      );
       assert.strictEqual(
         yield* operationOf(sessions.verify(Redacted.make("some-id.some-secret"))),
         "Sessions.verify",
@@ -1501,7 +1726,10 @@ describe("Sessions infrastructure failures (MA-004)", () => {
         yield* operationOf(sessions.purgeExpired(DateTime.makeUnsafe(0))),
         "Sessions.purgeExpired",
       );
-    }).pipe(Effect.provide(DownLayer)),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(DownLayer),
+    ),
   );
 });
 
@@ -1548,7 +1776,10 @@ describe("Sessions rotation loser (S-6)", () => {
       const verified = yield* sessions.verify(issued.token);
       assert.strictEqual(verified.session.id, issued.session.id);
       assert.isTrue(Option.isNone(verified.rotated));
-    }).pipe(Effect.provide(layerOver(losing(Option.some)))),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(layerOver(losing(Option.some))),
+    ),
   );
 
   // ESA-006: an expired presentation is announced with its kind wherever it is found, including by a
@@ -1578,6 +1809,7 @@ describe("Sessions rotation loser (S-6)", () => {
         ["idle"],
       );
     }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
       Effect.provide(
         Sessions.layer.pipe(
           Layer.provide(
@@ -1621,7 +1853,10 @@ describe("Sessions.list bound (S-8)", () => {
         const sessions = yield* Sessions.Sessions;
         yield* sessions.issue({ userId });
         yield* sessions.list(userId);
-      }).pipe(Effect.provide(Layer.mergeAll(layer, Logger.layer([logger]))));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(Layer.mergeAll(layer, Logger.layer([logger]))),
+      );
       assert.isTrue(warnings.some((warning) => warning.includes("Sessions.list stopped at")));
     }),
   );
@@ -1676,10 +1911,16 @@ describe("Sessions: an unreadable sealed ipAddress/userAgent", () => {
       return Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
         const userId = Users.UserId("77777777-7777-7777-7777-777777777777");
-        const issued = yield* sessions.issue({
-          userId,
-          request: { ip: "203.0.113.9", userAgent: "Agent/1.0" },
-        });
+        const issued = yield* sessions.issue({ userId }).pipe(
+          Effect.provideService(
+            Api.AuthRequestContext,
+            Api.AuthRequestContext.request({
+              correlationId: "test",
+              ip: "203.0.113.9",
+              userAgent: "Agent/1.0",
+            }),
+          ),
+        );
         // `issue` hands back what it wrote (nothing to open); verify reads the stored row.
         const verified = yield* sessions.verify(issued.token);
         assert.isTrue(Option.isNone(verified.session.ipAddress));
@@ -1690,7 +1931,61 @@ describe("Sessions: an unreadable sealed ipAddress/userAgent", () => {
         assert.isTrue(warnings.length >= 3);
         assert.isTrue(warnings.every((entry) => entry.includes('"table":"sessions"')));
         assert.isFalse(warnings.some((entry) => entry.includes("Agent/1.0")));
-      }).pipe(Effect.provide(Layer.merge(UnreadableLayer, Logger.layer([logger]))));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(Layer.merge(UnreadableLayer, Logger.layer([logger]))),
+      );
     },
+  );
+});
+
+// ADR-EA-047 (plan 26 ticket 09): a session records the facts of the request that minted it, read from
+// `Api.AuthRequestContext`; work that answers no request records none; the user agent is stored capped.
+describe("Sessions.issue and the request context (ADR-EA-047)", () => {
+  const inRequest = (ip: string | undefined, userAgent: string | undefined) =>
+    Effect.provideService(
+      Api.AuthRequestContext,
+      Api.AuthRequestContext.request({ correlationId: "c", ip, userAgent }),
+    );
+
+  it.effect("records the request context's address and user agent", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const issued = yield* sessions.issue({ userId }).pipe(inRequest("203.0.113.7", "Agent/1.0"));
+      assert.deepStrictEqual(issued.session.ipAddress, Option.some("203.0.113.7"));
+      assert.deepStrictEqual(issued.session.userAgent, Option.some("Agent/1.0"));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(MemoryLayer),
+    ),
+  );
+
+  it.effect("NoRequest records no address and no user agent", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const issued = yield* sessions
+        .issue({ userId })
+        .pipe(Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest));
+      assert.isTrue(Option.isNone(issued.session.ipAddress));
+      assert.isTrue(Option.isNone(issued.session.userAgent));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(MemoryLayer),
+    ),
+  );
+
+  it.effect("a 600-character user agent is stored as 512", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Sessions.Sessions;
+      const issued = yield* sessions.issue({ userId }).pipe(inRequest(undefined, "u".repeat(600)));
+      const verified = yield* sessions.verify(issued.token);
+      assert.strictEqual(
+        Option.getOrUndefined(verified.session.userAgent)?.length,
+        Api.MAX_USER_AGENT_LENGTH,
+      );
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(MemoryLayer),
+    ),
   );
 });

@@ -3,6 +3,7 @@
 // They share the World of `SamlSteps.ts` (the real in-memory core, the organization plugin, the SAML records and stores, the Node
 // XML-signature adapter, sealed SP keys over a real `Encryption`) and play the IdP's side of each protocol message themselves.
 import { Api } from "@awthaq/api";
+import { TestAuth } from "@awthaq/test";
 import { AuditLog, Sessions, Tenant, Users } from "@awthaq/core";
 import { Organization, OrganizationActor, OrganizationConnections } from "@awthaq/organization";
 import { MembershipRecords } from "@awthaq/organization/records";
@@ -150,7 +151,6 @@ const redirectInput = (
     samlResponse: kind === "SAMLResponse" ? decodeURIComponent(raw) : undefined,
     relayState: options.relayState,
     cookieState: options.cookieState,
-    ip: undefined,
   };
 };
 
@@ -182,7 +182,6 @@ const postInput = (
     samlResponse: kind === "SAMLResponse" ? encoded : undefined,
     relayState: undefined,
     cookieState: options.cookieState,
-    ip: undefined,
   };
 };
 
@@ -1188,7 +1187,9 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
     "asking where {string} signs in is refused as {string}",
     function* (email: string, tag: string) {
       const exit = yield* inAppExit(
-        Effect.flatMap(Sso.Sso, (sso) => sso.start({ email }, "203.0.113.9")),
+        Effect.flatMap(Sso.Sso, (sso) =>
+          sso.start({ email }).pipe(TestAuth.withRequest({ ip: "203.0.113.9" })),
+        ),
       );
       assert.ok(Exit.isFailure(exit));
       assert.equal(Option.getOrUndefined(Exit.findErrorOption(exit))?._tag, tag);

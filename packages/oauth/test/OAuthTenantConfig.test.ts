@@ -90,14 +90,14 @@ describe("EP-007: per-tenant OAuth.config in one composition", () => {
         "https://a.example.com/dash",
       );
       assert.strictEqual(yield* finishAt("https://a.example.com/dash", "b"), "/b/home");
-    }).pipe(Effect.provide(withTenants())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(withTenants())),
   );
 
   it.effect("with no tenant override the build-time configuration applies, exactly as before", () =>
     Effect.gen(function* () {
       // Nothing trusted, default "/": the same request lands on the build-time default.
       assert.strictEqual(yield* finishAt("https://a.example.com/dash", undefined), "/");
-    }).pipe(Effect.provide(withTenants())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(withTenants())),
   );
 
   it.effect("a build-time trusted origin still works when no tenant is in play", () =>
@@ -106,6 +106,9 @@ describe("EP-007: per-tenant OAuth.config in one composition", () => {
         yield* finishAt("https://built.example.com/x", undefined),
         "https://built.example.com/x",
       );
-    }).pipe(Effect.provide(withTenants({ trustedOrigins: ["https://built.example.com"] }))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(withTenants({ trustedOrigins: ["https://built.example.com"] })),
+    ),
   );
 });

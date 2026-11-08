@@ -5,8 +5,8 @@
 // 200 only when `Authentication` resolved a principal.
 import { Api } from "@awthaq/api";
 import { AuditLog, Auth, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
-import { Authentication, Credentials } from "@awthaq/server";
+import { ClientAddress, SqlTransaction } from "@awthaq/ports";
+import { Authentication, Credentials, RequestContext } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -169,6 +169,9 @@ describe("JWT bearer re-entry (MAPS-001/NAM-001)", () => {
         );
         const withoutRegistry = Jwt.Jwt.layer.pipe(
           Layer.provideMerge(Authentication.AuthenticationLive.pipe(Layer.provide(NoResolver))),
+          Layer.provideMerge(
+            RequestContext.RequestContextLive.pipe(Layer.provide(ClientAddress.layerDirect)),
+          ),
           Layer.provideMerge(KeyRing.KeyRing.layer),
           Layer.provideMerge(SigningKeyRecordsLive),
           Layer.provideMerge(SqlTransaction.layerNoop),

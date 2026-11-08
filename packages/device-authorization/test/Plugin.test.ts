@@ -1,6 +1,7 @@
 // BEH-EA-009 (composition), docs/plugin-authoring.md's checklist, and BEH-EA-304: how the redemption composes
 // with the other sign-in machinery — the real `@awthaq/two-factor` gate (the divert), a `BeforeSignIn` veto, and
 // the plugin contract's own mechanical checks (`TestAuth.runPluginContractTests`).
+import { TestAuth } from "@awthaq/test";
 import { Auth, ConfigDescriptor, HookPoint, Hooks, Sessions, Users } from "@awthaq/core";
 import { Totp, TwoFactor } from "@awthaq/two-factor";
 import { assert, describe, it } from "@effect/vitest";
@@ -49,13 +50,16 @@ const enrolledCaller = (email: string, amr: ReadonlyArray<Sessions.AuthMethod>) 
 const approvedFor = (caller: DeviceAuthorization.Caller) =>
   Effect.gen(function* () {
     const plugin = yield* service;
-    const issued = yield* plugin.requestCode(
-      { clientId: CLI_CLIENT_ID, scope: [], ip: "203.0.113.7" },
-      { verificationBase: "https://app.test/device" },
-    );
-    const source = { userCode: issued.userCode, ip: "198.51.100.20" };
-    yield* plugin.verify(source, Option.some(caller));
-    yield* plugin.approve(source, caller);
+    const issued = yield* plugin
+      .requestCode(
+        { clientId: CLI_CLIENT_ID, scope: [] },
+        { verificationBase: "https://app.test/device" },
+      )
+      .pipe(TestAuth.withRequest({ ip: "203.0.113.7" }));
+    const source = { userCode: issued.userCode };
+    const fromThePage = TestAuth.withRequest({ ip: "198.51.100.20" });
+    yield* plugin.verify(source, Option.some(caller)).pipe(fromThePage);
+    yield* plugin.approve(source, caller).pipe(fromThePage);
     yield* TestClock.adjust(Duration.seconds(5));
     return issued;
   });
@@ -63,11 +67,9 @@ const approvedFor = (caller: DeviceAuthorization.Caller) =>
 const pollOf = (issued: DeviceAuthorization.CodeIssued) =>
   Effect.gen(function* () {
     const plugin = yield* service;
-    return yield* plugin.poll({
-      deviceCode: issued.deviceCode,
-      clientId: CLI_CLIENT_ID,
-      ip: "203.0.113.7",
-    });
+    return yield* plugin
+      .poll({ deviceCode: issued.deviceCode, clientId: CLI_CLIENT_ID })
+      .pipe(TestAuth.withRequest({ ip: "203.0.113.7" }));
   });
 
 const grantOf = (issued: DeviceAuthorization.CodeIssued) =>
@@ -138,7 +140,6 @@ describe("DeviceAuthorization composition", () => {
   it("declares the ports it requires, which the manifest lists", () => {
     const auth = Auth.make([DeviceAuthorization.DeviceAuthorization]);
     assert.deepStrictEqual(auth.manifest.ports.map((port) => port.key).toSorted(), [
-      "awthaq/ports/ClientAddress",
       "awthaq/ports/RateLimiter",
     ]);
   });
@@ -161,7 +162,7 @@ describe("DeviceAuthorization redemption through the sign-in machinery (BEH-EA-3
           2,
           "no third session was minted",
         );
-      }).pipe(Effect.provide(buildLayer({ store: "memory" }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ store: "memory" }))),
   );
 
   it.effect(
@@ -173,7 +174,7 @@ describe("DeviceAuthorization redemption through the sign-in machinery (BEH-EA-3
         const redeemed = yield* pollOf(issued);
         assert.strictEqual(redeemed.session.userId, caller.userId);
         assert.deepStrictEqual(redeemed.session.amr, ["pwd", "otp", "mfa"]);
-      }).pipe(Effect.provide(buildLayer({ store: "memory" }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ store: "memory" }))),
   );
 
   it.effect(
@@ -200,6 +201,7 @@ describe("DeviceAuthorization redemption through the sign-in machinery (BEH-EA-3
         assert.isTrue(Option.isSome(yield* grantOf(issued)));
         assert.strictEqual((yield* sessions.list(user.id)).length, 1);
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayer(
             { store: "memory" },

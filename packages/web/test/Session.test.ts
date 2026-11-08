@@ -12,6 +12,7 @@
 // separately-constructed `ManagedRuntime`) so the expiry test can advance
 // simulated time and have `Sessions.layerMemory`'s own `DateTime.now` reads
 // see it.
+import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import {
   AuditLog,
@@ -118,7 +119,7 @@ describe("makeGetSession: the injected cookie-header resolver (BO-004)", () => {
             identity: { _tag: "Email", email: "bo004@example.com" },
             name: "Neutral",
           });
-          return yield* sessions.issue({ userId: user.id });
+          return yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest);
         }),
       );
       const seen: Array<string | null> = [];
@@ -179,7 +180,9 @@ describe("getSession (BEH-EA-185)", () => {
             identity: { _tag: "Email", email: "getsession@example.com" },
             name: "Getter",
           });
-          const { token } = yield* sessions.issue({ userId: user.id });
+          const { token } = yield* sessions
+            .issue({ userId: user.id })
+            .pipe(TestAuth.withoutRequest);
           return { user, token };
         }),
       );
@@ -207,7 +210,9 @@ describe("getSession (BEH-EA-185)", () => {
             identity: { _tag: "Email", email: "expired@example.com" },
             name: "Expired",
           });
-          const { token } = yield* sessions.issue({ userId: user.id });
+          const { token } = yield* sessions
+            .issue({ userId: user.id })
+            .pipe(TestAuth.withoutRequest);
           return token;
         }),
       );
@@ -229,7 +234,9 @@ describe("getSession (BEH-EA-185)", () => {
             identity: { _tag: "Email", email: "rotate@example.com" },
             name: "Rotator",
           });
-          const { token } = yield* sessions.issue({ userId: user.id });
+          const { token } = yield* sessions
+            .issue({ userId: user.id })
+            .pipe(TestAuth.withoutRequest);
           return token;
         }),
       );
@@ -272,7 +279,9 @@ describe("getSession (BEH-EA-185)", () => {
             identity: { _tag: "Email", email: "apply-rotate@example.com" },
             name: "Applier",
           });
-          const { token } = yield* sessions.issue({ userId: user.id });
+          const { token } = yield* sessions
+            .issue({ userId: user.id })
+            .pipe(TestAuth.withoutRequest);
           return token;
         }),
       );
@@ -345,7 +354,9 @@ describe("getSession (BEH-EA-185)", () => {
               identity: { _tag: "Email", email: "concurrent@example.com" },
               name: "Conc",
             });
-            const { token } = yield* sessions.issue({ userId: user.id });
+            const { token } = yield* sessions
+              .issue({ userId: user.id })
+              .pipe(TestAuth.withoutRequest);
             return token;
           }),
         );
@@ -372,11 +383,13 @@ describe("getSession under SecureDomain (IC-007)", () => {
       return {
         admin,
         target,
-        own: yield* sessions.issue({ userId: admin.id }),
-        impersonation: yield* sessions.issue({
-          userId: target.id,
-          actingAs: { type: "user", id: admin.id },
-        }),
+        own: yield* sessions.issue({ userId: admin.id }).pipe(TestAuth.withoutRequest),
+        impersonation: yield* sessions
+          .issue({
+            userId: target.id,
+            actingAs: { type: "user", id: admin.id },
+          })
+          .pipe(TestAuth.withoutRequest),
       };
     });
 
@@ -440,8 +453,8 @@ describe("getSession rotation rendering (IC-001, BEH-EA-185)", () => {
             name: "Planted",
           });
           return {
-            own: yield* sessions.issue({ userId: user.id }),
-            planted: yield* sessions.issue({ userId: user.id }),
+            own: yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest),
+            planted: yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest),
           };
         }),
       );

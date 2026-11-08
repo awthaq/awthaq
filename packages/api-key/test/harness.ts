@@ -31,10 +31,12 @@ const describePrincipal = Effect.gen(function* () {
  */
 const ProbeMachine = HttpApiGroup.make("probeMachine")
   .add(HttpApiEndpoint.get("whoAmI", "/probe/machine", { success: Schema.String }))
-  .middleware(Api.MachineAuthentication);
+  .middleware(Api.MachineAuthentication)
+  .middleware(Api.RequestContext);
 const ProbeUser = HttpApiGroup.make("probeUser")
   .add(HttpApiEndpoint.get("whoAmI", "/probe/user", { success: Schema.String }))
-  .middleware(Api.Authentication);
+  .middleware(Api.Authentication)
+  .middleware(Api.RequestContext);
 const ProbeApi = HttpApi.make("auth").add(ProbeMachine).add(ProbeUser);
 
 const built = Auth.make([Jwt.Jwt, ApiKey.ApiKey], { extraGroups: [ProbeMachine, ProbeUser] });
@@ -54,6 +56,8 @@ export interface HarnessOptions {
   readonly suite?: string;
   readonly config?: Partial<ApiKey.ApiKeyConfigShape>;
   readonly rateLimiter?: "permissive" | "enforcing";
+  /** ADR-EA-047: the address every request resolves to. */
+  readonly clientAddress?: string;
   /** A `SecureRandom` wrapped for the plugin (a domain race test holds a call where it mints). */
   readonly random?: Layer.Layer<SecureRandom.SecureRandom, never, SecureRandom.SecureRandom>;
 }
@@ -61,6 +65,7 @@ export interface HarnessOptions {
 export const buildLayer = (options: HarnessOptions) => {
   const common = {
     rateLimiter: options.rateLimiter ?? "permissive",
+    ...(options.clientAddress === undefined ? {} : { clientAddress: options.clientAddress }),
     services: Layer.mergeAll(
       ProbeHandlers,
       ApiKey.config(options.config ?? {}),
@@ -102,7 +107,7 @@ export const makeApp = (options: HarnessOptions) => {
           identity: { _tag: "Email", email: `${label}@example.com` },
           name: label,
         });
-        const issued = yield* sessions.issue({ userId: user.id });
+        const issued = yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest);
         return yield* TestAuth.sessionSetCookie(issued);
       }),
     );
@@ -118,6 +123,7 @@ export const orphanOwner = (userId: Users.UserId) =>
   Erasure.AccountErasure.use((erasure) =>
     erasure.eraseAccount(userId, Erasure.ErasureInitiator.Self()),
   ).pipe(
+    TestAuth.withoutRequest,
     Effect.provide(
       Erasure.layer.pipe(
         // `Layer.fresh`: the composition's own registry (holding api-key's contribution) is memoized

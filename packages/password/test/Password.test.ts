@@ -156,7 +156,7 @@ describe("Password", () => {
         const sent = yield* mailer.sent;
         assert.strictEqual(sent.length, 1);
         assert.strictEqual(sent[0]?.template, "verify-email");
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("BEH-EA-120: signUp rejects a too-short password with WeakPassword", () =>
@@ -166,7 +166,7 @@ describe("Password", () => {
         .signUp({ email, password: Redacted.make("short") })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "WeakPassword");
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("signUp rejects a duplicate email with EmailAlreadyExists", () =>
@@ -175,7 +175,7 @@ describe("Password", () => {
       yield* password.signUp({ email, password: strongPassword });
       const failure = yield* password.signUp({ email, password: strongPassword }).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "EmailAlreadyExists");
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -208,7 +208,7 @@ describe("Password", () => {
           Redacted.value(Option.getOrThrow(hashBefore)),
           Redacted.value(Option.getOrThrow(hashAfter)),
         );
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   // BEH-EA-115/REQ-EA-312 (a compile-time property, so the BDD scenario is @skip'd in favour of
@@ -245,6 +245,7 @@ describe("Password", () => {
           const previous = yield* PasswordHasher.PasswordHasher;
           return yield* previous.hash(strongPassword);
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(hasherAt({ AUTH_ARGON2_MEMORY_KIB: "1024", AUTH_ARGON2_ITERATIONS: "1" })),
         );
         assert.isTrue(current.needsRehash(outdated), "the planted hash must be below the floor");
@@ -259,7 +260,7 @@ describe("Password", () => {
         assert.match(stored, /^\$argon2id\$v=19\$m=19456,t=2,p=1\$/);
         assert.isFalse(current.needsRehash(stored));
         assert.isTrue(yield* current.verify(strongPassword, stored));
-      }).pipe(Effect.provide(TestLayerProductionHasher)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayerProductionHasher)),
   );
 
   it.effect(
@@ -281,7 +282,7 @@ describe("Password", () => {
         const stronger = yield* Effect.gen(function* () {
           const previous = yield* PasswordHasher.PasswordHasher;
           return yield* previous.hash(strongPassword);
-        }).pipe(Effect.provide(hasherAt({ AUTH_ARGON2_ITERATIONS: "3" })));
+        }).pipe(TestAuth.withoutRequest, Effect.provide(hasherAt({ AUTH_ARGON2_ITERATIONS: "3" })));
         assert.isFalse(current.needsRehash(stronger), "a stronger hash is above the floor");
         yield* accounts.updateCredentialHash(account.id, Redacted.make(stronger));
 
@@ -291,7 +292,7 @@ describe("Password", () => {
           Option.getOrThrow(yield* accounts.findCredentialHash(account.id)),
         );
         assert.strictEqual(stored, stronger, "signIn must never downgrade a stronger stored hash");
-      }).pipe(Effect.provide(TestLayerProductionHasher)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayerProductionHasher)),
   );
 
   // THS-003: how the session was authenticated.
@@ -313,48 +314,7 @@ describe("Password", () => {
         newPassword: Redacted.make("another strong passphrase"),
       });
       assert.deepStrictEqual(changed.session.amr, ["pwd"]);
-    }).pipe(Effect.provide(TestLayer)),
-  );
-
-  // CSD-003: request context recorded on every session-minting path.
-  it.effect(
-    "CSD-003: signUp, signIn and changePassword record ip and userAgent on the session",
-    () =>
-      Effect.gen(function* () {
-        const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
-        const sessions = yield* Sessions.Sessions;
-        const context = { ip: "203.0.113.7", userAgent: "Agent/1.0" };
-
-        const signedUp = yield* signUpAndVerify(password, mailer, {
-          email,
-          password: strongPassword,
-          ...context,
-        });
-        assert.deepStrictEqual(signedUp.session.ipAddress, Option.some(context.ip));
-        assert.deepStrictEqual(signedUp.session.userAgent, Option.some(context.userAgent));
-
-        const signedIn = yield* password.signIn({
-          email,
-          password: strongPassword,
-          ip: "198.51.100.9",
-          userAgent: "Agent/2.0",
-        });
-        const verified = yield* sessions.verify(signedIn.token);
-        assert.deepStrictEqual(verified.session.ipAddress, Option.some("198.51.100.9"));
-        assert.deepStrictEqual(verified.session.userAgent, Option.some("Agent/2.0"));
-
-        const changed = yield* password.changePassword({
-          userId: signedUp.session.userId,
-          currentSessionId: signedIn.session.id,
-          currentPassword: strongPassword,
-          newPassword: Redacted.make("a different strong passphrase"),
-          ip: "192.0.2.1",
-          userAgent: "Agent/3.0",
-        });
-        assert.deepStrictEqual(changed.session.ipAddress, Option.some("192.0.2.1"));
-        assert.deepStrictEqual(changed.session.userAgent, Option.some("Agent/3.0"));
-      }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -389,7 +349,7 @@ describe("Password", () => {
           .signIn({ email: "oauth@example.com", password: strongPassword })
           .pipe(Effect.flip);
         assert.strictEqual(noCredential._tag, "InvalidCredentials");
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -403,7 +363,7 @@ describe("Password", () => {
           .signIn({ email, password: strongPassword })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "EmailNotVerified");
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -450,7 +410,7 @@ describe("Password", () => {
         yield* users.setStatus(user.id, "active");
         const restored = yield* password.signIn({ email, password: strongPassword });
         assert.strictEqual(restored.session.userId, user.id);
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -466,7 +426,7 @@ describe("Password", () => {
           .signIn({ email, password: Redacted.make("totally wrong password") })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "InvalidCredentials");
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -500,7 +460,7 @@ describe("Password", () => {
           assert.notProperty(event, "userId");
           assert.notProperty(event, "email");
         }
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -530,7 +490,7 @@ describe("Password", () => {
         if (event?._tag === "auth.user.signInFailed") {
           assert.strictEqual(event.reason, "emailNotVerified");
         }
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -579,12 +539,15 @@ describe("Password", () => {
         assert.isFalse(values.some((value) => value.includes(email)));
         assert.isFalse(values.some((value) => value.includes("correct horse battery staple")));
         assert.isFalse(values.some((value) => value.includes("totally wrong password")));
-      }).pipe(Effect.provide(TracerLive.pipe(Layer.provideMerge(TestLayer))));
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(TracerLive.pipe(Layer.provideMerge(TestLayer))),
+      );
     },
   );
 
   it.effect(
-    "CSD-004: the failure event carries the source ip and a keyed identifierDigest — stable per identifier (existing account or not), distinct across identifiers, never the identifier itself",
+    "CSD-004: the failure event carries a keyed identifierDigest (the source ip is core's, SignIn.failed) — stable per identifier (existing account or not), distinct across identifiers, never the identifier itself",
     () =>
       Effect.gen(function* () {
         const password = yield* Password.Password;
@@ -592,7 +555,7 @@ describe("Password", () => {
         yield* password.signUp({ email, password: strongPassword });
         const wrong = Redacted.make("totally wrong password");
         const attempt = (who: string) =>
-          password.signIn({ email: who, password: wrong, ip: "203.0.113.7" }).pipe(Effect.flip);
+          password.signIn({ email: who, password: wrong }).pipe(Effect.flip);
         yield* attempt(email); // an existing account
         yield* attempt(email.toUpperCase()); // the same identifier, differently cased
         yield* attempt("nobody@example.com"); // no such account
@@ -604,7 +567,6 @@ describe("Password", () => {
         );
         assert.strictEqual(failures.length, 4);
         for (const failure of failures) {
-          assert.strictEqual(failure.clientIp, "203.0.113.7");
           assert.isString(failure.identifierDigest);
           assert.notProperty(failure, "userId");
           assert.notProperty(failure, "email");
@@ -614,7 +576,7 @@ describe("Password", () => {
         assert.strictEqual(digests.size, 2);
         assert.isFalse(JSON.stringify(failures).includes("nobody"));
         assert.isFalse(JSON.stringify(failures).includes(email));
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -649,7 +611,7 @@ describe("Password", () => {
           row?.payload._tag === "auth.password.resetRequested" ? row.payload.userId : "",
           issued.session.userId,
         );
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -688,7 +650,7 @@ describe("Password", () => {
           assert.strictEqual(fromSignIn.sessionId, signedIn.session.id);
           assert.strictEqual(fromSignIn.userId, signedIn.session.userId);
         }
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -700,7 +662,7 @@ describe("Password", () => {
         yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
         const issued = yield* password.signIn({ email, password: strongPassword });
         assert.isDefined(issued.token);
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -739,7 +701,7 @@ describe("Password", () => {
           afterVerified.filter((mail) => mail.template === "verify-email").length,
           2,
         );
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("BEH-EA-064/117: requestReset always succeeds; only a known email is mailed", () =>
@@ -758,7 +720,7 @@ describe("Password", () => {
       yield* letForkedFibersRun;
       const afterKnown = yield* mailer.sent;
       assert.strictEqual(afterKnown.filter((m) => m.template === "reset-password").length, 1);
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -773,7 +735,7 @@ describe("Password", () => {
         // Completing proves the dispatch is genuinely forked, not just
         // that a mail eventually lands in some store.
         yield* password.requestReset({ email });
-      }).pipe(Effect.provide(TestLayerHangingMailer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayerHangingMailer)),
   );
 
   it.effect(
@@ -783,7 +745,7 @@ describe("Password", () => {
         const password = yield* Password.Password;
         yield* password.signUp({ email, password: strongPassword });
         yield* password.resendVerification({ email });
-      }).pipe(Effect.provide(TestLayerHangingMailer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayerHangingMailer)),
   );
 
   it.effect(
@@ -826,7 +788,7 @@ describe("Password", () => {
           .signIn({ email, password: strongPassword })
           .pipe(Effect.flip);
         assert.strictEqual(oldPasswordFails._tag, "InvalidCredentials");
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -875,7 +837,7 @@ describe("Password", () => {
           assert.strictEqual(revoked.userId, issued.session.userId);
           assert.strictEqual(revoked.reason, "passwordReset");
         }
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -896,6 +858,7 @@ describe("Password", () => {
         const failure = yield* password.signUp({ email, password: breached }).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "WeakPassword");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           makeTestLayer({ httpClient: BreachedHttpClient, config: { breachCheck: true } }),
         ),
@@ -909,6 +872,7 @@ describe("Password", () => {
       const issued = yield* password.signUp({ email, password: strongPassword });
       assert.isDefined(issued.token);
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         makeTestLayer({ httpClient: UnavailableHttpClient, config: { breachCheck: true } }),
       ),
@@ -921,6 +885,7 @@ describe("Password", () => {
       const failure = yield* password.signUp({ email, password: strongPassword }).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "WeakPassword");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         makeTestLayer({
           httpClient: UnavailableHttpClient,
@@ -943,6 +908,7 @@ describe("Password", () => {
       const issued = yield* password.signUp({ email, password: strongPassword });
       assert.isDefined(issued.token);
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         makeTestLayer({
           httpClient: httpClientReturningStatus(429),
@@ -958,6 +924,7 @@ describe("Password", () => {
       const failure = yield* password.signUp({ email, password: strongPassword }).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "WeakPassword");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         makeTestLayer({
           httpClient: httpClientReturningStatus(503),
@@ -1010,7 +977,7 @@ describe("Password", () => {
           password: Redacted.make("a whole new strong password"),
         });
         assert.strictEqual(newWorks.session.userId, userId);
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -1038,7 +1005,7 @@ describe("Password", () => {
 
         const rotatedIsValid = yield* sessions.verify(rotated.token);
         assert.strictEqual(rotatedIsValid.session.id, rotated.session.id);
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -1095,7 +1062,7 @@ describe("Password", () => {
           assert.strictEqual(sessionIssued.sessionId, rotated.session.id);
           assert.strictEqual(sessionIssued.userId, userId);
         }
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("shipping-gaps/11: changePassword rejects a weak new password", () =>
@@ -1112,7 +1079,7 @@ describe("Password", () => {
         })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "WeakPassword");
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -1144,7 +1111,7 @@ describe("Password", () => {
           DateTime.toEpochMillis(verified.session.authenticatedAt),
           DateTime.toEpochMillis(issued.session.authenticatedAt),
         );
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("ticket 15 (AAPS-001): reauthenticate rejects a wrong current password", () =>
@@ -1160,7 +1127,7 @@ describe("Password", () => {
         })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "WrongPassword");
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -1181,7 +1148,7 @@ describe("Password", () => {
           })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "Unauthenticated");
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -1216,6 +1183,7 @@ describe("Password", () => {
         assert.isFalse(JSON.stringify(breaches[0]?.payload).includes(email));
         assert.strictEqual(JSON.stringify(breaches[0]?.payload).includes('"rule":"signIn"'), true);
       }).pipe(
+        TestAuth.withoutRequest,
         // A real, enforcing limiter for this one test — every other test
         // in this file uses `RateLimiter.layerPermissive` via `TestLayer`'s
         // own `PortsLive`, deliberately, so this is the one place that
@@ -1244,35 +1212,27 @@ describe("Password", () => {
         // exhausted.
         for (let i = 0; i < 30; i++) {
           const attempt = yield* password
-            .signIn({
-              email: `spray-${i}@example.com`,
-              password: Redacted.make("wrong password"),
-              ip: "203.0.113.9",
-            })
+            .signIn({ email: `spray-${i}@example.com`, password: Redacted.make("wrong password") })
+            .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }))
             .pipe(Effect.flip);
           assert.strictEqual(attempt._tag, "InvalidCredentials");
         }
 
         const throttled = yield* password
-          .signIn({
-            email: "spray-30@example.com",
-            password: Redacted.make("wrong password"),
-            ip: "203.0.113.9",
-          })
+          .signIn({ email: "spray-30@example.com", password: Redacted.make("wrong password") })
+          .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }))
           .pipe(Effect.flip);
         assert.strictEqual(throttled._tag, "RateLimited");
 
         // A different source IP, same never-seen email pattern, is
         // untouched by the first IP's exhausted budget.
         const otherIp = yield* password
-          .signIn({
-            email: "spray-31@example.com",
-            password: Redacted.make("wrong password"),
-            ip: "198.51.100.4",
-          })
+          .signIn({ email: "spray-31@example.com", password: Redacted.make("wrong password") })
+          .pipe(TestAuth.withRequest({ ip: "198.51.100.4" }))
           .pipe(Effect.flip);
         assert.strictEqual(otherIp._tag, "InvalidCredentials");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           makeTestLayer({
             limiter: RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
@@ -1292,21 +1252,24 @@ describe("Password", () => {
         // the same IP, then prove the 31st is throttled even though its
         // own email has never been requested before.
         for (let i = 0; i < 30; i++) {
-          yield* password.requestReset({
-            email: `reset-spray-${i}@example.com`,
-            ip: "203.0.113.9",
-          });
+          yield* password
+            .requestReset({ email: `reset-spray-${i}@example.com` })
+            .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }));
         }
         const throttled = yield* password
-          .requestReset({ email: "reset-spray-30@example.com", ip: "203.0.113.9" })
+          .requestReset({ email: "reset-spray-30@example.com" })
+          .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }))
           .pipe(Effect.flip);
         assert.strictEqual(throttled._tag, "RateLimited");
 
         // A different source IP is untouched by the first IP's exhausted
         // budget — `requestReset` always succeeds (`void`), so nothing to
         // flip here.
-        yield* password.requestReset({ email: "reset-spray-31@example.com", ip: "198.51.100.4" });
+        yield* password
+          .requestReset({ email: "reset-spray-31@example.com" })
+          .pipe(TestAuth.withRequest({ ip: "198.51.100.4" }));
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           makeTestLayer({
             limiter: RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
@@ -1346,6 +1309,7 @@ describe("Password", () => {
         .pipe(Effect.flip);
       assert.strictEqual(throttled._tag, "RateLimited");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         makeTestLayer({
           limiter: RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
@@ -1371,11 +1335,9 @@ describe("Password", () => {
           // (20 per hour) is otherwise tripped by this test's own 31
           // sign-ups sharing a single key, before ever reaching the
           // `verifyEmail`-under-test throttling below.
-          yield* password.signUp({
-            email: `verify-spray-${i}@example.com`,
-            password: strongPassword,
-            ip: `198.51.100.${100 + i}`,
-          });
+          yield* password
+            .signUp({ email: `verify-spray-${i}@example.com`, password: strongPassword })
+            .pipe(TestAuth.withRequest({ ip: `198.51.100.${100 + i}` }));
         }
         yield* letForkedFibersRun;
         const sent = yield* mailer.sent;
@@ -1389,19 +1351,15 @@ describe("Password", () => {
 
         for (let i = 0; i < 30; i++) {
           const attempt = yield* password
-            .verifyEmail({
-              token: Redacted.make(`${identifiers[i]}.wrong-secret`),
-              ip: "203.0.113.9",
-            })
+            .verifyEmail({ token: Redacted.make(`${identifiers[i]}.wrong-secret`) })
+            .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }))
             .pipe(Effect.flip);
           assert.strictEqual(attempt._tag, "TokenConsumed");
         }
 
         const throttled = yield* password
-          .verifyEmail({
-            token: Redacted.make(`${identifiers[30]}.wrong-secret`),
-            ip: "203.0.113.9",
-          })
+          .verifyEmail({ token: Redacted.make(`${identifiers[30]}.wrong-secret`) })
+          .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }))
           .pipe(Effect.flip);
         assert.strictEqual(throttled._tag, "RateLimited");
 
@@ -1409,13 +1367,12 @@ describe("Password", () => {
         // (still bogus) token, is untouched by the first IP's exhausted
         // budget.
         const untouched = yield* password
-          .verifyEmail({
-            token: Redacted.make(`${identifiers[30]}.wrong-secret-2`),
-            ip: "198.51.100.4",
-          })
+          .verifyEmail({ token: Redacted.make(`${identifiers[30]}.wrong-secret-2`) })
+          .pipe(TestAuth.withRequest({ ip: "198.51.100.4" }))
           .pipe(Effect.flip);
         assert.strictEqual(untouched._tag, "TokenConsumed");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           makeTestLayer({
             limiter: RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
@@ -1449,8 +1406,8 @@ describe("Password", () => {
             .confirmReset({
               token: Redacted.make(`reset-password:forged-public-id-${i}.wrong`),
               password: strongPassword,
-              ip: "203.0.113.9",
             })
+            .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }))
             .pipe(Effect.flip);
           assert.strictEqual(attempt._tag, "TokenConsumed");
         }
@@ -1458,8 +1415,8 @@ describe("Password", () => {
           .confirmReset({
             token: Redacted.make("reset-password:forged-public-id-30.wrong"),
             password: strongPassword,
-            ip: "203.0.113.9",
           })
+          .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }))
           .pipe(Effect.flip);
         assert.strictEqual(throttled._tag, "RateLimited");
         assert.isAtMost(breachRequests, 30);
@@ -1469,11 +1426,12 @@ describe("Password", () => {
           .confirmReset({
             token: Redacted.make("reset-password:forged-public-id-31.wrong"),
             password: strongPassword,
-            ip: "198.51.100.4",
           })
+          .pipe(TestAuth.withRequest({ ip: "198.51.100.4" }))
           .pipe(Effect.flip);
         assert.strictEqual(untouched._tag, "TokenConsumed");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           makeTestLayer({
             httpClient: CountingHttpClient,
@@ -1516,6 +1474,7 @@ describe("Password", () => {
           .pipe(Effect.flip);
         assert.strictEqual(throttled._tag, "RateLimited");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           makeTestLayer({
             limiter: RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
@@ -1554,7 +1513,10 @@ describe("Password signIn timing floor (TSS-006)", () => {
       yield* TestClock.adjust(Duration.millis(60));
       const failure = yield* Fiber.join(fiber);
       assert.strictEqual(failure._tag, "InvalidCredentials");
-    }).pipe(Effect.provide(layerWith({ signInTimingFloor: Duration.millis(100) }))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(layerWith({ signInTimingFloor: Duration.millis(100) })),
+    ),
   );
 
   it.effect("signInTimingFloor: off restores the unpadded behaviour", () =>
@@ -1564,7 +1526,7 @@ describe("Password signIn timing floor (TSS-006)", () => {
         .signIn({ email: "nobody@example.com", password: strongPassword })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "InvalidCredentials");
-    }).pipe(Effect.provide(layerWith({ signInTimingFloor: "off" }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(layerWith({ signInTimingFloor: "off" }))),
   );
 });
 
@@ -1598,7 +1560,10 @@ describe("Password sign-in wiring (ADR-EA-038)", () => {
           ["wiring@example.com", "password"],
         ],
       );
-    }).pipe(Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(TestLayer)))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(TestLayer))),
+    ),
   );
 
   it.effect(
@@ -1624,7 +1589,10 @@ describe("Password sign-in wiring (ADR-EA-038)", () => {
           ),
           ["emailNotVerified"],
         );
-      }).pipe(Effect.provide(makeTestLayer({ config: { requireVerifiedEmail: true } }))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(makeTestLayer({ config: { requireVerifiedEmail: true } })),
+      ),
   );
 
   it.effect(
@@ -1642,7 +1610,8 @@ describe("Password sign-in wiring (ADR-EA-038)", () => {
         yield* users.verifyEmail(signedUp.session.userId);
         gone.value = true;
         const refused = yield* password
-          .signIn({ email: "erased@example.com", password: strongPassword, ip: "203.0.113.7" })
+          .signIn({ email: "erased@example.com", password: strongPassword })
+          .pipe(TestAuth.withRequest({ ip: "203.0.113.7" }))
           .pipe(Effect.flip);
         assert.strictEqual(refused._tag, "InvalidCredentials");
         const failures = yield* auditLog.list({ eventTag: "auth.user.signInFailed" });
@@ -1653,6 +1622,7 @@ describe("Password sign-in wiring (ADR-EA-038)", () => {
           ["invalidCredentials"],
         );
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           makeTestLayer({
             coreOverride: Layer.effect(

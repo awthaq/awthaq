@@ -199,7 +199,10 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
               const user = yield* users
                 .create({ identity: { _tag: "Email", email: `${name}@example.com` }, name })
                 .pipe(Effect.orDie);
-              return { userId: user.id, issued: yield* sessions.issue({ userId: user.id }) };
+              return {
+                userId: user.id,
+                issued: yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest),
+              };
             }),
           );
           const token = Redacted.value(issued.issued.token);
@@ -671,7 +674,7 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
             const signedUp = yield* passwords.signUp({ email, password });
             yield* users.verifyEmail(signedUp.session.userId);
             return signedUp;
-          }),
+          }).pipe(TestAuth.withoutRequest),
         ),
       );
       // The user's browser: it signs in over HTTP and keeps the session (and its CSRF cookie), then

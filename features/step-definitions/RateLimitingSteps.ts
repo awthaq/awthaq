@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
@@ -629,8 +630,8 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.equal(call, "consume");
       const [strategy] = yield* getTexts("strategy");
       const ORIGIN = "203.0.113.7";
-      // The handler resolves the principal (`CurrentPrincipal`) and the origin (`ClientAddress`) and
-      // passes them in; the built-in strategies key on exactly those fields.
+      // The handler passes the principal (`CurrentPrincipal`); the origin is the request context's address
+      // (ADR-EA-047), which the `ip` strategy reads itself: the request below carries it.
       const spec = {
         group: "invite",
         endpoint: "create",
@@ -644,7 +645,17 @@ export const rateLimitingSteps = defineSteps<World>(({ Given, When, Then }) => {
         Effect.succeed(
           strategy === "principal"
             ? RateLimits.bucketKey(principalRule, { userId: user })
-            : RateLimits.bucketKey(ipRule, { ip: ORIGIN }),
+            : Option.getOrElse(
+                ipRule.keyOf(
+                  ipRule.bucket,
+                  {},
+                  {
+                    email: RateLimits.Key.emailKey,
+                    request: Api.AuthRequestContext.request({ correlationId: user, ip: ORIGIN }),
+                  },
+                ),
+                () => "none",
+              ),
         );
       yield* setTexts("derived", [yield* derive(name), yield* derive("someone-else")]);
     },

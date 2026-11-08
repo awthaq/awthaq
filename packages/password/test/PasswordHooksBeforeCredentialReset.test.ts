@@ -3,6 +3,7 @@
 // before the credential is rewritten and the sessions revoked — so mailbox possession alone
 // cannot downgrade an account a second factor protects. `@awthaq/two-factor`'s
 // `credentialResetGate` is the real tap; here a stand-in tap pins the seam itself.
+import { TestAuth } from "@awthaq/test";
 import { HookPoint, Hooks } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
@@ -69,7 +70,7 @@ describe("Password.confirmReset x BeforeCredentialReset (ARF-005)", () => {
         password: newPassword,
       });
       assert.isDefined(signedIn.token);
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -91,7 +92,7 @@ describe("Password.confirmReset x BeforeCredentialReset (ARF-005)", () => {
           password: oldPassword,
         });
         assert.isDefined(stillOld.token);
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("a wrong code surfaces as the typed HookAborted naming the point", () =>
@@ -105,7 +106,7 @@ describe("Password.confirmReset x BeforeCredentialReset (ARF-005)", () => {
       if (failure._tag !== "HookAborted") return assert.fail(failure._tag);
       assert.strictEqual(failure.point, "auth.credential.beforeReset");
       assert.strictEqual(failure.code, "SECOND_FACTOR_INVALID");
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("a valid code carries the reset through, and the tap saw it", () =>
@@ -125,6 +126,6 @@ describe("Password.confirmReset x BeforeCredentialReset (ARF-005)", () => {
       });
       assert.isDefined(signedIn.token);
       assert.deepStrictEqual(yield* Ref.get(seen), [{ userId, code: "123456" }]);
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 });

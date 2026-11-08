@@ -21,6 +21,7 @@
 // A plugin resolves this once inside its `make` (`SignIn.make`), like `MailDispatch.make`: its
 // requirements are already in every sign-in plugin's `RIn`, so no host wires a new layer.
 
+import type { Api } from "@awthaq/api";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -32,7 +33,7 @@ import { SignInContinuationRegistry } from "./SignInContinuationRegistry.ts";
 import type { ContinuationContext } from "./SignInContinuationRegistry.ts";
 import type * as Users from "./Users.ts";
 
-export type { Attempt, Clearance, IssuedSession, SessionRequest } from "./internal/signInSteps.ts";
+export type { Attempt, Clearance, Failure, IssuedSession } from "./internal/signInSteps.ts";
 export { UserGone } from "./internal/signInSteps.ts";
 // The registry class and the three hook points `make` requires ride this namespace so a plugin whose
 // inferred layer type mentions them can name them through the `SignIn` import it already has (TS2883).
@@ -47,9 +48,16 @@ export type ClearError =
   | StoreUnavailable;
 export type ResumeError = Steps.UserGone | Users.UserSuspended | StoreUnavailable;
 
+/**
+ * ADR-EA-047: every operation names `Api.AuthRequestContext` in its requirements: the session records the request's
+ * address and user agent, and `signInFailed` (a refused suspended user included) carries its address. A flow behind
+ * an awthaq group gets it from the group's `RequestContext` middleware; in-process work provides `noRequest`.
+ */
 export interface SignInShape {
   /** Lookup, gate (+ `signInFailed{suspended}`), `BeforeSignIn`, `BeforeSessionIssue` (with this `amr` and the handoff). */
-  readonly clear: (attempt: Steps.Attempt) => Effect.Effect<Steps.Clearance, ClearError>;
+  readonly clear: (
+    attempt: Steps.Attempt,
+  ) => Effect.Effect<Steps.Clearance, ClearError, Api.AuthRequestContext>;
   /**
    * For the plugin that resolved a divert (two-factor) with the handoff the divert carried:
    * re-runs the gate only, because `BeforeSignIn` and `BeforeSessionIssue` already ran for this
@@ -57,26 +65,35 @@ export interface SignInShape {
    */
   readonly resume: (
     attempt: Steps.Attempt & { readonly handoff?: Hooks.Handoff | undefined },
-  ) => Effect.Effect<Steps.Clearance, ResumeError>;
+  ) => Effect.Effect<Steps.Clearance, ResumeError, Api.AuthRequestContext>;
   /** Mints under the clearance's tenant, runs its continuation, publishes `auth.user.signedIn`, runs `AfterSignIn`. */
   readonly issue: (
     clearance: Steps.Clearance,
-    request?: Steps.SessionRequest,
-  ) => Effect.Effect<Steps.IssuedSession, StoreUnavailable>;
+  ) => Effect.Effect<Steps.IssuedSession, StoreUnavailable, Api.AuthRequestContext>;
   /** `clear` then `issue`: every flow with nothing to do between the two. */
   readonly complete: (
     attempt: Steps.Attempt,
-    request?: Steps.SessionRequest,
-  ) => Effect.Effect<Steps.IssuedSession, ClearError>;
+  ) => Effect.Effect<Steps.IssuedSession, ClearError, Api.AuthRequestContext>;
+  /**
+   * ALF-003/CSD-004: the one publisher of `auth.user.signInFailed` (ADR-EA-047). `clientIp` is the request's address,
+   * read from `Api.AuthRequestContext`; a plugin passes only the strategy, the reason and an optional digest.
+   */
+  readonly failed: (failure: Steps.Failure) => Effect.Effect<void, never, Api.AuthRequestContext>;
 }
 
 /** Resolves the core services once, at plugin build; the returned closures carry no further requirements. */
 export const make = Effect.map(Steps.makeSteps, (steps) => {
-  const issue: SignInShape["issue"] = (cleared, request) =>
-    Effect.flatMap(steps.mint(cleared, request), (issued) => steps.announce(cleared, issued));
-  const complete: SignInShape["complete"] = (attempt, request) =>
-    Effect.flatMap(steps.clear(attempt), (cleared) => issue(cleared, request));
-  return { clear: steps.clear, resume: steps.resume, issue, complete } satisfies SignInShape;
+  const issue: SignInShape["issue"] = (cleared) =>
+    Effect.flatMap(steps.mint(cleared), (issued) => steps.announce(cleared, issued));
+  const complete: SignInShape["complete"] = (attempt) =>
+    Effect.flatMap(steps.clear(attempt), (cleared) => issue(cleared));
+  return {
+    clear: steps.clear,
+    resume: steps.resume,
+    issue,
+    complete,
+    failed: steps.failed,
+  } satisfies SignInShape;
 });
 
 /**

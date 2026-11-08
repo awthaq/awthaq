@@ -3,6 +3,7 @@
 // caller): a connection cannot mint `owner` unless the deployment allowed it and the connection's ceiling holds it, a member who
 // out-privileges the connection is never reshaped by it, the last owner is never demoted, and a mapping that cannot be applied
 // never locks the user out.
+import { TestAuth } from "@awthaq/test";
 import { AuditLog, Users } from "@awthaq/core";
 import { Organization, OrganizationHooks } from "@awthaq/organization";
 import { MembershipRecords } from "@awthaq/organization/records";
@@ -148,7 +149,7 @@ describe("validating a mapping when a connection is written", () => {
           yield* refusal(mapping([], ["member"], ["admin"])),
           "more than the connection's role ceiling",
         );
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect("owner is refused unless the deployment allowed it, whatever the ceiling says", () =>
@@ -162,7 +163,7 @@ describe("validating a mapping when a connection is written", () => {
       );
       assert.include(yield* refusal(mapping([], ["owner"])), "may not confer owner");
       assert.include(yield* refusal(mapping([], ["member"], ["owner"])), "may not confer owner");
-    }).pipe(Effect.provide(SamlLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -202,7 +203,7 @@ describe("validating a mapping when a connection is written", () => {
           escalation._tag === "InvalidSamlConnection" ? escalation.reason : "",
           "more than the connection's role ceiling",
         );
-      }).pipe(Effect.provide(SamlLive({ allowOwnerRoleMapping: true }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive({ allowOwnerRoleMapping: true }))),
   );
 
   it.effect("unknown roles, an empty ceiling, blank rules and too many rules are refused", () =>
@@ -231,7 +232,7 @@ describe("validating a mapping when a connection is written", () => {
         ),
         "at most 50",
       );
-    }).pipe(Effect.provide(SamlLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 });
 
@@ -299,7 +300,7 @@ describe("a sign-in through a connection with a role mapping", () => {
           yield* rolesOf(admin.session.session.userId, organizationId),
           Option.some(["member"]),
         );
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect("a connection with no mapping changes no membership at all", () =>
@@ -316,7 +317,7 @@ describe("a sign-in through a connection with a role mapping", () => {
         yield* rolesOf(outcome.session.session.userId, organizationId),
         Option.none(),
       );
-    }).pipe(Effect.provide(SamlLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -367,7 +368,7 @@ describe("a sign-in through a connection with a role mapping", () => {
           members.countOwners(organizationId),
         );
         assert.strictEqual(memberships, 1, "only the founder is an owner");
-      }).pipe(Effect.provide(SamlLive({ allowOwnerRoleMapping: true }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive({ allowOwnerRoleMapping: true }))),
   );
 
   it.effect(
@@ -415,7 +416,7 @@ describe("a sign-in through a connection with a role mapping", () => {
         );
         assert.deepStrictEqual(yield* rolesOf(founder.id, organizationId), Option.some(["owner"]));
         assert.strictEqual(yield* members.countOwners(organizationId), 1);
-      }).pipe(Effect.provide(SamlLive({ allowOwnerRoleMapping: true }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive({ allowOwnerRoleMapping: true }))),
   );
 
   it.effect("an applied mapping fires AfterAddMember with an IdentityProvider actor", () => {
@@ -437,6 +438,7 @@ describe("a sign-in through a connection with a role mapping", () => {
       assert.deepStrictEqual(seen.slice(1), [`IdentityProvider:${connection.id}`]);
       assert.strictEqual(seen[0]?.startsWith("User:"), true);
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         SamlLive(
           {},
@@ -477,7 +479,7 @@ describe("a sign-in through a connection with a role mapping", () => {
         yield* rolesOf(outcome.session.session.userId, organizationId),
         Option.none(),
       );
-    }).pipe(Effect.provide(SamlLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -503,6 +505,6 @@ describe("a sign-in through a connection with a role mapping", () => {
         );
         assert.isDefined(ada);
         assert.deepStrictEqual(ada?.tenantId, Option.some(organizationId));
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 });

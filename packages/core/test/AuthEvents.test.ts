@@ -17,7 +17,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
-import * as AuthRequestContext from "../src/AuthRequestContext.ts";
+import { Api } from "@awthaq/api";
 import * as Observability from "../src/Observability.ts";
 import * as Tenant from "../src/Tenant.ts";
 import * as Users from "../src/Users.ts";
@@ -422,11 +422,14 @@ describe("AuthEvents", () => {
               { startImmediately: true },
             );
             yield* events.publish({ _tag: "auth.user.created", userId }).pipe(
-              Effect.provideService(AuthRequestContext.AuthRequestContext, {
-                correlationId: Option.some("req-1"),
-                ip: Option.some("203.0.113.9"),
-                userAgent: Option.some("vitest"),
-              }),
+              Effect.provideService(
+                Api.AuthRequestContext,
+                Api.AuthRequestContext.request({
+                  correlationId: "req-1",
+                  ip: "203.0.113.9",
+                  userAgent: "vitest",
+                }),
+              ),
             );
             yield* events.publish({ _tag: "auth.token.replay", identifier: "outside-a-request" });
             const delivered = yield* Fiber.join(collected);
@@ -437,6 +440,50 @@ describe("AuthEvents", () => {
             assert.deepStrictEqual(rows[0]?.correlationId, Option.some("req-1"));
             assert.deepStrictEqual(rows[0]?.ip, Option.some("203.0.113.9"));
             assert.deepStrictEqual(rows[0]?.userAgent, Option.some("vitest"));
+          }),
+        );
+      }).pipe(Effect.provide(AuthEventsLive)),
+  );
+
+  it.effect(
+    "ADR-EA-047: a 600-character user agent is stored as 512 on the audit row and the bus event; NoRequest stamps nothing",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* AuthEvents.AuthEvents;
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const stream = yield* events.subscribe;
+            const collected = yield* Effect.forkChild(
+              stream.pipe(Stream.take(2), Stream.runCollect),
+              { startImmediately: true },
+            );
+            yield* events.publish({ _tag: "auth.user.created", userId }).pipe(
+              Effect.provideService(
+                Api.AuthRequestContext,
+                Api.AuthRequestContext.request({
+                  correlationId: "c",
+                  userAgent: "u".repeat(600),
+                }),
+              ),
+            );
+            yield* events
+              .publish({ _tag: "auth.token.replay", identifier: "from-a-job" })
+              .pipe(
+                Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+              );
+            const delivered = yield* Fiber.join(collected);
+            assert.strictEqual(
+              Option.getOrUndefined(delivered[0]?.userAgent ?? Option.none())?.length,
+              512,
+            );
+            assert.deepStrictEqual(delivered[1]?.correlationId, Option.none());
+            assert.deepStrictEqual(delivered[1]?.userAgent, Option.none());
+            const rows = yield* auditLog.list({ eventTag: "auth.user.created" });
+            assert.strictEqual(
+              Option.getOrUndefined(rows[0]?.userAgent ?? Option.none())?.length,
+              512,
+            );
           }),
         );
       }).pipe(Effect.provide(AuthEventsLive)),

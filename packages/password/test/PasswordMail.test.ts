@@ -1,5 +1,6 @@
 // verification-token-delivery + mail-delivery-reliability: MLO-009, ARF-009,
 // EOTS-010, EEM-002, ERS-002 as seen from the password plugin.
+import { TestAuth } from "@awthaq/test";
 import { AuthEvents, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
@@ -27,7 +28,7 @@ describe("MLO-009/EOTS-010: mail data", () => {
       const token = mail?.data?.["token"];
       assert.isTrue(Redacted.isRedacted(token));
       assert.notInclude(String(token), tokenOf(mail));
-    }).pipe(Effect.provide(makeTestLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 
   it.effect("mail data carries expiresAt, and a url only when a link builder is configured", () =>
@@ -47,6 +48,7 @@ describe("MLO-009/EOTS-010: mail data", () => {
       assert.strictEqual(reset?.data?.["url"], `https://app.example/reset#${tokenOf(reset)}`);
       assert.strictEqual(verify?.data?.["url"], undefined);
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         makeTestLayer({
           config: { links: { resetPassword: (token) => `https://app.example/reset#${token}` } },
@@ -71,7 +73,7 @@ describe("ARF-009: opaque token identifiers", () => {
         // UUIDv7 puts a millisecond timestamp in its first 48 bits.
         assert.notInclude(tokenOf(mail), userId.slice(0, 8));
       }
-    }).pipe(Effect.provide(makeTestLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 });
 
@@ -122,7 +124,10 @@ describe("EEM-002/ERS-002: delivery failure policy", () => {
         // signUp's verification mail hit the first failure; both mails land once retried.
         assert.strictEqual(sent.filter((m) => m.template === "reset-password").length, 1);
         assert.strictEqual(sent.filter((m) => m.template === "verify-email").length, 1);
-      }).pipe(Effect.provide(makeTestLayer({ mailer: flakyMailer(1, true) }))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(makeTestLayer({ mailer: flakyMailer(1, true) })),
+      ),
   );
 
   it.effect(
@@ -145,6 +150,9 @@ describe("EEM-002/ERS-002: delivery failure policy", () => {
         const serialized = JSON.stringify(collected);
         assert.include(serialized, "verify-email");
         assert.notInclude(serialized, email);
-      }).pipe(Effect.provide(makeTestLayer({ mailer: flakyMailer(100, false) }))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(makeTestLayer({ mailer: flakyMailer(100, false) })),
+      ),
   );
 });

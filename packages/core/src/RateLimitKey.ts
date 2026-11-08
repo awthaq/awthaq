@@ -10,6 +10,7 @@
 // a computed field name would need a cast to type the struct. Call sites already build these small
 // inputs at the handler edge, where the IP and the principal are resolved.
 
+import { Api } from "@awthaq/api";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Phone from "./Phone.ts";
@@ -17,13 +18,18 @@ import * as Phone from "./Phone.ts";
 /** What a breach is attributed to (`auth.rateLimit.exceeded.dimension`). */
 export type Dimension = "identity" | "ip" | "principal" | "custom";
 
-/** Per-budget settings a key may read; today only the email normaliser (`PasswordConfig.rateLimitEmailKey`). */
+/** What a key may read beyond its input: the budget's email normaliser and the call's request context. */
 export interface KeyContext {
   readonly email: (address: string) => string;
+  /** What the budget read from `Api.AuthRequestContext` for this call (`noRequest` when there was none). ADR-EA-047. */
+  readonly request: Api.RequestFacts | Api.NoRequest;
 }
 
-/** A bucket-key strategy over input `I`: a printable name, a dimension, a guard, and the key part. */
-export interface Key<I> {
+/**
+ * A bucket-key strategy over input `I`: a printable name, a dimension, a guard, and the key part. `R` is the per-call
+ * service the key reads (`Api.AuthRequestContext` for `ip`, ADR-EA-047; `never` for every other strategy).
+ */
+export interface Key<I, R = never> {
   readonly strategy:
     | "ip"
     | "email"
@@ -36,7 +42,12 @@ export interface Key<I> {
   readonly dimension: Dimension;
   /** `Schema.is` of the strategy's own input struct: narrows `unknown`, never a cast. */
   readonly accepts: (input: unknown) => input is I;
-  readonly part: (input: I, context: KeyContext) => string;
+  /** `None`: the rule does not apply to this call (only `ip`, under `NoRequest`). */
+  readonly part: (input: I, context: KeyContext) => Option.Option<string>;
+  /** Whether the budget must read the request context for this key (`ip` only). */
+  readonly readsRequest: boolean;
+  /** Phantom: the per-call service the key reads. Never assigned (the `"~input"` precedent in `RateLimitModel`). */
+  readonly "~requires"?: R;
 }
 
 const make = <S extends Schema.Constraint>(spec: {
@@ -49,7 +60,8 @@ const make = <S extends Schema.Constraint>(spec: {
     strategy: spec.strategy,
     dimension: spec.dimension,
     accepts: Schema.is(spec.input),
-    part: spec.part,
+    part: (input, context) => Option.some(spec.part(input, context)),
+    readsRequest: false,
   };
   return key;
 };
@@ -69,13 +81,31 @@ export const emailKey = (address: string) => {
   return `${plus > 0 ? local.slice(0, plus) : local}${lowered.slice(at)}`;
 };
 
-/** The source address the handler resolved through `ClientAddress`; unresolvable falls into one shared `unknown` bucket. */
-export const ip = make({
+/**
+ * What an `ip` rule takes: nothing. `ip?: never` (not `{}`, which disables the excess-property check) makes
+ * `spend("xByIp", { ip })` a compile error.
+ */
+export interface NoInput {
+  readonly ip?: never;
+}
+const isNoInput = (input: unknown): input is NoInput =>
+  typeof input === "object" && input !== null && !("ip" in input && input.ip !== undefined);
+
+/**
+ * The request's own address, read from `Api.AuthRequestContext` (ADR-EA-047). No input field: the address is not the
+ * caller's to supply. An unresolvable address falls into one shared `unknown` bucket; work that answers no request
+ * (`noRequest`) is not throttled per source (the rule does not apply; the identity and principal rules still do).
+ */
+export const ip: Key<NoInput, Api.AuthRequestContext> = {
   strategy: "ip",
   dimension: "ip",
-  input: Schema.Struct({ ip: Schema.optional(Schema.String) }),
-  part: (input) => `ip:${input.ip ?? "unknown"}`,
-});
+  accepts: isNoInput,
+  part: (_input, context) =>
+    Api.isRequest(context.request)
+      ? Option.some(`ip:${Option.getOrElse(context.request.ip, () => "unknown")}`)
+      : Option.none(),
+  readsRequest: true,
+};
 
 /** A target address (mail-bombing, enumeration). Normalised by the budget's `KeyContext.email`. */
 export const email = make({

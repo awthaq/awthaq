@@ -3,6 +3,7 @@
 // cannot tell "no password set" from "wrong password" by timing (TSS-006), and both answer
 // WrongPassword. These paths hold the uniform-cost fallbacks (`onNone` account lookup and the
 // `dummyHash` default) that no other test reaches.
+import { TestAuth } from "@awthaq/test";
 import { Accounts, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -37,7 +38,7 @@ describe("password-gated endpoints for a user with no password credential", () =
         })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "WrongPassword");
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("reauthenticate answers WrongPassword", () =>
@@ -52,6 +53,6 @@ describe("password-gated endpoints for a user with no password credential", () =
         })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "WrongPassword");
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 });

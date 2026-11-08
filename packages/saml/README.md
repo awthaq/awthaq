@@ -17,7 +17,7 @@ Saml.Saml.layer.pipe(
   Layer.provideMerge(SamlMetadataFetcher.layerPinned), // IdP metadata by URL, through the pinned SSRF-safe fetch
   Layer.provideMerge(SamlRecords.layerSql), // or layerMemory; run the plugin's migrations
   Layer.provideMerge(XmlSignatureNode.layer), // the XmlSignature port over xml-crypto
-  /* + Organization and its records, Users/Accounts/Sessions/Verification, RateLimiter, ClientAddress, Crypto,
+  /* + Organization and its records, Users/Accounts/Sessions/Verification, RateLimiter, Crypto,
        Encryption, HostResolver, the admin-tier and user authentication */
 );
 

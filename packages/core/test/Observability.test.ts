@@ -1,6 +1,7 @@
 // MW-001 (.issues/high), wayfinder ticket 27: business-logic spans, the field
 // vocabulary and the metric taxonomy — asserted against a recording tracer, with the
 // invariant that no span attribute ever carries a secret (BEH-EA-199).
+import { Api } from "@awthaq/api";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -65,7 +66,10 @@ describe("Observability (ticket 27)", () => {
         // The issue span exists too, with the same id.
         const [issued] = tracer.named(Observability.Span.sessionIssue);
         assert.strictEqual(issued?.attributes.get(Observability.Field.sessionId), session.id);
-      }).pipe(Effect.provide(Live.pipe(Layer.provideMerge(tracer.layer))));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(Live.pipe(Layer.provideMerge(tracer.layer))),
+      );
     },
   );
 
@@ -82,7 +86,10 @@ describe("Observability (ticket 27)", () => {
         yield* sessions.verify(Redacted.make(`${session.id}.wrong-secret`)).pipe(Effect.ignore);
         yield* sessions.verify(Redacted.make("not-even-shaped-like-a-token")).pipe(Effect.ignore);
         assert.strictEqual((yield* Metric.value(counter)).count - before, 2);
-      }).pipe(Effect.provide(Live));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(Live),
+      );
     },
   );
 
@@ -94,7 +101,10 @@ describe("Observability (ticket 27)", () => {
       yield* sessions.verify(Redacted.make(`${hostile}.secret`)).pipe(Effect.ignore);
       const [span] = tracer.named(Observability.Span.sessionVerify);
       assert.isFalse(span?.attributes.has(Observability.Field.sessionId) ?? true);
-    }).pipe(Effect.provide(Live.pipe(Layer.provideMerge(tracer.layer))));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(Live.pipe(Layer.provideMerge(tracer.layer))),
+    );
   });
 
   it.effect(
@@ -105,7 +115,10 @@ describe("Observability (ticket 27)", () => {
         const before = (yield* Metric.value(Observability.sessionsIssued)).count;
         yield* sessions.issue({ userId });
         assert.strictEqual((yield* Metric.value(Observability.sessionsIssued)).count - before, 1);
-      }).pipe(Effect.provide(Live)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(Live),
+      ),
   );
 
   it.effect(
@@ -128,6 +141,7 @@ describe("Observability (ticket 27)", () => {
         );
         assert.strictEqual((yield* Metric.value(failures)).count - before, 1);
       }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
         Effect.provide(
           AuthEvents.layer.pipe(
             Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
@@ -149,6 +163,9 @@ describe("Observability (ticket 27)", () => {
         span?.attributes.get(Observability.Field.hook),
         "awthaq/hook/auth.test.thing",
       );
-    }).pipe(Effect.provide(AfterThing.layer.pipe(Layer.provideMerge(tracer.layer))));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(AfterThing.layer.pipe(Layer.provideMerge(tracer.layer))),
+    );
   });
 });

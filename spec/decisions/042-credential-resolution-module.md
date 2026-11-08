@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-042 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-10-18 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-18): Initial release (architecture plan 11) |
+> | Change History | 1.0 (2026-10-18): Initial release (architecture plan 11) <br> 1.1 (2026-11-08): Related: ADR-EA-047, request facts are read from `AuthRequestContext` (architecture plan 26) |
 
 ---
 
@@ -57,3 +57,5 @@ It was written four times: `Authentication.ts` (the user and machine tiers and, 
 ## Related
 
 [BEH-EA-065](../behaviors/09-authentication-middleware.md) to [BEH-EA-072](../behaviors/09-authentication-middleware.md), [BEH-EA-153](../behaviors/20-qadi-bridge-path-b.md#beh-ea-153-subjectextractor-runs-session-resolution-on-the-raw-request), [BEH-EA-185](../behaviors/24-nextjs-ssr.md#beh-ea-185-getsession-verifies-the-cookie-against-the-database), [BEH-EA-055](../behaviors/07-sessions.md), [ADR-EA-028](028-infrastructure-error-policy.md) (the outage record), [ADR-EA-015](015-qadi-bridge-path-selection.md) (both bridges resolve the same identity), [ADR-EA-012](012-slots-exclusive-registries-aggregate.md) (the registry).
+
+[ADR-EA-047](047-request-facts-from-auth-request-context.md): `Credentials.httpScope(request, context)` hands a claim the request context the authentication middleware requires; Path B reads it optionally and captures it on a bare route.

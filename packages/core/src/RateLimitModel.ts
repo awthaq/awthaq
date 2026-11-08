@@ -15,7 +15,7 @@ import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
 import type * as Effect from "effect/Effect";
-import type * as Option from "effect/Option";
+import * as Option from "effect/Option";
 import type * as HookPoint from "./HookPoint.ts";
 import type * as Key from "./RateLimitKey.ts";
 
@@ -30,11 +30,16 @@ export interface Sizing {
   readonly escalation?: RateLimiter.Escalation | undefined;
 }
 
-export interface Rule<Group extends string = string, I = unknown, M extends Mode = Mode> {
+export interface Rule<
+  Group extends string = string,
+  I = unknown,
+  M extends Mode = Mode,
+  R = never,
+> {
   readonly group: Group;
   /** One of `group`'s endpoints, or `"*"` for a group-wide rule (the event then reports the endpoint `spend` names). */
   readonly endpoint: string;
-  readonly strategy: Key.Key<I>["strategy"];
+  readonly strategy: Key.Key<I, R>["strategy"];
   readonly dimension: Key.Dimension;
   readonly mode: M;
   /** The declared default. */
@@ -42,21 +47,32 @@ export interface Rule<Group extends string = string, I = unknown, M extends Mode
   /** A bucket shared by several rules (or used outside a budget): must start with one of the owner's groups + ".". */
   readonly bucket: string | undefined;
   readonly order: number;
-  /** Erased derivation: `ratelimit:<bucket>:<part>`, or `ratelimit:<bucket>:invalid` for input of the wrong shape. */
-  readonly keyOf: (bucket: string, input: unknown, context: Key.KeyContext) => string;
+  /**
+   * Erased derivation: `ratelimit:<bucket>:<part>`, or `ratelimit:<bucket>:invalid` for input of the wrong shape;
+   * `None` when the rule does not apply to this call (an `ip` rule under `NoRequest`, ADR-EA-047).
+   */
+  readonly keyOf: (
+    bucket: string,
+    input: unknown,
+    context: Key.KeyContext,
+  ) => Option.Option<string>;
+  /** Whether the budget reads the request context for this rule (its key is `ip`). */
+  readonly readsRequest: boolean;
   /** Phantom: the input type `spend` demands. Never assigned (the `"~userFields"` precedent in `AuthPlugin.Class`). */
   readonly "~input"?: I;
+  /** Phantom: the per-call service the rule's key reads (`Api.AuthRequestContext` for `ip`). Never assigned. */
+  readonly "~requires"?: R;
 }
 
 /** A plugin's rule table; the key of each entry IS the rule's name (`rule` in the event and the metric). */
 export type Table<Group extends string = string> = {
-  readonly [name: string]: Rule<Group, unknown, Mode>;
+  readonly [name: string]: Rule<Group, unknown, Mode, unknown>;
 };
 
-export interface RuleSpec<Group extends string, I> {
+export interface RuleSpec<Group extends string, I, R = never> {
   readonly group: Group;
   readonly endpoint: string;
-  readonly key: Key.Key<I>;
+  readonly key: Key.Key<I, R>;
   readonly limit: number;
   readonly window: Duration.Input;
   readonly escalation?: RateLimiter.Escalation;
@@ -64,8 +80,11 @@ export interface RuleSpec<Group extends string, I> {
   readonly order?: number;
 }
 
-const build = <Group extends string, I, M extends Mode>(spec: RuleSpec<Group, I>, mode: M) => {
-  const made: Rule<Group, I, M> = {
+const build = <Group extends string, I, M extends Mode, R>(
+  spec: RuleSpec<Group, I, R>,
+  mode: M,
+) => {
+  const made: Rule<Group, I, M, R> = {
     group: spec.group,
     endpoint: spec.endpoint,
     strategy: spec.key.strategy,
@@ -75,7 +94,10 @@ const build = <Group extends string, I, M extends Mode>(spec: RuleSpec<Group, I>
     bucket: spec.bucket,
     order: spec.order ?? 0,
     keyOf: (bucket, input, context) =>
-      `ratelimit:${bucket}:${spec.key.accepts(input) ? spec.key.part(input, context) : "invalid"}`,
+      spec.key.accepts(input)
+        ? Option.map(spec.key.part(input, context), (part) => `ratelimit:${bucket}:${part}`)
+        : Option.some(`ratelimit:${bucket}:invalid`),
+    readsRequest: spec.key.readsRequest,
   };
   return made;
 };
@@ -89,24 +111,24 @@ const build = <Group extends string, I, M extends Mode>(spec: RuleSpec<Group, I>
  * so `RateLimits.bucketKey`, which has no table name to derive a default from, accepts only a rule
  * that names one.
  */
-export function rule<const Group extends string, I>(
-  spec: RuleSpec<Group, I> & { readonly bucket?: undefined },
-): Rule<Group, I, "attempts"> & { readonly bucket: undefined };
-export function rule<const Group extends string, I, const Bucket extends string>(
-  spec: RuleSpec<Group, I> & { readonly bucket: Bucket },
-): Rule<Group, I, "attempts"> & { readonly bucket: Bucket };
-export function rule<const Group extends string, I>(spec: RuleSpec<Group, I>) {
+export function rule<const Group extends string, I, R = never>(
+  spec: RuleSpec<Group, I, R> & { readonly bucket?: undefined },
+): Rule<Group, I, "attempts", R> & { readonly bucket: undefined };
+export function rule<const Group extends string, I, const Bucket extends string, R = never>(
+  spec: RuleSpec<Group, I, R> & { readonly bucket: Bucket },
+): Rule<Group, I, "attempts", R> & { readonly bucket: Bucket };
+export function rule<const Group extends string, I, R>(spec: RuleSpec<Group, I, R>) {
   return build(spec, "attempts");
 }
 
 /** A failure budget (BCR-006): `guard` before evaluating, `charge` on a failure. */
-export function failureRule<const Group extends string, I>(
-  spec: RuleSpec<Group, I> & { readonly bucket?: undefined },
-): Rule<Group, I, "failures"> & { readonly bucket: undefined };
-export function failureRule<const Group extends string, I, const Bucket extends string>(
-  spec: RuleSpec<Group, I> & { readonly bucket: Bucket },
-): Rule<Group, I, "failures"> & { readonly bucket: Bucket };
-export function failureRule<const Group extends string, I>(spec: RuleSpec<Group, I>) {
+export function failureRule<const Group extends string, I, R = never>(
+  spec: RuleSpec<Group, I, R> & { readonly bucket?: undefined },
+): Rule<Group, I, "failures", R> & { readonly bucket: undefined };
+export function failureRule<const Group extends string, I, const Bucket extends string, R = never>(
+  spec: RuleSpec<Group, I, R> & { readonly bucket: Bucket },
+): Rule<Group, I, "failures", R> & { readonly bucket: Bucket };
+export function failureRule<const Group extends string, I, R>(spec: RuleSpec<Group, I, R>) {
   return build(spec, "failures");
 }
 
@@ -128,7 +150,7 @@ export interface RateLimitDeclaration<Group extends string = string> {
   readonly name: string;
   readonly dimension: Key.Dimension;
   /** The key strategy (`"ip"`, `"email"`, ...), printed by `plugin list --rules`. */
-  readonly key: Key.Key<unknown>["strategy"];
+  readonly key: Key.Key<unknown, unknown>["strategy"];
   readonly mode: Mode;
   readonly limit: number;
   readonly window: Duration.Input;
@@ -166,7 +188,7 @@ export interface Owner<Limits = Table> extends HookPoint.TapOwner {
 export type InputOf<R> = R extends { readonly "~input"?: infer I } ? I : never;
 
 export type NamesOf<Limits, M extends Mode> = {
-  [N in keyof Limits]: Limits[N] extends Rule<string, unknown, M> ? N : never;
+  [N in keyof Limits]: Limits[N] extends Rule<string, unknown, M, unknown> ? N : never;
 }[keyof Limits] &
   string;
 
@@ -182,6 +204,21 @@ type UnionToIntersection<U> = (U extends unknown ? (u: U) => void : never) exten
 export type InputsOf<Limits, N> = UnionToIntersection<
   Picked<N> extends infer K ? (K extends keyof Limits ? InputOf<Limits[K]> : never) : never
 >;
+
+/** ADR-EA-047: the per-call services the named rules' keys read (`Api.AuthRequestContext` for an `ip` rule). */
+export type RequiresOf<Limits, N> =
+  Picked<N> extends infer K
+    ? K extends keyof Limits
+      ? Limits[K] extends { readonly "~requires"?: infer R }
+        ? R
+        : never
+      : never
+    : never;
+
+/** `input` may be left out only when every named rule's key reads nothing from it (an `ip` rule's `{}`). */
+type InputArgs<I> = {} extends I
+  ? [input?: I, options?: SpendOptions]
+  : [input: I, options?: SpendOptions];
 
 export type Tuning<Limits> = { readonly [N in keyof Limits]?: Partial<Sizing> };
 
@@ -202,35 +239,33 @@ export interface Budget<Limits> {
     const N extends NamesOf<Limits, "attempts"> | ReadonlyArray<NamesOf<Limits, "attempts">>,
   >(
     names: N,
-    input: InputsOf<Limits, N>,
-    options?: SpendOptions,
-  ) => Effect.Effect<void, Api.RateLimited>;
+    ...rest: InputArgs<InputsOf<Limits, N>>
+  ) => Effect.Effect<void, Api.RateLimited, RequiresOf<Limits, N>>;
   /** The read half of a failure budget: refuses once spent, never counts (`RateLimiter.check`). */
   readonly guard: <N extends NamesOf<Limits, "failures">>(
     name: N,
-    input: InputOf<Limits[N]>,
-    options?: SpendOptions,
-  ) => Effect.Effect<void, Api.RateLimited>;
+    ...rest: InputArgs<InputOf<Limits[N]>>
+  ) => Effect.Effect<void, Api.RateLimited, RequiresOf<Limits, N>>;
   /** Charges one failure; a race past the limit is ignored (the next `guard` refuses). */
   readonly charge: <N extends NamesOf<Limits, "failures">>(
     name: N,
-    input: InputOf<Limits[N]>,
-  ) => Effect.Effect<void>;
+    input?: InputOf<Limits[N]>,
+  ) => Effect.Effect<void, never, RequiresOf<Limits, N>>;
 }
 
 /** The runtime shape. Assignable to `Budget<Limits>` because its parameters are wider. */
 export interface ErasedBudget {
   readonly spend: (
     names: string | ReadonlyArray<string>,
-    input: unknown,
+    input?: unknown,
     options?: SpendOptions,
   ) => Effect.Effect<void, Api.RateLimited>;
   readonly guard: (
     name: string,
-    input: unknown,
+    input?: unknown,
     options?: SpendOptions,
   ) => Effect.Effect<void, Api.RateLimited>;
-  readonly charge: (name: string, input: unknown) => Effect.Effect<void>;
+  readonly charge: (name: string, input?: unknown) => Effect.Effect<void>;
 }
 
 export interface BudgetOptions<Limits> {
@@ -268,7 +303,7 @@ export interface RegisteredRule {
 /** One rule of a table, resolved: the tuned sizing in force at open and the bucket it counts in. */
 export interface Registration {
   readonly name: string;
-  readonly rule: Rule;
+  readonly rule: Rule<string, unknown, Mode, unknown>;
   readonly bucket: string;
   readonly sizing: Sizing;
 }

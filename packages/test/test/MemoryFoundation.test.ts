@@ -1,6 +1,7 @@
 // ELC-004: `TestAuth.memoryFoundation` is the one-line way to satisfy every memory layer's shared
 // requirements (the crypto services, `AuthEvents`, `AuditLog`, the hook registries), instead of each suite
 // repeating `Layer.provideMerge(NodeCrypto.layer)` and its three neighbours.
+import { Api } from "@awthaq/api";
 import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -27,6 +28,7 @@ describe("TestAuth.memoryFoundation (ELC-004)", () => {
         yield* Hooks.BeforeUserDelete;
         yield* SecureRandom.SecureRandom;
       }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
         Effect.provide(
           Layer.mergeAll(
             Users.layer.pipe(Layer.provide(Persistence.memory)),

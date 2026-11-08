@@ -22,7 +22,6 @@
 
 import { Api, SessionContract, type SessionLifecycle } from "@awthaq/api";
 import {
-  AuthEvents,
   AuthPlugin,
   HookPoint,
   Hooks,
@@ -34,7 +33,7 @@ import {
   VerificationLink,
 } from "@awthaq/core";
 import type { Errors } from "@awthaq/core";
-import { ClientAddress, Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -44,7 +43,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Channel from "./Channel.ts";
 import * as MagicLinkApi from "./MagicLinkApi.ts";
@@ -145,20 +143,19 @@ export interface MagicLinkShape {
   /** BEH-EA-268: always resolves (or is rate limited) — never says whether an account exists. */
   readonly requestLink: (input: {
     readonly email: string;
-    readonly ip?: string | undefined;
-  }) => Effect.Effect<void, Api.RateLimited>;
-  /** BEH-EA-269: the only way to consume a link. */
-  readonly verify: (
-    input: { readonly token: Redacted.Redacted<string>; readonly ip?: string | undefined },
-    context?: { readonly userAgent?: string | undefined },
-  ) => Effect.Effect<
+  }) => Effect.Effect<void, Api.RateLimited, Api.AuthRequestContext>;
+  /** BEH-EA-269: the only way to consume a link. The session records the request's facts (ADR-EA-047). */
+  readonly verify: (input: {
+    readonly token: Redacted.Redacted<string>;
+  }) => Effect.Effect<
     Sessions.IssuedSession,
     | MagicLinkApi.MagicLinkConsumed
     | Api.RateLimited
     | HookPoint.HookAborted
     | Hooks.TwoFactorRequired
     | Users.UserSuspended
-    | Errors.StoreUnavailable
+    | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
 }
 
@@ -167,31 +164,14 @@ export const MagicLinkHandlers = HttpApiBuilder.group(
   "magicLink",
   Effect.fnUntraced(function* (handlers) {
     const magicLink = yield* MagicLink;
-    const clientAddress = yield* ClientAddress.ClientAddress;
+    // ADR-EA-047: the group's request context carries the address and the user agent.
     return handlers.handleAll({
-      request: Effect.fnUntraced(function* ({
-        payload,
-        request,
-      }: {
-        payload: MagicLinkApi.RequestPayload;
-        request: HttpServerRequest.HttpServerRequest;
-      }) {
-        const { ip } = yield* ClientAddress.address(clientAddress, request);
-        yield* magicLink.requestLink({ email: payload.email, ip });
-      }),
-      verify: Effect.fnUntraced(function* ({
-        payload,
-        request,
-      }: {
-        payload: MagicLinkApi.VerifyPayload;
-        request: HttpServerRequest.HttpServerRequest;
-      }) {
+      request: ({ payload }: { payload: MagicLinkApi.RequestPayload }) =>
+        magicLink.requestLink({ email: payload.email }),
+      verify: Effect.fnUntraced(function* ({ payload }: { payload: MagicLinkApi.VerifyPayload }) {
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          Effect.gen(function* () {
-            const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
-            return yield* magicLink.verify({ token: payload.token, ip }, context);
-          }),
+          magicLink.verify({ token: payload.token }),
         );
         return response;
       }),
@@ -208,17 +188,11 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
   tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(MagicLink, {
-    ports: [
-      ClientAddress.ClientAddress,
-      Mailer.Mailer,
-      RateLimiter.RateLimiter,
-      SqlTransaction.SqlTransaction,
-    ],
+    ports: [Mailer.Mailer, RateLimiter.RateLimiter, SqlTransaction.SqlTransaction],
     handlers: MagicLinkHandlers,
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
       const verification = yield* Verification.Verification;
-      const events = yield* AuthEvents.AuthEvents;
       const mailer = yield* Mailer.Mailer;
       const random = yield* SecureRandom.SecureRandom;
       const settings = yield* MagicLinkConfig;
@@ -237,7 +211,7 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
       const links = VerificationLink.redeemer(MagicLinkPurpose, {
         verification,
         budget: {
-          source: (ip) => limits.spend("verifyByIp", { ip }),
+          source: limits.spend("verifyByIp"),
           // Keyed on the token's public id (never its secret half): a flood of guesses at one link.
           token: (publicId) => limits.spend("verifyByToken", { identifier: publicId }),
         },
@@ -283,14 +257,9 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
         );
       });
 
-      const verify: MagicLinkShape["verify"] = Effect.fnUntraced(function* (input, context) {
+      const verify: MagicLinkShape["verify"] = Effect.fnUntraced(function* (input) {
         const refused = Effect.gen(function* () {
-          yield* events.publish({
-            _tag: "auth.user.signInFailed",
-            strategy: "magicLink",
-            reason: "invalidCredentials",
-            ...(input.ip === undefined ? {} : { clientIp: input.ip }),
-          });
+          yield* channel.failed("magicLink");
           return yield* Effect.fail(new MagicLinkApi.MagicLinkConsumed());
         });
         // ADR-EA-039: the link is redeemed, not merely consumed. The whole completion runs in the
@@ -307,8 +276,6 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
               email: Option.some(payload.email),
               userId,
               allowSignUp: settings.allowSignUp,
-              ip: input.ip,
-              userAgent: context?.userAgent,
             }),
           { onFailure: Verification.commitUnlessUnavailable },
         ).pipe(

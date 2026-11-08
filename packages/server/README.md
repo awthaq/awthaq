@@ -23,7 +23,7 @@ The server delivers a rotated bearer token in the `set-auth-token` response head
 | the host middleware the groups declare (`AuthHttp.middlewareFor`) and the resolver | `taps`: your hook taps, built over the composition's own points |
 | `auth.userFieldsLayer` | `decorate`: wrap a composition-owned service in place (metrics, a fault) |
 | SQL: core's migrations then `auth.migrations`, with the ledger-drift refusal | ports, left in `RIn`: `PasswordHasher`, `Mailer`, `RateLimiter`, `ClientAddress`, `Encryption`, `SecureRandom`/`Digest`/`Mac`, `HttpClient`, ... |
-| `RequestContext.layer` and `BodyLimit.layer` (dials `requestContext`, `bodyLimit`, both default `true`) | platform, left in `RIn`: `HttpRouter`, `HttpPlatform`, `Etag.Generator`, `FileSystem`, `Path` (`HttpServer.layerServices` + `HttpRouter.layer`, or `HttpRouter.serve`/`toWebHandler`) |
+| the request context's populator (`Api.RequestContext`, among the derived middleware) and `BodyLimit.layer` (dial `bodyLimit`, default `true`) | platform, left in `RIn`: `HttpRouter`, `HttpPlatform`, `Etag.Generator`, `FileSystem`, `Path` (`HttpServer.layerServices` + `HttpRouter.layer`, or `HttpRouter.serve`/`toWebHandler`) |
 
 ```ts
 const auth = Auth.make([Password.Password, Organization.Organization])
@@ -47,11 +47,13 @@ const App = AuthHost.layer(auth, {
 
 **`services` versus `decorate`.** A `services` layer sits closest to the plugins and is merged into the output, so `yield*` returns the instance the plugins used. For a key the composition also provides, the plugins see yours but the output holds the composition's; `decorate` (built over the composition's service, shadowing it above) replaces one for everyone. `bodyLimit: false` (or `BodyLimit.config({ maxBytes })` in `services`) when a route of yours on the same router takes larger bodies.
 
-## Request context (`RequestContext.layer`)
+## Request context (ADR-EA-047)
 
-`AuthHost.layer` installs `RequestContext.layer` by default (`requestContext: false` opts out). For a hand-wired composition it is an **opt-in** global `HttpRouter` middleware: merge it beside `AuthHttp.routes(...)`. It fills core's `AuthRequestContext` once per request with a correlation id (a sane `x-request-id`, else the `traceparent` trace id, else a fresh uuidv7), the client address (what the `ClientAddress` port resolves) and the user agent. Without it a session minted over HTTP records no address or user agent (the device list in `GET /session` is empty) and events carry no correlation id.
+Every awthaq group declares `Api.RequestContext` as its last (outermost) middleware, and `AuthHttp.middlewareFor` (so `AuthHost.layer`) derives its implementation, `RequestContext.RequestContextLive`, like the other host middleware. It captures the request once: a correlation id (a sane `x-request-id`, else the `traceparent` trace id, else a fresh uuidv7), the client address (what the `ClientAddress` port resolves; the populator is that port's one consumer, so the port is required) and the user agent (capped at 512 characters). It provides them as `Api.AuthRequestContext` and annotates the request's logs with the correlation id. Sessions, rate limits, events and audit rows all read this one value.
 
-`AuthHttp.coreHandlers` logs one warning at layer build when it finds a router without the middleware. A composition that runs without it on purpose (the in-process `@awthaq/test` harness does) silences the warning by providing `RequestContext.warnWhenAbsent` as `false`.
+- **Required by the type.** A handler or authentication middleware that reads the context, served without its populator, does not compile: the middleware is an unmet requirement, a forgotten declaration leaves an unsatisfiable `HttpRouter.Request<"Requires", AuthRequestContext>`, and the four authentication middlewares `require` the context, so a group of yours that declares `Api.Authentication` (or `MachineAuthentication`, `AdminAuthentication`, `OptionalAuthentication`) must declare `.middleware(Api.RequestContext)` after it. A hand-wired composition provides `RequestContext.RequestContextLive` (it needs `ClientAddress` and `SecureRandom`).
+- **Host routes.** A route of yours outside awthaq's contracts that calls a plugin operation provides the facts itself: `Effect.provideService(Api.AuthRequestContext, yield* RequestContext.capture(request))`, or declare `Api.RequestContext` on its group. In-process work (a job, a CLI command) states `Api.AuthRequestContext.noRequest`. Never provide a fixed `AuthRequestContext` as a layer: it would stamp one value on every request.
+- **Web handlers.** `HttpRouter.toWebHandler` (Next.js, Workers, Bun) reports no socket peer, so under `ClientAddress.layerDirect` every client resolves to no address and shares the `ip:unknown` rate-limit bucket. Behind a proxy, provide `ClientAddress.layerTrustedProxy(...)`.
 
 ## Session delivery
 

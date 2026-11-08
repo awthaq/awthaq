@@ -364,6 +364,8 @@ export const AdminGroup = HttpApiGroup.make("admin")
   // AR-003: the admin tier's own scheme (default: `Authentication`'s handlers) — see
   // `Api.AdminAuthentication` — so a host can firewall/re-authenticate this group alone.
   .middleware(Api.AdminAuthentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const AdminApi = HttpApi.make("auth").add(AdminGroup);

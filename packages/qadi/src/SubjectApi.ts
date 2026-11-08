@@ -52,7 +52,9 @@ export const SubjectGroup = SubjectContract.SubjectGroup
   // `OptionalAuthentication` — which `AuthorizedSubject` requires
   // `CurrentPrincipal` from — must be declared last.
   .middleware(AuthorizedSubject)
-  .middleware(Api.OptionalAuthentication);
+  .middleware(Api.OptionalAuthentication)
+  // ADR-EA-047: the request context is outermost, so the credential claims above read its facts.
+  .middleware(Api.RequestContext);
 
 // MW-002: id "auth", the composed api's own, so `SubjectHandlers` (keyed by api id + group) serve the
 // group whether it is mounted standalone or through `Auth.make(..., { extraGroups: [SubjectGroup] })`.

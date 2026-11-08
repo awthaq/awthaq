@@ -65,7 +65,8 @@ const NoBreachHttpClient = Layer.succeed(
 // interleaving control a sequential step definition otherwise lacks.
 const GateGroup = HttpApiGroup.make("gate")
   .add(HttpApiEndpoint.get("hold", "/gate/hold", { success: Schema.String }))
-  .middleware(Api.Authentication);
+  .middleware(Api.Authentication)
+  .middleware(Api.RequestContext);
 // Declared against the composed api's own id (`auth`): the group rides beside `Password` as an `extraGroup`.
 const GateApi = HttpApi.make("auth").add(GateGroup);
 

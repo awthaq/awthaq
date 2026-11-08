@@ -89,7 +89,8 @@ const TestApi = HttpApi.make("test")
           success: Schema.NullOr(Schema.String),
         }),
       )
-      .middleware(Api.Authentication),
+      .middleware(Api.Authentication)
+      .middleware(Api.RequestContext),
   )
   .add(
     HttpApiGroup.make("optional")
@@ -99,7 +100,8 @@ const TestApi = HttpApi.make("test")
           success: Schema.String,
         }),
       )
-      .middleware(Api.OptionalAuthentication),
+      .middleware(Api.OptionalAuthentication)
+      .middleware(Api.RequestContext),
   );
 
 const whoAmI = () =>
@@ -128,6 +130,7 @@ const TestLayer = Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provideMerge(Authentication.OptionalAuthenticationLive),
   Layer.provide(Wiring.resolver),
+  Layer.provideMerge(Wiring.requestContextLive),
   Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
@@ -173,7 +176,10 @@ describe("Authentication", () => {
           headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
         });
         assert.strictEqual(result, "admin-1");
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(TestLayer),
+      ),
   );
 
   it.effect("an ordinary session (no actingAs) resolves to a UserPrincipal with no actingAs", () =>
@@ -185,7 +191,10 @@ describe("Authentication", () => {
         headers: { cookie: `${Sessions.SESSION_COOKIE_NAME}=${Redacted.value(token)}` },
       });
       assert.strictEqual(result, null);
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(TestLayer),
+    ),
   );
 
   // .scratch/jwt/issues/16-automatic-response-mirroring.md: `PostAuthResponseHook`
@@ -214,11 +223,13 @@ describe("Authentication", () => {
       assert.strictEqual(result, userId);
       assert.deepStrictEqual(yield* Ref.get(seen), Option.some(userId));
     }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
       Effect.provide(
         Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
           Layer.provideMerge(Authentication.AuthenticationLive),
           Layer.provideMerge(Authentication.OptionalAuthenticationLive),
           Layer.provide(Wiring.resolver),
+          Layer.provideMerge(Wiring.requestContextLive),
           Layer.provide(TappedHook),
           Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
           // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
@@ -253,11 +264,13 @@ describe("Authentication", () => {
       });
       assert.deepStrictEqual(yield* Ref.get(schemes), ["cookie", "bearer"]);
     }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
       Effect.provide(
         Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
           Layer.provideMerge(Authentication.AuthenticationLive),
           Layer.provideMerge(Authentication.OptionalAuthenticationLive),
           Layer.provide(Wiring.resolver),
+          Layer.provideMerge(Wiring.requestContextLive),
           Layer.provide(TappedHook),
           Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
           Layer.provideMerge(AuthEvents.layer),
@@ -292,11 +305,13 @@ describe("Authentication", () => {
       assert.strictEqual(result, "Anonymous");
       assert.deepStrictEqual(yield* Ref.get(seen), Option.none());
     }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
       Effect.provide(
         Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
           Layer.provideMerge(Authentication.AuthenticationLive),
           Layer.provideMerge(Authentication.OptionalAuthenticationLive),
           Layer.provide(Wiring.resolver),
+          Layer.provideMerge(Wiring.requestContextLive),
           Layer.provide(TappedHook),
           Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
           // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
@@ -321,7 +336,8 @@ const RotationApi = HttpApi.make("rotation").add(
     .add(HttpApiEndpoint.get("boom", "/boom", { success: Schema.String, error: Boom }))
     // ADR-EA-045: an endpoint that ends the caller's session, behind the same rotating verify.
     .add(HttpApiEndpoint.post("end", "/end").middleware(SessionLifecycle.Ends))
-    .middleware(Api.Authentication),
+    .middleware(Api.Authentication)
+    .middleware(Api.RequestContext),
 );
 
 const RotationHandlers = HttpApiBuilder.group(RotationApi, "g", (handlers) =>
@@ -336,6 +352,7 @@ const RotationLayer = HttpApiBuilder.layer(RotationApi).pipe(
   Layer.provide(SessionLifecycleLive.EndsLive),
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provide(Wiring.resolver),
+  Layer.provideMerge(Wiring.requestContextLive),
   Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
@@ -350,6 +367,7 @@ const OutageLayer = HttpApiBuilder.layer(RotationApi).pipe(
   Layer.provide(SessionLifecycleLive.EndsLive),
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provide(Wiring.resolver),
+  Layer.provideMerge(Wiring.requestContextLive),
   Layer.provideMerge(UnreliableSessions),
   Layer.provideMerge(TestServices),
   Layer.provideMerge(HttpRouter.layer),
@@ -384,6 +402,7 @@ const rotationLayerWith = (cookieConfig: Layer.Layer<never>) =>
     Layer.provide(SessionLifecycleLive.EndsLive),
     Layer.provideMerge(Authentication.AuthenticationLive),
     Layer.provide(Wiring.resolver),
+    Layer.provideMerge(Wiring.requestContextLive),
     Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(AuthEvents.layer),
     Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
@@ -402,7 +421,10 @@ describe("MA-004: a session-store outage answers 503", () => {
           cookie: `${Sessions.SESSION_COOKIE_NAME}=some-id.some-secret`,
         });
         assert.strictEqual(response.status, 503);
-      }).pipe(Effect.provide(OutageLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(OutageLayer),
+      ),
   );
 });
 
@@ -427,7 +449,10 @@ describe("Session cookie policy on rotation (IC-007, BO-005, AGA-004)", () => {
           );
           assert.strictEqual(cookie.value.options?.sameSite, "strict");
         }),
-      ).pipe(Effect.provide(RotationLayer)),
+      ).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(RotationLayer),
+      ),
   );
 
   it.effect("AGA-004: HostEmbedded rotates __Host-session with SameSite=None; Partitioned", () =>
@@ -447,6 +472,7 @@ describe("Session cookie policy on rotation (IC-007, BO-005, AGA-004)", () => {
         assert.isTrue(cookie.value.options?.secure);
       }),
     ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
       Effect.provide(rotationLayerWith(SessionCookie.config({ mode: SessionCookie.HostEmbedded }))),
     ),
   );
@@ -475,6 +501,7 @@ describe("Session cookie policy on rotation (IC-007, BO-005, AGA-004)", () => {
         assert.strictEqual(cookie.value.options?.sameSite, "lax");
       }),
     ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
       Effect.provide(
         rotationLayerWith(
           SessionCookie.config({
@@ -507,7 +534,10 @@ describe("Authentication rotation delivery (PIL-005)", () => {
           yield* sessions.verify(Redacted.make(rotated.value));
           assert.strictEqual(response.headers["cache-control"], "no-store");
         }),
-      ).pipe(Effect.provide(RotationLayer)),
+      ).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(RotationLayer),
+      ),
   );
 
   it.effect("a successful response carries the rotated cookie exactly once", () =>
@@ -523,7 +553,10 @@ describe("Authentication rotation delivery (PIL-005)", () => {
         assert.strictEqual(Object.keys(response.cookies.cookies).length, 1);
         assert.isTrue(Option.isSome(cookieOf(response)));
       }),
-    ).pipe(Effect.provide(RotationLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(RotationLayer),
+    ),
   );
 
   it.effect("bearer rotation sets the rotated-token header and Cache-Control: no-store", () =>
@@ -541,7 +574,10 @@ describe("Authentication rotation delivery (PIL-005)", () => {
         assert.isTrue(Option.isNone(cookieOf(response)));
         yield* sessions.verify(Redacted.make(rotated ?? ""));
       }),
-    ).pipe(Effect.provide(RotationLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(RotationLayer),
+    ),
   );
 
   // ADR-EA-045: a request whose verify rotated and which then ends the session must not hand the client the
@@ -566,7 +602,10 @@ describe("Authentication rotation delivery (PIL-005)", () => {
           assert.strictEqual(response.headers[Api.SESSION_ENDED_HEADER], "1");
           assert.strictEqual(response.headers["cache-control"], "no-store");
         }),
-      ).pipe(Effect.provide(RotationLayer)),
+      ).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(RotationLayer),
+      ),
   );
 
   it.effect("no rotation, no delivery: a fresh session's response is left untouched", () =>
@@ -580,7 +619,10 @@ describe("Authentication rotation delivery (PIL-005)", () => {
         assert.isTrue(Option.isNone(cookieOf(response)));
         assert.isUndefined(response.headers["cache-control"]);
       }),
-    ).pipe(Effect.provide(RotationLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(RotationLayer),
+    ),
   );
 });
 
@@ -602,7 +644,10 @@ describe("Authentication challenges (JR-007)", () => {
         const response = yield* serve(path, headers);
         return { status: response.status, challenge: response.headers["www-authenticate"] };
       }),
-    ).pipe(Effect.provide(RotationLayer));
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(RotationLayer),
+    );
 
   it.effect("no credential: 401 with the realm challenge", () =>
     Effect.gen(function* () {
@@ -641,7 +686,10 @@ describe("Authentication challenges (JR-007)", () => {
         assert.strictEqual(response.status, 404);
         assert.isUndefined(response.headers["www-authenticate"]);
       }),
-    ).pipe(Effect.provide(RotationLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(RotationLayer),
+    ),
   );
 });
 
@@ -671,7 +719,10 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
         if (principal._tag !== "User") return;
         assert.deepStrictEqual(principal.amr, ["pwd", "otp"]);
         assert.isUndefined(principal.emailVerified);
-      }).pipe(Effect.provide(factsLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(factsLayer),
+      ),
   );
 
   it.effect("layerWithUserFacts sets emailVerified=false for a fresh, unverified user", () =>
@@ -687,6 +738,7 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
       const principal = yield* resolver.resolve(session);
       assert.strictEqual(principal._tag === "User" ? principal.emailVerified : undefined, false);
     }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
       Effect.provide(
         Credentials.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
       ),
@@ -705,6 +757,7 @@ describe("PrincipalResolver amr and user facts (APS-007, THS-003)", () => {
         const principal = yield* resolver.resolve(session);
         assert.strictEqual(principal._tag === "User" ? principal.emailVerified : undefined, false);
       }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
         Effect.provide(
           Credentials.PrincipalResolverWithUserFactsLive.pipe(Layer.provideMerge(factsLayer)),
         ),
@@ -768,7 +821,10 @@ describe("Authentication observability", () => {
         const everything = logs.records.map((r) => r.text).join("\n");
         assert.notInclude(everything, secret);
         assert.notInclude(everything, "sess-unknown");
-      }).pipe(Effect.provide(Layer.merge(TestLayer, logs.layer)));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(Layer.merge(TestLayer, logs.layer)),
+      );
     },
   );
 
@@ -778,7 +834,10 @@ describe("Authentication observability", () => {
       const client = yield* HttpApiTest.groups(TestApi, ["required", "optional"]);
       yield* client.required.whoAmI({ headers: {} }).pipe(Effect.flip);
       assert.isFalse(logs.records.some((r) => r.text.includes("session.verify.failed")));
-    }).pipe(Effect.provide(Layer.merge(TestLayer, logs.layer)));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(Layer.merge(TestLayer, logs.layer)),
+    );
   });
 
   it.effect(
@@ -807,7 +866,10 @@ describe("Authentication observability", () => {
           [...span.attributes.values()].map((value) => String(value)),
         );
         assert.isFalse(allValues.some((value) => value.includes(secret)));
-      }).pipe(Effect.provide(TestLayer.pipe(Layer.provideMerge(trace.layer))));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(TestLayer.pipe(Layer.provideMerge(trace.layer))),
+      );
     },
   );
 });
@@ -824,16 +886,23 @@ describe("Path A parity with the credential table (group A)", () => {
   const endpointAt = (path: `/${string}`) =>
     HttpApiEndpoint.get("who", path, { headers: AllHeaders, success: Schema.String });
   const ParityApi = HttpApi.make("parity")
-    .add(HttpApiGroup.make("user").add(endpointAt("/who-user")).middleware(Api.Authentication))
+    .add(
+      HttpApiGroup.make("user")
+        .add(endpointAt("/who-user"))
+        .middleware(Api.Authentication)
+        .middleware(Api.RequestContext),
+    )
     .add(
       HttpApiGroup.make("optional")
         .add(endpointAt("/who-optional"))
-        .middleware(Api.OptionalAuthentication),
+        .middleware(Api.OptionalAuthentication)
+        .middleware(Api.RequestContext),
     )
     .add(
       HttpApiGroup.make("machine")
         .add(endpointAt("/who-machine"))
-        .middleware(Api.MachineAuthentication),
+        .middleware(Api.MachineAuthentication)
+        .middleware(Api.RequestContext),
     );
 
   const whoHandler = () =>
@@ -861,6 +930,7 @@ describe("Path A parity with the credential table (group A)", () => {
     Layer.provideMerge(Authentication.OptionalAuthenticationLive),
     Layer.provideMerge(Authentication.MachineAuthenticationLive),
     Layer.provide(Wiring.resolver),
+    Layer.provideMerge(Wiring.requestContextLive),
     Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(AuthEvents.layer),
     Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
@@ -890,12 +960,14 @@ describe("Path A parity with the credential table (group A)", () => {
             outcome === none || outcome === "anonymous" ? none : `${outcome}@${scheme}`;
           assert.strictEqual(served, expected);
         }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
           Effect.provide(
             Handlers.pipe(
               Layer.provideMerge(Authentication.AuthenticationLive),
               Layer.provideMerge(Authentication.OptionalAuthenticationLive),
               Layer.provideMerge(Authentication.MachineAuthenticationLive),
               Layer.provide(Hook),
+              Layer.provideMerge(Wiring.requestContextLive),
               Layer.provideMerge(layerFor(variantOf(row))),
               Layer.provideMerge(TestServices),
             ),
@@ -926,6 +998,9 @@ describe("Path A parity with the credential table (group A)", () => {
         assert.strictEqual(keyOnly.status, 401);
         assert.strictEqual(keyOnly.challenge, 'Bearer realm="awthaq"');
       }),
-    ).pipe(Effect.provide(MachineChallengeLayer)),
+    ).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(MachineChallengeLayer),
+    ),
   );
 });

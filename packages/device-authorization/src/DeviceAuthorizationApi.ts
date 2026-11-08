@@ -231,7 +231,9 @@ export const DeviceGroup = HttpApiGroup.make("device_authorization")
     }).middleware(SessionLifecycle.Mints),
   )
   // BEH-EA-201: no cookie in, none out, and a device has none to double-submit: `awthaq doctor` skips its CSRF check.
-  .annotate(Api.BackChannel, true);
+  .annotate(Api.BackChannel, true)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const VerificationGroup = HttpApiGroup.make("device_authorization.verification")
   .add(
@@ -242,7 +244,9 @@ export const VerificationGroup = HttpApiGroup.make("device_authorization.verific
     }),
   )
   .middleware(Api.OptionalAuthentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const DecisionGroup = HttpApiGroup.make("device_authorization.decision")
   .add(
@@ -267,7 +271,9 @@ export const DecisionGroup = HttpApiGroup.make("device_authorization.decision")
   )
   // The last-declared middleware runs first, so a forged request is rejected before any credential work.
   .middleware(Api.Authentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const DeviceAuthorizationApi = HttpApi.make("auth")
   .add(DeviceGroup)

@@ -3,6 +3,7 @@
 // stored sealed (a `SealedColumn`, AAD naming the key), the newest unexpired key signs while every unexpired certificate is
 // published, and a connection that says it signs NEVER sends an unsigned request, whatever happens to its key.
 
+import { TestAuth } from "@awthaq/test";
 import { X509Certificate } from "node:crypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -58,7 +59,7 @@ describe("a connection that does not sign", () => {
       const metadata = yield* saml.metadata(connection.id);
       assert.include(metadata, 'AuthnRequestsSigned="false"');
       assert.deepStrictEqual(certificatesInSpMetadata(metadata), []);
-    }).pipe(Effect.provide(SamlLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 });
 
@@ -86,7 +87,7 @@ describe("a connection that signs its AuthnRequests", () => {
         assert.isTrue(yield* verifiesUnder(started.location, published));
         // The request body itself is unchanged by signing: it still names this SP and ACS.
         assert.include(started.authnRequest, "AssertionConsumerServiceURL=");
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -112,7 +113,7 @@ describe("a connection that signs its AuthnRequests", () => {
           encodeURIComponent(ALGORITHM.rsaSha1),
         );
         assert.isFalse(yield* verifiesUnder(downgraded, published));
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -131,7 +132,7 @@ describe("a connection that signs its AuthnRequests", () => {
         // Switching it off keeps the key (a logout is still signed with it), and stops signing requests.
         yield* store.update(connection.id, { authnRequestsSigned: false });
         assert.strictEqual((yield* keys.list(connection.id)).length, 1);
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect("an IdP that asks for signed requests in its metadata gets them by default", () =>
@@ -164,7 +165,7 @@ describe("a connection that signs its AuthnRequests", () => {
         authnRequestsSigned: false,
       });
       assert.isFalse(optedOut.authnRequestsSigned);
-    }).pipe(Effect.provide(SamlLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 });
 
@@ -181,7 +182,7 @@ describe("the SP signing key at rest", () => {
       assert.notInclude(JSON.stringify(row), "PRIVATE KEY");
       const keys = yield* SamlSpKeys.SamlSpKeys;
       assert.notInclude(JSON.stringify(yield* keys.list(connection.id)), "PRIVATE KEY");
-    }).pipe(Effect.provide(SamlLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -213,7 +214,7 @@ describe("the SP signing key at rest", () => {
           Exit.isFailure(exit) && Exit.hasDies(exit),
           "a defect, not a typed error a caller could shrug off",
         );
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect("when every key has expired a signing connection fails closed too", () =>
@@ -225,7 +226,7 @@ describe("the SP signing key at rest", () => {
       yield* TestClock.adjust(Duration.days(3));
       const exit = yield* Effect.exit(saml.authnRequest(connection.id, {}));
       assert.isTrue(Exit.isFailure(exit) && Exit.hasDies(exit));
-    }).pipe(Effect.provide(SamlLive({ signingKeyValidityDays: 2 }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive({ signingKeyValidityDays: 2 }))),
   );
 });
 
@@ -256,7 +257,7 @@ describe("rotating the SP signing key", () => {
           yield* verifiesUnder(second.location, before),
           "the newest key signs, not the old one",
         );
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect(
@@ -288,6 +289,6 @@ describe("rotating the SP signing key", () => {
         assert.isTrue((yield* saml.metadata(connection.id)).includes("X509Certificate"));
         // Nothing about the key material leaks into the refusal.
         assert.notInclude(JSON.stringify(mismatch), "PRIVATE");
-      }).pipe(Effect.provide(SamlLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 });

@@ -7,6 +7,7 @@
 // this suite proves the plugin's own ceremony/persistence/enumeration-safety
 // logic, not `@simplewebauthn/server`'s cryptography (that's
 // `packages/ports/test/WebAuthn.test.ts`'s own job).
+import { TestAuth } from "@awthaq/test";
 import {
   Accounts,
   AuditLog,
@@ -83,7 +84,7 @@ describe("Passkey", () => {
       assert.strictEqual(record.id, "cred-mock-1");
       const linked = yield* accounts.findByProviderSubject("passkey", "cred-mock-1");
       assert.isTrue(linked._tag === "Some");
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("BEH-EA-131: authenticate/verify issues a real session via Sessions", () =>
@@ -131,7 +132,7 @@ describe("Passkey", () => {
       });
 
       assert.strictEqual(issued.session.userId, user.id);
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   // ADR-EA-038: policy (gate, veto, divert, announcement) is tested once at `SignIn`; this proves the wiring.
@@ -154,7 +155,10 @@ describe("Passkey", () => {
         recorded.beforeSessionIssue.map((input) => [input.strategy, input.amr]),
         [["passkey", ["hwk", "user"]]],
       );
-    }).pipe(Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(TestLayer)))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(TestLayer))),
+    ),
   );
 
   // CSD-004: a refused assertion is the passkey strategy's failure signal.
@@ -167,7 +171,6 @@ describe("Passkey", () => {
         const refused = yield* passkey
           .authenticateVerify({
             ceremonyId: "no-such-ceremony",
-            ip: "203.0.113.4",
             credential: {
               id: "cred-x",
               rawId: "cred-x",
@@ -182,13 +185,12 @@ describe("Passkey", () => {
           _tag: "auth.user.signInFailed",
           strategy: "passkey",
           reason: "assertionInvalid",
-          clientIp: "203.0.113.4",
         });
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
-  // CSD-003: the ceremony's request context is recorded on the issued session.
-  it.effect("CSD-003: authenticateVerify records ip and userAgent from its context", () =>
+  // THS-003: the session records the kind of key (the request facts are core's, ADR-EA-047).
+  it.effect("THS-003: authenticateVerify records a hardware-bound key with user verification", () =>
     Effect.gen(function* () {
       const passkey = yield* Passkey.Passkey;
       const users = yield* Users.Users;
@@ -215,32 +217,26 @@ describe("Passkey", () => {
         },
       });
       const { ceremonyId, options } = yield* passkey.authenticateOptions({});
-      const issued = yield* passkey.authenticateVerify(
-        {
-          ip: "198.51.100.44",
-          ceremonyId,
-          credential: {
-            id: "cred-mock-1",
-            rawId: "cred-mock-1",
-            type: "public-key",
-            response: {
-              clientDataJSON: buildClientDataJSON({
-                type: "webauthn.get",
-                challenge: extractChallenge(options),
-                origin: ORIGIN,
-              }),
-              authenticatorData: "",
-              signature: "",
-            },
+      const issued = yield* passkey.authenticateVerify({
+        ceremonyId,
+        credential: {
+          id: "cred-mock-1",
+          rawId: "cred-mock-1",
+          type: "public-key",
+          response: {
+            clientDataJSON: buildClientDataJSON({
+              type: "webauthn.get",
+              challenge: extractChallenge(options),
+              origin: ORIGIN,
+            }),
+            authenticatorData: "",
+            signature: "",
           },
         },
-        { userAgent: "PasskeyBrowser/1.0" },
-      );
+      });
       // THS-003: a hardware-bound key, with user verification (the mock reports it).
       assert.deepStrictEqual(issued.session.amr, ["hwk", "user"]);
-      assert.deepStrictEqual(issued.session.ipAddress, Option.some("198.51.100.44"));
-      assert.deepStrictEqual(issued.session.userAgent, Option.some("PasskeyBrowser/1.0"));
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -287,7 +283,7 @@ describe("Passkey", () => {
         // runs the core rows and none of the plugins' contributions.
         yield* Erasure.AccountErasure.use((erasure) =>
           erasure.eraseAccount(user.id, Erasure.ErasureInitiator.Self()),
-        ).pipe(Effect.provide(OrphaningErasure), Effect.orDie);
+        ).pipe(TestAuth.withoutRequest, Effect.provide(OrphaningErasure), Effect.orDie);
 
         const { ceremonyId, options } = yield* passkey.authenticateOptions({});
         const clientDataJSON = buildClientDataJSON({
@@ -307,7 +303,7 @@ describe("Passkey", () => {
           })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "InvalidCredentials");
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("BEH-EA-134: credential management refuses to remove the last credential", () =>
@@ -320,7 +316,7 @@ describe("Passkey", () => {
 
       const listed = yield* passkey.listCredentials(userId);
       assert.strictEqual(listed.length, 1);
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("rename fails for a credential belonging to another user", () =>
@@ -337,7 +333,7 @@ describe("Passkey", () => {
         .renameCredential(other.id, "cred-mock-1", "Stolen")
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "PasskeyCredentialNotFound");
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 });
 
@@ -346,7 +342,7 @@ describe("Passkey — Conditional Create (ticket 07)", () => {
     Effect.gen(function* () {
       const enabled = yield* Passkey.PasskeyConfig;
       assert.isTrue(enabled.conditionalCreate);
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("setting conditionalCreate to false disables registerOptionsConditional", () =>
@@ -363,7 +359,10 @@ describe("Passkey — Conditional Create (ticket 07)", () => {
         .registerOptionsConditional(user.id, issued.session.id)
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "PasskeyConditionalCreateDisabled");
-    }).pipe(Effect.provide(buildLayer(mockWebAuthn(), { conditionalCreate: false }))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(buildLayer(mockWebAuthn(), { conditionalCreate: false })),
+    ),
   );
 });
 
@@ -385,7 +384,7 @@ describe("Passkey — step-up reauthentication (ticket 15, BPAS-001/AAPS-001)", 
       const failure = yield* passkey.registerOptions(user.id, issued.session.id).pipe(Effect.flip);
       if (failure._tag !== "PasskeyReauthRequired") return assert.fail(failure._tag);
       assert.strictEqual(failure.maxAgeSeconds, 300);
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("registerVerify refuses a stale session even with a valid completed ceremony", () =>
@@ -423,7 +422,7 @@ describe("Passkey — step-up reauthentication (ticket 15, BPAS-001/AAPS-001)", 
         })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "PasskeyReauthRequired");
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -458,7 +457,7 @@ describe("Passkey — step-up reauthentication (ticket 15, BPAS-001/AAPS-001)", 
 
         // The gate is now clear — same session, no new sign-in.
         yield* passkey.registerOptions(userId, sessionId);
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect(
@@ -490,7 +489,7 @@ describe("Passkey — step-up reauthentication (ticket 15, BPAS-001/AAPS-001)", 
           })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "Unauthenticated");
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 });
 
@@ -576,7 +575,7 @@ describe("BEH-EA-136 posture: register/verify answers each ceremony refusal prec
           )
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, row.expected);
-      }).pipe(Effect.provide(row.layer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(row.layer)),
     );
   }
 });
@@ -686,7 +685,7 @@ describe("BEH-EA-136 posture: authenticate/verify collapses every refusal past t
           })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, row.expected);
-      }).pipe(Effect.provide(row.layer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(row.layer)),
     );
   }
 });
@@ -718,7 +717,7 @@ describe("BEH-EA-136 posture: reauthenticate/verify answers precisely", () => {
           })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, row.expected);
-      }).pipe(Effect.provide(row.layer)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(row.layer)),
     );
   }
 
@@ -735,7 +734,7 @@ describe("BEH-EA-136 posture: reauthenticate/verify answers precisely", () => {
         })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "PasskeyCredentialNotFound");
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 });
 
@@ -763,6 +762,7 @@ describe("BEH-EA-132/255 admission: a register/verify refused for a stale sessio
       const record = yield* passkey.registerVerify(userId, sessionId, payload);
       assert.strictEqual(record.id, "cred-second");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(buildLayer(mockWebAuthn(), { reauthMaxAgeSeconds: Duration.minutes(1) })),
     ),
   );
@@ -777,7 +777,10 @@ describe("TC-008: related origins at boot", () => {
         const exit = yield* Effect.exit(
           Effect.gen(function* () {
             yield* Passkey.Passkey;
-          }).pipe(Effect.provide(buildLayer(mockWebAuthn(), { relatedOrigins: [bad] }))),
+          }).pipe(
+            TestAuth.withoutRequest,
+            Effect.provide(buildLayer(mockWebAuthn(), { relatedOrigins: [bad] })),
+          ),
         );
         assert.isTrue(Exit.isFailure(exit), `${bad} should be refused`);
       }
@@ -800,7 +803,7 @@ describe("TC-003: explicit ceremony timeout, hints and extensions", () => {
         ];
         // The default is 4m30s, under BEH-EA-132's fixed five-minute challenge TTL.
         assert.deepStrictEqual(timeouts, [270_000, 270_000, 270_000, 270_000]);
-      }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 
   it.effect("a configured timeout, hints and extensions reach the port", () => {
@@ -817,6 +820,7 @@ describe("TC-003: explicit ceremony timeout, hints and extensions", () => {
       assert.strictEqual(Duration.toMillis(authentication[0]?.timeout ?? Duration.zero), 120_000);
       assert.deepStrictEqual(authentication[0]?.hints, ["security-key"]);
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         buildLayer(
           mockWebAuthn({
@@ -838,6 +842,7 @@ describe("TC-003: explicit ceremony timeout, hints and extensions", () => {
         Effect.gen(function* () {
           yield* Passkey.Passkey;
         }).pipe(
+          TestAuth.withoutRequest,
           Effect.provide(buildLayer(mockWebAuthn(), { ceremonyTimeout: Duration.minutes(6) })),
         ),
       );
@@ -856,6 +861,7 @@ describe("CB-009: Conditional Create under a required-UV policy", () => {
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "PasskeyConditionalCreateDisabled");
     }).pipe(
+      TestAuth.withoutRequest,
       Effect.provide(
         buildLayer(mockWebAuthn(), { authenticatorSelection: { userVerification: "required" } }),
       ),
@@ -883,7 +889,7 @@ describe("HSK-003: browser-reported transports", () => {
           { id: "cred-usb", type: "public-key", transports: ["usb", "nfc"] },
         ]);
         assert.isString(extractChallenge(next));
-      }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 });
 
@@ -913,6 +919,6 @@ describe("WPS-010: duplicate credential ids", () => {
         assert.strictEqual((yield* passkey.listCredentials(second.userId)).length, 0);
         const linked = yield* accounts.findByProviderSubject("passkey", "cred-mock-1");
         assert.isTrue(Option.isSome(linked) && linked.value.userId === first.userId);
-      }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 });

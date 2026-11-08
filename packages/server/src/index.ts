@@ -8,7 +8,7 @@
 // Csrf.ts (spec/behaviors/10-csrf.md, BEH-EA-073-080), Session.ts (core session-group
 // handlers, BEH-EA-031), AuthHttp.ts (spec/behaviors/11-http-error-mapping.md, BEH-EA-083/084),
 // BodyLimit.ts (the default request-body cap, NHS-004 / BEH-EA-085),
-// RequestContext.ts (the per-request correlation id / client address for events, ALF-006),
+// RequestContext.ts (the one capture of a request's facts, the implementation of Api.RequestContext, ADR-EA-047),
 // SessionLifecycle.ts (the server half of the contract's session-lifecycle markers, ADR-EA-045).
 // See spec/overview.md for the full package map.
 

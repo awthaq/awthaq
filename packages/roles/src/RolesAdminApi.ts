@@ -102,6 +102,8 @@ export const RolesAdminGroup = HttpApiGroup.make("rolesAdmin")
   // `CsrfProtection` last so it runs first: a forged cross-site request is rejected before
   // any session or permission work.
   .middleware(RequirePermission)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const RolesAdminApi = HttpApi.make("auth").add(RolesAdminGroup);

@@ -26,11 +26,13 @@ import { TestAuth, UserAgent } from "@awthaq/test";
 
 // A window of 0 makes any elapsed time "stale" without needing a test clock the
 // router's own runtime would not share; a wide window is never stale.
-const LoginGroup = HttpApiGroup.make("login").add(
-  HttpApiEndpoint.post("login", "/login", { success: SessionContract.SessionDto }).middleware(
-    SessionLifecycle.Mints,
-  ),
-);
+const LoginGroup = HttpApiGroup.make("login")
+  .add(
+    HttpApiEndpoint.post("login", "/login", { success: SessionContract.SessionDto }).middleware(
+      SessionLifecycle.Mints,
+    ),
+  )
+  .middleware(Api.RequestContext);
 
 const StaleGroup = HttpApiGroup.make("reauth")
   .add(
@@ -46,7 +48,8 @@ const StaleGroup = HttpApiGroup.make("reauth")
     }),
   )
   .middleware(AuthorizedSubject.AuthorizedSubject)
-  .middleware(Api.Authentication);
+  .middleware(Api.Authentication)
+  .middleware(Api.RequestContext);
 
 const TestApi = HttpApi.make("auth").add(LoginGroup).add(StaleGroup);
 

@@ -4,7 +4,7 @@
 // it carries the cookie on its next request) — proving the real, exported `SubjectApi`/`SubjectHandlers`
 // actually serve a decodable `SubjectDto`, not just that the underlying
 // `AuthorizedSubject` middleware chain resolves a subject in memory.
-import { SubjectContract, SessionContract, SessionLifecycle } from "@awthaq/api";
+import { SubjectContract, SessionContract, SessionLifecycle, Api } from "@awthaq/api";
 import { Auth, Sessions, Users } from "@awthaq/core";
 import { AuthHttp, SessionDelivery } from "@awthaq/server";
 import { assert, describe, it } from "@effect/vitest";
@@ -25,11 +25,13 @@ import { TestAuth, UserAgent } from "@awthaq/test";
 // `/login` group of the test's own (it mints a real session cookie the second request carries), both riding as
 // `extraGroups` beside the `UserClaims` plugin through the composition a host builds. `HttpApiBuilder.group`'s
 // handler tag is keyed by the composed api's id, so the login group is declared against `auth`.
-const LoginGroup = HttpApiGroup.make("login").add(
-  HttpApiEndpoint.post("login", "/login", { success: SessionContract.SessionDto }).middleware(
-    SessionLifecycle.Mints,
-  ),
-);
+const LoginGroup = HttpApiGroup.make("login")
+  .add(
+    HttpApiEndpoint.post("login", "/login", { success: SessionContract.SessionDto }).middleware(
+      SessionLifecycle.Mints,
+    ),
+  )
+  .middleware(Api.RequestContext);
 const LoginApi = HttpApi.make("auth").add(LoginGroup);
 
 const LoginHandlers = HttpApiBuilder.group(

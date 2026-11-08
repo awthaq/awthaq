@@ -1,6 +1,7 @@
 // BEH-EA-247 through 250 (spec/behaviors/30-scim.md): SCIM Users — provisioning,
 // ownership, immutability, deactivation and deletion — driven at the domain level over
 // the same layer graph an application builds (`support.ts`).
+import { TestAuth } from "@awthaq/test";
 import { Accounts, AuditLog, AuthEvents, HookPoint, Hooks, Sessions, Users } from "@awthaq/core";
 import { OrganizationHooks } from "@awthaq/organization";
 import { InvitationRecords, MembershipRecords } from "@awthaq/organization/records";
@@ -65,7 +66,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
       const user = yield* users.findById(Users.UserId(created.id));
       assert.deepStrictEqual(Users.emailOf(user), Option.some("ada@acme.example"));
       assert.isTrue(Option.isSome(yield* members.findByUserAndOrg(user.id, organizationId)));
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect("meta.location honours the configured base URL", () =>
@@ -76,7 +77,10 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
         created.meta.location,
         `https://id.acme.example/scim/v2/Users/${created.id}`,
       );
-    }).pipe(Effect.provide(ScimLive({ baseUrl: Option.some("https://id.acme.example") }))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(ScimLive({ baseUrl: Option.some("https://id.acme.example") })),
+    ),
   );
 
   it.effect(
@@ -90,7 +94,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
         assert.strictEqual(user.identity._tag, "Anonymous");
         assert.strictEqual(created.userName, "svc-account-17");
         assert.isUndefined(created.emails);
-      }).pipe(Effect.provide(ScimLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect("a repeat POST with the same externalId converges instead of duplicating", () =>
@@ -101,7 +105,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
       const again = yield* provision(connection, "ada@acme.example", { externalId: "dir-1" });
       assert.strictEqual(again.id, first.id);
       assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 1);
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect("POST never adopts an existing account: an existing email is 409 uniqueness", () =>
@@ -117,7 +121,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
       assert.strictEqual(refused.scimType, "uniqueness");
       assert.strictEqual(refused.status, "409");
       assert.deepStrictEqual(refused.schemas, [ScimApi.ERROR_SCHEMA]);
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect("a repeated userName from the same connection is a conflict", () =>
@@ -126,7 +130,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
       yield* provision(connection, "ada@acme.example");
       const refused = yield* provision(connection, "ada@acme.example").pipe(Effect.flip);
       assert.strictEqual(refused._tag, "ScimConflict");
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect("a blank userName is refused", () =>
@@ -134,7 +138,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
       const { connection } = yield* seedConnection();
       const refused = yield* provision(connection, "   ").pipe(Effect.flip);
       assert.strictEqual(refused._tag, "ScimBadRequest");
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect("a token for connection A cannot see or touch connection B's users", () =>
@@ -160,7 +164,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
       assert.strictEqual((yield* scim.listUsers(a.connection, {})).totalResults, 0);
       // Untouched for its owner.
       assert.isTrue((yield* scim.getUser(b.connection, created.id)).active);
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect(
@@ -183,7 +187,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
         ]).pipe(Effect.flip);
         assert.strictEqual(deactivate._tag, "ScimNotFound");
         assert.strictEqual((yield* users.findById(stranger.id)).status, "active");
-      }).pipe(Effect.provide(ScimLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect(
@@ -224,7 +228,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
           .pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
         assert.strictEqual(unsupported._tag, "ScimBadRequest");
         assert.strictEqual(unsupported.scimType, "invalidFilter");
-      }).pipe(Effect.provide(ScimLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect(
@@ -251,7 +255,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
         assert.isTrue(Option.isNone(yield* users.findByEmail("extra@acme.example")));
         assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 0);
         assert.isTrue(Option.isSome(yield* invitations.findById(grant, invitation.id)));
-      }).pipe(Effect.provide(ScimLive({}, { membershipLimit: 1 }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive({}, { membershipLimit: 1 }))),
   );
 
   it.effect(
@@ -266,6 +270,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
         assert.isTrue(Option.isNone(yield* users.findByEmail("veto@acme.example")));
         assert.strictEqual((yield* scim.listUsers(connection, {})).totalResults, 0);
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           ScimLive(
             {},
@@ -288,7 +293,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
       assert.strictEqual(recorded.length, 1);
       const payload = recorded[0]?.payload;
       assert.isTrue(payload?._tag === "auth.user.created" && payload.userId === created.id);
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect("provisioning is audited as an event naming the connection and organization", () =>
@@ -310,7 +315,7 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
           payload.userId === created.id,
       );
       void AuthEvents;
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 });
 
@@ -339,7 +344,7 @@ describe("SCIM Users: userName is immutable, other attributes update (BEH-EA-248
         const users = yield* Users.Users;
         const user = yield* users.findById(Users.UserId(created.id));
         assert.deepStrictEqual(Users.emailOf(user), Option.some("ada@acme.example"));
-      }).pipe(Effect.provide(ScimLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect("PUT replaces name, externalId and active; an absent externalId clears it", () =>
@@ -359,7 +364,7 @@ describe("SCIM Users: userName is immutable, other attributes update (BEH-EA-248
         userName: "ada@acme.example",
       });
       assert.isUndefined(cleared.externalId);
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect(
@@ -388,7 +393,7 @@ describe("SCIM Users: userName is immutable, other attributes update (BEH-EA-248
         ]).pipe(Effect.catchTag("StoreUnavailable", Effect.die), Effect.flip);
         assert.strictEqual(malformed._tag, "ScimBadRequest");
         assert.strictEqual(malformed.scimType, "invalidSyntax");
-      }).pipe(Effect.provide(ScimLive())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 });
 
@@ -424,7 +429,7 @@ describe("SCIM Users: active is suspension (BEH-EA-249)", () => {
         (yield* Users.assertCanSignIn(user).pipe(Effect.flip))._tag,
         "UserSuspended",
       );
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect("active:true reactivates a suspension this connection made, and nothing else", () =>
@@ -456,7 +461,7 @@ describe("SCIM Users: active is suspension (BEH-EA-249)", () => {
         (yield* scim.getUser(b.connection, created.id).pipe(Effect.flip))._tag,
         "ScimNotFound",
       );
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect("provisioning with active:false creates an already-suspended user", () =>
@@ -466,7 +471,7 @@ describe("SCIM Users: active is suspension (BEH-EA-249)", () => {
       const created = yield* provision(connection, "ada@acme.example", { active: false });
       assert.isFalse(created.active);
       assert.strictEqual((yield* users.findById(Users.UserId(created.id))).status, "suspended");
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect("deactivation and reactivation are published as events", () =>
@@ -484,7 +489,7 @@ describe("SCIM Users: active is suspension (BEH-EA-249)", () => {
         (yield* auditLog.list({ eventTag: "auth.scim.userReactivated" })).length,
         1,
       );
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect("a repeat POST for a deactivated user reactivates it (a directory re-provision)", () =>
@@ -495,7 +500,7 @@ describe("SCIM Users: active is suspension (BEH-EA-249)", () => {
       const again = yield* provision(connection, "ada@acme.example", { externalId: "dir-1" });
       assert.strictEqual(again.id, created.id);
       assert.isTrue(again.active);
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 });
 
@@ -536,6 +541,7 @@ describe("SCIM Users: membership goes through OrganizationMembers (plan 04)", ()
         assert.deepStrictEqual(seen.slice(1), [`Directory:${connection.id}`]);
         assert.strictEqual(seen[0]?.startsWith("User:"), true);
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           ScimLive(
             {},
@@ -572,7 +578,7 @@ describe("SCIM Users: DELETE (BEH-EA-250)", () => {
       );
       // Still the connection's, and still readable — as inactive.
       assert.isFalse((yield* scim.getUser(connection, created.id)).active);
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 
   it.effect(
@@ -611,7 +617,10 @@ describe("SCIM Users: DELETE (BEH-EA-250)", () => {
         assert.isTrue(
           Option.isSome(yield* members.findByUserAndOrg(Users.UserId(fresh.id), organizationId)),
         );
-      }).pipe(Effect.provide(ScimLive({ deleteBehavior: "erase" }, { membershipLimit: 2 }))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(ScimLive({ deleteBehavior: "erase" }, { membershipLimit: 2 })),
+      ),
   );
 
   it.effect(
@@ -637,7 +646,7 @@ describe("SCIM Users: DELETE (BEH-EA-250)", () => {
         const first = deleted[0];
         const second = scimDeleted[0];
         assert.isTrue(first !== undefined && second !== undefined && first.id < second.id);
-      }).pipe(Effect.provide(ScimLive({ deleteBehavior: "erase" }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive({ deleteBehavior: "erase" }))),
   );
 
   it.effect("an erasing DELETE pseudonymizes the user's audit trail", () =>
@@ -656,7 +665,7 @@ describe("SCIM Users: DELETE (BEH-EA-250)", () => {
           created.id,
         ),
       );
-    }).pipe(Effect.provide(ScimLive({ deleteBehavior: "erase" }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive({ deleteBehavior: "erase" }))),
   );
 
   it.effect("DELETE of a user erased in between is 404 and publishes nothing", () =>
@@ -669,7 +678,10 @@ describe("SCIM Users: DELETE (BEH-EA-250)", () => {
       assert.strictEqual(failure._tag, "ScimNotFound");
       assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.scim.userDeleted" }), []);
       assert.deepStrictEqual(yield* auditLog.list({ eventTag: "auth.user.deleted" }), []);
-    }).pipe(Effect.provide(ScimLive({ deleteBehavior: "erase" }, {}, ErasedBetweenReads))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(ScimLive({ deleteBehavior: "erase" }, {}, ErasedBetweenReads)),
+    ),
   );
 });
 
@@ -681,6 +693,6 @@ describe("SCIM connections (BEH-EA-246)", () => {
       const { token } = yield* seedConnection();
       assert.isTrue(token.startsWith("scim_"));
       assert.strictEqual(Redacted.value(Redacted.make(token)), token);
-    }).pipe(Effect.provide(ScimLive())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 });

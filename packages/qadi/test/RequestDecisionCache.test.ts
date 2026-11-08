@@ -37,7 +37,8 @@ const CheckGroup = HttpApiGroup.make("check")
   .middleware(AuthorizedSubject.AuthorizedSubject)
   .middleware(Api.OptionalAuthentication)
   // Declared last, so outermost: the cache wraps everything below it.
-  .middleware(RequestDecisionCache.RequestDecisionCache);
+  .middleware(RequestDecisionCache.RequestDecisionCache)
+  .middleware(Api.RequestContext);
 
 const TestApi = HttpApi.make("auth").add(CheckGroup);
 

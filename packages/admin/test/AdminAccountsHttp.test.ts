@@ -45,7 +45,9 @@ const buildHandler = (config: Partial<Admin.AdminConfigShape>) => {
     const setCookie = await inApp(
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
+        const issued = yield* sessions
+          .issue({ userId: Users.UserId(userId) })
+          .pipe(TestAuth.withoutRequest);
         return yield* TestAuth.sessionSetCookie(issued);
       }),
     );

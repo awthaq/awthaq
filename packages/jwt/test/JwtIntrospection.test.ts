@@ -5,8 +5,8 @@
 import { Api } from "@awthaq/api";
 import { Auth, AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
-import { SqlTransaction } from "@awthaq/ports";
-import { Authentication, Credentials } from "@awthaq/server";
+import { ClientAddress, SqlTransaction } from "@awthaq/ports";
+import { Authentication, Credentials, RequestContext } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -51,6 +51,12 @@ const WithSessions = TestAuth.layer(Auth.make([Jwt.Jwt]), {
 // inside `AuthenticationLive`'s own scope: `Jwt` itself cannot see it.
 const WithoutSessions = jwtBase.pipe(
   Layer.provide(AuthenticationLive.pipe(Layer.provide(SessionsLive))),
+  Layer.provide(
+    RequestContext.RequestContextLive.pipe(
+      Layer.provide(ClientAddress.layerDirect),
+      Layer.provide(NodeCrypto.layer),
+    ),
+  ),
 );
 
 const caller = (userId: string, sessionId: string, actingAs?: { type: string; id: string }) =>
@@ -75,7 +81,7 @@ describe("Jwt.introspectComposed (TIR-007)", () => {
         // bare introspect (denylist only) and verify keep the documented lag until exp
         assert.isTrue((yield* jwt.introspect(token)).active);
         yield* jwt.verify(token);
-      }).pipe(Effect.provide(WithSessions)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(WithSessions)),
   );
 
   it.effect("still works (denylist only) in a composition without Sessions", () =>
@@ -84,7 +90,7 @@ describe("Jwt.introspectComposed (TIR-007)", () => {
       const token = yield* jwt.sign(caller("user-1", "session-that-jwt-cannot-check"));
       const result = yield* jwt.introspectComposed(token);
       assert.isTrue(result.active);
-    }).pipe(Effect.provide(WithoutSessions)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(WithoutSessions)),
   );
 });
 
@@ -102,6 +108,6 @@ describe("act claim (JR-005)", () => {
         assert.strictEqual(claims["sub"], "target-user");
         const plain = yield* jwt.verify(yield* jwt.sign(caller("target-user", "session-2")));
         assert.isUndefined(plain["act"]);
-      }).pipe(Effect.provide(WithSessions)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(WithSessions)),
   );
 });

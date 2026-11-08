@@ -149,7 +149,7 @@ const AppLayer = makeAppLayer(FetchHttpClient.layer);
 const audited = AuthorizationAudit.auditAuthorizationAnnotations(built.api);
 
 // 4. A real listening server (`HttpRouter.serve` + `NodeHttpServer.layer`, as the README quickstart). `AuthHost`
-//    already installs `BodyLimit.layer` and `RequestContext.layer`; `HttpRouter.serve` logs one structured line per
+//    already installs `BodyLimit.layer` and derives the request context; `HttpRouter.serve` logs one structured line per
 //    request (EOTS-006) and `AuthHttp.layerRedactedHeaders` keeps the session cookie and rotated token out of it.
 //    Host jobs stay beside the layer and share its stores: `Retention.layerScheduled` is the opt-in retention sweep
 //    (CSG-003), `SecuritySignals.layer` turns breach signals into incidents (CSG-008).

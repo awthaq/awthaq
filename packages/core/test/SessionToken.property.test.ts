@@ -1,6 +1,7 @@
 // ETVS-002: property tests for the `id.secret` session token (BEH-EA-049/050, PIL-007).
 // `Sessions.verify` parses a value an attacker fully controls (the cookie), so the parse is
 // checked against arbitrary strings, not a handful of hand-picked malformed examples.
+import { Api } from "@awthaq/api";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -32,7 +33,10 @@ describe("Sessions.verify token parsing properties", () => {
         const sessions = yield* Sessions.Sessions;
         const failure = yield* sessions.verify(Redacted.make(presented)).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(MemoryLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(MemoryLayer),
+      ),
   );
 
   it.effect.prop(
@@ -52,7 +56,10 @@ describe("Sessions.verify token parsing properties", () => {
         // The id is public (cookies, JWT sid): a wrong secret must not revoke or rotate anything.
         const stillLive = yield* sessions.verify(token);
         assert.strictEqual(stillLive.session.id, session.id);
-      }).pipe(Effect.provide(MemoryLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(MemoryLayer),
+      ),
   );
 
   it.effect.prop(
@@ -75,7 +82,10 @@ describe("Sessions.verify token parsing properties", () => {
           const failure = yield* sessions.verify(Redacted.make(half)).pipe(Effect.flip);
           assert.strictEqual(failure._tag, "Sessions/NotFound");
         }
-      }).pipe(Effect.provide(MemoryLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(MemoryLayer),
+      ),
   );
 
   it.effect.prop(
@@ -94,6 +104,9 @@ describe("Sessions.verify token parsing properties", () => {
           new Set(tokens.map((raw) => raw.slice(raw.indexOf(".") + 1))).size,
           count,
         );
-      }).pipe(Effect.provide(MemoryLayer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(MemoryLayer),
+      ),
   );
 });

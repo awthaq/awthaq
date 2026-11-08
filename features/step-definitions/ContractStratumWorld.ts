@@ -17,7 +17,8 @@
 import { Api } from "@awthaq/api";
 import { Auth, Persistence, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Password } from "@awthaq/password";
-import { Authentication, Credentials, AuthHttp } from "@awthaq/server";
+import { ClientAddress } from "@awthaq/ports";
+import { Authentication, Credentials, AuthHttp, RequestContext } from "@awthaq/server";
 import { TestAuth, type UserAgent } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -41,7 +42,7 @@ import * as Cookies from "effect/http/Cookies";
 /** BEH-EA-028: the same two schemes declared in the opposite order — only the record differs, the handlers are `Authentication`'s own. */
 export class ReorderedAuthentication extends HttpApiMiddleware.Service<
   ReorderedAuthentication,
-  { provides: Api.CurrentPrincipal }
+  { provides: Api.CurrentPrincipal; requires: Api.AuthRequestContext }
 >()("ReorderedAuthentication", {
   security: { bearer: Api.BearerToken, cookie: Api.SessionCookie },
   error: [Api.Unauthenticated, Api.StoreUnavailable],
@@ -53,17 +54,20 @@ const ProbeApi = HttpApi.make("probe")
   .add(
     HttpApiGroup.make("app")
       .add(HttpApiEndpoint.get("who", "/app/who", { success: Who }))
-      .middleware(Api.Authentication),
+      .middleware(Api.Authentication)
+      .middleware(Api.RequestContext),
   )
   .add(
     HttpApiGroup.make("optional")
       .add(HttpApiEndpoint.get("who", "/optional/who", { success: Who }))
-      .middleware(Api.OptionalAuthentication),
+      .middleware(Api.OptionalAuthentication)
+      .middleware(Api.RequestContext),
   )
   .add(
     HttpApiGroup.make("reordered")
       .add(HttpApiEndpoint.get("who", "/reordered/who", { success: Who }))
-      .middleware(ReorderedAuthentication),
+      .middleware(ReorderedAuthentication)
+      .middleware(Api.RequestContext),
   );
 
 const traced =
@@ -129,6 +133,7 @@ const buildAuthProbe = () => {
     Layer.provideMerge(TracedAuthentication),
     Layer.provideMerge(Authentication.OptionalAuthenticationLive),
     Layer.provide(Credentials.PrincipalResolverLive),
+    Layer.provide(RequestContext.RequestContextLive.pipe(Layer.provide(ClientAddress.layerDirect))),
     Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(Users.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(TestAuth.memoryFoundation),
@@ -285,7 +290,7 @@ const sessionFor = (name: string) =>
       identity: { _tag: "Email", email: `${name}@example.com` },
       name,
     });
-    const issued = yield* sessions.issue({ userId: user.id });
+    const issued = yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest);
     const rendered = yield* SessionCookie.render(issued.session, issued.token);
     return {
       userId: user.id,

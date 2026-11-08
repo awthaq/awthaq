@@ -1,6 +1,7 @@
 // P20a: step definitions for 28-tenancy.feature (BEH-EA-230..237). Every assertion reads the
 // state the real services and store adapters produced: the raw `"tenantId"` column, the response
 // a router middleware wrote, the typed refusal an organization operation returned.
+import { TestAuth } from "@awthaq/test";
 import { Accounts, AuditLog, Sessions, Users, Verification } from "@awthaq/core";
 import { AuditLogStore, Encryption, Mailer, PasswordHasher, Tenant } from "@awthaq/ports";
 import {
@@ -293,6 +294,7 @@ const authorize = Effect.fn("features.tenancy.authorize")(function* (providerId:
         onSuccess: (started) => ({ tag: "success", location: started.location }),
       }),
       Effect.orDie,
+      TestAuth.withoutRequest,
     );
   yield* world.outcomes.set("authorize", outcome.tag);
   if (outcome.location !== undefined) yield* world.redirects.set("last", outcome.location);
@@ -461,7 +463,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
         yield* identity(
           Effect.gen(function* () {
             const sessions = yield* Sessions.Sessions;
-            return yield* sessions.issue({ userId: user.id });
+            return yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest);
           }),
         );
         break;
@@ -592,7 +594,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     const issued = yield* identity(
       Effect.gen(function* () {
         const sessions = yield* Sessions.Sessions;
-        return yield* sessions.issue({ userId });
+        return yield* sessions.issue({ userId }).pipe(TestAuth.withoutRequest);
       }),
     );
     yield* Ref.set(world.sessionTenant, issued.session.tenantId);
@@ -606,7 +608,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       Tenant.withTenant(tenant)(
         Effect.gen(function* () {
           const sessions = yield* Sessions.Sessions;
-          return yield* sessions.issue({ userId });
+          return yield* sessions.issue({ userId }).pipe(TestAuth.withoutRequest);
         }),
       ),
     );

@@ -26,6 +26,7 @@
 // Nothing here touches an existing password credential: a magic link or code signs the person in; it
 // does not link, unlink or replace any credential.
 
+import type { Api } from "@awthaq/api";
 import {
   Accounts,
   AuthEvents,
@@ -64,8 +65,6 @@ export interface Completion {
   readonly userId: Option.Option<Users.UserId>;
   /** Whether an unknown address may create a user (the plugin's `allowSignUp`). */
   readonly allowSignUp: boolean;
-  readonly ip?: string | undefined;
-  readonly userAgent?: string | undefined;
 }
 
 export interface Channel {
@@ -77,8 +76,11 @@ export interface Channel {
     | HookPoint.HookAborted
     | Hooks.TwoFactorRequired
     | Users.UserSuspended
-    | Errors.StoreUnavailable
+    | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
+  /** ALF-003/CSD-004: core's `SignIn.failed`, so the refusal carries the request's address (ADR-EA-047). */
+  readonly failed: (strategy: string) => Effect.Effect<void, never, Api.AuthRequestContext>;
 }
 
 /** Resolves the core services once, at plugin build; the returned closure carries no further requirements. */
@@ -146,10 +148,7 @@ export const make = Effect.gen(function* () {
     );
     // ADR-EA-038: the shared sign-in (gate, veto, MFA divert, session, announcement) is core's.
     return yield* signIn
-      .complete(
-        { userId: user.id, strategy: completion.strategy, amr: completion.amr },
-        { ip: completion.ip, userAgent: completion.userAgent },
-      )
+      .complete({ userId: user.id, strategy: completion.strategy, amr: completion.amr })
       .pipe(
         // An erasure can run between the proof and the session: the one opaque refusal.
         Effect.catchTag("SignIn/UserGone", () =>
@@ -158,7 +157,10 @@ export const make = Effect.gen(function* () {
       );
   });
 
-  return { complete } satisfies Channel;
+  const failed: Channel["failed"] = (strategy) =>
+    signIn.failed({ strategy, reason: "invalidCredentials" });
+
+  return { complete, failed } satisfies Channel;
 });
 
 /** A refusal reaching the client is one opaque error; the reason (an operator's question) goes to the log. */

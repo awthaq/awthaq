@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-33 |
-> | Revision | 1.3 |
+> | Revision | 1.4 |
 > | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (SOS-001, BCR-005, SOS-004, MLO-002; wayfinder ticket 05 §3), replacing [MOD-EA-005](../models/05-email-otp.md)'s non-normative sketch <br> 1.1 (2026-10-13): BEH-EA-273: the sign-in half of the channel step is `SignIn.complete` (ADR-EA-038, architecture plan 01) <br> 1.2 (2026-10-13): BEH-EA-273 redeems the code through `Verification.redeem`: an outage while completing leaves it usable with its attempt budget unchanged (ADR-EA-039, plan 07) <br> 1.3 (2026-11-08): `verify` declares `SessionLifecycle.Mints` (ADR-EA-045, architecture plan 21) |
+> | Change History | 1.0 (2026-09-29): Initial release (SOS-001, BCR-005, SOS-004, MLO-002; wayfinder ticket 05 §3), replacing [MOD-EA-005](../models/05-email-otp.md)'s non-normative sketch <br> 1.1 (2026-10-13): BEH-EA-273: the sign-in half of the channel step is `SignIn.complete` (ADR-EA-038, architecture plan 01) <br> 1.2 (2026-10-13): BEH-EA-273 redeems the code through `Verification.redeem`: an outage while completing leaves it usable with its attempt budget unchanged (ADR-EA-039, plan 07) <br> 1.3 (2026-11-08): `verify` declares `SessionLifecycle.Mints` (ADR-EA-045, architecture plan 21) <br> 1.4 (2026-11-08): signature snippets: no `ip` or `{ userAgent }`; the address and user agent come from the request context (ADR-EA-047, architecture plan 26 ticket 17) |
 ---
 
 > Status: the `EmailOtp` plugin in `@awthaq/magic-link` and the `Verification` numeric-value and attempt-budget support it needs are implemented and tested (`packages/magic-link/test/EmailOtp.test.ts`, `packages/core/test/Verification.test.ts`). SMS is deferred ([ADR-EA-021](../decisions/021-sms-otp-restricted-plugin.md)).
@@ -42,7 +42,7 @@ _Next: [BEH-EA-272](33-email-otp.md#beh-ea-272-requesting-a-code-answers-202-for
 ## BEH-EA-272: Requesting a code answers 202 for every address, inside a resend window
 
 ```ts
-EmailOtp.requestCode({ email, ip }): Effect<void, RateLimited>
+EmailOtp.requestCode({ email }): Effect<void, RateLimited, AuthRequestContext>
 ```
 
 ```text
@@ -64,7 +64,7 @@ _Previous: [BEH-EA-271](33-email-otp.md#beh-ea-271-a-short-numeric-code-is-minte
 ## BEH-EA-273: A correct code signs in once, and every failure is the one InvalidEmailOtp
 
 ```ts
-EmailOtp.verify({ email, code, ip }, { userAgent }): Effect<IssuedSession, InvalidEmailOtp | RateLimited | HookAborted | TwoFactorRequired | UserSuspended>
+EmailOtp.verify({ email, code }): Effect<IssuedSession, InvalidEmailOtp | RateLimited | HookAborted | TwoFactorRequired | UserSuspended, AuthRequestContext>
 ```
 
 ```text

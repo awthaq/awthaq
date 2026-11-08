@@ -2,6 +2,7 @@
 // guarantees `SignUp.test.ts` proves over memory (a conflict, a failing `within`, a vetoed or
 // failed first session all leave nothing behind) run here over SQLite, and over Postgres under
 // `pnpm test:pg` (`packages/test/src/TestSql.ts`).
+import { Api } from "@awthaq/api";
 import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { SqlTransaction } from "@awthaq/ports";
 import { CoreMigrations } from "@awthaq/sql";
@@ -96,7 +97,10 @@ describe("SignUp over a real transaction", () => {
       assert.isTrue(Option.isSome(yield* accounts.findByProviderSubject("acme", "acme-ok")));
       const rows = yield* (yield* AuditLog.AuditLog).list({ eventTag: "auth.user.created" });
       assert.strictEqual(rows.length, 1);
-    }).pipe(Effect.provide(envFor())),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor()),
+    ),
   );
 
   it.effect("a duplicate email is IdentityTaken and a link conflict leaves no user behind", () =>
@@ -118,7 +122,10 @@ describe("SignUp over a real transaction", () => {
       assert.isFalse(yield* rowsOf("second@example.com"));
       const rows = yield* (yield* AuditLog.AuditLog).list({ eventTag: "auth.user.created" });
       assert.strictEqual(rows.length, 1);
-    }).pipe(Effect.provide(envFor())),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor()),
+    ),
   );
 
   it.effect("a failing within rolls back the user and the account, and announces nothing", () =>
@@ -140,7 +147,10 @@ describe("SignUp over a real transaction", () => {
         rows.map((row) => row.eventTag),
         [],
       );
-    }).pipe(Effect.provide(envFor())),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor()),
+    ),
   );
 
   it.effect(
@@ -157,7 +167,10 @@ describe("SignUp over a real transaction", () => {
         );
         assert.strictEqual((yield* sessions.list(issued.session.userId)).length, 1);
         assert.isTrue(yield* rowsOf("in@example.com"));
-      }).pipe(Effect.provide(envFor())),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor()),
+      ),
   );
 
   it.effect("createSignedIn: a BeforeSignIn veto rolls the account back", () =>
@@ -170,7 +183,10 @@ describe("SignUp over a real transaction", () => {
       );
       assert.strictEqual(error._tag, "HookAborted");
       assert.isFalse(yield* rowsOf("vetoed@example.com"));
-    }).pipe(Effect.provide(envFor({ signInAbort: true }))),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor({ signInAbort: true })),
+    ),
   );
 
   it.effect(
@@ -188,6 +204,9 @@ describe("SignUp over a real transaction", () => {
         const sql = yield* SqlClient.SqlClient;
         const sessionRows = yield* sql`SELECT COUNT(*) AS n FROM sessions`;
         assert.strictEqual(Number(sessionRows[0]?.["n"]), 0);
-      }).pipe(Effect.provide(envFor({ sessionsOutage: true }))),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor({ sessionsOutage: true })),
+      ),
   );
 });

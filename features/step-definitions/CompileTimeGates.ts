@@ -20,7 +20,7 @@ import { TwoFactor } from "@awthaq/two-factor";
 import { OAuthProvider } from "@awthaq/oauth";
 import { Password } from "@awthaq/password";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
-import { AuthHost, Csrf, SessionDelivery } from "@awthaq/server";
+import { AuthHost, Csrf, RequestContext, SessionDelivery } from "@awthaq/server";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { AuthorizedSubject } from "@awthaq/qadi";
@@ -182,11 +182,12 @@ const gatedRules = {
 };
 
 // type-gate: spend-names-only-declared-rules
+// (An `ip` rule takes no input: it reads the request context's address, ADR-EA-047.)
 export const spendsDeclared = (limits: RateLimits.Budget<typeof gatedRules>) =>
-  limits.spend("signIn", { ip: "203.0.113.7" });
+  limits.spend("signIn");
 export const spendsUndeclared = (limits: RateLimits.Budget<typeof gatedRules>) =>
   // @ts-expect-error - "signUp" is not in the table the plugin declared, so it cannot be enforced
-  limits.spend("signUp", { ip: "203.0.113.7" });
+  limits.spend("signUp");
 
 // ---- 19-qadi-bridge-path-a.feature: BEH-EA-145 (REQ-EA-406) ----
 
@@ -207,7 +208,9 @@ export const misorderedLeavesPrincipal: Api.CurrentPrincipal extends HttpApiGrou
 // type-gate: authorized-subject-in-the-right-order
 export const ordered = bridgedBase
   .middleware(AuthorizedSubject.AuthorizedSubject)
-  .middleware(Api.Authentication);
+  .middleware(Api.Authentication)
+  // ADR-EA-047: the request context `Authentication` requires, outermost.
+  .middleware(Api.RequestContext);
 export const orderedLeavesNothing: [HttpApiGroup.MiddlewareServices<typeof ordered>] extends [never]
   ? true
   : false = true;
@@ -321,6 +324,35 @@ export const declaredDelivery = HttpApiBuilder.group(lifecycleApi, "gate", (hand
 );
 export const declaredLeavesNothing: [
   Extract<Layer.Services<typeof declaredDelivery>, HttpRouter.Request<"Requires", unknown>>,
+] extends [never]
+  ? true
+  : false = true;
+
+// ---- 09-authentication-middleware: ADR-EA-047 (plan 26) ----
+
+const contextGroup = HttpApiGroup.make("context")
+  .add(HttpApiEndpoint.get("who", "/context", { success: Schema.String }))
+  .middleware(Api.RequestContext);
+const contextApi = HttpApi.make("auth").add(contextGroup);
+const contextHandlers = HttpApiBuilder.group(contextApi, "context", (handlers) =>
+  handlers.handle("who", () =>
+    Effect.map(Effect.service(Api.AuthRequestContext), (context) => context._tag),
+  ),
+);
+
+// type-gate: serving-without-request-context-does-not-compile
+// A group whose handler reads the request context, served without the populator, leaves `Api.RequestContext`
+// an unmet requirement: the layer cannot be launched.
+// @ts-expect-error - `Api.RequestContext` (the request context's populator) is still required
+// @effect-diagnostics-next-line missingLayerContext:off
+export const servedWithoutRequestContext: Layer.Layer<never, never, never> = contextHandlers;
+export const servedWithRequestContext = contextHandlers.pipe(
+  Layer.provide(RequestContext.RequestContextLive),
+  Layer.provide(ClientAddress.layerDirect),
+  Layer.provide(NodeCrypto.layer),
+);
+export const withTheRequestContextNothingIsLeft: [
+  Layer.Services<typeof servedWithRequestContext>,
 ] extends [never]
   ? true
   : false = true;

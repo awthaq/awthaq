@@ -150,7 +150,7 @@ export const registerUser = (email: string) =>
             password: Redacted.make(STRONG_PASSWORD),
           });
           yield* users.verifyEmail(signedUp.session.userId);
-        }),
+        }).pipe(TestAuth.withoutRequest),
       ),
     );
   });

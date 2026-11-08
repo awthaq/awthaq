@@ -5,6 +5,7 @@
 // every registration ceremony, stored on every credential, and checked
 // against the `userHandle` a discoverable credential's assertion carries. The store's own cases
 // (`getOrCreate` under concurrency, `deleteByUser`) are its RecordsContract suite, `contract/PasskeyUserHandles.ts`.
+import { TestAuth } from "@awthaq/test";
 import { Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -51,7 +52,7 @@ describe("BPAS-003: one stable handle per user", () => {
         assert.strictEqual(first.user.id, conditional.user.id);
         assert.strictEqual(firstRecord.webauthnUserId, first.user.id);
         assert.strictEqual(secondRecord.webauthnUserId, first.user.id);
-      }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 
   it.effect("two users get different handles, and the handle is not the internal user id", () =>
@@ -63,7 +64,7 @@ describe("BPAS-003: one stable handle per user", () => {
       const optionsB = yield* passkey.registerOptions(b.userId, b.sessionId);
       assert.notStrictEqual(optionsA.user.id, optionsB.user.id);
       assert.notStrictEqual(optionsA.user.id, a.userId);
-    }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 });
 
@@ -94,7 +95,7 @@ describe("BPAS-006/TC-004: the signals surface", () => {
         assert.strictEqual(signals.name, "signals-me@example.com");
         assert.strictEqual(signals.displayName, "Name of signals-me@example.com");
         assert.deepStrictEqual([...signals.allAcceptedCredentialIds].sort(), ["mine-1", "mine-2"]);
-      }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 
   it.effect("a user with no credentials still gets a handle and an empty accepted set", () =>
@@ -104,6 +105,6 @@ describe("BPAS-006/TC-004: the signals surface", () => {
       const signals = yield* passkey.signals(userId);
       assert.isAbove(signals.userId.length, 0);
       assert.deepStrictEqual(signals.allAcceptedCredentialIds, []);
-    }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 });

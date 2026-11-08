@@ -127,9 +127,9 @@ export type ClaimCarrier = "bearer" | "apiKey";
  * falls through to opaque session resolution, exactly as before.
  * `resolve` goes straight to an `Api.Principal`: a stateless token has no session
  * row to hand `PrincipalResolver` (and so no rotation to deliver). It runs inside
- * the request (`HttpServerRequest` is the one service it may require, e.g. to
- * rate-limit by client address); every other dependency is captured when the
- * contributing layer is built.
+ * the request: `HttpServerRequest` and the request context (ADR-EA-047; e.g. to
+ * rate-limit by client address) are the services it may require; every other
+ * dependency is captured when the contributing layer is built.
  */
 export interface CredentialResolverContribution {
   readonly id: string;
@@ -141,7 +141,7 @@ export interface CredentialResolverContribution {
   ) => Effect.Effect<
     Api.Principal,
     Api.Unauthenticated | Api.StoreUnavailable,
-    HttpServerRequest.HttpServerRequest
+    HttpServerRequest.HttpServerRequest | Api.AuthRequestContext
   >;
 }
 
@@ -642,8 +642,14 @@ const rotationDelivery =
     );
   };
 
-/** The HTTP scope: one per request (keyed on `source`, so `request.modify` re-wraps share it — NHS-006). */
-export const httpScope = (request: HttpServerRequest.HttpServerRequest) =>
+/**
+ * The HTTP scope: one per request (keyed on `source`, so `request.modify` re-wraps share it — NHS-006). A claim runs
+ * with the request and its request context (ADR-EA-047), which the caller read from the context it runs in.
+ */
+export const httpScope = (
+  request: HttpServerRequest.HttpServerRequest,
+  context: Api.RequestFacts | Api.NoRequest,
+) =>
   ({
     key: request.source,
     // effect 4.1 keeps pre-response handlers in the request state `HttpEffect.toHandled` puts
@@ -655,6 +661,7 @@ export const httpScope = (request: HttpServerRequest.HttpServerRequest) =>
     claim: (carrier, credential) =>
       resolveClaimed(carrier, credential).pipe(
         Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+        Effect.provideService(Api.AuthRequestContext, context),
       ),
   }) satisfies Scope;
 

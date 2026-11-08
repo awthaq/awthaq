@@ -53,7 +53,7 @@ import {
   Users,
 } from "@awthaq/core";
 import { Jwt, JwtCodec } from "@awthaq/jwt";
-import { ClientAddress, Defects, Hmac, RateLimiter } from "@awthaq/ports";
+import { Defects, Hmac, RateLimiter } from "@awthaq/ports";
 import { Credentials } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -537,7 +537,6 @@ export const ApiKeyHandlers = Layer.mergeAll(
     "apikey.token",
     Effect.fnUntraced(function* (handlers) {
       const apiKey = yield* ApiKey;
-      const clientAddress = yield* ClientAddress.ClientAddress;
       // The budget `ApiKey.layer`'s `make` opened (BEH-EA-107): the token endpoint spends it by name.
       const limits = yield* RateLimits.budgetOf(ApiKey);
       return handlers.handleAll({
@@ -548,8 +547,8 @@ export const ApiKeyHandlers = Layer.mergeAll(
           payload: ApiKeyApi.TokenPayload;
           request: HttpServerRequest.HttpServerRequest;
         }) {
-          const address = yield* clientAddress.resolve(request);
-          yield* limits.spend("tokenByIp", { ip: Option.getOrUndefined(address) });
+          // ADR-EA-047: keyed on the request's address, read from the group's request context.
+          yield* limits.spend("tokenByIp", {});
           if (payload.grant_type !== "client_credentials") {
             return yield* new ApiKeyApi.UnsupportedGrantType();
           }
@@ -590,23 +589,18 @@ export const ApiKeyHandlers = Layer.mergeAll(
 
 /**
  * Registers what a request-path credential resolver needs. Its `resolve` runs inside
- * the request, so it can rate-limit by the caller's address (`ClientAddress`); every
- * other dependency was captured when this layer was built.
+ * the request, so it can rate-limit by the caller's address (the request context the claim
+ * receives, ADR-EA-047); every other dependency was captured when this layer was built.
  */
 const CredentialContributionsLive = Layer.unwrap(
   Effect.gen(function* () {
     const apiKey = yield* ApiKey;
     const jwt = yield* Jwt.Jwt;
     const settings = yield* ApiKeyConfig;
-    const clientAddress = yield* ClientAddress.ClientAddress;
     const limits = yield* RateLimits.budgetOf(ApiKey);
     const registry = yield* Credentials.CredentialResolvers;
 
-    const throttle = Effect.gen(function* () {
-      const request = yield* HttpServerRequest.HttpServerRequest;
-      const address = yield* clientAddress.resolve(request);
-      yield* limits.spend("resolveByIp", { ip: Option.getOrUndefined(address) });
-    });
+    const throttle = limits.spend("resolveByIp", {});
 
     const keys = Credentials.contribute("apiKey", {
       id: "apikey.key",
@@ -786,7 +780,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
       // `Jwt` mints the service tokens, and its signing keys must exist first.
       dependsOn: [Jwt.Jwt],
       // PV-241: the token endpoint and the credential contributions throttle by address.
-      ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter],
+      ports: [RateLimiter.RateLimiter],
       handlers: ApiKeyHandlers,
       contributes: Layer.mergeAll(apiKeyErasure, apiKeyExport),
       make: Effect.gen(function* () {

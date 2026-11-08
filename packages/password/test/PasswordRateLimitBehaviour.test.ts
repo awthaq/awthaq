@@ -1,6 +1,7 @@
 // password-rate-limit-hardening, behaviour half: RBS-006 (enforcement consumes only registered,
 // secret-free buckets), MLO-003 (per-IP resend), TMS-006 (subaddress-normalized buckets). The key
 // derivation itself is tested once in core (`RateLimitKey.test.ts`, `RateLimitBudget.test.ts`).
+import { TestAuth } from "@awthaq/test";
 import { RateLimits } from "@awthaq/core";
 import { Mailer, RateLimiter } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
@@ -33,17 +34,24 @@ describe("RBS-006: enforcement consumes only the buckets the registry reports", 
         const registry = yield* RateLimits.RateLimitsRegistry;
         const ip = "203.0.113.9";
 
-        yield* password.signUp({ email: "Alice@X.com", password: strongPassword, ip });
         yield* password
-          .signIn({ email: "Alice@X.com", password: strongPassword, ip })
+          .signUp({ email: "Alice@X.com", password: strongPassword })
+          .pipe(TestAuth.withRequest({ ip }));
+        yield* password
+          .signIn({ email: "Alice@X.com", password: strongPassword })
+          .pipe(TestAuth.withRequest({ ip }))
           .pipe(Effect.flip);
-        yield* password.requestReset({ email: "Alice@X.com", ip });
-        yield* password.resendVerification({ email: "Alice@X.com", ip });
+        yield* password.requestReset({ email: "Alice@X.com" }).pipe(TestAuth.withRequest({ ip }));
+        yield* password
+          .resendVerification({ email: "Alice@X.com" })
+          .pipe(TestAuth.withRequest({ ip }));
         yield* letForkedFibersRun;
         const sent = yield* mailer.sent;
         const resetToken = tokenOf(sent.findLast((m) => m.template === "reset-password"));
         const verifyToken = tokenOf(sent.findLast((m) => m.template === "verify-email"));
-        yield* password.verifyEmail({ token: Redacted.make(verifyToken), ip });
+        yield* password
+          .verifyEmail({ token: Redacted.make(verifyToken) })
+          .pipe(TestAuth.withRequest({ ip }));
         yield* password.confirmReset({
           token: Redacted.make(resetToken),
           password: Redacted.make("a brand new strong password"),
@@ -75,7 +83,10 @@ describe("RBS-006: enforcement consumes only the buckets the registry reports", 
         assert.isTrue(enforced.includes("ratelimit:password.signIn:email:alice@x.com"));
         assert.isTrue(enforced.includes("ratelimit:password.requestReset:email:alice@x.com"));
         assert.isTrue(enforced.includes("ratelimit:password.resendVerification:email:alice@x.com"));
-      }).pipe(Effect.provide(makeTestLayer({ limiter: recordingLimiter(keys) })));
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(makeTestLayer({ limiter: recordingLimiter(keys) })),
+      );
     }),
   );
 });
@@ -86,15 +97,20 @@ describe("MLO-003: resendVerification is throttled per source", () => {
       const password = yield* Password.Password;
       // `resendVerificationByIp` is 20 per 15 minutes.
       for (let i = 0; i < 20; i++) {
-        yield* password.resendVerification({ email: `victim-${i}@example.com`, ip: "203.0.113.9" });
+        yield* password
+          .resendVerification({ email: `victim-${i}@example.com` })
+          .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }));
       }
       const throttled = yield* password
-        .resendVerification({ email: "victim-20@example.com", ip: "203.0.113.9" })
+        .resendVerification({ email: "victim-20@example.com" })
+        .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }))
         .pipe(Effect.flip);
       assert.strictEqual(throttled._tag, "RateLimited");
       // Another source is unaffected.
-      yield* password.resendVerification({ email: "victim-21@example.com", ip: "198.51.100.4" });
-    }).pipe(Effect.provide(makeTestLayer({ limiter: realLimiter }))),
+      yield* password
+        .resendVerification({ email: "victim-21@example.com" })
+        .pipe(TestAuth.withRequest({ ip: "198.51.100.4" }));
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer({ limiter: realLimiter }))),
   );
 });
 
@@ -111,7 +127,7 @@ describe("TMS-006: subaddressed aliases share one per-email bucket", () => {
         .signUp({ email: "victim+6@x.com", password: strongPassword })
         .pipe(Effect.flip);
       assert.strictEqual(throttled._tag, "RateLimited");
-    }).pipe(Effect.provide(makeTestLayer({ limiter: realLimiter }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer({ limiter: realLimiter }))),
   );
 
   it.effect("rateLimitEmailKey is configurable", () =>
@@ -124,6 +140,7 @@ describe("TMS-006: subaddressed aliases share one per-email bucket", () => {
           .pipe(Effect.flip);
         assert.isTrue((yield* Ref.get(keys)).includes("ratelimit:password.signIn:email:everyone"));
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           makeTestLayer({
             limiter: recordingLimiter(keys),

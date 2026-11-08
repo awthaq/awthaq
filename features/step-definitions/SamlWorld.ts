@@ -14,6 +14,7 @@ import { Organization, OrganizationConnections } from "@awthaq/organization";
 import { MembershipRecords } from "@awthaq/organization/records";
 import type { Encryption } from "@awthaq/ports";
 import { XmlSignature } from "@awthaq/ports";
+import { RequestContext } from "@awthaq/server";
 import {
   Saml,
   SamlConnections,
@@ -194,6 +195,8 @@ const buildLive = (
     ...(meeting === undefined ? {} : { decorate: Rendezvous.anchorReadsMeet(meeting) }),
   });
   return Sso.Sso.layer.pipe(
+    // ADR-EA-047: `Sso` is served beside the composition, so its group's request context is provided here.
+    Layer.provide(RequestContext.RequestContextLive),
     Layer.provide(preferred === undefined ? Layer.empty : Sso.config({ preferred })),
     Layer.provideMerge(OidcStoreLive),
     Layer.provideMerge(Composition),
@@ -204,7 +207,10 @@ const buildLive = (
 
 /** The built application: run an effect against the very instances the scenario has been using. */
 interface AppHandle {
-  readonly run: <A, E>(effect: Effect.Effect<A, E, AppServices>) => Promise<Exit.Exit<A, E>>;
+  /** ADR-EA-047: answers no request unless the effect provides one (`TestAuth.app`'s `run`). */
+  readonly run: <A, E>(
+    effect: Effect.Effect<A, E, AppServices | Api.AuthRequestContext>,
+  ) => Promise<Exit.Exit<A, E>>;
   readonly close: Effect.Effect<void>;
 }
 
@@ -377,7 +383,7 @@ export const configure = Effect.fn("features.saml.configure")(function* (
 
 /** Runs `effect` against the app; a defect or failure the scenario did not expect is a defect of the step. */
 export const inApp = Effect.fn("features.saml.inApp")(function* <A, E>(
-  effect: Effect.Effect<A, E, AppServices>,
+  effect: Effect.Effect<A, E, AppServices | Api.AuthRequestContext>,
 ) {
   const app = yield* currentApp;
   const exit = yield* Effect.promise(() => app.run(effect));
@@ -386,7 +392,9 @@ export const inApp = Effect.fn("features.saml.inApp")(function* <A, E>(
 });
 
 /** Runs `effect` and hands back its exit, for a call whose failure is the thing under test. */
-export const inAppExit = <A, E>(effect: Effect.Effect<A, E, AppServices>) =>
+export const inAppExit = <A, E>(
+  effect: Effect.Effect<A, E, AppServices | Api.AuthRequestContext>,
+) =>
   Effect.gen(function* () {
     const app = yield* currentApp;
     return yield* Effect.promise(() => app.run(effect));

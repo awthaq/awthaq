@@ -16,7 +16,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
-import * as AuthRequestContext from "../src/AuthRequestContext.ts";
+import { Api } from "@awthaq/api";
 import * as Errors from "../src/Errors.ts";
 import * as Phone from "../src/Phone.ts";
 import * as HookPoint from "../src/HookPoint.ts";
@@ -139,6 +139,49 @@ const eventsOf = (tag: "auth.user.signInFailed" | "auth.user.signedIn" | "auth.s
     return yield* auditLog.list({ eventTag: tag });
   });
 
+describe("SignIn.failed (ALF-003/CSD-004, ADR-EA-047)", () => {
+  it.effect(
+    "stamps clientIp from the request context, none outside a request, and passes the digest through",
+    () => {
+      const recorder = newRecorder();
+      return Effect.gen(function* () {
+        const signIn = yield* SignIn.make;
+        yield* signIn
+          .failed({ strategy: "passkey", reason: "assertionInvalid", identifierDigest: "d-1" })
+          .pipe(
+            Effect.provideService(
+              Api.AuthRequestContext,
+              Api.AuthRequestContext.request({ correlationId: "c", ip: "203.0.113.4" }),
+            ),
+          );
+        yield* signIn
+          .failed({ strategy: "password", reason: "invalidCredentials" })
+          .pipe(Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest));
+        const payloads = (yield* eventsOf("auth.user.signInFailed")).map((row) => row.payload);
+        const byStrategy = (strategy: string) =>
+          payloads.find(
+            (payload) => payload._tag === "auth.user.signInFailed" && payload.strategy === strategy,
+          );
+        assert.deepStrictEqual(byStrategy("passkey"), {
+          _tag: "auth.user.signInFailed",
+          strategy: "passkey",
+          reason: "assertionInvalid",
+          identifierDigest: "d-1",
+          clientIp: "203.0.113.4",
+        });
+        assert.deepStrictEqual(byStrategy("password"), {
+          _tag: "auth.user.signInFailed",
+          strategy: "password",
+          reason: "invalidCredentials",
+        });
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor(recorder)),
+      );
+    },
+  );
+});
+
 describe("SignIn.clear", () => {
   it.effect(
     "an active user clears: the clearance carries user, strategy and amr, and no session exists yet",
@@ -157,7 +200,10 @@ describe("SignIn.clear", () => {
         assert.deepStrictEqual(cleared.amr, ["pwd"]);
         const sessions = yield* Sessions.Sessions;
         assert.strictEqual((yield* sessions.list(user.id)).length, 0);
-      }).pipe(Effect.provide(envFor(recorder)));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor(recorder)),
+      );
     },
   );
 
@@ -173,10 +219,10 @@ describe("SignIn.clear", () => {
         const error = yield* signIn
           .clear({ userId: user.id, strategy: "passkey", amr: ["hwk"] })
           .pipe(
-            Effect.provideService(AuthRequestContext.AuthRequestContext, {
-              ...AuthRequestContext.none,
-              ip: Option.some("203.0.113.9"),
-            }),
+            Effect.provideService(
+              Api.AuthRequestContext,
+              Api.AuthRequestContext.request({ correlationId: "c", ip: "203.0.113.9" }),
+            ),
             Effect.flip,
           );
         assert.strictEqual(error._tag, "UserSuspended");
@@ -193,7 +239,10 @@ describe("SignIn.clear", () => {
         assert.strictEqual(recorder.beforeIssue.length, 0);
         const sessions = yield* Sessions.Sessions;
         assert.strictEqual((yield* sessions.list(user.id)).length, 0);
-      }).pipe(Effect.provide(envFor(recorder)));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor(recorder)),
+      );
     },
   );
 
@@ -212,7 +261,10 @@ describe("SignIn.clear", () => {
       yield* TestClock.adjust(Duration.minutes(6));
       const cleared = yield* signIn.clear({ userId: user.id, strategy: "password", amr: ["pwd"] });
       assert.strictEqual(cleared.user.id, user.id);
-    }).pipe(Effect.provide(envFor(recorder)));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder)),
+    );
   });
 
   it.effect("an unknown id is UserGone: no event, no tap", () => {
@@ -225,7 +277,10 @@ describe("SignIn.clear", () => {
       assert.strictEqual(error._tag, "SignIn/UserGone");
       assert.strictEqual((yield* eventsOf("auth.user.signInFailed")).length, 0);
       assert.strictEqual(recorder.beforeSignIn.length, 0);
-    }).pipe(Effect.provide(envFor(recorder)));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder)),
+    );
   });
 
   it.effect(
@@ -245,7 +300,10 @@ describe("SignIn.clear", () => {
         }
         assert.strictEqual(recorder.beforeIssue.length, 0);
         assert.strictEqual((yield* eventsOf("auth.user.signedIn")).length, 0);
-      }).pipe(Effect.provide(envFor(recorder, { abort: true })));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor(recorder, { abort: true })),
+      );
     },
   );
 
@@ -270,7 +328,10 @@ describe("SignIn.clear", () => {
           { userId: emailUser.id, email: "ada@example.com", strategy: "magicLink" },
           { userId: phoneUser.id, strategy: "sms" },
         ]);
-      }).pipe(Effect.provide(envFor(recorder)));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor(recorder)),
+      );
     },
   );
 
@@ -296,7 +357,10 @@ describe("SignIn.clear", () => {
             },
           },
         ]);
-      }).pipe(Effect.provide(envFor(recorder)));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor(recorder)),
+      );
     },
   );
 
@@ -313,7 +377,10 @@ describe("SignIn.clear", () => {
       assert.strictEqual((yield* sessions.list(user.id)).length, 0);
       assert.strictEqual((yield* eventsOf("auth.user.signedIn")).length, 0);
       assert.strictEqual(recorder.afterSignIn.length, 0);
-    }).pipe(Effect.provide(envFor(recorder, { divert: true })));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder, { divert: true })),
+    );
   });
 
   it.effect("a Users outage surfaces as the typed StoreUnavailable", () => {
@@ -324,7 +391,10 @@ describe("SignIn.clear", () => {
         signIn.clear({ userId: Users.UserId("u"), strategy: "password", amr: ["pwd"] }),
       );
       assert.strictEqual(error._tag, "StoreUnavailable");
-    }).pipe(Effect.provide(envFor(recorder, { usersOutage: true })));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder, { usersOutage: true })),
+    );
   });
 });
 
@@ -357,12 +427,15 @@ describe("SignIn.issue", () => {
           { userId: user.id, strategy: "password" },
         );
         assert.deepStrictEqual(recorder.afterSignIn, [{ userId: user.id, strategy: "password" }]);
-      }).pipe(Effect.provide(envFor(recorder)));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor(recorder)),
+      );
     },
   );
 
   it.effect(
-    "request facts come from AuthRequestContext, an explicit field overrides per field, neither gives an empty record",
+    "ADR-EA-047: request facts come from the request context only; NoRequest records none",
     () => {
       const recorder = newRecorder();
       return Effect.gen(function* () {
@@ -377,24 +450,21 @@ describe("SignIn.issue", () => {
         assert.isTrue(Option.isNone(bare.session.ipAddress));
         assert.isTrue(Option.isNone(bare.session.userAgent));
         const ambient = yield* signIn.issue(cleared).pipe(
-          Effect.provideService(AuthRequestContext.AuthRequestContext, {
-            ...AuthRequestContext.none,
-            ip: Option.some("198.51.100.1"),
-            userAgent: Option.some("ctx-agent"),
-          }),
+          Effect.provideService(
+            Api.AuthRequestContext,
+            Api.AuthRequestContext.request({
+              correlationId: "c",
+              ip: "198.51.100.1",
+              userAgent: "ctx-agent",
+            }),
+          ),
         );
         assert.deepStrictEqual(Option.getOrUndefined(ambient.session.ipAddress), "198.51.100.1");
         assert.deepStrictEqual(Option.getOrUndefined(ambient.session.userAgent), "ctx-agent");
-        const mixed = yield* signIn.issue(cleared, { userAgent: "explicit-agent" }).pipe(
-          Effect.provideService(AuthRequestContext.AuthRequestContext, {
-            ...AuthRequestContext.none,
-            ip: Option.some("198.51.100.1"),
-            userAgent: Option.some("ctx-agent"),
-          }),
-        );
-        assert.deepStrictEqual(Option.getOrUndefined(mixed.session.ipAddress), "198.51.100.1");
-        assert.deepStrictEqual(Option.getOrUndefined(mixed.session.userAgent), "explicit-agent");
-      }).pipe(Effect.provide(envFor(recorder)));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor(recorder)),
+      );
     },
   );
 
@@ -408,7 +478,10 @@ describe("SignIn.issue", () => {
         .pipe(Tenant.withTenant("t1"));
       const issued = yield* signIn.issue(cleared);
       assert.deepStrictEqual(Option.getOrUndefined(issued.session.tenantId), "t1");
-    }).pipe(Effect.provide(envFor(recorder)));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder)),
+    );
   });
 
   it.effect("an AfterSignIn failure does not fail the sign-in (BEH-EA-092)", () => {
@@ -423,7 +496,10 @@ describe("SignIn.issue", () => {
       });
       assert.strictEqual(issued.session.userId, user.id);
       assert.strictEqual(recorder.afterSignIn.length, 1);
-    }).pipe(Effect.provide(envFor(recorder, { afterFails: true })));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder, { afterFails: true })),
+    );
   });
 
   it.effect("a Sessions outage is the typed StoreUnavailable and nothing is announced", () => {
@@ -437,7 +513,10 @@ describe("SignIn.issue", () => {
       assert.strictEqual(error._tag, "StoreUnavailable");
       assert.strictEqual((yield* eventsOf("auth.user.signedIn")).length, 0);
       assert.strictEqual(recorder.afterSignIn.length, 0);
-    }).pipe(Effect.provide(envFor(recorder, { sessionsOutage: true })));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder, { sessionsOutage: true })),
+    );
   });
 });
 
@@ -477,7 +556,10 @@ describe("SignIn.resume", () => {
           signIn.resume({ userId: Users.UserId("nobody"), strategy: "x", amr: [] }),
         );
         assert.strictEqual(gone._tag, "SignIn/UserGone");
-      }).pipe(Effect.provide(envFor(recorder)));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor(recorder)),
+      );
     },
   );
 });
@@ -500,7 +582,10 @@ describe("sign-in continuations", () => {
         assert.deepStrictEqual(recorder.continued, [
           { n: 1, sessionId: issued.session.id, userId: user.id, strategy: "saml:o:c" },
         ]);
-      }).pipe(Effect.provide(envFor(recorder)));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(envFor(recorder)),
+      );
     },
   );
 
@@ -528,7 +613,10 @@ describe("sign-in continuations", () => {
           .pipe(Tenant.withTenant("t1"));
         yield* signIn.issue(cleared);
         assert.deepStrictEqual(tenants, [Option.some("t1")]);
-      }).pipe(Effect.provide(watching.layer.pipe(Layer.provideMerge(envFor(recorder)))));
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(watching.layer.pipe(Layer.provideMerge(envFor(recorder)))),
+      );
     },
   );
 
@@ -547,7 +635,10 @@ describe("sign-in continuations", () => {
       );
       assert.isTrue(Exit.isFailure(exit));
       if (Exit.isFailure(exit)) assert.isTrue(Cause.hasDies(exit.cause));
-    }).pipe(Effect.provide(envFor(recorder)));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder)),
+    );
   });
 
   it.effect("registering after the registry was first read is a defect (frozen)", () => {
@@ -568,6 +659,9 @@ describe("sign-in continuations", () => {
         ).pipe(Effect.scoped),
       );
       assert.isTrue(Exit.isFailure(late));
-    }).pipe(Effect.provide(envFor(recorder)));
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(envFor(recorder)),
+    );
   });
 });

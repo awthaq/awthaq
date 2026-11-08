@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-07 |
-> | Revision | 1.9 |
+> | Revision | 1.10 |
 > | Effective Date | 2026-09-29 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-014 (session storage backend neutrality) and a note on the revoke/in-flight-request TOCTOU window (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added BEH-EA-319: `reauthenticate` advances only a live session the caller owns (plan 10 item 3) <br> 1.4 (2026-10-13): Added BEH-EA-320: `requireFresh`, the one fresh-session gate (plan 10 item 4) <br> 1.5 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.6 (2026-10-13): BEH-EA-053 names the ownership rule for `supersedes`; RRS-003's reuse is published once; THS-003's union and TIR-008's revoke are one atomic step in both layers (plan 02 phase 0) <br> 1.7 (2026-10-13): One implementation over `SessionStore`: the supersede is one store primitive (BEH-EA-053), a rotation is a compare-and-swap that never rotates a tombstone and whose loser re-checks liveness (BEH-EA-052), the listing is bounded on every adapter (BEH-EA-054), session writes capture the causal token (plan 02 phase 6) <br> 1.8 (2026-10-18): BEH-EA-055 `SecureDomain` readers: the web adapter reads and renders under the configured cookie too; the naming rule is `Api.sessionCookieName` (plan 11 phase 0) <br> 1.9 (2026-10-18): the decision over a presented credential is one pure function, and a rotation loser announces an expiry (plan 19) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-014 (session storage backend neutrality) and a note on the revoke/in-flight-request TOCTOU window (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added BEH-EA-319: `reauthenticate` advances only a live session the caller owns (plan 10 item 3) <br> 1.4 (2026-10-13): Added BEH-EA-320: `requireFresh`, the one fresh-session gate (plan 10 item 4) <br> 1.5 (2026-10-13): The retention-sweep note cites ADR-EA-031, not ADR-EA-033 (plan 10 item 8) <br> 1.6 (2026-10-13): BEH-EA-053 names the ownership rule for `supersedes`; RRS-003's reuse is published once; THS-003's union and TIR-008's revoke are one atomic step in both layers (plan 02 phase 0) <br> 1.7 (2026-10-13): One implementation over `SessionStore`: the supersede is one store primitive (BEH-EA-053), a rotation is a compare-and-swap that never rotates a tombstone and whose loser re-checks liveness (BEH-EA-052), the listing is bounded on every adapter (BEH-EA-054), session writes capture the causal token (plan 02 phase 6) <br> 1.8 (2026-10-18): BEH-EA-055 `SecureDomain` readers: the web adapter reads and renders under the configured cookie too; the naming rule is `Api.sessionCookieName` (plan 11 phase 0) <br> 1.9 (2026-10-18): the decision over a presented credential is one pure function, and a rotation loser announces an expiry (plan 19) <br> 1.10 (2026-11-08): request facts are read from `Api.AuthRequestContext` (ADR-EA-047, architecture plan 26) |
 
 ---
 
@@ -21,7 +21,7 @@
 > **See:** [ADR-EA-014](../decisions/014-session-storage-backend-neutrality.md)
 
 ```ts
-const { session, token } = yield* sessions.issue({ userId, request: { ip, userAgent } })
+const { session, token } = yield* sessions.issue({ userId })   // records the request context's ip and user agent
 // token: Redacted<"<id>.<secret>">
 ```
 
@@ -126,7 +126,7 @@ REQUIREMENT: `Sessions` MUST expose a list of a user's own live sessions
 
 **`revokeAll` (TIR-006) is the third bulk operation.** `POST /session/revoke-all` revokes every one of the caller's sessions — the current one included, unlike `revokeOthers` — and its response expires the `__Host-session` cookie, so the caller is signed out of this device too.
 
-**Device metadata is recorded at issuance (CSD-003).** Every session-minting path — password sign-up, sign-in and change-password, the OAuth callback, the passkey authenticate ceremony — MUST pass the request's client address (resolved through the `ClientAddress` port, so a trusted-proxy composition records the real client) and `User-Agent` to `Sessions.issue`, so the device list and forensics have data. `issue` caps the persisted user agent at 512 characters (`MAX_USER_AGENT_LENGTH`) at the persistence boundary, since it is a caller-supplied header.
+**Device metadata is recorded at issuance (CSD-003, [ADR-EA-047](../decisions/047-request-facts-from-auth-request-context.md)).** Every session records the facts of the request that minted it, read from `Api.AuthRequestContext`: `Sessions.issue` takes no request argument and names the context in its requirements, so every minting path (the sign-in flows, sign-up, change-password, admin impersonation) records the client address the `ClientAddress` port resolved (a trusted-proxy composition records the real client) and the `User-Agent`, capped at 512 characters (`Api.MAX_USER_AGENT_LENGTH`) by the only constructor of `Api.UserAgentHeader`. Work that answers no request states `Api.AuthRequestContext.noRequest`, and its session records no address and no user agent. A migrated legacy session keeps the legacy row's own facts.
 
 `archive/design/usage-examples-v4.md` §5.1 is the worked example of all three operations reached through the core `session` group (BEH-EA-031): listing devices, revoking a specific one, and revoking the rest after a password change (`sessions.revokeOthers(userId, session.id)`, §5.2) — the operation BEH-EA-053's privilege-change rule is designed to trigger automatically as well as expose for a user to invoke directly.
 

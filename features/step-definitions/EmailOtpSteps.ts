@@ -1,6 +1,7 @@
 // P20a (BCR-010): steps for features/features/14-mfa-passwordless/33-email-otp.feature. The
 // shared people/clock/gate steps are in PasswordlessCommonSteps.ts; what is specific here is a
 // code — minted by Verification, mailed, presented with an attempt budget behind it.
+import { TestAuth } from "@awthaq/test";
 import { AuditLog, AuthEvents, Persistence, Verification } from "@awthaq/core";
 import { EmailOtp, EmailOtpApi } from "@awthaq/magic-link";
 import { defineSteps } from "@effect-cucumber/vitest";
@@ -51,7 +52,9 @@ const variant = (email: string, tag: string) => {
 };
 
 const requestCode = (email: string, ip?: string) =>
-  EmailOtp.EmailOtp.pipe(Effect.flatMap((otp) => otp.requestCode({ email, ip })));
+  EmailOtp.EmailOtp.pipe(
+    Effect.flatMap((otp) => otp.requestCode({ email }).pipe(TestAuth.withRequest({ ip }))),
+  );
 
 const issueNumeric = (identifier: string, digits: number) =>
   Verification.Verification.pipe(

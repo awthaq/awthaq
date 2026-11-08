@@ -129,7 +129,7 @@ describe("VerificationLink.redeemer", () => {
       spent: Ref.get(spent),
       note,
       budget: {
-        source: (ip: string | undefined) => note(`source:${ip}`),
+        source: note("source"),
         token: (publicId: string) => note(`token:${publicId}`),
       },
     };
@@ -147,7 +147,7 @@ describe("VerificationLink.redeemer", () => {
           userId: userA,
         });
         const redeem = VerificationLink.redeemer(ResetLink, { verification, budget });
-        const link = yield* redeem({ token: issued.token, ip: "203.0.113.1" }, Effect.succeed);
+        const link = yield* redeem({ token: issued.token }, Effect.succeed);
         assert.deepStrictEqual(link, {
           purpose: "reset-password",
           userId: userA,
@@ -174,15 +174,14 @@ describe("VerificationLink.redeemer", () => {
           "reset-password:abc.",
         ];
         for (const raw of raws) {
-          const refused = yield* redeem(
-            { token: Redacted.make(raw), ip: "ip" },
-            Effect.succeed,
-          ).pipe(Effect.flip);
+          const refused = yield* redeem({ token: Redacted.make(raw) }, Effect.succeed).pipe(
+            Effect.flip,
+          );
           assert.strictEqual(reasonOf(refused), "malformed", raw);
         }
         assert.deepStrictEqual(
           yield* spent,
-          raws.map(() => "source:ip"),
+          raws.map(() => "source"),
         );
       }).pipe(Effect.provide(TestLayer)),
   );
@@ -204,7 +203,7 @@ describe("VerificationLink.redeemer", () => {
         const wire: Redacted.Redacted<string> = verifyIssued.token;
         const refused = yield* resets({ token: wire }, Effect.succeed).pipe(Effect.flip);
         assert.strictEqual(reasonOf(refused), "malformed");
-        assert.deepStrictEqual(yield* spent, ["source:undefined"]);
+        assert.deepStrictEqual(yield* spent, ["source"]);
         const link = yield* verifies({ token: wire }, Effect.succeed);
         assert.strictEqual(link.userId, userA);
       }).pipe(Effect.provide(TestLayer)),
@@ -222,11 +221,11 @@ describe("VerificationLink.redeemer", () => {
           userId: userA,
         });
         const redeem = VerificationLink.redeemer(ResetLink, { verification, budget });
-        yield* redeem({ token: issued.token, ip: "ip" }, () => note("use"), {
+        yield* redeem({ token: issued.token }, () => note("use"), {
           beforeClaim: note("beforeClaim"),
         });
         assert.deepStrictEqual(yield* spent, [
-          "source:ip",
+          "source",
           `token:${issued.publicId}`,
           "beforeClaim",
           "use",
@@ -251,7 +250,7 @@ describe("VerificationLink.redeemer", () => {
         const limited = VerificationLink.redeemer(ResetLink, {
           verification,
           budget: {
-            source: () => Effect.void,
+            source: Effect.void,
             token: () => Effect.fail("limited" as const),
           },
         });

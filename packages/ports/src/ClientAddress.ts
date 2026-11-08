@@ -9,7 +9,10 @@
 // `PasswordHasher` (ADR-EA-010): "which proxy hops do I trust" is
 // deployment topology, not something a plugin like `@awthaq/oauth` or
 // `@awthaq/password` can know, so it is a capability the *application*
-// provides, never a plugin-bundled feature.
+// provides, never a plugin-bundled feature. ADR-EA-047: its one consumer is
+// `@awthaq/server`'s request-context middleware (`RequestContextLive`), which
+// captures the address once per request as `Api.AuthRequestContext`; no plugin
+// reads this port.
 //
 // Two shipped layers:
 //
@@ -44,7 +47,6 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Headers from "effect/http/Headers";
 import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 export interface ClientAddressShape {
@@ -56,29 +58,6 @@ export interface ClientAddressShape {
 export class ClientAddress extends Context.Service<ClientAddress, ClientAddressShape>()(
   "awthaq/ports/ClientAddress",
 ) {}
-
-/**
- * CSD-003/AGA-001: what a request says about its client, as the explicit `ip`/`userAgent` arguments plugin
- * Shapes take (plan 01 Q1: they stay explicit). Omitted keys, never `undefined` (`exactOptionalPropertyTypes`).
- */
-export const facts = (
-  clientAddress: ClientAddressShape,
-  request: HttpServerRequest.HttpServerRequest,
-) =>
-  Effect.map(clientAddress.resolve(request), (ip) => ({
-    ...(Option.isSome(ip) ? { ip: ip.value } : {}),
-    ...Option.match(Headers.get(request.headers, "user-agent"), {
-      onNone: () => ({}),
-      onSome: (userAgent) => ({ userAgent }),
-    }),
-  }));
-
-/** The address alone, for a call that keys a rate limit on it and takes no user agent. */
-export const address = (
-  clientAddress: ClientAddressShape,
-  request: HttpServerRequest.HttpServerRequest,
-) =>
-  Effect.map(clientAddress.resolve(request), (ip) => (Option.isSome(ip) ? { ip: ip.value } : {}));
 
 /** Byte-for-byte today's behavior — the raw socket peer, no header trusted. */
 export const layerDirect: Layer.Layer<ClientAddress> = Layer.succeed(

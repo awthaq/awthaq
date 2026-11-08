@@ -4,6 +4,7 @@
 // `React.cache` only memoizes inside a React server render, so this file stands in a faithful memoizing `cache`
 // (keyed on argument identity, as React's is) to pin what `getSession` hands it: the WHOLE cookie-header resolution
 // (ADR-EA-042), not each token, so two calls in one render verify once.
+import { TestAuth } from "@awthaq/test";
 import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { Credentials } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -54,7 +55,7 @@ describe("getSession: the React.cache unit is the whole cookie-header resolution
             identity: { _tag: "Email", email: "next-dedupe@example.com" },
             name: "Dedupe",
           });
-          return yield* sessions.issue({ userId: user.id });
+          return yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest);
         }),
       );
       // One render: `headers().get("cookie")` is the same string and the runtime the same object.

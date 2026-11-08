@@ -1,6 +1,7 @@
 // BAM-007, MLO-005, MLO-002, ARF-005 Fix A (BEH-EA-267 to BEH-EA-270): the MagicLink plugin at the
 // domain level — real in-memory stores, the real mail dispatcher, the real `@awthaq/two-factor`
 // gates for the MFA divert.
+import { TestAuth } from "@awthaq/test";
 import { AuditLog, Sessions, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { SignInProbe } from "@awthaq/test";
@@ -76,7 +77,10 @@ describe("MagicLink.requestLink (BEH-EA-268)", () => {
         assert.isTrue(token.startsWith("magic-link:"));
         // Sign-up is off: asking for a link never created anyone.
         assert.isTrue(Option.isNone(yield* users.findByEmail("nobody@example.com")));
-      }).pipe(Effect.provide(buildLayer({ magicLink: { allowSignUp: false } }))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer({ magicLink: { allowSignUp: false } })),
+      ),
   );
 
   it.effect("mail data carries the expiry, and a fragment link when a baseUrl is configured", () =>
@@ -92,7 +96,10 @@ describe("MagicLink.requestLink (BEH-EA-268)", () => {
       assert.notInclude(url.split("#")[0] ?? "", "token");
       assert.isFalse(url.includes("?"));
       assert.isTrue(Redacted.isRedacted(mail?.data?.["token"]));
-    }).pipe(Effect.provide(buildLayer({ magicLink: { baseUrl: "https://app.example.com" } }))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(buildLayer({ magicLink: { baseUrl: "https://app.example.com" } })),
+    ),
   );
 
   it.effect("MLO-002: an address is mailed at most one link per resend window", () =>
@@ -108,7 +115,7 @@ describe("MagicLink.requestLink (BEH-EA-268)", () => {
       yield* awaitMails(mailer.sent, 2);
       yield* letForkedFibersRun;
       assert.strictEqual((yield* mailer.sent).length, 2);
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("is rate limited per address (5 in 15 minutes, `+tag` variants share one budget)", () =>
@@ -120,7 +127,7 @@ describe("MagicLink.requestLink (BEH-EA-268)", () => {
         .requestLink({ email: "victim+9@example.com" })
         .pipe(Effect.flip);
       assert.strictEqual(limited._tag, "RateLimited");
-    }).pipe(Effect.provide(buildLayer({ limiter: realLimiter }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ limiter: realLimiter }))),
   );
 });
 
@@ -139,7 +146,7 @@ describe("MagicLink.verify (BEH-EA-269)", () => {
         assert.isFalse(Users.isEmailVerified(created));
 
         const { token } = yield* requestAndRead("ada@example.com");
-        const issued = yield* magicLink.verify({ token }, { userAgent: "Browser/1.0" });
+        const issued = yield* magicLink.verify({ token });
         assert.strictEqual(issued.session.userId, created.id);
         assert.deepStrictEqual(issued.session.amr, ["email"]);
         assert.isTrue(Users.isEmailVerified(yield* users.findById(created.id)));
@@ -147,7 +154,7 @@ describe("MagicLink.verify (BEH-EA-269)", () => {
 
         const replay = yield* magicLink.verify({ token }).pipe(Effect.flip);
         assert.strictEqual(replay._tag, "MagicLinkConsumed");
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -166,7 +173,7 @@ describe("MagicLink.verify (BEH-EA-269)", () => {
         assert.strictEqual(issued.session.userId, created.id);
         assert.isTrue(Users.isEmailVerified(created));
         assert.strictEqual((yield* audit.list({ eventTag: "auth.user.created" })).length, 1);
-      }).pipe(Effect.provide(buildLayer())),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -190,7 +197,10 @@ describe("MagicLink.verify (BEH-EA-269)", () => {
           recorded.afterSignIn.map((input) => input.strategy),
           ["magicLink"],
         );
-      }).pipe(Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(buildLayer())))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(SignInProbe.layer.pipe(Layer.provideMerge(buildLayer()))),
+      ),
   );
 
   it.effect(
@@ -231,7 +241,10 @@ describe("MagicLink.verify (BEH-EA-269)", () => {
         );
         assert.deepStrictEqual(consumed.amr, ["email"]);
         assert.strictEqual(consumed.strategy, "magicLink");
-      }).pipe(Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer)))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer))),
+      ),
   );
 });
 
@@ -253,7 +266,7 @@ describe("MagicLink.verify redeems the link (ADR-EA-039)", () => {
           Effect.andThen(magicLink.verify({ token })),
         );
         assert.strictEqual(issued.session.userId, created.id);
-      }).pipe(Effect.provide(buildLayer({ failSessionIssue: outage }))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ failSessionIssue: outage }))),
   );
 
   it.effect(
@@ -288,7 +301,10 @@ describe("MagicLink.verify redeems the link (ADR-EA-039)", () => {
           Effect.succeed,
         );
         assert.strictEqual(challenge.strategy, "magicLink");
-      }).pipe(Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer)))),
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer().pipe(Layer.provide(NodeCrypto.layer))),
+      ),
   );
 
   it.effect("a suspended user's refusal spends the link (refusals commit)", () =>
@@ -306,6 +322,6 @@ describe("MagicLink.verify redeems the link (ADR-EA-039)", () => {
       yield* users.setStatus(user.id, "active");
       const second = yield* magicLink.verify({ token }).pipe(Effect.flip);
       assert.strictEqual(second._tag, "MagicLinkConsumed");
-    }).pipe(Effect.provide(buildLayer())),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 });

@@ -89,7 +89,7 @@ describe("Admin", () => {
         // The caller's own original session is completely untouched.
         const stillWorks = yield* sessions.verify(callerSession.token);
         assert.strictEqual(stillWorks.session.id, callerSession.session.id);
-      }).pipe(Effect.provide(buildLayer(allow))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(allow))),
   );
 
   it.effect(
@@ -120,7 +120,7 @@ describe("Admin", () => {
         yield* TestClock.adjust(Duration.millis(10));
         assert.isUndefined(seen.pollUnsafe());
         yield* Fiber.interrupt(seen);
-      }).pipe(Effect.provide(buildLayer(deny))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(deny))),
   );
 
   it.effect(
@@ -138,7 +138,7 @@ describe("Admin", () => {
           .impersonate({ caller, targetUserId: targetId, reason: "test" })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "AdminAlreadyImpersonating");
-      }).pipe(Effect.provide(buildLayer(allow))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(allow))),
   );
 
   it.effect(
@@ -174,7 +174,7 @@ describe("Admin", () => {
         const targetOwnSession = yield* sessions.issue({ userId: targetId });
         const stillWorks = yield* sessions.verify(targetOwnSession.token);
         assert.strictEqual(stillWorks.session.id, targetOwnSession.session.id);
-      }).pipe(Effect.provide(buildLayer(allow))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(allow))),
   );
 
   it.effect("stopImpersonating fails when the caller's own session carries no actingAs", () =>
@@ -184,7 +184,7 @@ describe("Admin", () => {
       const caller = asCaller({ id: adminId, sessionId: "admin-session" });
       const failure = yield* admin.stopImpersonating(caller).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "AdminImpersonationNotFound");
-    }).pipe(Effect.provide(buildLayer(allow))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(allow))),
   );
 
   it.effect(
@@ -210,7 +210,7 @@ describe("Admin", () => {
 
         const unknown = yield* admin.forceStop(anotherAdmin, "does-not-exist").pipe(Effect.flip);
         assert.strictEqual(unknown._tag, "AdminImpersonationNotFound");
-      }).pipe(Effect.provide(buildLayer(allow))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(allow))),
   );
 
   it.effect(
@@ -239,7 +239,7 @@ describe("Admin", () => {
         const active = (yield* admin.list(caller, { active: true })).items;
         assert.strictEqual(active.length, 1);
         assert.strictEqual(active[0]?.reason, "second");
-      }).pipe(Effect.provide(buildLayer(allow))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(allow))),
   );
 
   it.effect(
@@ -271,7 +271,7 @@ describe("Admin", () => {
         yield* TestClock.adjust(Duration.millis(10));
         assert.isUndefined(seen.pollUnsafe());
         yield* Fiber.interrupt(seen);
-      }).pipe(Effect.provide(buildLayer(allow))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(allow))),
   );
 
   /** Collects every `impersonationStopped` event published from now on (the fork is registered before it returns). */
@@ -338,7 +338,7 @@ describe("Admin", () => {
             targetUserId: targetId,
           },
         ]);
-      }).pipe(Effect.scoped, Effect.provide(buildLayer(allow))),
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer(allow))),
   );
 
   it.effect("IDS-004: sweepExpiredEpisodes closes expired episodes without any read", () =>
@@ -360,7 +360,7 @@ describe("Admin", () => {
       if (Option.isSome(row)) assert.deepStrictEqual(row.value.endedBy, Option.some("expired"));
       yield* TestClock.adjust(Duration.millis(10));
       assert.strictEqual((yield* Ref.get(seen)).length, 1);
-    }).pipe(Effect.scoped, Effect.provide(buildLayer(allow))),
+    }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer(allow))),
   );
 
   it.effect("IDS-007: stopImpersonating still revokes when the audit row was already ended", () =>
@@ -382,7 +382,7 @@ describe("Admin", () => {
       );
       const revoked = yield* sessions.verify(issued.token).pipe(Effect.flip);
       assert.strictEqual(revoked._tag, "Sessions/NotFound");
-    }).pipe(Effect.provide(buildLayer(allow))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(allow))),
   );
 
   it.effect("IDS-007: forceStop after the target's revokeAll does not die", () =>
@@ -402,7 +402,7 @@ describe("Admin", () => {
       if (Option.isSome(row)) {
         assert.deepStrictEqual(row.value.endedBy, Option.some("forcedByAdmin"));
       }
-    }).pipe(Effect.provide(buildLayer(allow))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(allow))),
   );
 
   it.effect("IDS-007: forceStop never revokes a session that has no episode row", () =>
@@ -417,7 +417,7 @@ describe("Admin", () => {
       assert.strictEqual(failure._tag, "AdminImpersonationNotFound");
       const stillLive = yield* sessions.verify(ordinary.token);
       assert.strictEqual(stillLive.session.id, ordinary.session.id);
-    }).pipe(Effect.provide(buildLayer(allow))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(allow))),
   );
 
   it.effect(
@@ -436,7 +436,7 @@ describe("Admin", () => {
         assert.strictEqual(failure._tag, "AdminImpersonationNotFound");
         const revoked = yield* sessions.verify(issued.token).pipe(Effect.flip);
         assert.strictEqual(revoked._tag, "Sessions/NotFound");
-      }).pipe(Effect.provide(buildLayer(allow))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(allow))),
   );
 });
 
@@ -454,7 +454,7 @@ describe("Admin tenant scoping (IDS-002)", () => {
       const [episode] = (yield* admin.list(caller).pipe(Tenant.withTenant("org-a"))).items;
       assert.deepStrictEqual(episode?.tenantId, Option.some("org-a"));
       assert.strictEqual(episode?.sessionId, issued.session.id);
-    }).pipe(Effect.provide(buildLayerWith({ canImpersonate: allow }))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayerWith({ canImpersonate: allow }))),
   );
 
   it.effect(
@@ -495,6 +495,7 @@ describe("Admin tenant scoping (IDS-002)", () => {
         const revoked = yield* sessions.verify(inB.token).pipe(Effect.flip);
         assert.strictEqual(revoked._tag, "Sessions/NotFound");
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayerWith({
             canImpersonate: () => Effect.succeed(true),
@@ -514,7 +515,7 @@ describe("Admin tenant scoping (IDS-002)", () => {
       assert.strictEqual(listed.length, 1);
       assert.isTrue(Option.isNone(listed[0]?.tenantId ?? Option.some("x")));
       yield* admin.forceStop(caller, issued.session.id);
-    }).pipe(Effect.provide(buildLayer(allow))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(allow))),
   );
 
   it.effect(
@@ -533,6 +534,7 @@ describe("Admin tenant scoping (IDS-002)", () => {
           .pipe(Tenant.withTenant("org-b"));
         assert.strictEqual(listed.length, 0);
       }).pipe(
+        TestAuth.withoutRequest,
         Effect.provide(
           buildLayerWith({
             canImpersonate: () => Effect.succeed(true),

@@ -3,6 +3,7 @@
 // One suite, run over memory and over SQLite (migrated by `@awthaq/sql`'s own
 // `CoreMigrations`). Time is `TestClock`'s: rows are created at the epoch and the clock is
 // moved forward, so "older than the grace" is exact and no test waits.
+import { Api } from "@awthaq/api";
 import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { SqlTransaction } from "@awthaq/ports";
 import { CoreMigrations } from "@awthaq/sql";
@@ -101,7 +102,10 @@ const suite = (
           assert.strictEqual((yield* Retention.sweep).sessionsDeleted, 0);
           assert.isTrue(Option.isNone(yield* sessions.findOwned(alice, gone.session.id)));
           assert.isTrue(Option.isSome(yield* sessions.findOwned(alice, longLived.session.id)));
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect(
@@ -123,7 +127,10 @@ const suite = (
           assert.strictEqual(report.verificationRowsDeleted, 2);
           assert.strictEqual((yield* Retention.sweep).verificationRowsDeleted, 0);
           yield* verification.consume("fresh", fresh.value);
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect("audit rows are kept for ever unless a window is configured", () =>
@@ -134,7 +141,10 @@ const suite = (
         yield* TestClock.adjust(days(3650));
         assert.strictEqual((yield* Retention.sweep).auditRowsDeleted, 0);
         assert.strictEqual((yield* auditLog.list()).length, 1);
-      }).pipe(Effect.provide(layer)),
+      }).pipe(
+        Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+        Effect.provide(layer),
+      ),
     );
 
     it.effect(
@@ -156,6 +166,7 @@ const suite = (
 
           // Only `auth.token.replay` has a 90-day window; no default: the other tag stays.
           const perTag = yield* Retention.sweep.pipe(
+            Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
             Effect.provide(
               Retention.config({
                 auditLog: {
@@ -177,7 +188,10 @@ const suite = (
           });
           // ...but the tag's own 30-day rule wins over the default and purges it.
           assert.strictEqual(
-            (yield* Retention.sweep.pipe(Effect.provide(withDefault))).auditRowsDeleted,
+            (yield* Retention.sweep.pipe(
+              Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+              Effect.provide(withDefault),
+            )).auditRowsDeleted,
             1,
           );
           assert.deepStrictEqual(yield* tags, []);
@@ -186,6 +200,7 @@ const suite = (
           yield* publishBoth;
           yield* TestClock.adjust(days(400));
           const onlyDefault = yield* Retention.sweep.pipe(
+            Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
             Effect.provide(
               Retention.config({
                 auditLog: {
@@ -197,7 +212,10 @@ const suite = (
           );
           assert.strictEqual(onlyDefault.auditRowsDeleted, 1);
           assert.deepStrictEqual(yield* tags, ["auth.user.emailVerified"]);
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect(
@@ -243,7 +261,10 @@ const suite = (
             { id: "fake.b", deleted: 3, failed: false },
           ]);
           assert.deepStrictEqual(seen, [DateTime.toEpochMillis(yield* DateTime.now)]);
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
 
     it.effect(
@@ -276,11 +297,17 @@ const suite = (
               yield* Effect.yieldNow;
               yield* TestClock.adjust(days(1));
               yield* Effect.yieldNow;
-            }).pipe(Effect.provide(Retention.config({ sweepInterval: days(1) }))),
+            }).pipe(
+              Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+              Effect.provide(Retention.config({ sweepInterval: days(1) })),
+            ),
           );
           const cutoff = yield* graceCutoff(days(7));
           assert.strictEqual(yield* sessions.purgeExpired(cutoff), 0);
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+          Effect.provide(layer),
+        ),
     );
   });
 
@@ -328,6 +355,9 @@ describe("Retention over SQLite: rows are physically gone", () => {
         ],
         [0, 0, 0],
       );
-    }).pipe(Effect.provide(SqlLayer)),
+    }).pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(SqlLayer),
+    ),
   );
 });

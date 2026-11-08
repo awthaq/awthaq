@@ -10,7 +10,8 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { Defects } from "@awthaq/ports";
 import { AuthEvents } from "../AuthEvents.ts";
-import { AuthRequestContext } from "../AuthRequestContext.ts";
+import type { SignInFailureReason } from "../AuthEventSchemas.ts";
+import { Api } from "@awthaq/api";
 import * as HookPoint from "../HookPoint.ts";
 import * as Hooks from "../Hooks.ts";
 import type * as Sessions from "../Sessions.ts";
@@ -49,10 +50,12 @@ export class UserGone extends Data.TaggedError("SignIn/UserGone")<{
   readonly userId: Users.UserId;
 }> {}
 
-/** Explicit request facts; each field falls back to `AuthRequestContext` when omitted. */
-export interface SessionRequest {
-  readonly ip?: string | undefined;
-  readonly userAgent?: string | undefined;
+/** A failed sign-in attempt, announced by `SignIn.failed`. No user id, no email (ALF-003/CSD-004). */
+export interface Failure {
+  readonly strategy: string;
+  readonly reason: SignInFailureReason;
+  /** A keyed digest of the presented identifier, for a stuffing detector; never the identifier itself. */
+  readonly identifierDigest?: string | undefined;
 }
 
 /** The one session-with-token type every sign-in plugin aliases: `Sessions.IssuedSession`. */
@@ -66,6 +69,25 @@ export const makeSteps = Effect.gen(function* () {
   const beforeSessionIssue = yield* Hooks.BeforeSessionIssue;
   const afterSignIn = yield* Hooks.AfterSignIn;
   const continuations = yield* SignInContinuationRegistry;
+
+  /**
+   * ALF-003/CSD-004: the one publisher of `auth.user.signInFailed`. Its `clientIp` is the address of the request the
+   * attempt answered (ADR-EA-047), absent outside a request or when the address is unresolvable.
+   */
+  const failed = (failure: Failure) =>
+    Effect.gen(function* () {
+      const context = yield* Api.AuthRequestContext;
+      const ip = Api.isRequest(context) ? context.ip : Option.none<string>();
+      yield* events.publish({
+        _tag: "auth.user.signInFailed",
+        strategy: failure.strategy,
+        reason: failure.reason,
+        ...(failure.identifierDigest === undefined
+          ? {}
+          : { identifierDigest: failure.identifierDigest }),
+        ...(Option.isSome(ip) ? { clientIp: ip.value } : {}),
+      });
+    });
 
   /** Lookup + THE gate (SCP-001). A suspended refusal is announced for every strategy (policy 3.6.2). */
   const gate = Effect.fnUntraced(function* (attempt: Attempt) {
@@ -82,17 +104,7 @@ export const makeSteps = Effect.gen(function* () {
     // EOTS-001: the credential is proven, so the span may name the user (an id, never the email).
     yield* Effect.annotateCurrentSpan("user.id", user.id);
     yield* Users.assertCanSignIn(user).pipe(
-      Effect.tapError(() =>
-        Effect.gen(function* () {
-          const request = yield* AuthRequestContext;
-          yield* events.publish({
-            _tag: "auth.user.signInFailed",
-            strategy: attempt.strategy,
-            reason: "suspended",
-            ...(Option.isSome(request.ip) ? { clientIp: request.ip.value } : {}),
-          });
-        }),
-      ),
+      Effect.tapError(() => failed({ strategy: attempt.strategy, reason: "suspended" })),
     );
     return user;
   });
@@ -141,19 +153,10 @@ export const makeSteps = Effect.gen(function* () {
   });
 
   /** Inside or outside a transaction: the row only (plus the core-owned `auth.session.issued`). */
-  const mint = (cleared: Clearance, request: SessionRequest | undefined) =>
+  /** ADR-EA-047: `Sessions.issue` records the request context's facts itself. */
+  const mint = (cleared: Clearance) =>
     Effect.gen(function* () {
-      const context = yield* AuthRequestContext;
-      const ip = request?.ip ?? Option.getOrUndefined(context.ip);
-      const userAgent = request?.userAgent ?? Option.getOrUndefined(context.userAgent);
-      const issue = sessions.issue({
-        userId: cleared.user.id,
-        request: {
-          ...(ip === undefined ? {} : { ip }),
-          ...(userAgent === undefined ? {} : { userAgent }),
-        },
-        amr: cleared.amr,
-      });
+      const issue = sessions.issue({ userId: cleared.user.id, amr: cleared.amr });
       // D3: a resumed sign-in is minted in the first factor's tenant, not the verify request's.
       return yield* Option.match(cleared.tenantId, {
         onNone: () => issue,
@@ -192,5 +195,5 @@ export const makeSteps = Effect.gen(function* () {
     return issued;
   });
 
-  return { gate, clear, resume, mint, announce };
+  return { gate, clear, resume, mint, announce, failed };
 });

@@ -85,7 +85,7 @@ type Handler = HttpApiMiddleware.HttpApiMiddlewareSecurity<
   typeof Api.MachineAuthentication.security,
   Api.CurrentPrincipal,
   typeof Api.Unauthenticated | typeof Api.StoreUnavailable,
-  never
+  Api.AuthRequestContext
 >["cookie"];
 
 /**
@@ -109,7 +109,7 @@ const tierHandlers = <P extends Api.Principal>(tier: Credentials.Tier<P>) =>
             carrier,
             presented,
             tier,
-            Credentials.httpScope(request),
+            Credentials.httpScope(request, yield* Api.AuthRequestContext),
           );
           return yield* serve(resolved.carrier, httpEffect, resolved.principal);
         });
@@ -214,13 +214,17 @@ export const OptionalAuthenticationLive: Layer.Layer<
       typeof Api.OptionalAuthentication.security,
       Api.CurrentPrincipal,
       typeof Api.StoreUnavailable,
-      never
+      Api.AuthRequestContext
     >["cookie"] = (httpEffect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
         const presented = yield* Credentials.fromRequest(request);
         const resolved = yield* credentials
-          .resolve(presented, Credentials.optionalTier, Credentials.httpScope(request))
+          .resolve(
+            presented,
+            Credentials.optionalTier,
+            Credentials.httpScope(request, yield* Api.AuthRequestContext),
+          )
           .pipe(
             Effect.map(Option.some),
             Effect.catchTag("Unauthenticated", () => Effect.succeedNone),

@@ -38,7 +38,8 @@ class Whoami extends Schema.Class<Whoami>("Whoami")({ userId: Schema.String }) {
 const WhoamiApi = HttpApi.make("auth").add(
   HttpApiGroup.make("whoami")
     .add(HttpApiEndpoint.get("get", "/whoami", { success: Whoami }))
-    .middleware(Api.Authentication),
+    .middleware(Api.Authentication)
+    .middleware(Api.RequestContext),
 );
 
 const WhoamiHandlers = HttpApiBuilder.group(WhoamiApi, "whoami", (handlers) =>
@@ -156,7 +157,7 @@ layer(PasswordLayer)(
         yield* users.verifyEmail(issued.session.userId);
         const again = yield* password.signIn({ email: "bundle@example.com", password: secret });
         assert.strictEqual(again.session.userId, issued.session.userId);
-      }),
+      }).pipe(TestAuth.withoutRequest),
     );
   },
 );

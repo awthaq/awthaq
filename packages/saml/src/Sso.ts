@@ -16,7 +16,7 @@
 import { Api } from "@awthaq/api";
 import { AuthPlugin, RateLimits } from "@awthaq/core";
 import { OrganizationConnections } from "@awthaq/organization";
-import { ClientAddress, RateLimiter } from "@awthaq/ports";
+import { RateLimiter } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -26,7 +26,6 @@ import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
-import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as Saml from "./Saml.ts";
 import * as SamlConfig from "./SamlConfig.ts";
 import * as SamlConnections from "./SamlConnections.ts";
@@ -82,7 +81,9 @@ export const SsoGroup = HttpApiGroup.make("sso")
   )
   // BEH-EA-201: a pre-authentication lookup (which login does this address route to?) that reads no credential and changes
   // nothing, so there is no ambient credential to forge: `awthaq doctor` skips its CSRF check.
-  .annotate(Api.BackChannel, true);
+  .annotate(Api.BackChannel, true)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const SsoApi = HttpApi.make("auth").add(SsoGroup);
 
@@ -116,11 +117,14 @@ export interface SsoShape {
     readonly organizationId?: string | undefined;
     readonly callbackURL?: string | undefined;
   }) => Effect.Effect<Option.Option<SsoRoute>, Api.StoreUnavailable>;
-  /** The HTTP operation: rate limited per source address, then `discover`. */
+  /** The HTTP operation: rate limited per request address (ADR-EA-047), then `discover`. */
   readonly start: (
     input: StartPayload,
-    ip: string | undefined,
-  ) => Effect.Effect<SsoRoute, SsoNotFound | Api.RateLimited | Api.StoreUnavailable>;
+  ) => Effect.Effect<
+    SsoRoute,
+    SsoNotFound | Api.RateLimited | Api.StoreUnavailable,
+    Api.AuthRequestContext
+  >;
 }
 
 const withCallback = (path: string, callbackURL: string | undefined, hasQuery: boolean) =>
@@ -152,24 +156,16 @@ export class Sso extends AuthPlugin.Service<Sso, SsoShape>()("sso", {
   migrations: [],
 }) {
   static readonly layer = AuthPlugin.layer(Sso, {
-    ports: [ClientAddress.ClientAddress, RateLimiter.RateLimiter],
+    ports: [RateLimiter.RateLimiter],
     dependsOn: [Saml.Saml],
     handlers: HttpApiBuilder.group(
       SsoApi,
       "sso",
       Effect.fnUntraced(function* (handlers) {
         const sso = yield* Sso;
-        const clientAddress = yield* ClientAddress.ClientAddress;
         return handlers.handleAll({
-          start: Effect.fnUntraced(function* ({
-            payload,
-            request,
-          }: {
-            payload: StartPayload;
-            request: HttpServerRequest.HttpServerRequest;
-          }) {
-            const resolved = yield* clientAddress.resolve(request);
-            const route = yield* sso.start(payload, Option.getOrUndefined(resolved));
+          start: Effect.fnUntraced(function* ({ payload }: { payload: StartPayload }) {
+            const route = yield* sso.start(payload);
             return new StartResponse(route);
           }),
         });
@@ -251,8 +247,8 @@ export class Sso extends AuthPlugin.Service<Sso, SsoShape>()("sso", {
       const discover: SsoShape["discover"] = (hint) =>
         Effect.map(discoverAll(hint), (routes) => Option.fromNullishOr(routes[0]));
 
-      const start: SsoShape["start"] = Effect.fnUntraced(function* (input, ip) {
-        yield* limits.spend("start", { ip });
+      const start: SsoShape["start"] = Effect.fnUntraced(function* (input) {
+        yield* limits.spend("start", {});
         const found = yield* discover({
           email: input.email,
           organizationId: input.organizationId,

@@ -5,6 +5,7 @@
 // authenticate ceremony (what `allowCredentials` says about an email) and its
 // cost (how much work an unknown credential id costs), not only the verify
 // response's error tag.
+import { TestAuth } from "@awthaq/test";
 import { Users } from "@awthaq/core";
 import * as Redacted from "effect/Redacted";
 import { assert, describe, it } from "@effect/vitest";
@@ -51,7 +52,7 @@ describe("TC-001: allowCredentials does not reveal which emails are registered",
           Object.keys(unknownOnce[0] ?? {}).sort(),
           Object.keys(known[0] ?? {}).sort(),
         );
-      }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 
   it.effect("different unknown emails get different decoys", () =>
@@ -59,7 +60,7 @@ describe("TC-001: allowCredentials does not reveal which emails are registered",
       const a = yield* decoysFor("a@example.com");
       const b = yield* decoysFor("b@example.com");
       assert.notStrictEqual(JSON.stringify(a), JSON.stringify(b));
-    }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 
   it.effect("a known user with no credentials is indistinguishable from an unknown email", () =>
@@ -71,7 +72,7 @@ describe("TC-001: allowCredentials does not reveal which emails are registered",
       });
       const decoys = yield* decoysFor("empty@example.com");
       assert.isAbove(decoys.length, 0);
-    }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 
   it.effect(
@@ -80,7 +81,10 @@ describe("TC-001: allowCredentials does not reveal which emails are registered",
       const secret = Redacted.make("shared-enumeration-secret");
       const run = Effect.gen(function* () {
         return yield* decoysFor("stable@example.com");
-      }).pipe(Effect.provide(buildLayer(mockWebAuthn(), { enumerationSecret: secret })));
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(buildLayer(mockWebAuthn(), { enumerationSecret: secret })),
+      );
       return Effect.gen(function* () {
         assert.deepStrictEqual(yield* run, yield* run);
       });
@@ -91,6 +95,7 @@ describe("TC-001: allowCredentials does not reveal which emails are registered",
     Effect.gen(function* () {
       const withSecret = (value: string) =>
         decoysFor("stable@example.com").pipe(
+          TestAuth.withoutRequest,
           Effect.provide(buildLayer(mockWebAuthn(), { enumerationSecret: Redacted.make(value) })),
         );
       assert.notStrictEqual(
@@ -107,7 +112,7 @@ describe("TC-001: allowCredentials does not reveal which emails are registered",
         const passkey = yield* Passkey.Passkey;
         const { options } = yield* passkey.authenticateOptions({});
         assert.deepStrictEqual(options.allowCredentials ?? [], []);
-      }).pipe(Effect.provide(buildLayer(mockWebAuthn()))),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(mockWebAuthn()))),
   );
 });
 
@@ -119,15 +124,20 @@ describe("WPS-005/TC-001: the anonymous ceremony is rate-limited", () => {
       const passkey = yield* Passkey.Passkey;
       // 10 per 15 minutes per email (a fresh IP each time, so only the email budget can trip).
       for (let attempt = 0; attempt < 10; attempt++) {
-        yield* passkey.authenticateOptions({ email: "probe@example.com", ip: `10.0.0.${attempt}` });
+        yield* passkey
+          .authenticateOptions({ email: "probe@example.com" })
+          .pipe(TestAuth.withRequest({ ip: `10.0.0.${attempt}` }));
       }
       const failure = yield* passkey
-        .authenticateOptions({ email: "probe@example.com", ip: "10.0.1.1" })
+        .authenticateOptions({ email: "probe@example.com" })
+        .pipe(TestAuth.withRequest({ ip: "10.0.1.1" }))
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "RateLimited");
       // Another email from a fresh address is unaffected.
-      yield* passkey.authenticateOptions({ email: "other@example.com", ip: "10.0.1.2" });
-    }).pipe(Effect.provide(limited)),
+      yield* passkey
+        .authenticateOptions({ email: "other@example.com" })
+        .pipe(TestAuth.withRequest({ ip: "10.0.1.2" }));
+    }).pipe(TestAuth.withoutRequest, Effect.provide(limited)),
   );
 
   it.effect(
@@ -139,47 +149,55 @@ describe("WPS-005/TC-001: the anonymous ceremony is rate-limited", () => {
         // IP), so only a shared bucket can throttle them. Before the shared normaliser each `+N` alias
         // was a fresh budget.
         for (let attempt = 1; attempt <= 10; attempt++) {
-          yield* passkey.authenticateOptions({
-            email:
-              attempt % 2 === 0
-                ? ` Victim+${attempt}@Example.com `
-                : `victim+${attempt}@example.com`,
-            ip: `10.1.0.${attempt}`,
-          });
+          yield* passkey
+            .authenticateOptions({
+              email:
+                attempt % 2 === 0
+                  ? ` Victim+${attempt}@Example.com `
+                  : `victim+${attempt}@example.com`,
+            })
+            .pipe(TestAuth.withRequest({ ip: `10.1.0.${attempt}` }));
         }
         const failure = yield* passkey
-          .authenticateOptions({ email: "victim+11@example.com", ip: "10.1.1.1" })
+          .authenticateOptions({ email: "victim+11@example.com" })
+          .pipe(TestAuth.withRequest({ ip: "10.1.1.1" }))
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "RateLimited");
-      }).pipe(Effect.provide(limited)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(limited)),
   );
 
   it.effect("authenticate/options is throttled per source address", () =>
     Effect.gen(function* () {
       const passkey = yield* Passkey.Passkey;
       for (let attempt = 0; attempt < 60; attempt++) {
-        yield* passkey.authenticateOptions({ ip: "192.0.2.7" });
+        yield* passkey.authenticateOptions({}).pipe(TestAuth.withRequest({ ip: "192.0.2.7" }));
       }
-      const failure = yield* passkey.authenticateOptions({ ip: "192.0.2.7" }).pipe(Effect.flip);
+      const failure = yield* passkey
+        .authenticateOptions({})
+        .pipe(TestAuth.withRequest({ ip: "192.0.2.7" }))
+        .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "RateLimited");
-      yield* passkey.authenticateOptions({ ip: "192.0.2.8" });
-    }).pipe(Effect.provide(limited)),
+      yield* passkey.authenticateOptions({}).pipe(TestAuth.withRequest({ ip: "192.0.2.8" }));
+    }).pipe(TestAuth.withoutRequest, Effect.provide(limited)),
   );
 
   it.effect("authenticate/verify is throttled per source address", () =>
     Effect.gen(function* () {
       const passkey = yield* Passkey.Passkey;
-      const { ceremonyId, options } = yield* passkey.authenticateOptions({ ip: "203.0.113.1" });
+      const { ceremonyId, options } = yield* passkey
+        .authenticateOptions({})
+        .pipe(TestAuth.withRequest({ ip: "203.0.113.1" }));
       const attempt = () =>
-        passkey.authenticateVerify({
-          ceremonyId,
-          credential: assertionCredential({ options, id: "no-such-credential" }),
-          ip: "203.0.113.9",
-        });
+        passkey
+          .authenticateVerify({
+            ceremonyId,
+            credential: assertionCredential({ options, id: "no-such-credential" }),
+          })
+          .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }));
       for (let i = 0; i < 60; i++) yield* attempt().pipe(Effect.ignore);
       const failure = yield* attempt().pipe(Effect.flip);
       assert.strictEqual(failure._tag, "RateLimited");
-    }).pipe(Effect.provide(limited)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(limited)),
   );
 });
 
@@ -188,25 +206,30 @@ describe("WPS-005 admission: an authenticate/verify throttled by the per-source 
     Effect.gen(function* () {
       const passkey = yield* Passkey.Passkey;
       yield* registerNewUser("admission-throttle@example.com");
-      const { ceremonyId, options } = yield* passkey.authenticateOptions({ ip: "203.0.113.1" });
+      const { ceremonyId, options } = yield* passkey
+        .authenticateOptions({})
+        .pipe(TestAuth.withRequest({ ip: "203.0.113.1" }));
       const credential = assertionCredential({ options });
       // Spend the budget of one address on attempts at other ceremonies.
       for (let i = 0; i < 60; i++) {
         yield* passkey
-          .authenticateVerify({ ceremonyId: `other-${i}`, credential, ip: "203.0.113.9" })
+          .authenticateVerify({ ceremonyId: `other-${i}`, credential })
+          .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }))
           .pipe(Effect.ignore);
       }
       const throttled = yield* passkey
-        .authenticateVerify({ ceremonyId, credential, ip: "203.0.113.9" })
+        .authenticateVerify({ ceremonyId, credential })
+        .pipe(TestAuth.withRequest({ ip: "203.0.113.9" }))
         .pipe(Effect.flip);
       assert.strictEqual(throttled._tag, "RateLimited");
       // Not an attempt: the challenge was not spent.
-      const issued = yield* passkey.authenticateVerify({
-        ceremonyId,
-        credential,
-        ip: "203.0.113.10",
-      });
+      const issued = yield* passkey
+        .authenticateVerify({ ceremonyId, credential })
+        .pipe(TestAuth.withRequest({ ip: "203.0.113.10" }));
       assert.isString(issued.session.userId);
-    }).pipe(Effect.provide(buildLayer(mockWebAuthn(), undefined, { rateLimiter: "enforcing" }))),
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(buildLayer(mockWebAuthn(), undefined, { rateLimiter: "enforcing" })),
+    ),
   );
 });

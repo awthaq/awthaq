@@ -47,7 +47,7 @@ Every preset accepts `id`, `scopes` and `mapProfile` overrides. **Apple is not s
 
 `baseUrl` **must be the public scheme + host (+ port) your users and the provider see** — TLS usually terminates at the proxy, so the process itself may only see plain `http` on an internal port. It is validated at boot: no path, query, fragment or credentials, and a plain-`http` non-loopback value logs a warning (most providers refuse such a `redirect_uri`, and the session cookie needs HTTPS).
 
-`redirect_uri` is always `${baseUrl}/oauth/<providerId>/callback` and must be registered **verbatim** at the provider. `Host` and `X-Forwarded-Host` are never consulted, by design (BEH-EA-128). At boot the plugin logs, at info level, the effective `redirect_uri` for every provider so you can diff it against the provider console. Client IPs (for rate limiting) are a separate knob: see `ClientAddress.layerTrustedProxy`.
+`redirect_uri` is always `${baseUrl}/oauth/<providerId>/callback` and must be registered **verbatim** at the provider. `Host` and `X-Forwarded-Host` are never consulted, by design (BEH-EA-128). At boot the plugin logs, at info level, the effective `redirect_uri` for every provider so you can diff it against the provider console. Client IPs (for rate limiting) are the request context's (ADR-EA-047), resolved by the host's `ClientAddress` port: see `ClientAddress.layerTrustedProxy` and `@awthaq/server`'s request-context section.
 
 ## OIDC validation scope
 

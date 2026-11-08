@@ -226,7 +226,9 @@ export const ApiKeyGroup = HttpApiGroup.make("apikey")
     }),
   )
   .middleware(Api.Authentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const ApiKeyClientGroup = HttpApiGroup.make("apikey.client")
   .add(
@@ -252,7 +254,9 @@ export const ApiKeyClientGroup = HttpApiGroup.make("apikey.client")
     }),
   )
   .middleware(Api.Authentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const ApiKeyTokenGroup = HttpApiGroup.make("apikey.token")
   .add(
@@ -270,7 +274,9 @@ export const ApiKeyTokenGroup = HttpApiGroup.make("apikey.token")
     }),
   )
   // BEH-EA-201: a back-channel POST authorized by the client secret in the request, no CSRF (see `Api.BackChannel`).
-  .annotate(Api.BackChannel, true);
+  .annotate(Api.BackChannel, true)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const ApiKeyApi = HttpApi.make("auth")
   .add(ApiKeyGroup)

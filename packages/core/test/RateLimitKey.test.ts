@@ -1,11 +1,19 @@
 // spec/behaviors/14-rate-limiting.md, BEH-EA-108 — the key strategies and the one email normaliser
 // (`RateLimits.Key`), plan 06 §5.1.
+import { Api } from "@awthaq/api";
 import { assert, describe, it } from "@effect/vitest";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as RateLimits from "../src/RateLimits.ts";
 
 const Key = RateLimits.Key;
-const context = { email: Key.emailKey };
+const context = { email: Key.emailKey, request: Api.AuthRequestContext.noRequest };
+/** A key part as text (`"none"` when the rule does not apply). */
+const text = (part: Option.Option<string>) => Option.getOrElse(part, () => "none");
+const inRequest = (ip?: string) => ({
+  email: Key.emailKey,
+  request: Api.AuthRequestContext.request({ correlationId: "c", ip }),
+});
 
 describe("Key.emailKey (TMS-006)", () => {
   it("trims, lower-cases and strips a +tag from the local part", () => {
@@ -20,11 +28,23 @@ describe("Key.emailKey (TMS-006)", () => {
   });
 });
 
-describe("Key.ip", () => {
+describe("Key.ip (ADR-EA-047)", () => {
+  it("keys on the request context's address, and reads the request", () => {
+    assert.strictEqual(text(Key.ip.part({}, inRequest("203.0.113.7"))), "ip:203.0.113.7");
+    assert.isTrue(Key.ip.readsRequest);
+  });
+
   it("an unresolved address falls into one shared unknown bucket", () => {
-    assert.strictEqual(Key.ip.part({}, context), "ip:unknown");
-    assert.strictEqual(Key.ip.part({ ip: undefined }, context), "ip:unknown");
-    assert.strictEqual(Key.ip.part({ ip: "1.2.3.4" }, context), "ip:1.2.3.4");
+    assert.strictEqual(text(Key.ip.part({}, inRequest())), "ip:unknown");
+  });
+
+  it("work that answers no request is not keyed per source (the rule does not apply)", () => {
+    assert.isTrue(Option.isNone(Key.ip.part({}, context)));
+  });
+
+  it("the other strategies ignore the request context", () => {
+    assert.strictEqual(text(Key.user.part({ userId: "u" }, inRequest("203.0.113.7"))), "user:u");
+    assert.isFalse(Key.user.readsRequest);
   });
 });
 
@@ -32,14 +52,14 @@ describe("Key.phone (SOS-007)", () => {
   const phone = Key.phone();
 
   it("spellings of one number share a bucket, different numbers differ", () => {
-    const a = phone.part({ phone: "+1 (555) 010-0100" }, context);
-    assert.strictEqual(a, phone.part({ phone: "+15550100100" }, context));
-    assert.notStrictEqual(a, phone.part({ phone: "+15550100101" }, context));
+    const a = text(phone.part({ phone: "+1 (555) 010-0100" }, context));
+    assert.strictEqual(a, text(phone.part({ phone: "+15550100100" }, context)));
+    assert.notStrictEqual(a, text(phone.part({ phone: "+15550100101" }, context)));
   });
 
   it("a value that is not a number shares one invalid bucket", () => {
-    assert.strictEqual(phone.part({ phone: "not a number" }, context), "phone:invalid");
-    assert.strictEqual(phone.part({ phone: "" }, context), "phone:invalid");
+    assert.strictEqual(text(phone.part({ phone: "not a number" }, context)), "phone:invalid");
+    assert.strictEqual(text(phone.part({ phone: "" }, context)), "phone:invalid");
   });
 });
 
@@ -60,7 +80,7 @@ describe("no secret reaches a key (BEH-EA-108)", () => {
 
   it("every built-in part over a hostile input names only its own field", () => {
     const parts = [
-      Key.ip.part(hostile, context),
+      Key.ip.part({}, inRequest("1.2.3.4")),
       Key.email.part(hostile, context),
       Key.identifier.part(hostile, context),
       Key.user.part(hostile, context),
@@ -68,7 +88,7 @@ describe("no secret reaches a key (BEH-EA-108)", () => {
       Key.client.part(hostile, context),
       Key.phone().part(hostile, context),
     ];
-    for (const part of parts) {
+    for (const part of parts.map(text)) {
       assert.isFalse(part.includes("SECRET"), part);
       assert.isFalse(part.includes("{") || part.includes("}"), part);
     }
@@ -83,11 +103,11 @@ describe("no secret reaches a key (BEH-EA-108)", () => {
       window: "1 minute",
     });
     assert.strictEqual(
-      signIn.keyOf("g.n", { password: "SECRET" }, context),
+      text(signIn.keyOf("g.n", { password: "SECRET" }, context)),
       "ratelimit:g.n:invalid",
     );
     assert.strictEqual(
-      signIn.keyOf("g.n", { email: "Alice+x@Example.com" }, context),
+      text(signIn.keyOf("g.n", { email: "Alice+x@Example.com" }, context)),
       "ratelimit:g.n:email:alice@example.com",
     );
   });
@@ -110,6 +130,6 @@ describe("strategy guards", () => {
     assert.strictEqual(byTenant.dimension, "custom");
     assert.isTrue(byTenant.accepts({ tenant: "acme" }));
     assert.isFalse(byTenant.accepts({ tenant: 1 }));
-    assert.strictEqual(byTenant.part({ tenant: "acme" }, context), "custom:tenant-acme");
+    assert.strictEqual(text(byTenant.part({ tenant: "acme" }, context)), "custom:tenant-acme");
   });
 });

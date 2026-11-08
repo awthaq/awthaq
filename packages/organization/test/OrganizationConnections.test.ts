@@ -140,7 +140,7 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
       // That it is an envelope at rest, bound to its row, is `runSealedColumnTests`' (ConnectionRecords.test.ts).
       assert.isTrue(Option.isSome(stored) && Option.isSome(stored.value.clientSecret));
       assert.notProperty(view, "clientSecret");
-    }).pipe(Effect.provide(ConnectionsLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ConnectionsLive)),
   );
 
   it.effect(
@@ -168,7 +168,7 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
         assert.strictEqual(yield* outcome("https://[fd12:3456::1]/x"), "InvalidConnection");
         assert.strictEqual(yield* outcome("https://[fe80::1]/x"), "InvalidConnection");
         assert.strictEqual(yield* outcome("https://[::ffff:127.0.0.1]/x"), "InvalidConnection");
-      }).pipe(Effect.provide(ConnectionsLive)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(ConnectionsLive)),
   );
 
   it.effect("rejects what an organization must not be able to point the server at", () =>
@@ -204,7 +204,7 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
       );
       assert.strictEqual(yield* reject({ emailDomains: ["not a domain"] }), "InvalidConnection");
       assert.strictEqual(yield* reject({ name: "  ", emailDomains: [] }), "InvalidConnection");
-    }).pipe(Effect.provide(ConnectionsLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ConnectionsLive)),
   );
 
   it.effect("normalizes email domains and refuses one another connection already routes", () =>
@@ -219,7 +219,7 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
         .create(actor, oidcInput("org-2", { emailDomains: ["acme.example"] }))
         .pipe(Effect.flip);
       assert.strictEqual(clash._tag, "ConnectionDomainTaken");
-    }).pipe(Effect.provide(ConnectionsLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ConnectionsLive)),
   );
 
   it.effect("discover routes by organization id, then by email domain", () =>
@@ -237,7 +237,7 @@ describe("OrganizationConnectionStore (BEH-EA-235)", () => {
       assert.isTrue(Option.isNone(yield* store.discover({ email: "ada@other.example" })));
       assert.isTrue(Option.isNone(yield* store.discover({ organizationId: "org-9" })));
       assert.isTrue(Option.isNone(yield* store.discover({ email: "not-an-email" })));
-    }).pipe(Effect.provide(ConnectionsLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ConnectionsLive)),
   );
 });
 
@@ -267,7 +267,7 @@ describe("oauthConnections resolver (BEH-EA-235)", () => {
         // Removing it makes the id unknown again.
         yield* store.remove(actor, "org-1", view.id);
         assert.isTrue(Option.isNone(yield* resolver.find(view.providerId)));
-      }).pipe(Effect.provide(ConnectionsLive)),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(ConnectionsLive)),
   );
 
   it.effect("static ids, other organizations' ids and malformed ids resolve to nothing", () =>
@@ -279,7 +279,7 @@ describe("oauthConnections resolver (BEH-EA-235)", () => {
       assert.isTrue(Option.isNone(yield* resolver.find("org:org-1")));
       assert.isTrue(Option.isNone(yield* resolver.find(`org:org-2:${view.id}`)));
       assert.isTrue(Option.isNone(yield* resolver.find(`org:org-1:no-such-connection`)));
-    }).pipe(Effect.provide(ConnectionsLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ConnectionsLive)),
   );
 
   it.effect("a connection whose secret no longer decrypts is dropped alone", () =>
@@ -293,7 +293,7 @@ describe("oauthConnections resolver (BEH-EA-235)", () => {
       yield* OrganizationConnections.OrganizationConnections.invalidate("org-1");
       assert.isTrue(Option.isSome(yield* resolver.find(good.providerId)));
       assert.isTrue(Option.isNone(yield* resolver.find(bad.providerId)));
-    }).pipe(Effect.provide(ConnectionsLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(ConnectionsLive)),
   );
 });
 
@@ -331,7 +331,7 @@ describe("connections belong to an active organization, and go with it (BEH-EA-2
       assert.strictEqual(suspended._tag, "InvalidConnection");
       const second = yield* store.create(actor, oidcInput(org.id)).pipe(Effect.flip);
       assert.strictEqual(second._tag, "InvalidConnection");
-    }).pipe(Effect.provide(RealLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(RealLive)),
   );
 
   it.effect("each write is published with the acting user, identifiers only", () =>
@@ -356,7 +356,7 @@ describe("connections belong to an active organization, and go with it (BEH-EA-2
       assert.deepStrictEqual(updated[0]?.actorUserId, Option.some("admin-1"));
       const deleted = yield* auditLog.list({ eventTag: "auth.organization.connectionDeleted" });
       assert.deepStrictEqual(deleted[0]?.actorUserId, Option.none());
-    }).pipe(Effect.provide(RealLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(RealLive)),
   );
 
   it.effect("deleting an organization removes its connections and frees their domains", () =>
@@ -380,7 +380,7 @@ describe("connections belong to an active organization, and go with it (BEH-EA-2
       assert.strictEqual((yield* records.listByOrganization(first.id)).length, 0);
       assert.isTrue(Option.isNone(yield* records.findByEmailDomain(grant, "acme.example")));
       assert.strictEqual((yield* records.listByOrganization(second.id)).length, 1);
-    }).pipe(Effect.provide(RealLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(RealLive)),
   );
 });
 
@@ -447,6 +447,6 @@ describe("a stored connection completes a full OAuth flow (EP-004)", () => {
       assert.isTrue(Option.isSome(linked));
       const user = yield* users.findByEmail("ada@acme.example");
       assert.isTrue(Option.isSome(user));
-    }).pipe(Effect.provide(OAuthLive)),
+    }).pipe(TestAuth.withoutRequest, Effect.provide(OAuthLive)),
   );
 });

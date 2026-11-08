@@ -26,6 +26,8 @@ export interface HarnessOptions {
   readonly config?: Partial<DeviceAuthorization.DeviceAuthorizationConfigShape>;
   /** The enforcing limiter over the in-memory store, instead of the permissive one. */
   readonly rateLimiter?: "permissive" | "enforcing";
+  /** ADR-EA-047: the address every request resolves to. */
+  readonly clientAddress?: string;
 }
 
 /** Hook taps a test installs: they need the points the composition provides. */
@@ -41,6 +43,7 @@ type Taps = Layer.Layer<
 export const buildLayer = (options: HarnessOptions, taps: Taps = Layer.empty) => {
   const common = {
     rateLimiter: options.rateLimiter ?? "permissive",
+    ...(options.clientAddress === undefined ? {} : { clientAddress: options.clientAddress }),
     taps,
     services: Layer.merge(
       DeviceAuthorization.config(options.config ?? {}),

@@ -3,6 +3,7 @@
 // the real HTTP surface; the middleware scenarios run against probe groups behind the shipped
 // `Authentication`/`OptionalAuthentication` with traced scheme handlers; the CSRF client rule
 // (INV-EA-011) is compile-time and goes through `ContractTypeGates.ts`.
+import { TestAuth } from "@awthaq/test";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import { Api, SessionContract, SubjectContract } from "@awthaq/api";
@@ -817,7 +818,9 @@ export const contractStratumSteps = defineSteps<ScratchWorld | AppWorld>(
         const other = yield* app.withServices(
           Effect.gen(function* () {
             const sessions = yield* Sessions.Sessions;
-            const issued = yield* sessions.issue({ userId: Users.UserId(alice.userId) });
+            const issued = yield* sessions
+              .issue({ userId: Users.UserId(alice.userId) })
+              .pipe(TestAuth.withoutRequest);
             return issued.session.id;
           }),
         );

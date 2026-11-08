@@ -9,12 +9,14 @@
 // `WebAuthn` is still mocked (`Layer.mock`, BEH-EA-195) — this proves the
 // wire contract, not the cryptography (ticket 02's own job).
 import { Api, SessionContract } from "@awthaq/api";
-import { Auth } from "@awthaq/core";
+import { Auth, Sessions } from "@awthaq/core";
 import type { WebAuthn } from "@awthaq/ports";
 import { CookieAssertions, TestAuth, type UserAgent } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Passkey from "../src/Passkey.ts";
 import * as PasskeyApi from "../src/PasskeyApi.ts";
@@ -189,6 +191,120 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
           CookieAssertions.findSetCookie(verifyResponse, Api.SESSION_COOKIE_NAME).name,
           Api.SESSION_COOKIE_NAME,
         );
+      }),
+  );
+
+  // ADR-EA-047 (plan 26 ticket 14): the wiring probe. Passkey reads no address and no header; the session records the
+  // request context's facts, and the per-source rule counts per request address.
+  it.effect(
+    "ADR-EA-047: a passkey sign-in records the request's address and user agent; authenticate/options counts per address",
+    () =>
+      Effect.gen(function* () {
+        const appAt = (clientAddress: string) =>
+          TestAuth.app(
+            TestAuth.layer(Auth.make([Passkey.Passkey]), {
+              services: Layer.mergeAll(
+                mockWebAuthn(),
+                Passkey.config({ rpId: RP_ID, origins: [ORIGIN] }),
+              ),
+              rateLimiter: "enforcing",
+              clientAddress,
+            }),
+            { baseUrl: ORIGIN },
+          );
+        const probe = appAt("198.51.100.14");
+        const as = async (
+          agent: UserAgent.UserAgent | undefined,
+          path: string,
+          body: unknown,
+          headers?: Record<string, string>,
+        ) =>
+          (agent ?? (await probe.agent())).request("POST", path, {
+            json: body,
+            ...(headers === undefined ? {} : { headers }),
+          });
+        const browser = yield* Effect.promise(() => probe.signIn("probe-passkey@example.com"));
+        const registerChallenge = extractChallenge(
+          yield* Effect.promise(() =>
+            as(browser, "/passkey/register/options", {}).then((r) => r.json()),
+          ),
+        );
+        yield* Effect.promise(() =>
+          as(browser, "/passkey/register/verify", {
+            credential: {
+              id: "cred-probe",
+              rawId: "cred-probe",
+              type: "public-key",
+              response: {
+                clientDataJSON: buildClientDataJSON({
+                  type: "webauthn.create",
+                  challenge: registerChallenge,
+                  origin: ORIGIN,
+                }),
+                attestationObject: "",
+              },
+            },
+          }),
+        );
+        const { ceremonyId, options } = Schema.decodeUnknownSync(
+          PasskeyApi.AuthenticateOptionsResult,
+        )(
+          yield* Effect.promise(() =>
+            as(undefined, "/passkey/authenticate/options", {}).then((r) => r.json()),
+          ),
+        );
+        const verified = yield* Effect.promise(() =>
+          as(
+            undefined,
+            "/passkey/authenticate/verify",
+            {
+              ceremonyId,
+              credential: {
+                id: "cred-probe",
+                rawId: "cred-probe",
+                type: "public-key",
+                response: {
+                  clientDataJSON: buildClientDataJSON({
+                    type: "webauthn.get",
+                    challenge: extractChallenge(options),
+                    origin: ORIGIN,
+                  }),
+                  authenticatorData: "",
+                  signature: "",
+                },
+              },
+            },
+            { [Api.TOKEN_DELIVERY_HEADER]: "bearer", "user-agent": "PasskeyProbe/1" },
+          ),
+        );
+        assert.strictEqual(verified.status, 200);
+        const body = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+          yield* Effect.promise(() => verified.json()),
+        );
+        const session = yield* Effect.promise(() =>
+          probe.run(
+            Effect.flatMap(Effect.service(Sessions.Sessions), (sessions) =>
+              sessions.verify(Redacted.make(body.token ?? "")),
+            ),
+          ),
+        );
+        assert.deepStrictEqual(session.session.ipAddress, Option.some("198.51.100.14"));
+        assert.deepStrictEqual(session.session.userAgent, Option.some("PasskeyProbe/1"));
+
+        // `authenticateOptionsByIp` is 60 per window: one options call above, 59 more, then refused; another
+        // address is not.
+        const options60 = () =>
+          Effect.promise(() => as(undefined, "/passkey/authenticate/options", {})).pipe(
+            Effect.map((response) => response.status),
+          );
+        for (let i = 0; i < 59; i++) assert.strictEqual(yield* options60(), 200);
+        assert.strictEqual(yield* options60(), 429);
+        const other = appAt("198.51.100.15");
+        const elsewhere = yield* Effect.promise(() =>
+          other.request("POST", "/passkey/authenticate/options", { json: {} }),
+        );
+        assert.strictEqual(elsewhere.status, 200);
+        yield* Effect.promise(() => Promise.all([probe.dispose(), other.dispose()]));
       }),
   );
 
