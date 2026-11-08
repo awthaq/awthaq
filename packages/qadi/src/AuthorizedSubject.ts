@@ -82,8 +82,8 @@ export const AuthorizedSubjectLive: Layer.Layer<AuthorizedSubject> = Layer.effec
 
 /**
  * YL-008: applies the pair in the one order that works — `AuthorizedSubject`
- * declared first, `Api.Authentication` last so it is outermost and runs first
- * (see this module's header). Use it instead of hand-ordering the two
+ * declared first, then `Api.Authentication`, then `Api.RequestContext` (ADR-EA-047), which the authentication
+ * middleware requires and which is therefore outermost (see this module's header). Use it instead of hand-ordering the two
  * `.middleware(...)` calls; a misordered pair still fails to compile, as an
  * unsatisfied `CurrentPrincipal` requirement (`AuthorizedSubject.test.ts` pins
  * both directions at the type level). The group's own type parameters are
@@ -95,7 +95,12 @@ export const withAuthorizedSubject = <
   TopLevel extends boolean,
 >(
   group: HttpApiGroup.HttpApiGroup<Id, Endpoints, TopLevel>,
-) => group.middleware(AuthorizedSubject).middleware(Api.Authentication);
+) =>
+  group
+    .middleware(AuthorizedSubject)
+    .middleware(Api.Authentication)
+    // ADR-EA-047: the request context the authentication middleware requires, outermost.
+    .middleware(Api.RequestContext);
 
 /** YL-008: as `withAuthorizedSubject`, for a group readable by anonymous callers (`Api.OptionalAuthentication`). */
 export const withOptionalAuthorizedSubject = <
@@ -104,4 +109,8 @@ export const withOptionalAuthorizedSubject = <
   TopLevel extends boolean,
 >(
   group: HttpApiGroup.HttpApiGroup<Id, Endpoints, TopLevel>,
-) => group.middleware(AuthorizedSubject).middleware(Api.OptionalAuthentication);
+) =>
+  group
+    .middleware(AuthorizedSubject)
+    .middleware(Api.OptionalAuthentication)
+    .middleware(Api.RequestContext);

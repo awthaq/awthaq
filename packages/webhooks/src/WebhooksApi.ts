@@ -265,6 +265,8 @@ export const WebhooksAdminGroup = HttpApiGroup.make("webhooks.admin")
   )
   // Same tier and CSRF posture as the rest of the admin surface: `CsrfProtection` declared last so it runs first.
   .middleware(Api.AdminAuthentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const WebhooksApi = HttpApi.make("auth").add(WebhooksAdminGroup);

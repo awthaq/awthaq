@@ -14,6 +14,7 @@ import { Organization, OrganizationConnections } from "@awthaq/organization";
 import { MembershipRecords } from "@awthaq/organization/records";
 import type { Encryption } from "@awthaq/ports";
 import { XmlSignature } from "@awthaq/ports";
+import { RequestContext } from "@awthaq/server";
 import {
   Saml,
   SamlConnections,
@@ -194,6 +195,8 @@ const buildLive = (
     ...(meeting === undefined ? {} : { decorate: Rendezvous.anchorReadsMeet(meeting) }),
   });
   return Sso.Sso.layer.pipe(
+    // ADR-EA-047: `Sso` is served beside the composition, so its group's request context is provided here.
+    Layer.provide(RequestContext.RequestContextLive),
     Layer.provide(preferred === undefined ? Layer.empty : Sso.config({ preferred })),
     Layer.provideMerge(OidcStoreLive),
     Layer.provideMerge(Composition),

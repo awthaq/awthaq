@@ -149,7 +149,9 @@ export const SamlGroup = HttpApiGroup.make("saml")
   )
   // BEH-EA-201: the IdP posts here cross-site by construction (no double-submit cookie can exist); the messages carry their own
   // signature and single-use id, so `awthaq doctor` skips its CSRF check for this group.
-  .annotate(Api.BackChannel, true);
+  .annotate(Api.BackChannel, true)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const LogoutPayload = Schema.Struct({
   /** Where the browser lands after the logout: a relative path, or an origin in `SamlConfig.trustedOrigins`; anything else is the default. */
@@ -167,7 +169,9 @@ export const SamlAccountGroup = HttpApiGroup.make("saml.account")
     }).middleware(SessionLifecycle.Ends),
   )
   .middleware(Api.Authentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 // ---- the administrator's surface (BEH-EA-318, BEH-EA-316) -------------------------------------------
 
@@ -447,7 +451,9 @@ export const SamlAdminGroup = HttpApiGroup.make("saml.admin")
   )
   // Same tier and CSRF posture as the rest of the admin surface: `CsrfProtection` declared last so it runs first.
   .middleware(Api.AdminAuthentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const SamlApi = HttpApi.make("auth")
   .add(SamlGroup)

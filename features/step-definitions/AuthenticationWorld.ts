@@ -26,7 +26,7 @@ import {
 } from "@awthaq/core";
 import { Jwt, JwtConfig, KeyRing, RevocationStore, SigningKeyRecords } from "@awthaq/jwt";
 import { ClientAddress, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import { Authentication, Credentials, AuthHttp, Csrf } from "@awthaq/server";
+import { Authentication, Credentials, AuthHttp, Csrf, RequestContext } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -54,7 +54,7 @@ import { resolveCredential } from "./shared/ResolveCredential.ts";
  */
 export class ReorderedAuthentication extends HttpApiMiddleware.Service<
   ReorderedAuthentication,
-  { provides: Api.CurrentPrincipal }
+  { provides: Api.CurrentPrincipal; requires: Api.AuthRequestContext }
 >()("ReorderedAuthentication", {
   security: { bearer: Api.BearerToken, cookie: Api.SessionCookie },
   error: [Api.Unauthenticated, Api.StoreUnavailable],
@@ -77,22 +77,26 @@ export const ProbeApi = HttpApi.make("probe")
   .add(
     HttpApiGroup.make("app")
       .add(HttpApiEndpoint.get("who", "/app/who", { success: Who }))
-      .middleware(Api.Authentication),
+      .middleware(Api.Authentication)
+      .middleware(Api.RequestContext),
   )
   .add(
     HttpApiGroup.make("optional")
       .add(HttpApiEndpoint.get("who", "/optional/who", { success: Who }))
-      .middleware(Api.OptionalAuthentication),
+      .middleware(Api.OptionalAuthentication)
+      .middleware(Api.RequestContext),
   )
   .add(
     HttpApiGroup.make("machine")
       .add(HttpApiEndpoint.get("who", "/machine/who", { success: Who }))
-      .middleware(Api.MachineAuthentication),
+      .middleware(Api.MachineAuthentication)
+      .middleware(Api.RequestContext),
   )
   .add(
     HttpApiGroup.make("reordered")
       .add(HttpApiEndpoint.get("who", "/reordered/who", { success: Who }))
-      .middleware(ReorderedAuthentication),
+      .middleware(ReorderedAuthentication)
+      .middleware(Api.RequestContext),
   )
   // No authentication middleware at all: BEH-EA-070's "neither declared" group.
   .add(HttpApiGroup.make("open").add(HttpApiEndpoint.get("who", "/open/who", { success: Who })));
@@ -257,6 +261,7 @@ const buildApp = (options: AppOptions) => {
       Layer.provide(ResolverLive),
       // The `apikey` plugin's own management group carries `CsrfProtection`.
       Layer.provide(CsrfProtectionLive),
+      Layer.provide(RequestContext.RequestContextLive),
       Layer.provideMerge(SessionSettings),
     )
     .pipe(

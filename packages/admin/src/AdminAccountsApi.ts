@@ -113,6 +113,8 @@ export const AdminAccountsGroup = HttpApiGroup.make("admin.accounts")
   )
   // Same tier and CSRF posture as `AdminGroup`: `CsrfProtection` declared last so it runs first.
   .middleware(Api.AdminAuthentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const AdminAccountsApi = HttpApi.make("auth").add(AdminAccountsGroup);

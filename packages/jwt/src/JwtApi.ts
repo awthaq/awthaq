@@ -54,12 +54,15 @@ export class IntrospectionResponse extends Schema.Class<IntrospectionResponse>(
   claims: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 }) {}
 
-export const JwtGroup = HttpApiGroup.make("jwt").add(
-  HttpApiEndpoint.get("jwks", "/jwt/jwks", {
-    success: JwksResponse,
-    error: Api.StoreUnavailable,
-  }),
-);
+export const JwtGroup = HttpApiGroup.make("jwt")
+  .add(
+    HttpApiEndpoint.get("jwks", "/jwt/jwks", {
+      success: JwksResponse,
+      error: Api.StoreUnavailable,
+    }),
+  )
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const JwtTokenGroup = HttpApiGroup.make("jwt.token")
   .add(
@@ -76,6 +79,8 @@ export const JwtTokenGroup = HttpApiGroup.make("jwt.token")
       success: IntrospectionResponse,
     }),
   )
-  .middleware(Api.Authentication);
+  .middleware(Api.Authentication)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const JwtApi = HttpApi.make("auth").add(JwtGroup).add(JwtTokenGroup);

@@ -17,9 +17,12 @@
 // to the next one exactly as it does on Path A.
 import { Api } from "@awthaq/api";
 import { Sessions } from "@awthaq/core";
-import { Credentials } from "@awthaq/server";
+import { ClientAddress } from "@awthaq/ports";
+import { Credentials, RequestContext } from "@awthaq/server";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { SubjectExtractionFailed, SubjectExtractor } from "@qadi/http";
 import { SubjectResolver } from "./SubjectResolver.ts";
 
@@ -32,21 +35,43 @@ import { SubjectResolver } from "./SubjectResolver.ts";
  * caller and never as a defect. PIL-005: a rotating `verify` registers its delivery
  * on the request itself (`Credentials.httpScope`), so a Path-B-only route rotates
  * cleanly.
+ *
+ * ADR-EA-047: `@qadi/http`'s `extract(request)` cannot carry a requirement, so this is the one reader of the request
+ * context that reads it optionally: inside a group that declares `Api.RequestContext` (every awthaq group) it is the
+ * middleware's capture; on a host route without one, it captures the same facts itself with `RequestContext.capture`.
  */
 export const SubjectExtractorLive: Layer.Layer<
   SubjectExtractor,
   never,
-  Sessions.Sessions | Credentials.PrincipalResolver
+  | Sessions.Sessions
+  | Credentials.PrincipalResolver
+  | ClientAddress.ClientAddress
+  | SecureRandom.SecureRandom
 > = Layer.effect(
   SubjectExtractor,
   Effect.gen(function* () {
     const credentials = yield* Credentials.make;
     const subjectResolver = yield* SubjectResolver;
+    const captureDeps = Layer.succeedContext(
+      yield* Effect.context<ClientAddress.ClientAddress | SecureRandom.SecureRandom>(),
+    );
+    const contextOf = (request: Parameters<typeof RequestContext.capture>[0]) =>
+      Effect.flatMap(
+        Effect.serviceOption(Api.AuthRequestContext),
+        Option.match({
+          onSome: Effect.succeed,
+          onNone: () => RequestContext.capture(request).pipe(Effect.provide(captureDeps)),
+        }),
+      );
     return {
       extract: (request) =>
-        Credentials.fromRequest(request).pipe(
-          Effect.flatMap((presented) =>
-            credentials.resolve(presented, Credentials.machineTier, Credentials.httpScope(request)),
+        Effect.all([Credentials.fromRequest(request), contextOf(request)]).pipe(
+          Effect.flatMap(([presented, context]) =>
+            credentials.resolve(
+              presented,
+              Credentials.machineTier,
+              Credentials.httpScope(request, context),
+            ),
           ),
           Effect.map((resolved) => resolved.principal),
           Effect.catchTag("Unauthenticated", () => Effect.succeed(Api.anonymousPrincipal)),

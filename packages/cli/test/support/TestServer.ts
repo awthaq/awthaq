@@ -22,7 +22,15 @@ import {
   DeviceGrantRecords,
 } from "@awthaq/device-authorization";
 import { ClientAddress, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import { Account, Authentication, Credentials, AuthHttp, Csrf, Session } from "@awthaq/server";
+import {
+  Account,
+  Authentication,
+  Credentials,
+  AuthHttp,
+  Csrf,
+  RequestContext,
+  Session,
+} from "@awthaq/server";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -50,6 +58,8 @@ const Base = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
 const Middleware = Layer.mergeAll(
   // ADR-EA-045: the session-lifecycle markers core's groups (and the device token) declare.
   AuthHttp.sessionLifecycle,
+  // ADR-EA-047: the request context every group declares outermost.
+  RequestContext.RequestContextLive.pipe(Layer.provide(ClientAddress.layerDirect)),
   Authentication.AuthenticationLive.pipe(Layer.provide(Credentials.PrincipalResolverLive)),
   Authentication.OptionalAuthenticationLive.pipe(Layer.provide(Credentials.PrincipalResolverLive)),
   Csrf.CsrfProtectionLive.pipe(

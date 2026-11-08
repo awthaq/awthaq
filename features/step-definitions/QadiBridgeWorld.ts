@@ -32,7 +32,8 @@ import {
 } from "@awthaq/core";
 import { AuthorizedSubject, SubjectApi, SubjectExtractor, SubjectResolver } from "@awthaq/qadi";
 import { Roles } from "@awthaq/roles";
-import { Authentication, Credentials, AuthHttp } from "@awthaq/server";
+import { ClientAddress } from "@awthaq/ports";
+import { Authentication, Credentials, AuthHttp, RequestContext } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   AttributeResolver,
@@ -208,7 +209,8 @@ const PathAGroup = HttpApiGroup.make("authz")
     }),
   )
   .middleware(AuthorizedSubject.AuthorizedSubject)
-  .middleware(Api.Authentication);
+  .middleware(Api.Authentication)
+  .middleware(Api.RequestContext);
 
 /**
  * Path B: `RequirePermission` alone — no awthaq contract middleware in front, so the
@@ -391,6 +393,8 @@ export const CoreLive = Layer.mergeAll(
   Layer.provideMerge(Slots.layer),
   Layer.provideMerge(Erasure.registryLayer),
   Layer.provideMerge(DataExport.registryLayer),
+  // ADR-EA-047: the topology the request context (and Path B's own capture) resolves addresses with.
+  Layer.provideMerge(ClientAddress.layerDirect),
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -740,6 +744,7 @@ const buildApp = (world: WorldShape, options: BridgeOptions) => {
   const appLayer = routes.pipe(
     Layer.provide(Authentication.AuthenticationLive),
     Layer.provide(Authentication.OptionalAuthenticationLive),
+    Layer.provide(RequestContext.RequestContextLive),
     Layer.provideMerge(requestServices),
     Layer.provideMerge(captureLogs(world)),
     Layer.provideMerge(HttpServer.layerServices),

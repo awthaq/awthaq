@@ -20,20 +20,25 @@ const Ping = HttpApiEndpoint.get("ping", "/ping", { success: Schema.String });
 const UserGroup = HttpApiGroup.make("user")
   .add(Ping)
   .middleware(Api.Authentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  .middleware(Api.RequestContext);
 const ScimGroup = HttpApiGroup.make("owned")
   .add(HttpApiEndpoint.get("owned", "/owned"))
   .middleware(PluginOwned);
-const EndpointOnly = HttpApiGroup.make("endpoint").add(
-  HttpApiEndpoint.get("e", "/e", { success: Schema.String }).middleware(Api.OptionalAuthentication),
-);
+const EndpointOnly = HttpApiGroup.make("endpoint")
+  .add(
+    HttpApiEndpoint.get("e", "/e", { success: Schema.String }).middleware(
+      Api.OptionalAuthentication,
+    ),
+  )
+  .middleware(Api.RequestContext);
 
 const api = HttpApi.make("auth").add(UserGroup).add(ScimGroup).add(EndpointOnly);
 type Groups = typeof api extends HttpApi.HttpApi<"auth", infer G> ? G : never;
 
 export const declaredIsExactlyTheHostMiddleware: Equals<
   AuthHttp.DeclaredMiddleware<Groups>,
-  Api.Authentication | Api.CsrfProtection | Api.OptionalAuthentication
+  Api.RequestContext | Api.Authentication | Api.CsrfProtection | Api.OptionalAuthentication
 > = true;
 
 export const layerSuccessIsTheDeclaredMiddleware: Equals<

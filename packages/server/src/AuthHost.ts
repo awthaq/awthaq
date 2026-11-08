@@ -29,6 +29,7 @@ import {
 import type {
   AccountStore,
   AuditLogStore,
+  ClientAddress,
   Encryption,
   RelayCursorStore,
   SessionStore,
@@ -50,7 +51,6 @@ import * as AuthHttp from "./AuthHttp.ts";
 import * as BodyLimit from "./BodyLimit.ts";
 import * as Credentials from "./Credentials.ts";
 import type * as Csrf from "./Csrf.ts";
-import * as RequestContext from "./RequestContext.ts";
 
 /** Single-process state: every core store and every plugin's `records.memory` (TRBS-005). */
 export interface MemoryPersistence {
@@ -92,8 +92,6 @@ export interface Options<S, SE, SR, T, D, DR, CE, CR, PR> {
   readonly decorate?: Layer.Layer<D, never, DR>;
   /** AR-003: the groups this listener serves. Default `"all"`. Plugin layers are always built whole. */
   readonly tier?: "all" | "public" | "admin";
-  /** `RequestContext.layer` (default `true`). `false` also silences `coreHandlers`' build-time warning. */
-  readonly requestContext?: boolean;
   /** `BodyLimit.layer` (default `true`; `BodyLimit.config({ maxBytes })` tunes it). */
   readonly bodyLimit?: boolean;
   /** BEH-EA-084: serve the OpenAPI document at this path (unauthenticated; off by default). */
@@ -213,7 +211,7 @@ export type Requires<
 > = Exclude<
   | Layer.Services<Auth.Built<P, Extra>["layer"]>
   | Layer.Services<typeof AuthHttp.coreHandlers>
-  | Layer.Services<typeof RequestContext.layer>
+  | ClientAddress.ClientAddress
   | Layer.Services<typeof BodyLimit.layer>
   | SecureRandom.SecureRandom
   | AuthPlugin.RecordsIn<P[number], M>
@@ -278,23 +276,13 @@ const makeLayer = (built: AnyBuilt, options: AnyOptions): Layer.Layer<never, unk
     csrf: options.csrf,
     principalResolver: resolver,
   });
-  const edge = Layer.mergeAll(
-    options.requestContext === false ? Layer.empty : RequestContext.layer,
-    options.bodyLimit === false ? Layer.empty : BodyLimit.layer,
-  );
-  const handlers =
-    options.requestContext === false
-      ? AuthHttp.coreHandlers.pipe(
-          Layer.provide(Layer.succeed(RequestContext.warnWhenAbsent, false)),
-        )
-      : AuthHttp.coreHandlers;
+  const edge = options.bodyLimit === false ? Layer.empty : BodyLimit.layer;
   const base =
     sql === undefined
       ? memoryBase
       : sqlBaseOf(sql.client, sql.migrations, built.migrations, sql.options);
   return routesFor(built, options).pipe(
-    Layer.provide(handlers),
-    // Built before the handlers, so `coreHandlers`' check finds `RequestContext.layer` on the router.
+    Layer.provide(AuthHttp.coreHandlers),
     Layer.provide(edge),
     // The plugins' own services stay in the output (`provideMerge`).
     Layer.provideMerge(built.layer),
@@ -315,7 +303,7 @@ const makeLayer = (built: AnyBuilt, options: AnyOptions): Layer.Layer<never, unk
  * ADR-EA-044: `AuthHost.layer(Auth.make([...]), { persistence, csrf, ... })` is the servable layer. It derives the
  * routes (for `tier`), core's handlers, every composed plugin's records bundle for the chosen persistence and its
  * declared hook points, core's services and registries, the host middleware the groups declare, the user-field
- * registry, `RequestContext.layer` and `BodyLimit.layer`; in SQL mode it applies or verifies the migrations before
+ * registry (the request context's populator among the middleware, ADR-EA-047) and `BodyLimit.layer`; in SQL mode it applies or verifies the migrations before
  * anything is built over the client. Its `RIn` is the ports, adapters and platform services the host owns.
  *
  * Merge host-owned jobs and edge middleware (`Retention.layerScheduled`, `SecuritySignals.layer`,

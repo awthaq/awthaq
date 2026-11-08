@@ -30,10 +30,12 @@ const describePrincipal = Effect.gen(function* () {
  */
 const ProbeMachine = HttpApiGroup.make("probeMachine")
   .add(HttpApiEndpoint.get("whoAmI", "/probe/machine", { success: Schema.String }))
-  .middleware(Api.MachineAuthentication);
+  .middleware(Api.MachineAuthentication)
+  .middleware(Api.RequestContext);
 const ProbeUser = HttpApiGroup.make("probeUser")
   .add(HttpApiEndpoint.get("whoAmI", "/probe/user", { success: Schema.String }))
-  .middleware(Api.Authentication);
+  .middleware(Api.Authentication)
+  .middleware(Api.RequestContext);
 const ProbeApi = HttpApi.make("auth").add(ProbeMachine).add(ProbeUser);
 
 const built = Auth.make([Jwt.Jwt, ApiKey.ApiKey], { extraGroups: [ProbeMachine, ProbeUser] });

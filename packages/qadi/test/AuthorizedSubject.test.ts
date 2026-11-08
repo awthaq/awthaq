@@ -38,7 +38,8 @@ const WhoamiGroup = HttpApiGroup.make("whoami")
   )
   .add(HttpApiEndpoint.get("get", "/whoami", { success: Whoami }))
   .middleware(AuthorizedSubject.AuthorizedSubject)
-  .middleware(Api.OptionalAuthentication);
+  .middleware(Api.OptionalAuthentication)
+  .middleware(Api.RequestContext);
 
 const TestApi = HttpApi.make("auth").add(WhoamiGroup);
 
@@ -121,7 +122,8 @@ describe("withAuthorizedSubject (YL-008)", () => {
     .middleware(AuthorizedSubject.AuthorizedSubject);
   const handRolled = base
     .middleware(AuthorizedSubject.AuthorizedSubject)
-    .middleware(Api.Authentication);
+    .middleware(Api.Authentication)
+    .middleware(Api.RequestContext);
 
   it("leaves no unsatisfied middleware service, exactly like the hand-ordered pair", () => {
     expectTypeOf<HttpApiGroup.MiddlewareServices<typeof viaHelper>>().toEqualTypeOf<never>();

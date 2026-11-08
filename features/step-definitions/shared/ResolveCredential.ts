@@ -1,6 +1,7 @@
 // The BDD worlds resolve one raw credential the way the middleware does, without serving a request: the credential
 // module's `step` for the one carrier it came in on (ADR-EA-042), over a synthetic request (the per-request memo
 // and the claimed-credential resolvers read it). Admits any principal, like the machine tier.
+import { Api } from "@awthaq/api";
 import { Credentials } from "@awthaq/server";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -29,7 +30,7 @@ export const resolveCredential = (carrier: Credentials.Carrier, credential: stri
       carrier,
       presentedIn(carrier, credential),
       Credentials.machineTier,
-      Credentials.httpScope(request),
+      Credentials.httpScope(request, Api.AuthRequestContext.noRequest),
     );
     return resolved.principal;
   });

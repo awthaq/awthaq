@@ -82,7 +82,9 @@ export const SsoGroup = HttpApiGroup.make("sso")
   )
   // BEH-EA-201: a pre-authentication lookup (which login does this address route to?) that reads no credential and changes
   // nothing, so there is no ambient credential to forge: `awthaq doctor` skips its CSRF check.
-  .annotate(Api.BackChannel, true);
+  .annotate(Api.BackChannel, true)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const SsoApi = HttpApi.make("auth").add(SsoGroup);
 

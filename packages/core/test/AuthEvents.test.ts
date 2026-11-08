@@ -458,17 +458,15 @@ describe("AuthEvents", () => {
               stream.pipe(Stream.take(2), Stream.runCollect),
               { startImmediately: true },
             );
-            yield* events
-              .publish({ _tag: "auth.user.created", userId })
-              .pipe(
-                Effect.provideService(
-                  Api.AuthRequestContext,
-                  Api.AuthRequestContext.request({
-                    correlationId: "c",
-                    userAgent: "u".repeat(600),
-                  }),
-                ),
-              );
+            yield* events.publish({ _tag: "auth.user.created", userId }).pipe(
+              Effect.provideService(
+                Api.AuthRequestContext,
+                Api.AuthRequestContext.request({
+                  correlationId: "c",
+                  userAgent: "u".repeat(600),
+                }),
+              ),
+            );
             yield* events
               .publish({ _tag: "auth.token.replay", identifier: "from-a-job" })
               .pipe(

@@ -5,8 +5,8 @@
 import { Api } from "@awthaq/api";
 import { Auth, AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
-import { SqlTransaction } from "@awthaq/ports";
-import { Authentication, Credentials } from "@awthaq/server";
+import { ClientAddress, SqlTransaction } from "@awthaq/ports";
+import { Authentication, Credentials, RequestContext } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -51,6 +51,12 @@ const WithSessions = TestAuth.layer(Auth.make([Jwt.Jwt]), {
 // inside `AuthenticationLive`'s own scope: `Jwt` itself cannot see it.
 const WithoutSessions = jwtBase.pipe(
   Layer.provide(AuthenticationLive.pipe(Layer.provide(SessionsLive))),
+  Layer.provide(
+    RequestContext.RequestContextLive.pipe(
+      Layer.provide(ClientAddress.layerDirect),
+      Layer.provide(NodeCrypto.layer),
+    ),
+  ),
 );
 
 const caller = (userId: string, sessionId: string, actingAs?: { type: string; id: string }) =>

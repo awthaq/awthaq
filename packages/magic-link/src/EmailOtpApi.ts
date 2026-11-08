@@ -52,6 +52,8 @@ export const EmailOtpGroup = HttpApiGroup.make("emailOtp")
       ],
     }).middleware(SessionLifecycle.Mints),
   )
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const EmailOtpApi = HttpApi.make("auth").add(EmailOtpGroup);

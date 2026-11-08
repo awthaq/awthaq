@@ -211,7 +211,9 @@ export const OAuthGroup = HttpApiGroup.make("oauth")
       ],
     }).middleware(SessionLifecycle.Mints),
   )
-  .middleware(Api.OptionalAuthentication);
+  .middleware(Api.OptionalAuthentication)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const ExchangePayload = Schema.Struct({
   /** The `code` query parameter the native redirect carried. */
@@ -230,12 +232,15 @@ export type ExchangePayload = typeof ExchangePayload.Type;
  * defends ambient credentials, of which this request has none). Answers the
  * same `SessionDto` (with `token`) as password/passkey bearer delivery.
  */
-export const OAuthExchangeGroup = HttpApiGroup.make("oauth.exchange").add(
-  HttpApiEndpoint.post("token", "/oauth/token", {
-    payload: ExchangePayload,
-    success: SessionContract.SessionDto,
-    error: [OAuthCallbackFailed, Api.RateLimited, Api.StoreUnavailable],
-  }).middleware(SessionLifecycle.Mints),
-);
+export const OAuthExchangeGroup = HttpApiGroup.make("oauth.exchange")
+  .add(
+    HttpApiEndpoint.post("token", "/oauth/token", {
+      payload: ExchangePayload,
+      success: SessionContract.SessionDto,
+      error: [OAuthCallbackFailed, Api.RateLimited, Api.StoreUnavailable],
+    }).middleware(SessionLifecycle.Mints),
+  )
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const OAuthApi = HttpApi.make("auth").add(OAuthGroup).add(OAuthExchangeGroup);

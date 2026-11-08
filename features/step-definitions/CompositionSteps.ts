@@ -6,7 +6,7 @@ import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import { Auth, type AuthPlugin } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
-import { Mailer, RateLimiter } from "@awthaq/ports";
+import { ClientAddress, Mailer, RateLimiter } from "@awthaq/ports";
 import { AuthHost, Csrf } from "@awthaq/server";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { TestAuth } from "@awthaq/test";
@@ -813,7 +813,12 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
       csrf: Layer.succeed(Csrf.CsrfConfig, TestAuth.TestCsrfConfig),
     }).pipe(
       Layer.provide(
-        Layer.mergeAll(Mailer.layerMemory, RateLimiter.layerPermissive, TestAuth.encryption),
+        Layer.mergeAll(
+          Mailer.layerMemory,
+          RateLimiter.layerPermissive,
+          ClientAddress.layerDirect,
+          TestAuth.encryption,
+        ),
       ),
       Layer.provideMerge(NodeCrypto.layer),
       Layer.provideMerge(HttpServer.layerServices),

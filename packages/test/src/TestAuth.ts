@@ -109,6 +109,7 @@ import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
+import * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -292,9 +293,7 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
     // base and beneath the records, where they always sat; they only record, `assertNoLeaks` is what fails.
     decorate: (options.decorate ?? Layer.empty).pipe(Layer.provideMerge(GuardLive)),
     tier: options.tier ?? "all",
-    // The in-process harness serves without both on purpose, as it always has (`RequestContext` E1; `BodyLimit`
-    // has its own suite), and so `coreHandlers`' warning that `RequestContext.layer` is absent stays silent.
-    requestContext: false,
+    // `BodyLimit` has its own suite. The request context is derived with the middleware (ADR-EA-047).
     bodyLimit: false,
     openapiPath: options.openapiPath,
     docsPath: options.docsPath,
@@ -338,7 +337,8 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
  * `hookPoints` (BEH-EA-T4/T5), the core services over `Persistence.memory` / `Persistence.sql()` with the
  * migrations applied, the registries, erasure and export; `TestAuth` adds a cheap argon2id hasher,
  * `Mailer.layerMemory`, a permissive `RateLimiter`, `Encryption` over a fixed key, `ClientAddress`, the platform
- * crypto services and the recording `RedactionGuard` (EOTS-002). `RequestContext.layer` and `BodyLimit.layer` are off.
+ * crypto services and the recording `RedactionGuard` (EOTS-002). `BodyLimit.layer` is off; the request context is derived
+ * with the host middleware, as in production (ADR-EA-047).
  * Its `RIn` is `never` exactly when the composition is complete, and every service in its `ROut` is present
  * at runtime (including everything `services` provides).
  *
@@ -1147,6 +1147,36 @@ export const runPluginContractTests = <O, R = never>(
           framework.fail(`E_PLUGIN_DUPLICATE_ID: "${plugin.id}" also names a host plugin`);
         }
       });
+
+      // ADR-EA-047: the request context is captured outermost on every endpoint the plugin contributes, so every
+      // middleware and handler of the endpoint reads its facts.
+      framework.it(
+        `${label}: every endpoint declares Api.RequestContext as its last middleware`,
+        () => {
+          const missing: Array<string> = [];
+          const [first, ...rest] = [...host, plugin];
+          if (first === undefined) return;
+          const own = new Set(
+            Object.values(plugin.contract.groups).map((group) => group.identifier),
+          );
+          HttpApi.reflect(Auth.make([first, ...rest]).api, {
+            onGroup: () => {},
+            onEndpoint: ({ group, endpoint, middleware }) => {
+              if (
+                own.has(group.identifier) &&
+                [...middleware].at(-1)?.key !== Api.RequestContext.key
+              ) {
+                missing.push(`${group.identifier}.${endpoint.identifier}`);
+              }
+            },
+          });
+          if (missing.length > 0) {
+            framework.fail(
+              `plugin "${plugin.id}": these endpoints do not declare Api.RequestContext last: ${missing.join(", ")}`,
+            );
+          }
+        },
+      );
 
       framework.it(`${label}: every declared table carries this plugin's own id prefix`, () => {
         const prefix = TABLE_PREFIX_PATTERN(plugin.id);

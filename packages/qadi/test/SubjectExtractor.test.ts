@@ -4,6 +4,7 @@
 // exemption).
 import { Auth, AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { Api } from "@awthaq/api";
+import { ClientAddress } from "@awthaq/ports";
 import { Credentials } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -46,7 +47,7 @@ const ShortLivedCoreLive = Layer.mergeAll(
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(Hooks.HooksLive),
-  Layer.provideMerge(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig)),
+  Layer.provideMerge(Layer.mergeAll(NodeCrypto.layer, shortLivedConfig, ClientAddress.layerDirect)),
 );
 
 const ShortLivedTestLayer = SubjectExtractor.SubjectExtractorLive.pipe(
@@ -138,7 +139,7 @@ describe("SubjectExtractor (Path B adapter)", () => {
           "cookie",
           presented,
           Credentials.userTier,
-          Credentials.httpScope(request),
+          Credentials.httpScope(request, Api.AuthRequestContext.noRequest),
         );
         const principal = resolved.principal;
         assert.strictEqual(principal.ref.id, user.id);
@@ -221,6 +222,7 @@ describe("SubjectExtractor (Path B adapter)", () => {
       Effect.provide(
         SubjectExtractor.SubjectExtractorLive.pipe(
           Layer.provide(Credentials.PrincipalResolverLive),
+          Layer.provide(Layer.merge(ClientAddress.layerDirect, NodeCrypto.layer)),
           Layer.provide(
             Layer.succeed(Sessions.Sessions, {
               ...unreachableSessions,
@@ -352,4 +354,57 @@ describe("SubjectExtractor (Path B adapter)", () => {
         ),
     );
   });
+});
+
+// ADR-EA-047: `@qadi/http`'s extractor interface cannot carry a requirement, so Path B reads the request context
+// optionally: inside a group that declares `Api.RequestContext` it is the middleware's capture; without one, the
+// extractor captures the same facts itself. A claiming contribution sees them either way.
+describe("SubjectExtractor and the request context (ADR-EA-047)", () => {
+  const seen: Array<string> = [];
+  const Recording = Credentials.contribute("bearer", {
+    id: "test.records-context",
+    claims: (raw) => raw.startsWith("ctx."),
+    resolve: () =>
+      Effect.map(Effect.service(Api.AuthRequestContext), (context) => {
+        seen.push(context._tag === "Request" ? context.correlationId : "none");
+        return Api.anonymousPrincipal;
+      }),
+  });
+  const Live = SubjectExtractor.SubjectExtractorLive.pipe(
+    Layer.provide(Credentials.PrincipalResolverLive),
+    Layer.provideMerge(Recording.pipe(Layer.provideMerge(Credentials.CredentialResolversLive))),
+    Layer.provideMerge(ShortLivedCoreLive),
+  );
+  // A fresh request each time: a resolution is memoized per request (PCS-006).
+  const request = () =>
+    HttpServerRequest.fromWeb(
+      new Request("http://localhost/whatever", {
+        headers: { authorization: "Bearer ctx.token", "x-request-id": "captured-1" },
+      }),
+    );
+
+  it.effect("inside a declared group the claim reads the middleware's facts", () =>
+    Effect.gen(function* () {
+      seen.length = 0;
+      const extractor = yield* QadiSubjectExtractor;
+      yield* extractor
+        .extract(request())
+        .pipe(
+          Effect.provideService(
+            Api.AuthRequestContext,
+            Api.AuthRequestContext.request({ correlationId: "from-middleware" }),
+          ),
+        );
+      assert.deepStrictEqual(seen, ["from-middleware"]);
+    }).pipe(Effect.provide(Live)),
+  );
+
+  it.effect("on a route without the middleware the extractor captures the request itself", () =>
+    Effect.gen(function* () {
+      seen.length = 0;
+      const extractor = yield* QadiSubjectExtractor;
+      yield* extractor.extract(request());
+      assert.deepStrictEqual(seen, ["captured-1"]);
+    }).pipe(Effect.provide(Live)),
+  );
 });

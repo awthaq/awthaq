@@ -89,7 +89,8 @@ const TestApi = HttpApi.make("test")
           success: Schema.NullOr(Schema.String),
         }),
       )
-      .middleware(Api.Authentication),
+      .middleware(Api.Authentication)
+      .middleware(Api.RequestContext),
   )
   .add(
     HttpApiGroup.make("optional")
@@ -99,7 +100,8 @@ const TestApi = HttpApi.make("test")
           success: Schema.String,
         }),
       )
-      .middleware(Api.OptionalAuthentication),
+      .middleware(Api.OptionalAuthentication)
+      .middleware(Api.RequestContext),
   );
 
 const whoAmI = () =>
@@ -128,6 +130,7 @@ const TestLayer = Layer.mergeAll(RequiredLayer, OptionalLayer).pipe(
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provideMerge(Authentication.OptionalAuthenticationLive),
   Layer.provide(Wiring.resolver),
+  Layer.provideMerge(Wiring.requestContextLive),
   Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
   // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
   Layer.provideMerge(AuthEvents.layer),
@@ -219,6 +222,7 @@ describe("Authentication", () => {
           Layer.provideMerge(Authentication.AuthenticationLive),
           Layer.provideMerge(Authentication.OptionalAuthenticationLive),
           Layer.provide(Wiring.resolver),
+          Layer.provideMerge(Wiring.requestContextLive),
           Layer.provide(TappedHook),
           Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
           // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
@@ -258,6 +262,7 @@ describe("Authentication", () => {
           Layer.provideMerge(Authentication.AuthenticationLive),
           Layer.provideMerge(Authentication.OptionalAuthenticationLive),
           Layer.provide(Wiring.resolver),
+          Layer.provideMerge(Wiring.requestContextLive),
           Layer.provide(TappedHook),
           Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
           Layer.provideMerge(AuthEvents.layer),
@@ -297,6 +302,7 @@ describe("Authentication", () => {
           Layer.provideMerge(Authentication.AuthenticationLive),
           Layer.provideMerge(Authentication.OptionalAuthenticationLive),
           Layer.provide(Wiring.resolver),
+          Layer.provideMerge(Wiring.requestContextLive),
           Layer.provide(TappedHook),
           Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
           // RRS-003: `Sessions.layerMemory` now also needs `AuthEvents`.
@@ -321,7 +327,8 @@ const RotationApi = HttpApi.make("rotation").add(
     .add(HttpApiEndpoint.get("boom", "/boom", { success: Schema.String, error: Boom }))
     // ADR-EA-045: an endpoint that ends the caller's session, behind the same rotating verify.
     .add(HttpApiEndpoint.post("end", "/end").middleware(SessionLifecycle.Ends))
-    .middleware(Api.Authentication),
+    .middleware(Api.Authentication)
+    .middleware(Api.RequestContext),
 );
 
 const RotationHandlers = HttpApiBuilder.group(RotationApi, "g", (handlers) =>
@@ -336,6 +343,7 @@ const RotationLayer = HttpApiBuilder.layer(RotationApi).pipe(
   Layer.provide(SessionLifecycleLive.EndsLive),
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provide(Wiring.resolver),
+  Layer.provideMerge(Wiring.requestContextLive),
   Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
   Layer.provideMerge(AuthEvents.layer),
   Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
@@ -350,6 +358,7 @@ const OutageLayer = HttpApiBuilder.layer(RotationApi).pipe(
   Layer.provide(SessionLifecycleLive.EndsLive),
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provide(Wiring.resolver),
+  Layer.provideMerge(Wiring.requestContextLive),
   Layer.provideMerge(UnreliableSessions),
   Layer.provideMerge(TestServices),
   Layer.provideMerge(HttpRouter.layer),
@@ -384,6 +393,7 @@ const rotationLayerWith = (cookieConfig: Layer.Layer<never>) =>
     Layer.provide(SessionLifecycleLive.EndsLive),
     Layer.provideMerge(Authentication.AuthenticationLive),
     Layer.provide(Wiring.resolver),
+    Layer.provideMerge(Wiring.requestContextLive),
     Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(AuthEvents.layer),
     Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
@@ -824,16 +834,23 @@ describe("Path A parity with the credential table (group A)", () => {
   const endpointAt = (path: `/${string}`) =>
     HttpApiEndpoint.get("who", path, { headers: AllHeaders, success: Schema.String });
   const ParityApi = HttpApi.make("parity")
-    .add(HttpApiGroup.make("user").add(endpointAt("/who-user")).middleware(Api.Authentication))
+    .add(
+      HttpApiGroup.make("user")
+        .add(endpointAt("/who-user"))
+        .middleware(Api.Authentication)
+        .middleware(Api.RequestContext),
+    )
     .add(
       HttpApiGroup.make("optional")
         .add(endpointAt("/who-optional"))
-        .middleware(Api.OptionalAuthentication),
+        .middleware(Api.OptionalAuthentication)
+        .middleware(Api.RequestContext),
     )
     .add(
       HttpApiGroup.make("machine")
         .add(endpointAt("/who-machine"))
-        .middleware(Api.MachineAuthentication),
+        .middleware(Api.MachineAuthentication)
+        .middleware(Api.RequestContext),
     );
 
   const whoHandler = () =>
@@ -861,6 +878,7 @@ describe("Path A parity with the credential table (group A)", () => {
     Layer.provideMerge(Authentication.OptionalAuthenticationLive),
     Layer.provideMerge(Authentication.MachineAuthenticationLive),
     Layer.provide(Wiring.resolver),
+    Layer.provideMerge(Wiring.requestContextLive),
     Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
     Layer.provideMerge(AuthEvents.layer),
     Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
@@ -896,6 +914,7 @@ describe("Path A parity with the credential table (group A)", () => {
               Layer.provideMerge(Authentication.OptionalAuthenticationLive),
               Layer.provideMerge(Authentication.MachineAuthenticationLive),
               Layer.provide(Hook),
+              Layer.provideMerge(Wiring.requestContextLive),
               Layer.provideMerge(layerFor(variantOf(row))),
               Layer.provideMerge(TestServices),
             ),

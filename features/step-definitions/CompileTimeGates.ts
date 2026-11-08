@@ -207,7 +207,9 @@ export const misorderedLeavesPrincipal: Api.CurrentPrincipal extends HttpApiGrou
 // type-gate: authorized-subject-in-the-right-order
 export const ordered = bridgedBase
   .middleware(AuthorizedSubject.AuthorizedSubject)
-  .middleware(Api.Authentication);
+  .middleware(Api.Authentication)
+  // ADR-EA-047: the request context `Authentication` requires, outermost.
+  .middleware(Api.RequestContext);
 export const orderedLeavesNothing: [HttpApiGroup.MiddlewareServices<typeof ordered>] extends [never]
   ? true
   : false = true;

@@ -29,11 +29,10 @@ import type {
   Users,
   Verification,
 } from "@awthaq/core";
-import type { RateLimiter, SqlTransaction } from "@awthaq/ports";
+import type { ClientAddress, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Headers from "effect/http/Headers";
 import * as HttpMiddleware from "effect/http/HttpMiddleware";
 import * as HttpRouter from "effect/http/HttpRouter";
@@ -88,43 +87,21 @@ export type CoreHandlerServices =
   | SqlTransaction.SqlTransaction;
 
 /**
- * Plan 01 phase 6: `RequestContext.layer` is an opt-in global middleware, and without it every session a plugin
- * mints records no address or user agent (the session device list is empty, CSD-003). A composition that serves
- * routes with a router in scope but without the middleware is told so once, at layer build. It looks for the
- * router optionally, so a context without one (a unit test of the handlers) is not warned; a few scheduler turns
- * let a sibling `RequestContext.layer` that was merged beside `routes` register first.
- */
-export const requestContextCheck = Layer.effectDiscard(
-  Effect.gen(function* () {
-    if (!(yield* RequestContext.warnWhenAbsent)) return;
-    const router = yield* Effect.serviceOption(HttpRouter.HttpRouter);
-    if (Option.isNone(router)) return;
-    for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
-    if (RequestContext.isInstalledOn(router.value)) return;
-    yield* Effect.logWarning(
-      "awthaq: RequestContext.layer is not installed on this router, so sessions minted over HTTP record no address or user agent and events carry no correlation id. Merge RequestContext.layer beside AuthHttp.routes (see @awthaq/server's README), or provide RequestContext.warnWhenAbsent as false to silence this.",
-    );
-  }),
-);
-
-/**
  * MW-002 (wayfinder ticket 26): the handlers for the `session` and `account`
  * groups `Auth.make(...).api` always carries. Merge this beside the composed
  * `layer` wherever `routes(built.api)` is served; a composition that leaves it
  * out fails at layer build (missing group service), not as a silent 404.
  */
-export const coreHandlers = Layer.mergeAll(
-  Session.SessionHandlers,
-  Account.AccountHandlers,
-  requestContextCheck,
-);
+export const coreHandlers = Layer.merge(Session.SessionHandlers, Account.AccountHandlers);
 
 /**
  * Plan 08 (BEH-EA-T1): the host middleware `@awthaq/server` implements. A plugin's contract declares
  * which of them its groups need (`.middleware(Api.Authentication)`); `middlewareFor` builds exactly those.
- * Plan 21 (ADR-EA-045): the five `SessionLifecycle` markers are host middleware too.
+ * Plan 21 (ADR-EA-045): the five `SessionLifecycle` markers are host middleware too. Plan 26 (ADR-EA-047):
+ * `Api.RequestContext`, declared outermost on every group, is the one populator of the request context.
  */
 export type HostMiddleware =
+  | Api.RequestContext
   | Api.Authentication
   | Api.OptionalAuthentication
   | Api.MachineAuthentication
@@ -170,7 +147,7 @@ export function middlewareFor<
 ): Layer.Layer<
   DeclaredMiddleware<Groups>,
   CE,
-  Sessions.Sessions | SecureRandom.SecureRandom | CR | PR
+  Sessions.Sessions | SecureRandom.SecureRandom | ClientAddress.ClientAddress | CR | PR
 >;
 export function middlewareFor(
   api: HttpApi.HttpApi<"auth", HttpApiGroup.Constraint>,
@@ -192,6 +169,7 @@ export function middlewareFor(
   // `Layer`'s `ROut` is contravariant, so `never` is what the slot accepts from any one middleware layer.
   const entry = (key: string, layer: Layer.Layer<never, unknown, unknown>) => ({ key, layer });
   const table = [
+    entry(Api.RequestContext.key, Layer.fresh(RequestContext.RequestContextLive)),
     entry(Api.Authentication.key, user),
     entry(
       Api.OptionalAuthentication.key,

@@ -92,6 +92,7 @@ const makeAppLayer = (
     Layer.provideMerge(Authentication.AuthenticationLive),
     // ADR-EA-045: sign-out, revoke, revoke-all and delete-user declare `SessionLifecycle.Ends`.
     Layer.provide(AuthHttp.sessionLifecycle),
+    Layer.provide(Wiring.requestContextLive),
     Layer.provide(Wiring.resolver),
     Layer.provide(Wiring.csrfLive()),
     // CSG-001: `Account.deleteUser` runs core's `AccountErasure` and `Account.exportData` its `AccountExport` (CSG-005).

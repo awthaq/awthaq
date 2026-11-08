@@ -42,6 +42,8 @@ export const NotesGroup = HttpApiGroup.make("notes")
   // Middleware order: the last one declared runs first, so CSRF is checked
   // before any credential work.
   .middleware(Api.Authentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const NotesApi = HttpApi.make("auth").add(NotesGroup);

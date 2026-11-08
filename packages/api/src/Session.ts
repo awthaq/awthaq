@@ -12,7 +12,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
-import { Authentication, CsrfProtection, Unauthenticated } from "./Api.ts";
+import { Authentication, CsrfProtection, RequestContext, Unauthenticated } from "./Api.ts";
 import * as SessionLifecycle from "./SessionLifecycle.ts";
 
 /**
@@ -95,4 +95,6 @@ export const SessionGroup = HttpApiGroup.make("session")
   // header on declaration order) so a forged request is rejected before
   // `Authentication` does any credential work.
   .middleware(Authentication)
-  .middleware(CsrfProtection);
+  .middleware(CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(RequestContext);

@@ -133,7 +133,9 @@ export const TwoFactorGroup = HttpApiGroup.make("two_factor")
       error: [InvalidTwoFactorCode, SecondFactorLocked, Api.RateLimited, Users.UserSuspended],
     }).middleware(SessionLifecycle.Mints),
   )
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const TwoFactorAccountGroup = HttpApiGroup.make("two_factor.account")
   .add(
@@ -184,6 +186,8 @@ export const TwoFactorAccountGroup = HttpApiGroup.make("two_factor.account")
   .add(HttpApiEndpoint.get("status", "/two-factor/status", { success: StatusDto }))
   // See `@awthaq/api`'s `Session.ts`: `CsrfProtection` declared last so it runs first.
   .middleware(Api.Authentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const TwoFactorApi = HttpApi.make("auth").add(TwoFactorGroup).add(TwoFactorAccountGroup);

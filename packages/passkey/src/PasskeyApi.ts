@@ -418,7 +418,9 @@ export const PasskeyGroup = HttpApiGroup.make("passkey")
   // See `@awthaq/api`'s `Session.ts`: `CsrfProtection` declared last so it
   // runs first.
   .middleware(Api.Authentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const PasskeyAuthenticateGroup = HttpApiGroup.make("passkey.authenticate")
   .add(
@@ -456,7 +458,9 @@ export const PasskeyAuthenticateGroup = HttpApiGroup.make("passkey.authenticate"
   // protecting the same as `PasswordApi.ts`'s public `signIn`/`signUp`,
   // even though WebAuthn's own origin binding is a second, independent
   // defense here.
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const PasskeyCredentialsGroup = HttpApiGroup.make("passkey.credentials")
   .add(
@@ -487,7 +491,9 @@ export const PasskeyCredentialsGroup = HttpApiGroup.make("passkey.credentials")
   // See `@awthaq/api`'s `Session.ts`: `CsrfProtection` declared last so it
   // runs first.
   .middleware(Api.Authentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 /**
  * Wayfinder map (.scratch/resolve-ready-for-human-findings), ticket 15
@@ -526,19 +532,24 @@ export const PasskeyReauthenticateGroup = HttpApiGroup.make("passkey.reauthentic
   // See `@awthaq/api`'s `Session.ts`: `CsrfProtection` declared last so it
   // runs first.
   .middleware(Api.Authentication)
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 /**
  * TC-008: WebAuthn Related Origin Requests. Public and anonymous — the browser fetches it, without
  * credentials, from `https://<rpId>/.well-known/webauthn`; a `GET` with no state to protect (no CSRF
  * middleware), 404 unless `PasskeyConfig.relatedOrigins` is set.
  */
-export const PasskeyWellKnownGroup = HttpApiGroup.make("passkey.wellKnown").add(
-  HttpApiEndpoint.get("relatedOrigins", "/.well-known/webauthn", {
-    success: RelatedOriginsDto,
-    error: PasskeyRelatedOriginsNotConfigured,
-  }),
-);
+export const PasskeyWellKnownGroup = HttpApiGroup.make("passkey.wellKnown")
+  .add(
+    HttpApiEndpoint.get("relatedOrigins", "/.well-known/webauthn", {
+      success: RelatedOriginsDto,
+      error: PasskeyRelatedOriginsNotConfigured,
+    }),
+  )
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const PasskeyApi = HttpApi.make("auth")
   .add(PasskeyGroup)

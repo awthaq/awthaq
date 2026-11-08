@@ -38,7 +38,8 @@ class Whoami extends Schema.Class<Whoami>("Whoami")({ userId: Schema.String }) {
 const WhoamiApi = HttpApi.make("auth").add(
   HttpApiGroup.make("whoami")
     .add(HttpApiEndpoint.get("get", "/whoami", { success: Whoami }))
-    .middleware(Api.Authentication),
+    .middleware(Api.Authentication)
+    .middleware(Api.RequestContext),
 );
 
 const WhoamiHandlers = HttpApiBuilder.group(WhoamiApi, "whoami", (handlers) =>

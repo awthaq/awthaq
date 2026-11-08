@@ -45,7 +45,11 @@ describe("Credentials: the resolution table (T1 to T23 x user, machine, optional
           const request = requestWith(headersFor(row, tokens));
           const presented = yield* Credentials.fromRequest(request);
           const outcome = yield* credentials
-            .resolve(presented, tier, Credentials.httpScope(request))
+            .resolve(
+              presented,
+              tier,
+              Credentials.httpScope(request, Api.AuthRequestContext.noRequest),
+            )
             .pipe(
               Effect.map(show),
               Effect.catchTag("Unauthenticated", () => Effect.succeed(none)),
@@ -63,7 +67,11 @@ describe("Credentials: the resolution table (T1 to T23 x user, machine, optional
       const request = requestWith({ authorization: "Bearer jwtu.bad" });
       const presented = yield* Credentials.fromRequest(request);
       const failure = yield* credentials
-        .resolve(presented, Credentials.userTier, Credentials.httpScope(request))
+        .resolve(
+          presented,
+          Credentials.userTier,
+          Credentials.httpScope(request, Api.AuthRequestContext.noRequest),
+        )
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "Unauthenticated");
       assert.strictEqual(verifies.count, 0);
@@ -109,7 +117,7 @@ describe("Credentials: the per-request memo (PCS-006, TS-003, NHS-006)", () => {
         const credentials = yield* Credentials.make;
         const request = requestWith({ cookie: `__Host-session=${tokens.own}` });
         const presented = yield* Credentials.fromRequest(request);
-        const scope = Credentials.httpScope(request);
+        const scope = Credentials.httpScope(request, Api.AuthRequestContext.noRequest);
         const call = credentials.step("cookie", presented, Credentials.userTier, scope);
         const fiber = yield* Effect.all([call, call, call], { concurrency: "unbounded" }).pipe(
           Effect.forkChild,
@@ -131,7 +139,12 @@ describe("Credentials: the per-request memo (PCS-006, TS-003, NHS-006)", () => {
       const prefixed = request.modify({ url: "/y" });
       const presented = yield* Credentials.fromRequest(request);
       const first = yield* credentials
-        .step("cookie", presented, Credentials.userTier, Credentials.httpScope(request))
+        .step(
+          "cookie",
+          presented,
+          Credentials.userTier,
+          Credentials.httpScope(request, Api.AuthRequestContext.noRequest),
+        )
         .pipe(Effect.forkChild);
       yield* TestClock.adjust(Duration.millis(20));
       yield* Fiber.join(first);
@@ -139,7 +152,7 @@ describe("Credentials: the per-request memo (PCS-006, TS-003, NHS-006)", () => {
         "cookie",
         presented,
         Credentials.userTier,
-        Credentials.httpScope(prefixed),
+        Credentials.httpScope(prefixed, Api.AuthRequestContext.noRequest),
       );
       assert.strictEqual(verifies.count, 1);
     }).pipe(Effect.provide(layerFor(countingSessions(verifies))));
@@ -151,7 +164,7 @@ describe("Credentials: the per-request memo (PCS-006, TS-003, NHS-006)", () => {
       const credentials = yield* Credentials.make;
       const request = requestWith({ cookie: "__Host-session=some-id.some-secret" });
       const presented = yield* Credentials.fromRequest(request);
-      const scope = Credentials.httpScope(request);
+      const scope = Credentials.httpScope(request, Api.AuthRequestContext.noRequest);
       const step = credentials
         .step("cookie", presented, Credentials.userTier, scope)
         .pipe(Effect.flip);
@@ -171,7 +184,7 @@ describe("Credentials: the per-request memo (PCS-006, TS-003, NHS-006)", () => {
       const credentials = yield* Credentials.make;
       const request = requestWith({ authorization: "Bearer jwtu.ok" });
       const presented = yield* Credentials.fromRequest(request);
-      const scope = Credentials.httpScope(request);
+      const scope = Credentials.httpScope(request, Api.AuthRequestContext.noRequest);
       const before = claimed.resolves;
       yield* credentials.resolve(presented, Credentials.userTier, scope);
       yield* credentials.resolve(presented, Credentials.machineTier, scope);
@@ -191,7 +204,7 @@ describe("Credentials: the per-request memo (PCS-006, TS-003, NHS-006)", () => {
         const request = requestWith({ authorization: `Bearer ${Redacted.value(issued.token)}` });
         const presented = yield* Credentials.fromRequest(request);
         const scope = {
-          ...Credentials.httpScope(request),
+          ...Credentials.httpScope(request, Api.AuthRequestContext.noRequest),
           deliver: (rotation: Credentials.Rotation) =>
             Effect.sync(() => {
               rotations.push(rotation);
@@ -237,7 +250,7 @@ describe("Credentials: a store outage stops the chain (MA-004)", () => {
           authorization: "Bearer other-id.other-secret",
         });
         const presented = yield* Credentials.fromRequest(request);
-        const scope = Credentials.httpScope(request);
+        const scope = Credentials.httpScope(request, Api.AuthRequestContext.noRequest);
         const first = yield* credentials
           .step("cookie", presented, Credentials.userTier, scope)
           .pipe(Effect.flip);
@@ -262,7 +275,7 @@ describe("Credentials: a store outage stops the chain (MA-004)", () => {
         .resolve(
           { ...presented, cookie: Option.none(), impersonation: Option.none() },
           Credentials.machineTier,
-          Credentials.httpScope(request),
+          Credentials.httpScope(request, Api.AuthRequestContext.noRequest),
         )
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "StoreUnavailable");
@@ -290,7 +303,11 @@ describe("Credentials: a store outage stops the chain (MA-004)", () => {
         const request = requestWith({ cookie: "__Host-session=some-id.some-secret" });
         const presented = yield* Credentials.fromRequest(request);
         const failure = yield* credentials
-          .resolve(presented, Credentials.optionalTier, Credentials.httpScope(request))
+          .resolve(
+            presented,
+            Credentials.optionalTier,
+            Credentials.httpScope(request, Api.AuthRequestContext.noRequest),
+          )
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "StoreUnavailable");
       }).pipe(Effect.provide(layerFor(down))),

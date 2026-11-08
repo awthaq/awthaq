@@ -18,14 +18,16 @@ import { decisionCacheLayer } from "@qadi/core";
  * Provides a fresh `DecisionCache` around each request's whole handler
  * pipeline ("around the unit of work" — `Effect.provide` at each evaluation
  * would build an empty cache every time and cache nothing). Works for both
- * bridge paths: declare it **last** on the group so it is outermost and
- * wraps `AuthorizedSubject` (Path A) or `RequirePermission` (Path B):
+ * bridge paths: declare it after the authorization middleware so it wraps
+ * `AuthorizedSubject` (Path A) or `RequirePermission` (Path B), and before
+ * `Api.RequestContext`, which stays outermost (ADR-EA-047):
  *
  * ```ts
  * group
  *   .middleware(AuthorizedSubject)
  *   .middleware(Api.OptionalAuthentication)
  *   .middleware(RequestDecisionCache)
+ *   .middleware(Api.RequestContext)
  * ```
  */
 export class RequestDecisionCache extends HttpApiMiddleware.Service<RequestDecisionCache>()(

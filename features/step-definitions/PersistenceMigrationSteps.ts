@@ -18,7 +18,7 @@ import { Passkey } from "@awthaq/passkey";
 import { Roles } from "@awthaq/roles";
 import { Scim } from "@awthaq/scim";
 import { TestAuth } from "@awthaq/test";
-import { RateLimiter, UserStore } from "@awthaq/ports";
+import { ClientAddress, RateLimiter, UserStore } from "@awthaq/ports";
 import { AuthHost, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { CoreMigrations } from "@awthaq/sql";
@@ -80,7 +80,13 @@ const bootServer = <P extends ReadonlyArray<AuthPlugin.Any>>(
             persistence: { records: "sql", client: SqliteClient.layer({ filename }), migrations },
             csrf: Layer.succeed(Csrf.CsrfConfig, TestAuth.TestCsrfConfig),
           }).pipe(
-            Layer.provide(Layer.mergeAll(RateLimiter.layerPermissive, TestAuth.encryption)),
+            Layer.provide(
+              Layer.mergeAll(
+                RateLimiter.layerPermissive,
+                ClientAddress.layerDirect,
+                TestAuth.encryption,
+              ),
+            ),
             Layer.provide(NodeCrypto.layer),
             Layer.provide(HttpServer.layerServices),
             Layer.provide(HttpRouter.layer),

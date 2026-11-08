@@ -4,6 +4,7 @@
 // asserted here is the bridge's own contract: which subject the extractor resolves (and that it
 // reuses Authentication's session logic), which statuses a missing annotation / outage / denial end
 // in, what the registry route serves. qadi's policy evaluation is real and never stubbed.
+import { Api } from "@awthaq/api";
 import { Credentials } from "@awthaq/server";
 import { Sessions, Users } from "@awthaq/core";
 import { AuthorizedSubject } from "@awthaq/qadi";
@@ -241,7 +242,7 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
                   "cookie",
                   presented,
                   Credentials.userTier,
-                  Credentials.httpScope(request),
+                  Credentials.httpScope(request, Api.AuthRequestContext.noRequest),
                 ),
               ),
               Effect.map((resolved) => `user:${resolved.principal.ref.id}`),

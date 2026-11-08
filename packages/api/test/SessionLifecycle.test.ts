@@ -27,7 +27,8 @@ const api = HttpApi.make("auth")
       .add(HttpApiEndpoint.post("reauth", "/reauth").middleware(SessionLifecycle.Refreshes))
       .add(HttpApiEndpoint.get("plain", "/plain", { success: Schema.String }))
       .middleware(Api.Authentication)
-      .middleware(Api.CsrfProtection),
+      .middleware(Api.CsrfProtection)
+      .middleware(Api.RequestContext),
   )
   .add(
     HttpApiGroup.make("top", { topLevel: true }).add(

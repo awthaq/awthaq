@@ -2,7 +2,7 @@
 // BEH-EA-317 (spec/behaviors/29-saml-sp.md, ADR-EA-023 Decision 4): the `Sso` dispatcher. An email domain (or an organization id) routes
 // to an organization's OIDC connection or its SAML connection, and the answer is the URL of the owning protocol plugin's own login
 // route; which protocol wins when both route the same hint is configured, and `discoverAll` shows the conflict instead of hiding it.
-import { AuthHttp } from "@awthaq/server";
+import { AuthHttp, RequestContext } from "@awthaq/server";
 import { Organization, OrganizationActor, OrganizationConnections } from "@awthaq/organization";
 import { ConnectionRecords } from "@awthaq/organization/records";
 import { RateLimiter } from "@awthaq/ports";
@@ -37,6 +37,8 @@ const SsoLive = (
   limiter: Layer.Layer<RateLimiter.RateLimiter> = RateLimiter.layerPermissive,
 ) =>
   Sso.Sso.layer.pipe(
+    // ADR-EA-047: `Sso` is served on its own here, so its group's request context is provided beside it.
+    Layer.provide(RequestContext.RequestContextLive),
     Layer.provide(preferred === undefined ? Layer.empty : Sso.config({ preferred })),
     Layer.provideMerge(OidcStoreLive),
     Layer.provideMerge(SamlLive(config, limiter)),

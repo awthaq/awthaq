@@ -2,7 +2,7 @@
 // required options are required, and a tap on an undeclared point stays in `RIn`. Compile-time checks
 // (`tsc -p tsconfig.test.json` is the assertion) with a token runtime test so the file is a suite.
 import { Auth, AuthPlugin, HookPoint, Users } from "@awthaq/core";
-import { type Encryption, RateLimiter } from "@awthaq/ports";
+import { ClientAddress, type Encryption, RateLimiter } from "@awthaq/ports";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { it } from "@effect/vitest";
 import type * as Digest from "effect/crypto/Digest";
@@ -33,9 +33,13 @@ const sql = AuthHost.layer(built, {
   csrf,
 });
 
-/** What core plus `Ledger` leaves to the host: the limiter, the platform crypto, the HTTP platform. */
+/**
+ * What core plus `Ledger` leaves to the host: the limiter, the client-address topology (the request context's
+ * populator reads it, ADR-EA-047), the platform crypto, the HTTP platform.
+ */
 type HostOwned =
   | RateLimiter.RateLimiter
+  | ClientAddress.ClientAddress
   | SecureRandom.SecureRandom
   | Digest.Digest
   | Mac.Mac
@@ -59,7 +63,9 @@ export const notLaunchable = () =>
   // @ts-expect-error - `RateLimiter` is still required
   // @effect-diagnostics-next-line missingEffectContext:off
   Effect.runPromise(Layer.launch(withoutLimiter));
-const withLimiter = withoutLimiter.pipe(Layer.provide(RateLimiter.layerPermissive));
+const withLimiter = withoutLimiter.pipe(
+  Layer.provide(Layer.merge(RateLimiter.layerPermissive, ClientAddress.layerDirect)),
+);
 export const launchable = () => Effect.runPromise(Layer.launch(withLimiter));
 
 // 28: sql mode without `migrations` does not compile. Never called (the options are incomplete on purpose).

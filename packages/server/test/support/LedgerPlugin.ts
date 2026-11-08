@@ -67,24 +67,28 @@ export const LedgerConfig = Context.Reference("ledger/LedgerConfig", {
 
 const LedgerApi = HttpApi.make("auth")
   .add(
-    HttpApiGroup.make("ledger").add(
-      HttpApiEndpoint.get("list", "/ledger", { success: Schema.Array(Schema.String) }).middleware(
-        Api.Authentication,
-      ),
-      HttpApiEndpoint.post("add", "/ledger", {
-        payload: Schema.Struct({ label: Schema.String }),
-        success: Schema.String,
-      })
-        .middleware(Api.Authentication)
-        .middleware(Api.CsrfProtection),
-    ),
+    HttpApiGroup.make("ledger")
+      .add(
+        HttpApiEndpoint.get("list", "/ledger", { success: Schema.Array(Schema.String) }).middleware(
+          Api.Authentication,
+        ),
+        HttpApiEndpoint.post("add", "/ledger", {
+          payload: Schema.Struct({ label: Schema.String }),
+          success: Schema.String,
+        })
+          .middleware(Api.Authentication)
+          .middleware(Api.CsrfProtection),
+      )
+      .middleware(Api.RequestContext),
   )
   .add(
-    HttpApiGroup.make("ledger.admin").add(
-      HttpApiEndpoint.get("count", "/ledger/admin/count", { success: Schema.Number }).middleware(
-        Api.AdminAuthentication,
-      ),
-    ),
+    HttpApiGroup.make("ledger.admin")
+      .add(
+        HttpApiEndpoint.get("count", "/ledger/admin/count", { success: Schema.Number }).middleware(
+          Api.AdminAuthentication,
+        ),
+      )
+      .middleware(Api.RequestContext),
   );
 
 const LedgerHandlers = HttpApiBuilder.group(

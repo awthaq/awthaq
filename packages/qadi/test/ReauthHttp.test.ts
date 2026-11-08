@@ -46,7 +46,8 @@ const StaleGroup = HttpApiGroup.make("reauth")
     }),
   )
   .middleware(AuthorizedSubject.AuthorizedSubject)
-  .middleware(Api.Authentication);
+  .middleware(Api.Authentication)
+  .middleware(Api.RequestContext);
 
 const TestApi = HttpApi.make("auth").add(LoginGroup).add(StaleGroup);
 

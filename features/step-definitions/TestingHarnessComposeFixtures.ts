@@ -16,11 +16,13 @@ import * as SqlClient from "effect/sql/SqlClient";
 // ---- an admin-tier group behind AdminAuthentication (BEH-EA-331) ---------------------------
 
 const OperatorApi = HttpApi.make("auth").add(
-  HttpApiGroup.make("operator.admin").add(
-    HttpApiEndpoint.get("whoami", "/operator/whoami", { success: Schema.String }).middleware(
-      Api.AdminAuthentication,
-    ),
-  ),
+  HttpApiGroup.make("operator.admin")
+    .add(
+      HttpApiEndpoint.get("whoami", "/operator/whoami", { success: Schema.String }).middleware(
+        Api.AdminAuthentication,
+      ),
+    )
+    .middleware(Api.RequestContext),
 );
 
 const OperatorHandlers = HttpApiBuilder.group(OperatorApi, "operator.admin", (handlers) =>
@@ -93,17 +95,19 @@ const ledgerSql = Layer.effect(
 );
 
 const LedgerApi = HttpApi.make("auth").add(
-  HttpApiGroup.make("ledger").add(
-    HttpApiEndpoint.get("list", "/ledger", { success: Schema.Array(Schema.String) }).middleware(
-      Api.Authentication,
-    ),
-    HttpApiEndpoint.post("add", "/ledger", {
-      payload: Schema.Struct({ entry: Schema.String }),
-      success: Schema.String,
-    })
-      .middleware(Api.Authentication)
-      .middleware(Api.CsrfProtection),
-  ),
+  HttpApiGroup.make("ledger")
+    .add(
+      HttpApiEndpoint.get("list", "/ledger", { success: Schema.Array(Schema.String) }).middleware(
+        Api.Authentication,
+      ),
+      HttpApiEndpoint.post("add", "/ledger", {
+        payload: Schema.Struct({ entry: Schema.String }),
+        success: Schema.String,
+      })
+        .middleware(Api.Authentication)
+        .middleware(Api.CsrfProtection),
+    )
+    .middleware(Api.RequestContext),
 );
 
 const LedgerHandlers = HttpApiBuilder.group(

@@ -54,6 +54,7 @@ const appLayer = (allowedOrigins: ReadonlyArray<string>) =>
     Layer.provide(Wiring.resolver),
     Layer.provide(Csrf.CsrfProtectionLive),
     Layer.provide(AuthHttp.sessionLifecycle),
+    Layer.provide(Wiring.requestContextLive),
     // CSG-001: `Account.deleteUser` runs core's `AccountErasure` and `Account.exportData` its `AccountExport` (CSG-005).
     Layer.provide(Layer.mergeAll(Erasure.layer, DataExport.layer)),
     // CSG-005: the export endpoint rate-limits per account.

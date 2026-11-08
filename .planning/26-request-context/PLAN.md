@@ -1498,3 +1498,20 @@ What was stale when work started (the plan's §2.8 "dp2" column is the shipped t
   (`VerificationLink`'s `presented.ip` included), 82 + 51 sweep files.
 - **Ticket 02's spike** was not written as local declarations first: the type tests were written against the real
   classes in the ticket that introduces each one (04, 06, 08, 23).
+
+Phase 2 (tickets 06–08, one commit):
+
+- **`AuthHost`'s `requestContext` dial is gone** with the global middleware; `TestAuth`, which turned it off, now serves
+  with the derived request context like production. `AuthHost.Requires` names `ClientAddress` explicitly (as it names
+  `SecureRandom` for `middlewareFor`), so core alone now leaves the client-address topology to the host (Q2).
+- **`runPluginContractTests`' new case** reflects `Auth.make([...host, plugin]).api` and checks the plugin's own groups:
+  `AuthPlugin.Any["contract"]` is `ContractData`, which `HttpApi.reflect` does not accept.
+- **qadi's helpers** (`withAuthorizedSubject`, `withOptionalAuthorizedSubject`) add `Api.RequestContext` after the
+  authentication middleware, so a group built with them still compiles; `RequestDecisionCache`'s doc puts it before
+  `Api.RequestContext`.
+- **`SubjectExtractorLive` requires `ClientAddress | SecureRandom`** (the fallback `RequestContext.capture`).
+- **Hand-wired compositions** (server suites through `Wiring.requestContextLive`, cli `TestServer`, jwt suites, the
+  `Sso` suite and world, the BDD worlds `Authentication`, `ContractStratum`, `QadiBridge`, `SessionServer`) provide
+  `RequestContext.RequestContextLive`; 17 test files' groups that declare an authentication middleware gained
+  `.middleware(Api.RequestContext)`.
+- The OpenAPI document of `examples/memory-server` is byte-identical to the baseline.

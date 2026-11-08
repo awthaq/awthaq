@@ -11,7 +11,7 @@
 import * as Schema from "effect/Schema";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
-import { Authentication, CsrfProtection, RateLimited } from "./Api.ts";
+import { Authentication, CsrfProtection, RequestContext, RateLimited } from "./Api.ts";
 import * as SessionLifecycle from "./SessionLifecycle.ts";
 
 /**
@@ -158,4 +158,6 @@ export const AccountGroup = HttpApiGroup.make("account")
   // See Session.ts's identical comment: `CsrfProtection` declared last so
   // it runs first.
   .middleware(Authentication)
-  .middleware(CsrfProtection);
+  .middleware(CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(RequestContext);

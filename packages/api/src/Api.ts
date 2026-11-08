@@ -327,7 +327,7 @@ export const CsrfCookie = HttpApiSecurity.apiKey({ key: CSRF_COOKIE_NAME, in: "c
  */
 export class Authentication extends HttpApiMiddleware.Service<
   Authentication,
-  { provides: CurrentPrincipal }
+  { provides: CurrentPrincipal; requires: AuthRequestContext }
 >()("Authentication", {
   security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
   error: [Unauthenticated, StoreUnavailable],
@@ -346,7 +346,7 @@ export class Authentication extends HttpApiMiddleware.Service<
  */
 export class MachineAuthentication extends HttpApiMiddleware.Service<
   MachineAuthentication,
-  { provides: CurrentPrincipal }
+  { provides: CurrentPrincipal; requires: AuthRequestContext }
 >()("MachineAuthentication", {
   security: {
     impersonation: ImpersonationCookie,
@@ -370,7 +370,7 @@ export class MachineAuthentication extends HttpApiMiddleware.Service<
  */
 export class AdminAuthentication extends HttpApiMiddleware.Service<
   AdminAuthentication,
-  { provides: CurrentPrincipal }
+  { provides: CurrentPrincipal; requires: AuthRequestContext }
 >()("AdminAuthentication", {
   security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
   error: [Unauthenticated, StoreUnavailable],
@@ -387,7 +387,7 @@ export class AdminAuthentication extends HttpApiMiddleware.Service<
  */
 export class OptionalAuthentication extends HttpApiMiddleware.Service<
   OptionalAuthentication,
-  { provides: CurrentPrincipal }
+  { provides: CurrentPrincipal; requires: AuthRequestContext }
 >()("OptionalAuthentication", {
   security: { impersonation: ImpersonationCookie, cookie: SessionCookie, bearer: BearerToken },
   // MA-004: it still cannot answer 401, but a session store that is down is not "no credential":

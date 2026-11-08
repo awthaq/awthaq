@@ -65,6 +65,8 @@ export const MagicLinkGroup = HttpApiGroup.make("magicLink")
   )
   // Public and anonymous by design, but still unsafe-method endpoints a browser reaches: CSRF-worth
   // protecting the same as `PasswordApi.ts`'s public `signIn`.
-  .middleware(Api.CsrfProtection);
+  .middleware(Api.CsrfProtection)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const MagicLinkApi = HttpApi.make("auth").add(MagicLinkGroup);

@@ -413,6 +413,8 @@ export const ScimGroup = HttpApiGroup.make("scim")
       error: [ScimNotFound, ScimConflict, ScimForbidden, ScimUnavailable],
     }),
   )
-  .middleware(ScimAuthentication);
+  .middleware(ScimAuthentication)
+  // ADR-EA-047: declared last, so it is outermost and every middleware and handler above reads its facts.
+  .middleware(Api.RequestContext);
 
 export const ScimApi = HttpApi.make("auth").add(ScimGroup);

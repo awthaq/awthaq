@@ -4,6 +4,7 @@
 // tap layer handed to the composition the way a host application's `Point.tap(...)` is. The
 // plugin-declared side of BEH-EA-091/096 (dependency order, the static manifest) uses real
 // `AuthPlugin`s with `taps` declared on `AuthPlugin.layer`, composed by the real `Auth.make`.
+import { Api } from "@awthaq/api";
 import { Auth, AuthPlugin, HookPoint, Hooks, Users } from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { TestAuth } from "@awthaq/test";
@@ -109,9 +110,9 @@ export class AcmeGate extends AuthPlugin.Service<AcmeGate, Record<string, never>
 }
 
 const InviteApi = HttpApi.make("auth").add(
-  HttpApiGroup.make("acme.invite").add(
-    HttpApiEndpoint.get("ping", "/acme-invite/ping", { success: Schema.String }),
-  ),
+  HttpApiGroup.make("acme.invite")
+    .add(HttpApiEndpoint.get("ping", "/acme-invite/ping", { success: Schema.String }))
+    .middleware(Api.RequestContext),
 );
 /** BEH-EA-095's own example: a plugin that reacts to a user's deletion by tapping the point core exposes, over its own prefixed table. */
 export class AcmeInvite extends AuthPlugin.Service<AcmeInvite, Record<string, never>>()(
