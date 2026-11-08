@@ -1,7 +1,7 @@
 // BEH-EA-T3: `TestAuth.app` serves the composition and its context together: the handler and the context
 // runner share one instance of every service, and `request` satisfies CSRF for the composition's own config.
 import { Api } from "@awthaq/api";
-import { Auth, Persistence, Sessions } from "@awthaq/core";
+import { Auth, Persistence, SessionCookie, Sessions } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -64,6 +64,26 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
       const body = await session.json();
       assert.deepStrictEqual(body.amr, ["pwd"]);
       assert.isString(Api.SESSION_COOKIE_NAME);
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  // Plan 20 phase 0: `signIn` hands back the default `__Host-session` name whatever `SessionCookieConfig` the
+  // composition runs, so under `SecureDomain` (which reads `__Secure-session`) the session is ignored.
+  it.fails("`signIn` under `SecureDomain` authenticates `GET /session`", async () => {
+    const app = TestAuth.app(
+      TestAuth.layer(Auth.make([Pins]), {
+        services: SessionCookie.config({
+          mode: SessionCookie.SecureDomain({ domain: "example.com", sameSite: "lax" }),
+        }),
+      }),
+      { baseUrl: "https://app.example.com" },
+    );
+    try {
+      const signedIn = await app.signIn("secure-domain@example.com");
+      const session = await app.request("GET", "/session", { cookie: signedIn.cookieHeader });
+      assert.strictEqual(session.status, 200);
     } finally {
       await app.dispose();
     }

@@ -43,6 +43,16 @@ const TestApi = HttpApi.make("server-action-test").add(
       }),
     )
     .add(HttpApiEndpoint.post("echo", "/echo", { success: Echo }))
+    .add(
+      HttpApiEndpoint.post("appSet", "/app/set", {
+        success: Schema.Struct({ ok: Schema.Boolean }),
+      }),
+    )
+    .add(
+      HttpApiEndpoint.post("appExpire", "/app/expire", {
+        success: Schema.Struct({ ok: Schema.Boolean }),
+      }),
+    )
     .middleware(Api.CsrfProtection),
 );
 
@@ -70,8 +80,29 @@ const Handlers = HttpApiBuilder.group(TestApi, "login", (handlers) =>
           cookie: request.headers["cookie"] ?? null,
         };
       }),
-    ),
+    )
+    .handle("appSet", () => Effect.succeed({ ok: true }))
+    .handle("appExpire", () => Effect.succeed({ ok: true })),
 );
+
+/**
+ * An application route's cookies, written by a wrapper around the handler (as an application's own route
+ * beside awthaq's would): `/app/set` sets a `Path=/app` cookie and a `Path=/` one, `/app/expire` expires the
+ * latter by `Expires` alone (no `Max-Age`).
+ */
+const withApplicationCookies =
+  (handler: (request: Request) => Promise<Response>) => async (request: Request) => {
+    const response = await handler(request);
+    const path = new URL(request.url).pathname;
+    const headers = new Headers(response.headers);
+    if (path === "/app/set") {
+      headers.append("set-cookie", "scoped=1; Path=/app");
+      headers.append("set-cookie", "everywhere=1; Path=/");
+    } else if (path === "/app/expire") {
+      headers.append("set-cookie", "everywhere=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT");
+    }
+    return new Response(response.body, { status: response.status, headers });
+  };
 
 const TestServices = Layer.mergeAll(Path.layer, Etag.layerWeak, HttpPlatform.layer).pipe(
   Layer.provideMerge(FileSystem.layerNoop({})),
@@ -192,6 +223,39 @@ describe("inProcessClient (BO-002/NSA-008)", () => {
         }),
       );
       assert.deepStrictEqual(result, { ok: true });
+    } finally {
+      await dispose();
+    }
+  });
+
+  // Plan 20 phase 0: the transport drops a cookie only on `Max-Age<=0` and sends every cookie to every path.
+  it.fails("a cookie expired by `Expires` alone is not sent on the action's next call", async () => {
+    const { handler, dispose } = HttpRouter.toWebHandler(AppLayer);
+    try {
+      const client = await inProcessClient(TestApi, {
+        handler: withApplicationCookies(handler),
+        headers: actionHeaders({ cookie: `${Api.CSRF_COOKIE_NAME}=${validCsrfCookie()}` }),
+        jar: recordingJar(),
+      });
+      await client.login.appSet();
+      assert.include((await client.login.echo()).cookie ?? "", "everywhere=1");
+      await client.login.appExpire();
+      assert.notInclude((await client.login.echo()).cookie ?? "", "everywhere=");
+    } finally {
+      await dispose();
+    }
+  });
+
+  it.fails("a `Path=/app` cookie is not sent to a route outside `/app`", async () => {
+    const { handler, dispose } = HttpRouter.toWebHandler(AppLayer);
+    try {
+      const client = await inProcessClient(TestApi, {
+        handler: withApplicationCookies(handler),
+        headers: actionHeaders({ cookie: `${Api.CSRF_COOKIE_NAME}=${validCsrfCookie()}` }),
+        jar: recordingJar(),
+      });
+      await client.login.appSet();
+      assert.notInclude((await client.login.echo()).cookie ?? "", "scoped=");
     } finally {
       await dispose();
     }
