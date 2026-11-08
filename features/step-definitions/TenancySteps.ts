@@ -2,11 +2,12 @@
 // state the real services and store adapters produced: the raw `"tenantId"` column, the response
 // a router middleware wrote, the typed refusal an organization operation returned.
 import { Accounts, AuditLog, Sessions, Users, Verification } from "@awthaq/core";
-import { AuditLogStore, Encryption, PasswordHasher, Tenant } from "@awthaq/ports";
+import { AuditLogStore, Encryption, Mailer, PasswordHasher, Tenant } from "@awthaq/ports";
 import {
   Organization,
   OrganizationActor,
   OrganizationConnections,
+  OrganizationInvitations,
   OrganizationMembers,
 } from "@awthaq/organization";
 import { ConnectionRecords, OrganizationRecords } from "@awthaq/organization/records";
@@ -1380,6 +1381,105 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
         }),
       );
       assert.equal(outcome, tag);
+    },
+  );
+
+  // ---- BEH-EA-237: the invitation paths of a suspended organization (plan 30) ----
+
+  Given(
+    "{string} has invited {string} to the organization {string}",
+    function* (inviterName: string, invitee: string, name: string) {
+      const inviter = yield* callerNamed(inviterName);
+      const id = yield* organizationNamed(name);
+      const email = `${invitee}@example.com`;
+      const { userId, invitation, token } = yield* organization(
+        Effect.gen(function* () {
+          const users = yield* Users.Users;
+          const created = yield* users.create({
+            identity: { _tag: "Email", email },
+            name: invitee,
+          });
+          yield* users.verifyEmail(created.id);
+          const plugin = yield* Organization.Organization;
+          const invited = yield* plugin.invite(inviter, id, { email, role: ["member"] });
+          // MTI-010: the capability only travels by email; read it back as the invitee would.
+          const sent = yield* (yield* Mailer.Mailer).sent;
+          const mailed = sent
+            .toReversed()
+            .map((message) => message.data?.["token"])
+            .find((value) => typeof value === "string");
+          assert.ok(typeof mailed === "string", `no invitation mail was sent to ${email}`);
+          return { userId: created.id, invitation: invited, token: mailed };
+        }),
+      );
+      const { people, invitations } = yield* World;
+      yield* people.set(invitee, callerOf(userId));
+      yield* invitations.set(invitee, { id: invitation.id, token });
+    },
+  );
+
+  Then(
+    "{string} cancelling the invitation of {string} is refused with {string}",
+    function* (who: string, invitee: string, tag: string) {
+      const caller = yield* callerNamed(who);
+      const { id } = yield* (yield* World).invitations.get(invitee);
+      const outcome = yield* organization(
+        Effect.gen(function* () {
+          const plugin = yield* Organization.Organization;
+          return yield* outcomeTag(plugin.cancelInvitation(caller, id));
+        }),
+      );
+      assert.equal(outcome, tag);
+    },
+  );
+
+  Then(
+    "{string} {word} her invitation is refused with {string}",
+    function* (who: string, act: string, tag: string) {
+      const caller = yield* callerNamed(who);
+      const { id, token } = yield* (yield* World).invitations.get(who);
+      const outcome = yield* organization(
+        Effect.gen(function* () {
+          const plugin = yield* Organization.Organization;
+          switch (act) {
+            case "reading":
+              return yield* outcomeTag(plugin.getInvitationByToken(caller, token));
+            case "accepting":
+              return yield* outcomeTag(plugin.acceptInvitation(caller, id, token));
+            case "rejecting":
+              return yield* outcomeTag(plugin.rejectInvitation(caller, id, token));
+            default:
+              return assert.fail(`unknown invitation act "${act}"`);
+          }
+        }),
+      );
+      assert.equal(outcome, tag);
+    },
+  );
+
+  Then("the invitation of {string} is still pending", function* (invitee: string) {
+    const { id } = yield* (yield* World).invitations.get(invitee);
+    const found = yield* organization(
+      Effect.gen(function* () {
+        const invitations = yield* OrganizationInvitations.OrganizationInvitations;
+        return yield* invitations.find(id);
+      }),
+    );
+    assert.equal(Option.getOrThrow(found).status, "pending");
+  });
+
+  Then(
+    "{string} is not a member of the organization {string}",
+    function* (who: string, name: string) {
+      const caller = yield* callerNamed(who);
+      const id = yield* organizationNamed(name);
+      const membership = yield* organization(
+        Effect.gen(function* () {
+          const members = yield* OrganizationMembers.OrganizationMembers;
+          return yield* members.find(id, Users.UserId(caller.ref.id));
+        }),
+      );
+      assert.ok(Option.isNone(membership));
     },
   );
 

@@ -39,6 +39,7 @@ import {
   OrganizationConnections,
   OrganizationDirectory,
   OrganizationHooks,
+  OrganizationInvitations,
   OrganizationMembers,
   OrganizationQadi,
   TenantMiddleware,
@@ -50,6 +51,7 @@ import {
   AuditLogStore,
   Encryption,
   KeyProvider,
+  Mailer,
   PasswordHasher,
   SqlTransaction,
   Tenant,
@@ -163,7 +165,10 @@ export const PLATFORM_ADMIN = "superadmin";
 
 export type OrganizationServices =
   | Organization.Organization
+  | OrganizationInvitations.OrganizationInvitations
   | OrganizationMembers.OrganizationMembers
+  | Users.Users
+  | Mailer.Mailer
   | OrganizationRecords.OrganizationRecords
   | AdminTenants.AdminTenants
   | AuditLog.AuditLog
@@ -480,6 +485,8 @@ export interface WorldShape {
   readonly redirects: NamedRegistry<string>;
   readonly memberCounter: Ref.Ref<number>;
   readonly suspensions: NamedRegistry<string>;
+  /** An invitation by its invitee's name: its id and the emailed capability token. */
+  readonly invitations: NamedRegistry<{ readonly id: string; readonly token: string }>;
 }
 
 export class World extends Context.Service<World, WorldShape>()("features/TenancyWorld") {}
@@ -563,6 +570,7 @@ export const WorldLive = Layer.effect(
       redirects: makeNamedRegistry<string>("redirect"),
       memberCounter: Ref.makeUnsafe(0),
       suspensions: makeNamedRegistry<string>("suspension"),
+      invitations: makeNamedRegistry<{ readonly id: string; readonly token: string }>("invitation"),
     });
   }),
 );

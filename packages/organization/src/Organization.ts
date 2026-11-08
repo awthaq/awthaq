@@ -258,6 +258,18 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
        */
       const requireOrganization = directory.requireActive;
 
+      /**
+       * BEH-EA-237 for a path that starts from an invitation (its id or emailed token): the
+       * invitation's organization must be active, and a suspended one answers exactly like an
+       * unknown invitation.
+       */
+      const requireInvitationOrganization = (record: InvitationRecords.InvitationRecord) =>
+        requireOrganization(record.organizationId).pipe(
+          Effect.catchTag("OrganizationNotFound", () =>
+            Effect.fail(new OrganizationApi.InvitationNotFound()),
+          ),
+        );
+
       // ---- organizations: authorization on top of `OrganizationDirectory` ---------------------
 
       const create: OrganizationShape["create"] = Effect.fnUntraced(function* ({
@@ -484,6 +496,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           if (Option.isNone(callerMembership)) {
             return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
           }
+          yield* requireInvitationOrganization(found);
           if (found.status !== "pending") {
             return yield* Effect.fail(new OrganizationApi.InvitationNotPending());
           }
@@ -523,6 +536,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           const found = yield* invitationSystem.find(invitationId);
           if (Option.isNone(found))
             return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
+          yield* requireInvitationOrganization(found.value);
           const allowed = yield* mayReadInvitation(Users.UserId(caller.ref.id), found.value);
           if (!allowed) return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
           return found.value;
@@ -534,6 +548,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           const found = yield* invitationSystem.findByToken(token);
           if (Option.isNone(found))
             return yield* Effect.fail(new OrganizationApi.InvitationNotFound());
+          yield* requireInvitationOrganization(found.value);
           const user = yield* users
             .findById(Users.UserId(caller.ref.id))
             .pipe(Effect.catchTag("UserNotFound", () => Effect.succeed(undefined)));

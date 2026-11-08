@@ -420,6 +420,19 @@ Feature: Multi-Tenancy
       Then "alice" has no active member
       And "alice" making the organization "acme" her active organization is refused with "MembershipNotFound"
 
+    @REQ-EA-1336
+    Scenario: A suspended organization's invitations can be neither cancelled, read, accepted nor rejected
+      Given a signed-in user "alice" who owns the organization "acme"
+      And "alice" has invited "carol" to the organization "acme"
+      And a platform administrator "superadmin"
+      When "superadmin" suspends the organization "acme"
+      Then "alice" cancelling the invitation of "carol" is refused with "InvitationNotFound"
+      And "carol" reading her invitation is refused with "InvitationNotFound"
+      And "carol" accepting her invitation is refused with "InvitationNotFound"
+      And "carol" rejecting her invitation is refused with "InvitationNotFound"
+      And the invitation of "carol" is still pending
+      And "carol" is not a member of the organization "acme"
+
     @REQ-EA-856
     Scenario: Reinstating an organization restores access exactly as it was
       Given a signed-in user "alice" who owns the organization "acme"
