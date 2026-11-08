@@ -16,6 +16,8 @@ import {
   SqlSyntaxError,
   UniqueViolation,
 } from "effect/sql/SqlError";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as TestSql from "../../test/src/TestSql.ts";
 import * as StoreFailure from "../src/StoreFailure.ts";
 
 const sqlError = (reason: ConstructorParameters<typeof SqlError>[0]["reason"]) =>
@@ -127,6 +129,22 @@ describe("StoreFailure.orConflict", () => {
         );
         assert.instanceOf(outage, StoreFailure.StoreUnavailable);
       }),
+  );
+
+  // Plan 25 ticket 06 (plan 24 §2.5): node:sqlite reports a PRIMARY KEY clash as a generic
+  // `ConstraintError`, Postgres as 23505. Both are the domain conflict, through a real driver.
+  it.effect("maps a primary-key clash like Postgres does, on the real driver", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.unsafe(`DROP TABLE IF EXISTS store_failure_pk`);
+      yield* sql.unsafe(`CREATE TABLE store_failure_pk (id TEXT PRIMARY KEY)`);
+      const insert = sql`INSERT INTO store_failure_pk (id) VALUES ('a')`.pipe(
+        StoreFailure.orConflict("Probe.create", () => new Taken({ key: "a" })),
+      );
+      yield* insert;
+      const conflict = yield* Effect.flip(insert);
+      assert.instanceOf(conflict, Taken);
+    }).pipe(Effect.provide(TestSql.layer("sql_StoreFailure_pk"))),
   );
 
   it.effect("a RETURNING that returned no row is a defect, never an outage", () =>

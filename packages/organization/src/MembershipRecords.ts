@@ -6,8 +6,7 @@
 // JSON-serialized `TEXT` column under `layerSql`, a plain array in memory.
 
 import { Defects, Users } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
-import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
+import { Models as SqlModels, SqlStore, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -516,19 +515,7 @@ export const layerSql = Layer.effect(
     const lockedForOrganization = <A, E, R>(
       organizationId: string,
       effect: Effect.Effect<A, E, R>,
-    ) =>
-      SqlTransaction.transactional(sql)(
-        Effect.andThen(
-          sql.onDialectOrElse({
-            pg: () =>
-              Effect.asVoid(
-                sql`SELECT pg_advisory_xact_lock(hashtextextended(${`organization_membership:org:${organizationId}`}, 0))`,
-              ),
-            orElse: () => Effect.void,
-          }),
-          effect,
-        ),
-      );
+    ) => SqlStore.atomically(sql, `organization_membership:org:${organizationId}`)(effect);
 
     const updateRole: MembershipRecordsShape["updateRole"] = (userId, organizationId, role) =>
       lockedForOrganization(

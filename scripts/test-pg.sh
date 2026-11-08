@@ -26,6 +26,8 @@ suites=(
   packages/sql/test/SealedColumn.test.ts
   packages/sql/test/SqlDdl.test.ts
   packages/sql/test/UnitOfWork.test.ts
+  packages/sql/test/SqlStore.test.ts
+  packages/sql/test/StoreFailure.test.ts
   packages/test/test/CoreSealedColumns.test.ts
   packages/test/test/StoreContract.sql.test.ts
   packages/test/test/StoreContract.sealed.test.ts
