@@ -13,6 +13,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { Authentication, CsrfProtection, Unauthenticated } from "./Api.ts";
+import * as SessionLifecycle from "./SessionLifecycle.ts";
 
 /**
  * MW-008: a timestamp on the wire is an ISO-8601 date-time string (the generated OpenAPI
@@ -73,12 +74,14 @@ export const SessionGroup = HttpApiGroup.make("session")
   // handler's read answers a typed 401 (with an expired cookie), not a 500.
   .add(HttpApiEndpoint.get("current", "/session", { success: SessionDto, error: Unauthenticated }))
   .add(HttpApiEndpoint.get("list", "/session/list", { success: Schema.Array(SessionDto) }))
-  .add(HttpApiEndpoint.post("signOut", "/session/sign-out"))
+  // ADR-EA-045: `signOut`, `revoke` (when the target is the caller's own) and `revokeAll` end the caller's
+  // session; the declaration is what tells the server, the bearer client and React so.
+  .add(HttpApiEndpoint.post("signOut", "/session/sign-out").middleware(SessionLifecycle.Ends))
   .add(
     HttpApiEndpoint.post("revoke", "/session/revoke", {
       payload: RevokePayload,
       error: SessionNotFound,
-    }),
+    }).middleware(SessionLifecycle.Ends),
   )
   .add(HttpApiEndpoint.post("revokeOthers", "/session/revoke-others"))
   // Upstream-hardening map, ticket 02: completes the `revoke`/
@@ -86,7 +89,7 @@ export const SessionGroup = HttpApiGroup.make("session")
   // the caller, no exceptions, including the caller's own current
   // session. No payload. CSS-002: like `signOut`, the response expires the
   // `__Host-session` cookie (`@awthaq/server`'s handlers do this).
-  .add(HttpApiEndpoint.post("revokeAll", "/session/revoke-all"))
+  .add(HttpApiEndpoint.post("revokeAll", "/session/revoke-all").middleware(SessionLifecycle.Ends))
   // CSS-001/CDS-001/APS-001/NHS-001/PIL-001/TMS-001: `CsrfProtection`
   // declared last (outermost, runs first — see `AuthorizedSubject.ts`'s
   // header on declaration order) so a forged request is rejected before

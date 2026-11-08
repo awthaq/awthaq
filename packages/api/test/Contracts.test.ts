@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import * as Account from "../src/Account.ts";
 import * as AuthCore from "../src/AuthCore.ts";
 import * as Session from "../src/Session.ts";
+import * as SessionLifecycle from "../src/SessionLifecycle.ts";
 import * as Subject from "../src/Subject.ts";
 
 const endpointsOf = (group: {
@@ -50,9 +51,23 @@ describe("AuthCoreApi (BEH-EA-031)", () => {
   it("every core endpoint is behind Authentication, with CsrfProtection declared last (outermost, runs first)", () => {
     for (const group of [Session.SessionGroup, Account.AccountGroup]) {
       for (const keys of middlewareKeysOf(group)) {
-        expect(keys).toEqual(["Authentication", "CsrfProtection"]);
+        // An endpoint-level `SessionLifecycle` marker (ADR-EA-045) sits innermost, beneath both.
+        expect(keys.filter((key) => !key.startsWith("awthaq/api/SessionLifecycle/"))).toEqual([
+          "Authentication",
+          "CsrfProtection",
+        ]);
       }
     }
+  });
+
+  // ADR-EA-045: core's own session lifecycle, pinned where its contract lives.
+  it("declares the session lifecycle of its endpoints (BEH-EA-343)", () => {
+    expect(Object.fromEntries(SessionLifecycle.inventory(AuthCore.AuthCoreApi))).toEqual({
+      "session.signOut": "ends",
+      "session.revoke": "ends",
+      "session.revokeAll": "ends",
+      "account.deleteUser": "ends",
+    });
   });
 
   it("revoke answers a not-found error identical for unknown and foreign sessions (BEH-EA-086)", () => {

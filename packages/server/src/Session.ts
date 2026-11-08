@@ -5,33 +5,17 @@
 // (BEH-EA-081: a group's handlers are built with `HttpApiBuilder.group`
 // against that same group's own contract).
 
-import { AuthCore, Api, SessionContract } from "@awthaq/api";
+import { AuthCore, Api, SessionContract, SessionLifecycle } from "@awthaq/api";
 import { CurrentUser, Sessions } from "@awthaq/core";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { expireSessionCookie } from "./internal/SessionCookie.ts";
+import { toSessionDto as mapSessionDto } from "./internal/SessionDto.ts";
+import * as SessionDelivery from "./SessionDelivery.ts";
 
-/**
- * RSC-005: the one `SessionView` -> `SessionDto` mapper. The password/admin/
- * passkey handlers used to each keep a private identical copy, and
- * `@awthaq/next`'s `toInitialSession` needs the same mapping to seed
- * `@awthaq/react`'s `Providers`. `current` defaults to `true` — the view a
- * sign-in/sign-up/`getSession` returns is, by construction, the caller's own.
- */
-export const toSessionDto = (
-  view: Sessions.SessionView,
-  current = true,
-): SessionContract.SessionDto =>
-  new SessionContract.SessionDto({
-    id: view.id,
-    createdAt: view.createdAt,
-    lastActiveAt: view.lastActiveAt,
-    expiresAt: view.absoluteExpiresAt,
-    userAgent: Option.getOrNull(view.userAgent),
-    amr: view.amr,
-    current,
-  });
+/** RSC-005: the one `SessionView` -> `SessionDto` mapper (`@awthaq/next`'s `toInitialSession` uses it too). */
+export const toSessionDto = mapSessionDto;
 
 const toDto = (item: Sessions.SessionListItem): SessionContract.SessionDto =>
   new SessionContract.SessionDto({
@@ -88,13 +72,14 @@ export const SessionHandlers = HttpApiBuilder.group(
       // from another tab a moment earlier), the caller's goal — "this
       // session is no longer valid" — is already true, so a concurrent
       // `SessionNotFound` here is swallowed rather than surfaced as an error.
-      // CSS-002: the caller's own session ended, so its cookie is expired.
+      // CSS-002/ADR-EA-045: the caller's own session ended (`SessionLifecycle.Ends`): its cookie is expired
+      // and a bearer client is told so.
       signOut: Effect.fnUntraced(function* () {
         const { sessionId } = yield* CurrentUser.current;
         yield* sessions
           .revoke(sessionId, "signOut")
           .pipe(Effect.catchTag("Sessions/NotFound", () => Effect.void));
-        yield* expireSessionCookie;
+        yield* SessionDelivery.end;
       }),
 
       // BEH-EA-086/ADR-EA-013: a foreign or unknown target id answers
@@ -116,8 +101,9 @@ export const SessionHandlers = HttpApiBuilder.group(
           .revokeOwned(userId, targetId, targetId === sessionId ? "signOut" : "userRevoked")
           .pipe(Effect.catchTag("Sessions/NotFound", () => new SessionContract.SessionNotFound()));
         // CSS-002: revoking one's own current session ends it too; revoking a
-        // different device's session leaves this cookie alone.
-        if (targetId === sessionId) yield* expireSessionCookie;
+        // different device's session leaves this credential alone (the declaration is declined).
+        if (targetId === sessionId) yield* SessionDelivery.end;
+        else yield* SessionDelivery.decline(SessionLifecycle.EndGrant);
       }),
 
       revokeOthers: Effect.fnUntraced(function* () {
@@ -131,7 +117,7 @@ export const SessionHandlers = HttpApiBuilder.group(
       revokeAll: Effect.fnUntraced(function* () {
         const { userId } = yield* CurrentUser.current;
         yield* sessions.revokeAll(userId, "userRevoked");
-        yield* expireSessionCookie;
+        yield* SessionDelivery.end;
       }),
     });
   }),

@@ -32,7 +32,7 @@ import * as Headers from "effect/http/Headers";
 import * as HttpEffect from "effect/http/HttpEffect";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
-import { toSessionDto } from "./Session.ts";
+import { toSessionDto } from "./internal/SessionDto.ts";
 
 export type Mode = "cookie" | "bearer";
 

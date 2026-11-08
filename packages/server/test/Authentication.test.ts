@@ -10,7 +10,7 @@ import {
   Sessions,
   Users,
 } from "@awthaq/core";
-import { Api } from "@awthaq/api";
+import { Api, SessionLifecycle } from "@awthaq/api";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -41,6 +41,8 @@ import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Authentication from "../src/Authentication.ts";
 import * as Credentials from "../src/Credentials.ts";
+import * as SessionDelivery from "../src/SessionDelivery.ts";
+import * as SessionLifecycleLive from "../src/SessionLifecycle.ts";
 import * as Wiring from "./support/Wiring.ts";
 import {
   headersFor,
@@ -317,15 +319,21 @@ const RotationApi = HttpApi.make("rotation").add(
   HttpApiGroup.make("g")
     .add(HttpApiEndpoint.get("ok", "/ok", { success: Schema.String }))
     .add(HttpApiEndpoint.get("boom", "/boom", { success: Schema.String, error: Boom }))
+    // ADR-EA-045: an endpoint that ends the caller's session, behind the same rotating verify.
+    .add(HttpApiEndpoint.post("end", "/end").middleware(SessionLifecycle.Ends))
     .middleware(Api.Authentication),
 );
 
 const RotationHandlers = HttpApiBuilder.group(RotationApi, "g", (handlers) =>
-  handlers.handle("ok", () => Effect.succeed("ok")).handle("boom", () => Effect.fail(new Boom())),
+  handlers
+    .handle("ok", () => Effect.succeed("ok"))
+    .handle("boom", () => Effect.fail(new Boom()))
+    .handle("end", () => SessionDelivery.end),
 );
 
 const RotationLayer = HttpApiBuilder.layer(RotationApi).pipe(
   Layer.provide(RotationHandlers),
+  Layer.provide(SessionLifecycleLive.EndsLive),
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provide(Wiring.resolver),
   Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
@@ -339,6 +347,7 @@ const RotationLayer = HttpApiBuilder.layer(RotationApi).pipe(
 // MA-004: the same route served over a session store that is down.
 const OutageLayer = HttpApiBuilder.layer(RotationApi).pipe(
   Layer.provide(RotationHandlers),
+  Layer.provide(SessionLifecycleLive.EndsLive),
   Layer.provideMerge(Authentication.AuthenticationLive),
   Layer.provide(Wiring.resolver),
   Layer.provideMerge(UnreliableSessions),
@@ -346,7 +355,7 @@ const OutageLayer = HttpApiBuilder.layer(RotationApi).pipe(
   Layer.provideMerge(HttpRouter.layer),
 );
 
-const serve = (path: string, headers: Record<string, string>) =>
+const serve = (path: string, headers: Record<string, string>, method = "GET") =>
   Effect.gen(function* () {
     const router = yield* HttpRouter.HttpRouter;
     let written: HttpServerResponse.HttpServerResponse | undefined;
@@ -357,7 +366,7 @@ const serve = (path: string, headers: Record<string, string>) =>
     ).pipe(
       Effect.provideService(
         HttpServerRequest.HttpServerRequest,
-        HttpServerRequest.fromWeb(new Request(`http://localhost${path}`, { headers })),
+        HttpServerRequest.fromWeb(new Request(`http://localhost${path}`, { method, headers })),
       ),
     );
     if (written === undefined) return yield* Effect.die("no response was written");
@@ -372,6 +381,7 @@ const cookieOf = (response: HttpServerResponse.HttpServerResponse) =>
 const rotationLayerWith = (cookieConfig: Layer.Layer<never>) =>
   HttpApiBuilder.layer(RotationApi).pipe(
     Layer.provide(RotationHandlers),
+    Layer.provide(SessionLifecycleLive.EndsLive),
     Layer.provideMerge(Authentication.AuthenticationLive),
     Layer.provide(Wiring.resolver),
     Layer.provideMerge(Sessions.layer.pipe(Layer.provide(Persistence.memory))),
@@ -532,6 +542,31 @@ describe("Authentication rotation delivery (PIL-005)", () => {
         yield* sessions.verify(Redacted.make(rotated ?? ""));
       }),
     ).pipe(Effect.provide(RotationLayer)),
+  );
+
+  // ADR-EA-045: a request whose verify rotated and which then ends the session must not hand the client the
+  // secret of the session it just revoked; it says the session ended instead.
+  it.effect(
+    "a bearer sign-out after a verify-time rotation drops set-auth-token and says the session ended",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sessions = yield* Sessions.Sessions;
+          const { token } = yield* sessions.issue({ userId });
+          yield* TestClock.adjust(Duration.hours(2));
+          const response = yield* serve(
+            "/end",
+            {
+              authorization: `Bearer ${Redacted.value(token)}`,
+            },
+            "POST",
+          );
+          assert.strictEqual(response.status, 204);
+          assert.isUndefined(response.headers[Api.ROTATED_TOKEN_HEADER]);
+          assert.strictEqual(response.headers[Api.SESSION_ENDED_HEADER], "1");
+          assert.strictEqual(response.headers["cache-control"], "no-store");
+        }),
+      ).pipe(Effect.provide(RotationLayer)),
   );
 
   it.effect("no rotation, no delivery: a fresh session's response is left untouched", () =>

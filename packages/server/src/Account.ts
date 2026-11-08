@@ -4,7 +4,7 @@
 // `@awthaq/api`'s core `account` group, built against `AuthCoreApi`
 // the same way `Session.SessionHandlers` is.
 
-import { AuthCore, Api, AccountContract } from "@awthaq/api";
+import { AuthCore, Api, AccountContract, type SessionLifecycle } from "@awthaq/api";
 import {
   CurrentUser,
   DataExport,
@@ -20,7 +20,7 @@ import * as HttpEffect from "effect/http/HttpEffect";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
-import { expireSessionCookie } from "./internal/SessionCookie.ts";
+import * as SessionDelivery from "./SessionDelivery.ts";
 
 /**
  * The principal an `account` handler runs as. Also keeps `@awthaq/api`'s
@@ -29,6 +29,9 @@ import { expireSessionCookie } from "./internal/SessionCookie.ts";
  * when this file holds no reference to that module.
  */
 export type AccountPrincipal = Api.UserPrincipal;
+
+/** ADR-EA-045: the lifecycle `deleteUser` declares (it ends the caller's session); named for declaration emit too. */
+export type AccountLifecycle = SessionLifecycle.Ends;
 
 /** FAMS-002: exhaustive over `Users.UserIdentity`; `phone` is an `E164` string on the wire. */
 const identityDto = (identity: Users.UserIdentity): AccountContract.IdentityDto => {
@@ -144,9 +147,9 @@ export const AccountHandlers = HttpApiBuilder.group(
             ),
           ),
         );
-        // CSS-002: the account (and this request's own session) is gone, so
-        // the browser's now-dead cookie is expired with the response.
-        yield* expireSessionCookie;
+        // CSS-002/ADR-EA-045: the account (and this request's own session) is gone, so
+        // the browser's now-dead cookie is expired and a bearer client is told so.
+        yield* SessionDelivery.end;
       }),
 
       // CSG-005 (GDPR Art. 15/20): the caller's own data as one downloadable JSON document.
