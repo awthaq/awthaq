@@ -1,12 +1,14 @@
 // BAM-007, MLO-005, SOS-001 (BEH-EA-267/269/271/273): the wire contract of both plugins over a real
 // `HttpRouter`, and the property that matters most for a link: nothing under `/magic-link` (or
 // `/email-otp`) is a GET, so a mail scanner or a browser prefetch cannot consume a link.
-import { Api } from "@awthaq/api";
-import { Auth } from "@awthaq/core";
+import { Api, SessionContract } from "@awthaq/api";
+import { Auth, Sessions } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as EmailOtp from "../src/EmailOtp.ts";
 import * as MagicLink from "../src/MagicLink.ts";
@@ -47,6 +49,63 @@ describe("the contracts have no GET route (MLO-005)", () => {
 });
 
 describe("MagicLink and EmailOtp over HTTP", () => {
+  // ADR-EA-047 (plan 26 ticket 17): the wiring probe. Neither plugin reads an address or a header; the session
+  // records the request context's facts, and the per-source rule counts per request address.
+  it.live(
+    "ADR-EA-047: a verified link's session records the request's address and user agent; request counts per address",
+    () =>
+      Effect.gen(function* () {
+        const appAt = (clientAddress: string) =>
+          TestAuth.app(
+            TestAuth.layer(built, {
+              services: MagicLink.config({ baseUrl: "https://app.example.com" }),
+              rateLimiter: "enforcing",
+              clientAddress,
+            }),
+          );
+        const probe = appAt("198.51.100.17");
+        const mails = () => probe.run(Effect.flatMap(Mailer.Mailer, (mailer) => mailer.sent));
+        const requested = yield* Effect.promise(() =>
+          probe.request("POST", "/magic-link/request", { json: { email: "probe@example.com" } }),
+        );
+        assert.strictEqual(requested.status, 202);
+        yield* awaitMails(Effect.promise(mails), 1);
+        const token = secretOf(
+          (yield* Effect.promise(mails)).findLast((m) => m.template === "magic-link"),
+          "token",
+        );
+        const verified = yield* Effect.promise(() =>
+          probe.request("POST", "/magic-link/verify", {
+            json: { token },
+            headers: { [Api.TOKEN_DELIVERY_HEADER]: "bearer", "user-agent": "LinkProbe/1" },
+          }),
+        );
+        assert.strictEqual(verified.status, 200);
+        const body = Schema.decodeUnknownSync(SessionContract.SessionDto)(
+          yield* Effect.promise(() => verified.json()),
+        );
+        const session = yield* Effect.promise(() =>
+          probe.run(
+            Effect.flatMap(Effect.service(Sessions.Sessions), (sessions) =>
+              sessions.verify(Redacted.make(body.token ?? "")),
+            ),
+          ),
+        );
+        assert.deepStrictEqual(session.session.ipAddress, Option.some("198.51.100.17"));
+        assert.deepStrictEqual(session.session.userAgent, Option.some("LinkProbe/1"));
+        // `requestByIp` is 30 per window: one request above, 29 more, then refused; another address is not.
+        const request = (app: typeof probe, i: number) =>
+          Effect.promise(() =>
+            app.request("POST", "/magic-link/request", { json: { email: `p${i}@example.com` } }),
+          ).pipe(Effect.map((response) => response.status));
+        for (let i = 0; i < 29; i++) assert.strictEqual(yield* request(probe, i), 202);
+        assert.strictEqual(yield* request(probe, 29), 429);
+        const other = appAt("198.51.100.18");
+        assert.strictEqual(yield* request(other, 30), 202);
+        yield* Effect.promise(() => Promise.all([probe.dispose(), other.dispose()]));
+      }),
+  );
+
   it.live(
     "a link is requested (202), never consumable by GET, and POST /magic-link/verify signs in once",
     () =>

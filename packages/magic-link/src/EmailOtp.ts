@@ -30,7 +30,6 @@
 
 import { Api, SessionContract, type SessionLifecycle } from "@awthaq/api";
 import {
-  AuthEvents,
   AuthPlugin,
   HookPoint,
   Hooks,
@@ -41,7 +40,7 @@ import {
   Verification,
 } from "@awthaq/core";
 import type { Errors } from "@awthaq/core";
-import { ClientAddress, Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
+import { Mailer, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -51,7 +50,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Channel from "./Channel.ts";
 import * as EmailOtpApi from "./EmailOtpApi.ts";
@@ -139,24 +137,20 @@ export interface EmailOtpShape {
   /** BEH-EA-272: always resolves (or is rate limited) — never says whether an account exists or a code was mailed. */
   readonly requestCode: (input: {
     readonly email: string;
-    readonly ip?: string | undefined;
-  }) => Effect.Effect<void, Api.RateLimited>;
-  /** BEH-EA-273: trades a code for a session. */
-  readonly verify: (
-    input: {
-      readonly email: string;
-      readonly code: Redacted.Redacted<string>;
-      readonly ip?: string | undefined;
-    },
-    context?: { readonly userAgent?: string | undefined },
-  ) => Effect.Effect<
+  }) => Effect.Effect<void, Api.RateLimited, Api.AuthRequestContext>;
+  /** BEH-EA-273: trades a code for a session. The session records the request's facts (ADR-EA-047). */
+  readonly verify: (input: {
+    readonly email: string;
+    readonly code: Redacted.Redacted<string>;
+  }) => Effect.Effect<
     Sessions.IssuedSession,
     | EmailOtpApi.InvalidEmailOtp
     | Api.RateLimited
     | HookPoint.HookAborted
     | Hooks.TwoFactorRequired
     | Users.UserSuspended
-    | Errors.StoreUnavailable
+    | Errors.StoreUnavailable,
+    Api.AuthRequestContext
   >;
 }
 
@@ -165,34 +159,14 @@ export const EmailOtpHandlers = HttpApiBuilder.group(
   "emailOtp",
   Effect.fnUntraced(function* (handlers) {
     const emailOtp = yield* EmailOtp;
-    const clientAddress = yield* ClientAddress.ClientAddress;
+    // ADR-EA-047: the group's request context carries the address and the user agent.
     return handlers.handleAll({
-      request: Effect.fnUntraced(function* ({
-        payload,
-        request,
-      }: {
-        payload: EmailOtpApi.RequestPayload;
-        request: HttpServerRequest.HttpServerRequest;
-      }) {
-        const { ip } = yield* ClientAddress.address(clientAddress, request);
-        yield* emailOtp.requestCode({ email: payload.email, ip });
-      }),
-      verify: Effect.fnUntraced(function* ({
-        payload,
-        request,
-      }: {
-        payload: EmailOtpApi.VerifyPayload;
-        request: HttpServerRequest.HttpServerRequest;
-      }) {
+      request: ({ payload }: { payload: EmailOtpApi.RequestPayload }) =>
+        emailOtp.requestCode({ email: payload.email }),
+      verify: Effect.fnUntraced(function* ({ payload }: { payload: EmailOtpApi.VerifyPayload }) {
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
-          Effect.gen(function* () {
-            const { ip, ...context } = yield* ClientAddress.facts(clientAddress, request);
-            return yield* emailOtp.verify(
-              { email: payload.email, code: payload.code, ip },
-              context,
-            );
-          }),
+          emailOtp.verify({ email: payload.email, code: payload.code }),
         );
         return response;
       }),
@@ -209,17 +183,11 @@ export class EmailOtp extends AuthPlugin.Service<EmailOtp, EmailOtpShape>()("ema
   tables: {},
 }) {
   static readonly layer = AuthPlugin.layer(EmailOtp, {
-    ports: [
-      ClientAddress.ClientAddress,
-      Mailer.Mailer,
-      RateLimiter.RateLimiter,
-      SqlTransaction.SqlTransaction,
-    ],
+    ports: [Mailer.Mailer, RateLimiter.RateLimiter, SqlTransaction.SqlTransaction],
     handlers: EmailOtpHandlers,
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
       const verification = yield* Verification.Verification;
-      const events = yield* AuthEvents.AuthEvents;
       const mailer = yield* Mailer.Mailer;
       const settings = yield* EmailOtpConfig;
       const channel = yield* Channel.make;
@@ -265,16 +233,11 @@ export class EmailOtp extends AuthPlugin.Service<EmailOtp, EmailOtpShape>()("ema
         );
       });
 
-      const verify: EmailOtpShape["verify"] = Effect.fnUntraced(function* (input, context) {
+      const verify: EmailOtpShape["verify"] = Effect.fnUntraced(function* (input) {
         yield* limits.spend(["verifyByIp", "verifyByEmail"], input);
         const email = Channel.normalizeEmail(input.email);
         const refused = Effect.gen(function* () {
-          yield* events.publish({
-            _tag: "auth.user.signInFailed",
-            strategy: "emailOtp",
-            reason: "invalidCredentials",
-            ...(input.ip === undefined ? {} : { clientIp: input.ip }),
-          });
+          yield* channel.failed("emailOtp");
           return yield* Effect.fail(new EmailOtpApi.InvalidEmailOtp());
         });
         const presented = Redacted.value(input.code).trim();
@@ -298,8 +261,6 @@ export class EmailOtp extends AuthPlugin.Service<EmailOtp, EmailOtpShape>()("ema
                 ),
                 userId: consumed.userId,
                 allowSignUp: settings.allowSignUp,
-                ip: input.ip,
-                userAgent: context?.userAgent,
               }),
             onFailure: Verification.commitUnlessUnavailable,
           })

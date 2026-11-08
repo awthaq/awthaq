@@ -1,7 +1,9 @@
 // P20a (BCR-010): what the magic-link and email-otp steps share — a service call's outcome as a
 // plain value a Then can narrow (no casts), the user/session/audit reads both features assert on,
 // and the recipient-side helpers (`mint*`) that play the person opening the mail.
+import { Api } from "@awthaq/api";
 import { AuditLog, Users } from "@awthaq/core";
+import { TestAuth } from "@awthaq/test";
 import { EmailOtp, MagicLink } from "@awthaq/magic-link";
 import { SecondFactor } from "@awthaq/two-factor";
 import assert from "node:assert/strict";
@@ -36,7 +38,10 @@ export const outcomeOf = <A, E>(exit: Exit.Exit<A, E>): Outcome =>
       });
 
 /** Runs `effect` against the composition and records its outcome under `key`. */
-export const recordOutcome = <A, E>(key: string, effect: Effect.Effect<A, E, MagicLinkServices>) =>
+export const recordOutcome = <A, E>(
+  key: string,
+  effect: Effect.Effect<A, E, MagicLinkServices | Api.AuthRequestContext>,
+) =>
   Effect.gen(function* () {
     const world = yield* World;
     yield* world.outcomes.set(key, outcomeOf(yield* directExit(effect)));
@@ -178,7 +183,9 @@ export const mintCode = (email: string) =>
 export const presentLink = (token: string, ip?: string) =>
   MagicLink.MagicLink.pipe(
     Effect.flatMap((link) =>
-      link.verify({ token: Redacted.make(token), ip }, { userAgent: "Browser/1.0" }),
+      link
+        .verify({ token: Redacted.make(token) })
+        .pipe(TestAuth.withRequest({ ip, userAgent: "Browser/1.0" })),
     ),
   );
 
@@ -186,7 +193,9 @@ export const presentLink = (token: string, ip?: string) =>
 export const presentCode = (email: string, code: string, ip?: string) =>
   EmailOtp.EmailOtp.pipe(
     Effect.flatMap((otp) =>
-      otp.verify({ email, code: Redacted.make(code), ip }, { userAgent: "Browser/1.0" }),
+      otp
+        .verify({ email, code: Redacted.make(code) })
+        .pipe(TestAuth.withRequest({ ip, userAgent: "Browser/1.0" })),
     ),
   );
 

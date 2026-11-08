@@ -1,6 +1,7 @@
 // P20a (BCR-010): steps for features/features/14-mfa-passwordless/32-magic-link.feature.
 // The scenario's recipient is played from the captured mail; the service is driven directly where
 // a clock or an error tag is the point, and over the web handler where the wire is.
+import { TestAuth } from "@awthaq/test";
 import { Accounts, Verification } from "@awthaq/core";
 import { PasswordHasher } from "@awthaq/ports";
 import { MagicLink, MagicLinkApi } from "@awthaq/magic-link";
@@ -272,7 +273,11 @@ export const magicLinkSteps = defineSteps<World>(({ Given, When, Then }) => {
       for (let i = 0; i < count; i++) {
         yield* direct(
           MagicLink.MagicLink.pipe(
-            Effect.flatMap((link) => link.requestLink({ email: `person${i}@example.com`, ip })),
+            Effect.flatMap((link) =>
+              link
+                .requestLink({ email: `person${i}@example.com` })
+                .pipe(TestAuth.withRequest({ ip })),
+            ),
           ),
         );
       }
@@ -285,7 +290,9 @@ export const magicLinkSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* recordOutcome(
         "request",
         MagicLink.MagicLink.pipe(
-          Effect.flatMap((link) => link.requestLink({ email: "one-more@example.com", ip })),
+          Effect.flatMap((link) =>
+            link.requestLink({ email: "one-more@example.com" }).pipe(TestAuth.withRequest({ ip })),
+          ),
         ),
       );
       assert.equal(failureTag(yield* outcomeAt("request")), tag);

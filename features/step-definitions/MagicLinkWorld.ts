@@ -225,17 +225,22 @@ export const appOf = Effect.fn("features.magicLink.app")(function* () {
 });
 
 /** Runs a service-level effect against the same composition (and rows) the handler serves; a typed failure is a defect here. */
-export const direct = <A, E>(effect: Effect.Effect<A, E, MagicLinkServices>) =>
+export const direct = <A, E>(
+  effect: Effect.Effect<A, E, MagicLinkServices | Api.AuthRequestContext>,
+) =>
   Effect.gen(function* () {
     const { ctx } = yield* appOf();
-    return yield* Effect.provide(effect, ctx).pipe(Effect.orDie);
+    // ADR-EA-047: in-process work answers no request unless the step provides one (`TestAuth.withRequest`).
+    return yield* Effect.provide(TestAuth.withoutRequest(effect), ctx).pipe(Effect.orDie);
   });
 
 /** Like `direct`, but the outcome (a typed failure included) is the value. */
-export const directExit = <A, E>(effect: Effect.Effect<A, E, MagicLinkServices>) =>
+export const directExit = <A, E>(
+  effect: Effect.Effect<A, E, MagicLinkServices | Api.AuthRequestContext>,
+) =>
   Effect.gen(function* () {
     const { ctx } = yield* appOf();
-    return yield* Effect.exit(Effect.provide(effect, ctx));
+    return yield* Effect.exit(Effect.provide(TestAuth.withoutRequest(effect), ctx));
   });
 
 /** The mail the recipient last received of `template` for `to`, waiting (on the real timer: `TestClock` is frozen) for the background dispatch fiber. */
