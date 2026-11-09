@@ -1834,3 +1834,51 @@ the plan's 1,156 came from a script not on file. `auth.user.signInFailed` is now
 which does not change its place. `packages/core/lib/AuthEventSchemas.d.ts` is 6,318 lines. `pnpm typecheck` takes
 4.0 s warm (three runs: 4.00, 4.06, 4.03). `pnpm test`: 5,812 passed, 1 expected fail, 16 skipped. `pnpm test:bdd`:
 1,551 passed, 44 skipped, 1 failed (the known local `useInvalidate` flake).
+
+**Shipped (tickets 02–10).**
+
+| Ticket | Commit | What landed |
+|---|---|---|
+| 02 | `76e879c1` | `packages/core/test/EventDefinition.plugin.types.test.ts`: cases (a)–(f) of §4.1/02 |
+| 03 | `1e2784b0` | `spec/decisions/049-plugins-own-event-definitions.md` (Proposed, the §6.2 text), `index.yaml`, `spec/traceability.md` 1.73 |
+| 04 | `8eef2091` | `EventDefinition` public (git mv of `internal/eventDefinition.ts`): `define`, `make(members, origin)`, `problems`, `Any`/`TypeOf`/`Input`/`Registry`/`AnyEvent`, `ForeignEventTag`, `UserId`/`SessionId`. Core defines every event with `EventDefinition.define` and `EventDefinition.Actor` (so a move is verbatim); `CoreRegistry`, `coreDefinitions`, `AnyEvent`, `PublishedAny`, `EventRegistry`, `eventRegistryLayer` |
+| 05 | `5a3998dd` | `AuditLog.record(event, definition?)`, `meta.pii`, `ForeignEvent`, `PRE_ADR_049_PII`, `payloadAs`, `toPublished` unwrap; string tags in `AuditLog`/`EventRelay`/`Retention`; `PublishedAny` in `EventTransport` and the webhooks payload; `encodeEvent` removed |
+| 06 | `8fda4799` | `emit`, one `deliver`, the lane from the definition, `PublishedAny` stream, `AuthEvents.is`, mixed selectors in `on`/`onBatch`, `UndeclaredEventPolicy`/`UndeclaredEvent`, `awthaq_event_undeclared_total`; `RedactionGuard` inspects the published value; 19 tag-filter lambdas and the field-reading raw-stream consumers migrated |
+| 07 | `40c84f1c` | `AuthPlugin.Service({ events })`, `"~events"`, `Class`'s ninth parameter `Events`; `Auth.EventsOf<P>`, `Built.events`/`eventsLayer`, `Manifest.events`, `Auth/EventTagConflict`; `AuthEvents.typed`; `AuthHost.layer` provides `eventsLayer`; `TestAuth` sets `"die"`; `awthaq plugin list --events`; `linkErrorCodes` + 6 |
+| 08 | `76ba2e37` | contract runner: "every declared event is well-formed" and a sampled P3/P4 case, `events: { notPersonal }` |
+| 09 | `4f65d9e6` | webhooks filters/payload/enqueue and Retention rules read `EventRegistry`; `knownEventTags` removed; unknown tags not enqueued |
+| 10 | `63554505` | template `NotesEvents` end to end; `docs/plugin-authoring.md` "Events", checklist 9, "Testing a plugin" |
+
+Nothing has moved: `AuthEvents.eventTags.length === 97` (asserted in `EventDefinition.test.ts`).
+
+**Deviations.**
+- **`EventDefinition.Any` also pins `Type` to `AnyEvent`** (ticket 02 finding). Without it `TypeOf<Any>` is `Schema.Top`'s `unknown`, and `Published<TypeOf<D>>` fails its constraint. Every `define` result satisfies it.
+- **`Input<D>` keeps `_tag` as an optional key** (the `tag()` constructor default) rather than omitting it: the right literal is accepted, another tag is refused. Callers leave it out.
+- **`AnyEvent` and `ForeignEventTag` are defined in `EventDefinition`** (the leaf), re-exported by `AuthEventSchemas` (`AuthEvents.AnyEvent`, `AuthEvents.ForeignEventTag`), so `problems` can refuse the reserved tag without a cycle. `ForeignEvent` itself lives in `AuthEventSchemas` as planned (`AuthEvents.ForeignEvent`, not `AuditLog.ForeignEvent`).
+- **`AuthEvents` reads `EventRegistry` and `UndeclaredEventPolicy` once, when its layer is built**, not per `emit`: the composition provides both beneath it (`AuthHost.layer`'s last `provideMerge`, `TestAuth`'s platform). Likewise `WebhookDelivery.transportLayer` captures the registry at build and provides it to `enqueue`, which reads it from its context.
+- **`AuthEvents.encodeEvent` is removed** (unused once rows are encoded through each definition), announced in changeset 05.
+- **Plan 15 (`AuthHost`) has landed**, so `eventsLayer` is provided by `AuthHost.layer` (§8's "if 15 lands first" branch); `TestAuth` and `examples/memory-server` inherit it. BEH-EA-342's harness-parity check (`TestAuthHost.test.ts`, REQ-EA-1325's Then step) now names the one extra service the harness adds, `UndeclaredEventPolicy`.
+- **BDD worlds that collect core events filter with `AuthEvents.is(AuthEvents.eventTags)`** (`AdminWorld`, `OrganizationWorld`, `PasswordWorld`, and the `collectEvents` helpers in admin/password tests): they keep `ReadonlyArray<AuthEvent>`. `DomainWorld`/`EventsWorld` hold `PublishedAny` and their readers narrow with `AuthEvents.is`. See the Phase 2 notes below.
+- **`problems`' P6 heuristic skips names ending in `Id`/`Ids`**: the template's `noteId` tripped it (ticket 10). Core's set is unaffected.
+- **`awthaq plugin list --events` prints text and JSON**, like `--rules` (which has no DOT output either).
+- **Retention validates at `sweep` and at `layerScheduled` build**: the scheduled tick logs and retries a failed sweep, which would hide a typo.
+- **The sampled P3/P4 check uses `Arbitrary.sampleEffect`** (25 samples per definition, seeded by the tag) inside an async contract case.
+- **Moved lines are 1,083**, not 1,156 (baseline above).
+
+**Open questions: the recommended default, applied.** Q1 open-typed stream (`PublishedAny` + `AuthEvents.is`). Q2 the frozen three-entry table (`AuditLog.PRE_ADR_049_PII`), no data migration. Q3 runtime refusal only (`Auth/EventTagConflict`), no `Validate<P>` check. Q4 no host events (`composeEvents` would take one more list). Q5 fail closed: webhooks never delivers a tag its registry lacks. Q6 constant names verbatim (none moved yet; the recipe keeps them). Q7 plan 25 landed first; plan 15 landed first (see above). Q8 `"warn"` in production, `"die"` under `TestAuth`.
+
+**Ids.** ADR-EA-049 (049 was the next free; 048 is plan 27's). No new BEH id (BEH-EA-346 stays free) and no new REQ-EA id: the composition BEH and the §6.5 scenarios are ticket 23/24's. A REQ-EA id added later should start at 1510 (open PR #61 uses 1502/1503).
+
+**What only Postgres CI proves.** `pnpm test:pg` was not run (Postgres is down locally). CI's Postgres run covers: `AuditLogStoreSql.rewriteReferencing` applying the new `scrubRow` (A3/A4 ran on memory and SQLite here); `AuthEventsUnitOfWork.test.ts` E4 under Postgres transactions (and the tenanted-request case, Postgres-only); the SQL record mode of `TestAuthHost.test.ts` and of the template's event suite on Postgres; the contract runner's SQL cases.
+
+**Phase 2 notes (the move recipe with the interface as built).**
+- Core already writes `EventDefinition.define(`, `EventDefinition.Actor.` and `EventDefinition.UserId`/`.SessionId`, so recipe step 1 is a pure cut-and-paste of each block (JSDoc, `define`, `export type`): add `import { EventDefinition } from "@awthaq/core"; import * as Schema from "effect/Schema";`, copy `RoleNames` where used, and export `events = [...]` (an array, no `as const`).
+- Declare: `AuthPlugin.Service<...>()(id, { ..., events: XEvents.events })`.
+- Publish: `events.emit(XEvents.XEvent, { ...fields })` (drop `_tag`). `emit` returns `Effect<void>`, like `publish`. A publisher that is not the plugin's `make` (two-factor's `SecondFactor`, saml's `SamlSlo`, organization's system modules) already holds an `AuthEventsShape`, which has `emit`.
+- Core: delete the blocks and their `CoreRegistry` entries, their samples in `test/support/eventSamples.ts`, the `AuditLog.test.ts` actor rows and the attempt-set entries in `EventDefinition.test.ts`, and lower the `eventTags.length`/`coreDefinitions.length === 97` assertions in `EventDefinition.test.ts` by the moved count (`AuthPlugin.test.ts`'s manifest owner check maps `eventTags`, so it follows). Ticket 20 also breaks `packages/cli/test/Inspection.test.ts`'s `--events` case, which reads the `auth.admin.impersonationStarted` row from a `[Password, Roles]` composition: point it at an event that composition still holds (after ticket 20 no core event declares `pii`).
+- Consumers: an `AuthEvents.is("auth.x.y")` or `on("auth.x.y")` naming a moved tag stops compiling: switch it to `AuthEvents.is(XEvents.XEvent)`/`on(XEvents.XEvent)`. **Silent trap:** the worlds and helpers that filter with `AuthEvents.is(AuthEvents.eventTags)` (`AdminWorld`, `OrganizationWorld`, `PasswordWorld`, admin's `AdminAccounts`/`AdminUsers`/`AdminGate` tests, `PasswordChangeEmail.test.ts`) keep compiling but drop the moved events: widen each one's array to `AuthEvents.PublishedAny` (or add the plugin's definitions to the selector) in the move that needs it. `AuthEvents.payloadOf` throws for a moved event: use `Schema.decodeUnknownSync(XEvents.XEvent)`. An audit-row reader uses `AuditLog.payloadAs(XEvents.XEvent)`.
+- The webhooks BDD step `"the payload of event {string} is built with includeClientContext"` passes `AuthEvents.piiFieldsOf` (core's): for the moved `pii` events (admin's two, organization's suspension) pass the composed registry's `piiFieldsOf` instead.
+- `TestAuth.layer` dies on an emitted tag the composition does not declare, so a plugin that emits without declaring fails its own suite at once. The contract runner checks each moved definition; `auth.authz.denied.reason` is the only `notPersonal` entry core needed, and it stays in core.
+- Rows written before a move carry no `meta.pii`; the three `pii` tags are in `PRE_ADR_049_PII`, so ticket 20/21's `meta.pii` test should assert a *new* row carries `meta.pii: ["reason"]`.
+
+**`pnpm check` (end of Wave 1).** Every step through `pnpm coverage` passed (5,920 tests, 1 expected fail, 16 skipped). `pnpm test:bdd` failed one React scenario under load, "A just-revoked permission does not render a stale allow while re-evaluating" (`23-react`); re-run alone it passes, and the file's only failure alone is the known local `useInvalidate` flake (green in CI). `pnpm spec:verify:strict`, which `pnpm check` did not reach, passes on its own (32/32).
