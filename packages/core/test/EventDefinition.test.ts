@@ -116,8 +116,8 @@ describe("make (registry readers)", () => {
 
   it("core's registry holds core's own events, not the moved plugin events", () => {
     assert.strictEqual(AuthEvents.CoreRegistry.origin, "core");
-    assert.strictEqual(AuthEvents.eventTags.length, 92);
-    assert.strictEqual(AuthEvents.coreDefinitions.length, 92);
+    assert.strictEqual(AuthEvents.eventTags.length, 88);
+    assert.strictEqual(AuthEvents.coreDefinitions.length, 88);
   });
 });
 

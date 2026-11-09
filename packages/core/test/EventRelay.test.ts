@@ -190,14 +190,14 @@ const suite = (
             const events = yield* AuthEvents.AuthEvents;
             yield* publishN(events, 2);
             yield* events.publish({
-              _tag: "auth.user.emailVerified",
+              _tag: "auth.user.created",
               userId: Users.UserId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
             });
             yield* TestClock.adjust(SETTLE);
 
             assert.strictEqual(
               yield* EventRelay.drainOnce(
-                options("only-verified", { eventTag: "auth.user.emailVerified" }),
+                options("only-created", { eventTag: "auth.user.created" }),
               ),
               1,
             );
@@ -205,7 +205,7 @@ const suite = (
             assert.strictEqual(yield* EventRelay.drainOnce(options("everything")), 3);
             assert.strictEqual(
               yield* EventRelay.drainOnce(
-                options("only-verified", { eventTag: "auth.user.emailVerified" }),
+                options("only-created", { eventTag: "auth.user.created" }),
               ),
               0,
             );

@@ -140,35 +140,6 @@ export const UserSignInFailedEvent = EventDefinition.define(
 );
 export type UserSignInFailedEvent = typeof UserSignInFailedEvent.Type;
 
-/** ARF-006: published by `@awthaq/password`'s `verifyEmail` after the flag flips — the hook for owner notification / SIEM export. */
-export const UserEmailVerifiedEvent = EventDefinition.define(
-  "auth.user.emailVerified",
-  {
-    userId: EventDefinition.UserId,
-  },
-  {
-    actor: EventDefinition.Actor.field("userId"),
-    pii: [],
-  },
-);
-export type UserEmailVerifiedEvent = typeof UserEmailVerifiedEvent.Type;
-
-/**
- * BAM-009/BAM-005: published by `@awthaq/password`'s change-email confirmation after the address
- * was replaced and marked verified. No address, old or new (ADR-EA-029): identifiers only.
- */
-export const UserEmailChangedEvent = EventDefinition.define(
-  "auth.user.emailChanged",
-  {
-    userId: EventDefinition.UserId,
-  },
-  {
-    actor: EventDefinition.Actor.field("userId"),
-    pii: [],
-  },
-);
-export type UserEmailChangedEvent = typeof UserEmailChangedEvent.Type;
-
 /**
  * SCP-006: published once a user's erasure has committed (`Erasure.AccountErasure`, the only
  * path). Deliberately no email: the row is being erased (ESA-005), and the audit rows that
@@ -365,37 +336,6 @@ export const PasswordChangedEvent = EventDefinition.define(
   },
 );
 export type PasswordChangedEvent = typeof PasswordChangedEvent.Type;
-
-/**
- * ARF-006: published by `@awthaq/password`'s `requestReset` when a real account
- * exists — the earliest takeover signal, the hook for out-of-band owner
- * notification. Published from inside the detached mail branch, so it never
- * reintroduces the enumeration side channel (the response path is unchanged).
- */
-export const PasswordResetRequestedEvent = EventDefinition.define(
-  "auth.password.resetRequested",
-  {
-    userId: EventDefinition.UserId,
-  },
-  {
-    actor: EventDefinition.Actor.field("userId"),
-    pii: [],
-  },
-);
-export type PasswordResetRequestedEvent = typeof PasswordResetRequestedEvent.Type;
-
-/** ALF-004: published by `@awthaq/password`'s `confirmReset`, once the transaction (consume + rehash + revoke) has committed. */
-export const PasswordResetCompletedEvent = EventDefinition.define(
-  "auth.password.resetCompleted",
-  {
-    userId: EventDefinition.UserId,
-  },
-  {
-    actor: EventDefinition.Actor.field("userId"),
-    pii: [],
-  },
-);
-export type PasswordResetCompletedEvent = typeof PasswordResetCompletedEvent.Type;
 
 /**
  * Published by `@awthaq/passkey`'s authentication ceremony (BEH-EA-131,
@@ -1652,8 +1592,6 @@ export const CoreRegistry = EventDefinition.make(
     AccountLinkedEvent,
     UserSignedInEvent,
     UserSignInFailedEvent,
-    UserEmailVerifiedEvent,
-    UserEmailChangedEvent,
     UserDeletedEvent,
     UserDataExportedEvent,
     SessionReuseEvent,
@@ -1663,8 +1601,6 @@ export const CoreRegistry = EventDefinition.make(
     SessionRevokedEvent,
     SessionExpiredEvent,
     PasswordChangedEvent,
-    PasswordResetRequestedEvent,
-    PasswordResetCompletedEvent,
     PasskeyCounterAnomalyEvent,
     AdminImpersonationStartedEvent,
     AdminImpersonationStoppedEvent,

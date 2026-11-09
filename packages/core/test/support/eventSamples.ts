@@ -20,7 +20,6 @@ export const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.Ev
     clientIp: "203.0.113.5",
     identifierDigest: "ab12",
   },
-  "auth.user.emailVerified": { _tag: "auth.user.emailVerified", userId },
   "auth.user.deleted": { _tag: "auth.user.deleted", userId, deletedBy: "self" },
   "auth.user.dataExported": { _tag: "auth.user.dataExported", userId, requestedBy: "self" },
   "auth.session.reuse": {
@@ -53,8 +52,6 @@ export const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.Ev
   },
   "auth.session.expired": { _tag: "auth.session.expired", sessionId, userId, kind: "idle" },
   "auth.password.changed": { _tag: "auth.password.changed", userId },
-  "auth.password.resetRequested": { _tag: "auth.password.resetRequested", userId },
-  "auth.password.resetCompleted": { _tag: "auth.password.resetCompleted", userId },
   "auth.passkey.counterAnomaly": {
     _tag: "auth.passkey.counterAnomaly",
     userId,
@@ -282,7 +279,6 @@ export const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.Ev
     adminUserId: otherUserId,
     userId,
   },
-  "auth.user.emailChanged": { _tag: "auth.user.emailChanged", userId },
   "auth.admin.organizationSuspended": {
     _tag: "auth.admin.organizationSuspended",
     adminUserId: otherUserId,

@@ -43,6 +43,7 @@ import * as Ref from "effect/Ref";
 import * as PasswordApi from "./PasswordApi.ts";
 import { PasswordConfig } from "./PasswordConfig.ts";
 import * as PasswordCredential from "./PasswordCredential.ts";
+import * as PasswordEvents from "./PasswordEvents.ts";
 
 export { PasswordConfig, config } from "./PasswordConfig.ts";
 export type { PasswordConfigShape } from "./PasswordConfig.ts";
@@ -538,6 +539,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
   // BEH-EA-044: a password credential is an ordinary `accounts` row — this
   // plugin owns no table of its own, so there is nothing to declare here.
   tables: {},
+  // ADR-EA-049: the events this plugin publishes, defined in `PasswordEvents.ts`.
+  events: PasswordEvents.events,
   // ECS-008/BEH-EA-229: the policy knobs `doctor` audits and `config list` prints.
   config: [
     ConfigDescriptor.make(PasswordConfig, {
@@ -871,7 +874,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             { template: "reset-password", userId: user.id },
             Effect.gen(function* () {
               if (!(yield* Ref.getAndSet(announced, true))) {
-                yield* events.publish({ _tag: "auth.password.resetRequested", userId: user.id });
+                yield* events.emit(PasswordEvents.PasswordResetRequestedEvent, { userId: user.id });
               }
               // ARF-004: an OAuth-/passkey-only account has no password to
               // reset — a token would only lead to a dead link. Looked up
@@ -1035,7 +1038,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         ).pipe(Effect.catchTag("VerificationLink/Refused", refusedToken));
         // ALF-004: published only after the transaction above has actually committed, mirroring
         // `signUp`'s own `auth.user.created` placement, never inside the transaction itself.
-        yield* events.publish({ _tag: "auth.password.resetCompleted", userId });
+        yield* events.emit(PasswordEvents.PasswordResetCompletedEvent, { userId });
       });
 
       const verifyEmail: PasswordShape["verifyEmail"] = Effect.fnUntraced(function* (input) {
@@ -1046,7 +1049,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           proveMailbox(userId, "VerifyEmailTokenUserMissing").pipe(Effect.as(userId)),
         ).pipe(Effect.catchTag("VerificationLink/Refused", refusedToken));
         // ARF-006: after the commit, like `resetCompleted`.
-        yield* events.publish({ _tag: "auth.user.emailVerified", userId: verifiedUserId });
+        yield* events.emit(PasswordEvents.UserEmailVerifiedEvent, { userId: verifiedUserId });
       });
 
       const requestEmailChange: PasswordShape["requestEmailChange"] = Effect.fnUntraced(
@@ -1116,7 +1119,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               return { userId, previous: Users.emailOf(before) };
             }),
           ).pipe(Effect.catchTag("VerificationLink/Refused", refusedToken));
-          yield* events.publish({ _tag: "auth.user.emailChanged", userId: changed.userId });
+          yield* events.emit(PasswordEvents.UserEmailChangedEvent, { userId: changed.userId });
           // The previous address learns of the change (a takeover signal) — dispatched, never
           // awaited, and carrying nothing but the template.
           if (Option.isSome(changed.previous)) {

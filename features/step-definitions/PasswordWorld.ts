@@ -120,7 +120,7 @@ type ReadHandles =
 export interface AppHandle {
   readonly handler: (request: Request) => Promise<Response>;
   readonly sentMail: Effect.Effect<ReadonlyArray<Mailer.MailMessage>>;
-  readonly publishedEvents: Effect.Effect<ReadonlyArray<AuthEvents.AuthEvent>>;
+  readonly publishedEvents: Effect.Effect<ReadonlyArray<AuthEvents.PublishedAny>>;
   readonly fault: Ref.Ref<Fault>;
   /** Runs `effect` against the same running services `handler` uses (real clock, like `AdminWorld`'s reads). */
   readonly inApp: <A, E>(effect: Effect.Effect<A, E, ReadHandles>) => Promise<A>;
@@ -155,7 +155,7 @@ const buildApp = Effect.fn("features.password.buildApp")(function* (options: App
   const { layer: capturedMailer, sent } = makeCapturingMailer();
   const capturingMailer = options.slowMailer === true ? neverAnsweringMailer : capturedMailer;
 
-  const events = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+  const events = yield* Ref.make<ReadonlyArray<AuthEvents.PublishedAny>>([]);
   const fault = yield* Ref.make<Fault>("none");
   const eventsLayer = Layer.effectDiscard(
     Effect.gen(function* () {
@@ -163,8 +163,7 @@ const buildApp = Effect.fn("features.password.buildApp")(function* (options: App
       // `startImmediately`: the stream is a live broadcast, so a publish that beats the
       // subscription is gone for good (AdminWorld's own reproduced race).
       yield* authEvents.stream.pipe(
-        // Core's events (the bus is typed open, ADR-EA-049): this world reads them back by tag.
-        Stream.filter(AuthEvents.is(AuthEvents.eventTags)),
+        // Every event, core's and the password plugin's (ADR-EA-049): this world reads them back by tag.
         Stream.runForEach((event) => Ref.update(events, (existing) => [...existing, event])),
         Effect.forkScoped({ startImmediately: true }),
       );

@@ -158,7 +158,7 @@ const suite = (
           const auditLog = yield* AuditLog.AuditLog;
           const publishBoth = Effect.all([
             events.publish({ _tag: "auth.token.replay", identifier: "a" }),
-            events.publish({ _tag: "auth.user.emailVerified", userId: alice }),
+            events.publish({ _tag: "auth.user.created", userId: alice }),
           ]);
           const tags = Effect.map(auditLog.list(), (rows) =>
             rows.map((row) => row.eventTag).sort(),
@@ -180,13 +180,13 @@ const suite = (
             ),
           );
           assert.strictEqual(perTag.auditRowsDeleted, 1);
-          assert.deepStrictEqual(yield* tags, ["auth.user.emailVerified"]);
+          assert.deepStrictEqual(yield* tags, ["auth.user.created"]);
 
           // A one-year default with a longer window for the tag left over: still kept at day 100...
           const withDefault = Retention.config({
             auditLog: {
               default: Option.some(days(365)),
-              rules: [{ tags: ["auth.user.emailVerified"], keepFor: days(30) }],
+              rules: [{ tags: ["auth.user.created"], keepFor: days(30) }],
             },
           });
           // ...but the tag's own 30-day rule wins over the default and purges it.
@@ -208,13 +208,13 @@ const suite = (
               Retention.config({
                 auditLog: {
                   default: Option.some(days(365)),
-                  rules: [{ tags: ["auth.user.emailVerified"], keepFor: days(10_000) }],
+                  rules: [{ tags: ["auth.user.created"], keepFor: days(10_000) }],
                 },
               }),
             ),
           );
           assert.strictEqual(onlyDefault.auditRowsDeleted, 1);
-          assert.deepStrictEqual(yield* tags, ["auth.user.emailVerified"]);
+          assert.deepStrictEqual(yield* tags, ["auth.user.created"]);
         }).pipe(
           Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
           Effect.provide(layer),
