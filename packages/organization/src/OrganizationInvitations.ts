@@ -158,7 +158,10 @@ export interface OrganizationInvitationsShape {
     | HookPoint.HookAborted
     | Errors.StoreUnavailable
   >;
-  /** Pending only. Authorization (MTI-009 and `invitation:cancel`) is the caller's (D6): the veto runs after it. */
+  /**
+   * Pending only, of an active organization: a suspended organization's invitation is `InvitationNotFound`
+   * (BEH-EA-237). Authorization (MTI-009 and `invitation:cancel`) is the caller's (D6): the veto runs after it.
+   */
   readonly cancel: (
     actor: OrganizationActor.Actor,
     input: { readonly invitationId: string },
@@ -693,6 +696,11 @@ export class OrganizationInvitations extends Context.Service<
           const found = yield* invitations.findById(invitationIdGrant, invitationId);
           if (Option.isNone(found)) return yield* new OrganizationErrors.InvitationNotFound();
           const record = found.value;
+          // BEH-EA-237: a suspended organization's invitation answers like an unknown one, before its
+          // status (so suspension reveals nothing either), and nothing is written, vetoed or announced.
+          if (Option.isNone(yield* directory.findActive(record.organizationId))) {
+            return yield* new OrganizationErrors.InvitationNotFound();
+          }
           if (record.status !== "pending")
             return yield* new OrganizationErrors.InvitationNotPending();
           yield* HookPoint.aborted(OrganizationHooks.BeforeCancelInvitation)(
