@@ -29,6 +29,7 @@ import * as OrganizationAuthority from "./OrganizationAuthority.ts";
 import { OrganizationConfig } from "./OrganizationConfig.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationErrors from "./OrganizationErrors.ts";
+import * as OrganizationEvents from "./OrganizationEvents.ts";
 import * as OrganizationHooks from "./OrganizationHooks.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
 import * as TeamRecords from "./TeamRecords.ts";
@@ -441,15 +442,13 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
               }),
             )
             .pipe(Effect.catchTag("SqlError", Effect.die));
-          yield* events.publish({
-            _tag: "auth.organization.teamCreated",
+          yield* events.emit(OrganizationEvents.OrganizationTeamCreatedEvent, {
             actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
             teamId: team.id,
           });
           for (const userId of initial) {
-            yield* events.publish({
-              _tag: "auth.organization.teamMemberAdded",
+            yield* events.emit(OrganizationEvents.OrganizationTeamMemberAddedEvent, {
               actorUserId: OrganizationActor.userIdOf(actor),
               organizationId,
               teamId: team.id,
@@ -486,8 +485,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
         const updated = yield* teams
           .updateTeam(organizationId, teamId, vetoed.name)
           .pipe(Effect.catchTag("TeamRecordNotFound", () => vanished("team")));
-        yield* events.publish({
-          _tag: "auth.organization.teamUpdated",
+        yield* events.emit(OrganizationEvents.OrganizationTeamUpdatedEvent, {
           actorUserId: OrganizationActor.userIdOf(actor),
           organizationId,
           teamId,
@@ -518,8 +516,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
                 Effect.fail(new OrganizationErrors.TeamHierarchyCycle()),
             }),
           );
-        yield* events.publish({
-          _tag: "auth.organization.teamMoved",
+        yield* events.emit(OrganizationEvents.OrganizationTeamMovedEvent, {
           actorUserId: OrganizationActor.userIdOf(actor),
           organizationId,
           teamId,
@@ -566,8 +563,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
               }),
             )
             .pipe(Effect.catchTag("SqlError", Effect.die));
-          yield* events.publish({
-            _tag: "auth.organization.teamDeleted",
+          yield* events.emit(OrganizationEvents.OrganizationTeamDeletedEvent, {
             actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
             teamId,
@@ -607,8 +603,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
                   Effect.fail(new OrganizationErrors.TeamMemberLimitReached()),
               }),
             );
-          yield* events.publish({
-            _tag: "auth.organization.teamMemberAdded",
+          yield* events.emit(OrganizationEvents.OrganizationTeamMemberAddedEvent, {
             actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
             teamId,
@@ -637,8 +632,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
                 Effect.fail(new OrganizationErrors.TeamMembershipNotFound()),
               ),
             );
-          yield* events.publish({
-            _tag: "auth.organization.teamMemberRoleUpdated",
+          yield* events.emit(OrganizationEvents.OrganizationTeamMemberRoleUpdatedEvent, {
             actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
             teamId,
@@ -665,8 +659,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
                 Effect.fail(new OrganizationErrors.TeamMembershipNotFound()),
               ),
             );
-          yield* events.publish({
-            _tag: "auth.organization.teamMemberRemoved",
+          yield* events.emit(OrganizationEvents.OrganizationTeamMemberRemovedEvent, {
             actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
             teamId,
@@ -743,8 +736,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
             )
             .pipe(Effect.catchTag("SqlError", Effect.die));
           for (const userId of toRemove) {
-            yield* events.publish({
-              _tag: "auth.organization.teamMemberRemoved",
+            yield* events.emit(OrganizationEvents.OrganizationTeamMemberRemovedEvent, {
               actorUserId: OrganizationActor.userIdOf(actor),
               organizationId,
               teamId,
@@ -753,8 +745,7 @@ export class OrganizationTeams extends Context.Service<OrganizationTeams, Organi
             yield* afterRemoveTeamMember.run({ actor, organizationId, teamId, userId });
           }
           for (const userId of toAdd) {
-            yield* events.publish({
-              _tag: "auth.organization.teamMemberAdded",
+            yield* events.emit(OrganizationEvents.OrganizationTeamMemberAddedEvent, {
               actorUserId: OrganizationActor.userIdOf(actor),
               organizationId,
               teamId,

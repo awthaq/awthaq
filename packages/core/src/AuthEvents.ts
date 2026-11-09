@@ -2,10 +2,13 @@
 //
 // spec/behaviors/13-events.md, BEH-EA-097 through BEH-EA-104.
 //
-// The registry (BEH-EA-101) is `./AuthEventSchemas.ts` — every event is a
-// `Schema` there (ESA-007), re-exported from here so callers keep writing
+// Core's registry (BEH-EA-101) is `./AuthEventSchemas.ts` — every core event is
+// a `Schema` there (ESA-007), re-exported from here so callers keep writing
 // `AuthEvents.AuthEvent`/`AuthEvents.Published`. This module is the service:
-// `publish`, the two read paths, and the subscription sugar.
+// `publish` (core's events), `emit` (any event, through its definition:
+// ADR-EA-049), the two read paths, the validating guards and the subscription
+// sugar. The bus carries every event of the composition, so it is typed open
+// (`PublishedAny`) and narrowed by `is(...)`, which validates rather than trusts.
 //
 // **Delivery semantics.** The bus is an in-process, bounded, *dropping*
 // PubSub: at-most-once observation, single process. It is not the record of
@@ -24,8 +27,9 @@
 
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
-import { SqlTransaction } from "@awthaq/ports";
+import { Defects, SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -36,17 +40,22 @@ import * as PubSub from "effect/PubSub";
 import * as Random from "effect/Random";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import { AuditLog } from "./AuditLog.ts";
 import {
+  type AnyEvent,
   type AuthEvent,
   type AuthEventTag,
+  CoreRegistry,
   type EventOf,
-  isAttemptEvent,
+  EventRegistry,
   type Published,
+  type PublishedAny,
 } from "./AuthEventSchemas.ts";
+import * as EventDefinition from "./EventDefinition.ts";
 import { Api } from "@awthaq/api";
 import * as Observability from "./Observability.ts";
 import { TenantContext } from "./Tenant.ts";
@@ -63,6 +72,18 @@ export interface AuthEventsShape {
    */
   readonly publish: (event: AuthEvent) => Effect.Effect<void>;
   /**
+   * ADR-EA-049: publishes any declared event through its definition:
+   * `events.emit(TwoFactorEvents.TwoFactorEnabledEvent, { userId })` (`_tag` is
+   * filled in). The same guarantees as `publish`: one envelope, the audit row
+   * (actor column, declared personal data recorded with the row), the lane the
+   * definition declares (ADR-EA-037), then the bus. A definition the
+   * composition does not declare is handled per `UndeclaredEventPolicy`.
+   */
+  readonly emit: <D extends EventDefinition.Any>(
+    definition: D,
+    input: EventDefinition.Input<D>,
+  ) => Effect.Effect<void>;
+  /**
    * BEH-EA-102: raw stream access for a consumer that needs custom
    * filtering/multiplexing. **Lazy**: the subscription registers when a
    * fiber first pulls, so an event published before that is not seen — use
@@ -70,13 +91,15 @@ export interface AuthEventsShape {
    * is a full subscriber of the one bus (it pulls every event), so prefer one
    * multi-tag `on([...], ...)` over many single-tag subscriptions.
    */
-  readonly stream: Stream.Stream<Published>;
+  readonly stream: Stream.Stream<PublishedAny>;
   /**
    * ALF-007: registers the subscription *now*, in the caller's `Scope`, and
    * returns a stream that yields every event published from this point on. The
-   * race-free way to attach; `on`/`onBatch` are built on it.
+   * race-free way to attach; `on`/`onBatch` are built on it. Like `stream`, it
+   * carries every event of the composition, typed open: narrow with
+   * `Stream.filter(AuthEvents.is("auth.session.issued"))`.
    */
-  readonly subscribe: Effect.Effect<Stream.Stream<Published>, never, Scope.Scope>;
+  readonly subscribe: Effect.Effect<Stream.Stream<PublishedAny>, never, Scope.Scope>;
   /**
    * ALF-002/ESS-001/TMS-002/TRBS-003: how many `publish` calls have been
    * silently dropped from the bus (it was at capacity) since this `AuthEvents`
@@ -111,6 +134,24 @@ export const AuditWritePolicy = Context.Reference<AuditWritePolicy>(
 
 export const auditWritePolicy = (policy: AuditWritePolicy) =>
   Layer.succeed(AuditWritePolicy, policy);
+
+/**
+ * ADR-EA-049: what `emit` does with a definition whose tag the composed `EventRegistry` does not
+ * hold (its plugin did not list it in `events`). `"warn"` (default): the event is still recorded and
+ * delivered (its definition was in hand), and `auth.event.undeclared` is logged and counted. `"die"`:
+ * the publishing operation dies with `UndeclaredEvent`; `TestAuth.layer` sets it, so a plugin's own
+ * tests catch the slip. Nothing is checked against core's default registry, which knows no plugin.
+ */
+export const UndeclaredEventPolicy = Context.Reference<"warn" | "die">(
+  "awthaq/core/UndeclaredEventPolicy",
+  { defaultValue: () => "warn" },
+);
+
+/** ADR-EA-049: `emit` was given a definition the composition does not declare, under `UndeclaredEventPolicy` `"die"`. */
+export class UndeclaredEvent extends Data.TaggedError("AuthEvents/UndeclaredEvent")<{
+  readonly tag: string;
+  readonly message: string;
+}> {}
 
 /**
  * BEH-EA-097: a bounded capacity, so a slow or absent subscriber cannot
@@ -192,6 +233,9 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const auditLog = yield* AuditLog;
     const policy = yield* AuditWritePolicy;
+    // ADR-EA-049: read once, where the composition builds this service (`auth.eventsLayer` below it).
+    const registry = yield* EventRegistry;
+    const undeclaredPolicy = yield* UndeclaredEventPolicy;
     // ALF-002/ESS-001/TMS-002/TRBS-003: `PubSub.bounded` applies
     // backpressure — its own publish suspends the calling fiber once the
     // buffer is full, directly contradicting this shape's own "never
@@ -204,11 +248,17 @@ export const layer = Layer.effect(
     // guarantee (BEH-EA-097) but never suspends the publisher: a full
     // buffer drops the newest event instead, which `droppedCount` below
     // makes observable rather than silent.
-    const pubsub = yield* PubSub.dropping<Published>(CAPACITY);
+    const pubsub = yield* PubSub.dropping<PublishedAny>(CAPACITY);
     const dropped = yield* Ref.make(0);
     const nextEventId = yield* makeEventIds;
 
-    const deliver = (event: AuthEvent, parent: Option.Option<Tracer.Span>) =>
+    // One delivery for `publish` and `emit`: the definition supplies the encoding, the actor column,
+    // the declared personal data and the lane (ADR-EA-049).
+    const deliver = (
+      event: AnyEvent,
+      definition: EventDefinition.Any,
+      parent: Option.Option<Tracer.Span>,
+    ) =>
       Effect.gen(function* () {
         // ADR-EA-047: an optional read. Events are enrichment, so a job or the relay publishes with no request.
         const request = Option.filter(
@@ -218,7 +268,7 @@ export const layer = Layer.effect(
         const tenantId = yield* TenantContext;
         const eventId = yield* nextEventId;
         const occurredAt = yield* DateTime.now;
-        const published: Published = {
+        const published: PublishedAny = {
           ...event,
           eventId,
           occurredAt,
@@ -230,7 +280,7 @@ export const layer = Layer.effect(
           tenantId,
         };
         const record = auditLog
-          .record(published)
+          .record(published, definition)
           .pipe(
             Effect.catchTag("StoreUnavailable", (unavailable) =>
               policy === "required"
@@ -248,7 +298,7 @@ export const layer = Layer.effect(
             ),
           );
         const toBus = Effect.gen(function* () {
-          yield* countEvent(event);
+          if (CoreRegistry.is(event)) yield* countEvent(event);
           const accepted = yield* PubSub.publish(pubsub, published);
           if (!accepted) {
             yield* Ref.update(dropped, (n) => n + 1);
@@ -265,7 +315,7 @@ export const layer = Layer.effect(
         // has ended, committed or not (a rollback must not erase the forensic record). A state
         // change keeps its audit row inside the transaction, atomic with the change (the
         // ADR-EA-030 relay tails only committed rows), and tells live subscribers on commit.
-        if (isAttemptEvent(event._tag)) {
+        if (definition[EventDefinition.MetaKey].attempt) {
           yield* SqlTransaction.afterUnit(Effect.andThen(record, toBus));
         } else {
           yield* record;
@@ -275,17 +325,48 @@ export const layer = Layer.effect(
 
     // The parent is read *outside* the publish span, so the envelope names the
     // span the operation ran under (the request), not `awthaq.event.publish` itself.
-    const publish: AuthEventsShape["publish"] = (event) =>
+    const traced = (event: AnyEvent, definition: EventDefinition.Any) =>
       Effect.flatMap(Effect.option(Effect.currentSpan), (parent) =>
-        deliver(event, parent).pipe(
+        deliver(event, definition, parent).pipe(
           Effect.withSpan(Observability.Span.eventPublish, {
             attributes: { [Observability.Field.event]: event._tag },
           }),
         ),
       );
 
+    // `event` is typed `AuthEvent`, so core's registry always holds its definition.
+    const publish: AuthEventsShape["publish"] = (event) =>
+      Option.match(CoreRegistry.definitionOf(event._tag), {
+        onNone: () =>
+          Defects.invariantViolation(
+            "AuthEvents.publish",
+            `awthaq: "${event._tag}" is not one of core's events; publish a plugin's event with emit`,
+          ),
+        onSome: (definition) => traced(event, definition),
+      });
+
+    /** ADR-EA-049: a composed registry that does not hold `tag` means its plugin did not declare it. */
+    const checkDeclared = (tag: string) => {
+      if (registry.origin !== "composition" || registry.isTag(tag)) return Effect.void;
+      const message = `awthaq: event "${tag}" is emitted but no composed plugin declares it in its events`;
+      return undeclaredPolicy === "die"
+        ? Effect.die(new UndeclaredEvent({ tag, message }))
+        : Metric.update(Metric.withAttributes(Observability.eventsUndeclared, { tag }), 1).pipe(
+            Effect.andThen(Effect.logWarning("auth.event.undeclared", { tag })),
+          );
+    };
+
+    const emit: AuthEventsShape["emit"] = (definition, input) =>
+      Effect.gen(function* () {
+        // The same defect policy as an unencodable core event: a malformed input is a bug at the call site.
+        const event = yield* Effect.orDie(definition.makeEffect(input));
+        yield* checkDeclared(event._tag);
+        yield* traced(event, definition);
+      });
+
     return AuthEvents.of({
       publish,
+      emit,
       stream: Stream.fromPubSub(pubsub),
       subscribe: PubSub.subscribe(pubsub).pipe(Effect.map(Stream.fromSubscription)),
       droppedCount: Ref.get(dropped),
@@ -293,27 +374,54 @@ export const layer = Layer.effect(
   }),
 );
 
-// ---- subscriptions ------------------------------------------------------------
+// ---- guards and subscriptions --------------------------------------------------
 
-type TagSelect = AuthEventTag | ReadonlyArray<AuthEventTag>;
-type TagOf<Select extends TagSelect> =
-  Select extends ReadonlyArray<infer Tag extends AuthEventTag>
-    ? Tag
-    : Select extends AuthEventTag
-      ? Select
-      : never;
+/** One selector: a core tag, or an event definition (a plugin's, or core's). */
+type Selector = AuthEventTag | EventDefinition.Any;
+/** One selector or several, mixed. */
+type Select = Selector | ReadonlyArray<Selector>;
+type One<S extends Select> = S extends ReadonlyArray<infer Item> ? Item : S;
+type EventOfSelector<S> = S extends AuthEventTag
+  ? EventOf<S>
+  : S extends EventDefinition.Any
+    ? EventDefinition.TypeOf<S>
+    : never;
 
-/** What a handler for `Select` receives: the matching event(s) with their envelope. */
-export type Handled<Select extends TagSelect> = Published<EventOf<TagOf<Select>>>;
+/** What a handler or guard for `S` receives: the selected events with their envelope. */
+export type Handled<S extends Select> = Published<EventOfSelector<One<S>>>;
 
-/** A membership check that narrows: a type guard over the union, no assertion. */
-const matching = <const Select extends TagSelect>(select: Select) => {
-  const wanted = new Set<string>(typeof select === "string" ? [select] : select);
-  return (event: Published): event is Handled<Select> => wanted.has(event._tag);
+const isList = (select: Select): select is ReadonlyArray<Selector> => Array.isArray(select);
+
+const selectorsOf = (select: Select): ReadonlyArray<Selector> =>
+  isList(select) ? select : [select];
+
+const tagOf = (selector: Selector) =>
+  typeof selector === "string" ? selector : selector[EventDefinition.MetaKey].tag;
+
+const labelOf = (select: Select) => selectorsOf(select).map(tagOf).join(",");
+
+/**
+ * ADR-EA-049: a guard over the open stream, by core tag(s) and/or event definition(s). A core tag
+ * matches by tag (`Auth.make` refuses any other declaration of a core tag); a definition matches when
+ * the tag is its own AND its schema accepts the event, so it validates rather than trusts:
+ * `Stream.filter(AuthEvents.is(TwoFactorEvents.TwoFactorEnabledEvent))`.
+ */
+export const is = <const S extends Select>(select: S) => {
+  const tags = new Set<string>();
+  const definitions = new Map<string, EventDefinition.Any>();
+  for (const selector of selectorsOf(select)) {
+    if (typeof selector === "string") tags.add(selector);
+    else definitions.set(selector[EventDefinition.MetaKey].tag, selector);
+  }
+  return (event: PublishedAny): event is Handled<S> => {
+    if (tags.has(event._tag)) return true;
+    const definition = definitions.get(event._tag);
+    return definition !== undefined && Schema.is(definition)(event);
+  };
 };
 
 /** ALF-006/EOTS-009: the link back to the span the event was published under, when it had one. */
-const originLinks = (event: Published): ReadonlyArray<Tracer.SpanLink> =>
+const originLinks = (event: PublishedAny): ReadonlyArray<Tracer.SpanLink> =>
   Option.match(Option.all({ traceId: event.traceId, spanId: event.spanId }), {
     onNone: () => [],
     onSome: ({ traceId, spanId }) => [
@@ -329,7 +437,7 @@ const originLinks = (event: Published): ReadonlyArray<Tracer.SpanLink> =>
  * root span *linked* to the publishing span, with the correlation id annotated
  * on every log line it writes.
  */
-const isolate = (label: string, event: Published, run: Effect.Effect<void, unknown>) =>
+const isolate = (label: string, event: PublishedAny, run: Effect.Effect<void, unknown>) =>
   run.pipe(
     Effect.catchCause((cause) =>
       Observability.logObserverFailure(
@@ -382,7 +490,7 @@ const RESTART_BACKOFF = Schedule.min([
  */
 const supervise = (
   label: string,
-  drain: (stream: Stream.Stream<Published>) => Effect.Effect<void>,
+  drain: (stream: Stream.Stream<PublishedAny>) => Effect.Effect<void>,
 ) =>
   Effect.gen(function* () {
     const events = yield* AuthEvents;
@@ -417,15 +525,16 @@ const supervise = (
  * its own `Stream.runForEach`/`Effect.forkScoped` to get BEH-EA-099's
  * isolation. `Layer.effectDiscard` is what supplies and then strips the
  * `Scope.Scope` the forked fiber needs, so the subscription's lifetime is
- * exactly this `Layer`'s own. `select` is one tag or an array of tags (ESS-007):
- * one subscription, the handler narrowed to the union of the selected events.
+ * exactly this `Layer`'s own. `select` is one selector or an array (ESS-007): core
+ * tags and/or event definitions (ADR-EA-049), mixed; one subscription, the handler
+ * narrowed to the union of the selected events.
  */
-export const on = <const Select extends TagSelect>(
-  select: Select,
-  handler: (event: Handled<Select>) => Effect.Effect<void, unknown>,
+export const on = <const S extends Select>(
+  select: S,
+  handler: (event: Handled<S>) => Effect.Effect<void, unknown>,
 ): Layer.Layer<never, never, AuthEvents> => {
-  const isSelected = matching(select);
-  const label = typeof select === "string" ? select : select.join(",");
+  const isSelected = is(select);
+  const label = labelOf(select);
   return Layer.effectDiscard(
     supervise(label, (stream) =>
       stream.pipe(
@@ -444,13 +553,13 @@ export const on = <const Select extends TagSelect>(
  * failed batch is logged and dropped, so a sink that must not lose events
  * checkpoints on `eventId` and backfills with `AuditLog.replay`.
  */
-export const onBatch = <const Select extends TagSelect>(
-  select: Select,
+export const onBatch = <const S extends Select>(
+  select: S,
   options: { readonly size: number; readonly within: Duration.Input },
-  handler: (batch: ReadonlyArray<Handled<Select>>) => Effect.Effect<void, unknown>,
+  handler: (batch: ReadonlyArray<Handled<S>>) => Effect.Effect<void, unknown>,
 ): Layer.Layer<never, never, AuthEvents> => {
-  const isSelected = matching(select);
-  const label = `batch:${typeof select === "string" ? select : select.join(",")}`;
+  const isSelected = is(select);
+  const label = `batch:${labelOf(select)}`;
   return Layer.effectDiscard(
     supervise(label, (stream) =>
       stream.pipe(
@@ -464,4 +573,46 @@ export const onBatch = <const Select extends TagSelect>(
       ),
     ),
   );
+};
+
+// ---- the composition-typed view ------------------------------------------------
+
+/**
+ * ADR-EA-049: the events of one composition, typed by its plugin tuple: `AuthEvents.typed(auth.events)`, the
+ * `Users.typedFields(auth.userFields)` precedent. `auth.events` is `Built.events`, a registry typed
+ * `Auth.EventsOf<P>`, so `is` narrows the open stream to that union, `subscribe` yields only its events, and
+ * `on(tag, handler)` takes any of its tags with the handler typed exactly. Every guard validates against the
+ * registry's definitions.
+ */
+export const typed = <E extends AnyEvent>(registry: EventDefinition.Registry<E>) => {
+  const isEvent = (event: PublishedAny): event is Published<E> => registry.is(event);
+  return {
+    is: isEvent,
+    /** `AuthEvents.subscribe`, keeping only this composition's events, typed. */
+    subscribe: Effect.map(
+      Effect.flatMap(AuthEvents, (events) => events.subscribe),
+      (stream) => Stream.filter(stream, isEvent),
+    ),
+    on: <const Tag extends E["_tag"]>(
+      select: Tag | ReadonlyArray<Tag>,
+      handler: (
+        event: Published<Extract<E, { readonly _tag: Tag }>>,
+      ) => Effect.Effect<void, unknown>,
+    ) => {
+      const wanted = new Set<string>(typeof select === "string" ? [select] : select);
+      const isSelected = (
+        event: PublishedAny,
+      ): event is Published<Extract<E, { readonly _tag: Tag }>> =>
+        wanted.has(event._tag) && registry.is(event);
+      const label = [...wanted].join(",");
+      return Layer.effectDiscard(
+        supervise(label, (stream) =>
+          stream.pipe(
+            Stream.filter(isSelected),
+            Stream.runForEach((event) => isolate(label, event, handler(event))),
+          ),
+        ),
+      );
+    },
+  };
 };

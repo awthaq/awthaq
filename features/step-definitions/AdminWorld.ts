@@ -17,7 +17,7 @@
 // direct domain-level access to `Sessions`/`Credentials`
 // over the same shared `MemoMap` the HTTP handler itself resolves against.
 import { Auth, AuthEvents, Sessions, Users } from "@awthaq/core";
-import { Admin } from "@awthaq/admin";
+import { Admin, AdminEvents } from "@awthaq/admin";
 import type { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -29,6 +29,10 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { TestAuth, type UserAgent } from "@awthaq/test";
 import { resolveCredential } from "./shared/ResolveCredential.ts";
+
+/** What this world reads back by tag: core's events and the admin plugins' own (ADR-EA-049). */
+const worldEvents = [...AuthEvents.eventTags, ...AdminEvents.events, ...AdminEvents.accountsEvents];
+type WorldEvent = AuthEvents.Handled<typeof worldEvents>;
 
 const ORIGIN = "http://localhost:3000";
 
@@ -81,10 +85,7 @@ export interface AppOptions {
 
 const built = Auth.make([Admin.Admin]);
 
-const buildAppLayer = (
-  options: AppOptions,
-  events: Ref.Ref<ReadonlyArray<AuthEvents.AuthEvent>>,
-) => {
+const buildAppLayer = (options: AppOptions, events: Ref.Ref<ReadonlyArray<WorldEvent>>) => {
   const eventsLayer = Layer.effectDiscard(
     Effect.gen(function* () {
       const authEvents = yield* AuthEvents.AuthEvents;
@@ -97,6 +98,8 @@ const buildAppLayer = (
       // hypothetical — see `packages/core/test/AuthEvents.test.ts`'s own
       // identical fix and its own comment on exactly this race.
       yield* authEvents.stream.pipe(
+        // Core's events and the admin plugins' own (the bus is typed open, ADR-EA-049).
+        Stream.filter(AuthEvents.is(worldEvents)),
         Stream.runForEach((event) => Ref.update(events, (existing) => [...existing, event])),
         Effect.forkScoped({ startImmediately: true }),
       );
@@ -125,7 +128,7 @@ const buildAppLayer = (
 export interface AppHandle {
   /** The composition served and read through one memo map: the handler and `run` share every instance. */
   readonly app: TestAuth.App<AppServices>;
-  readonly events: Ref.Ref<ReadonlyArray<AuthEvents.AuthEvent>>;
+  readonly events: Ref.Ref<ReadonlyArray<WorldEvent>>;
 }
 
 export type AppServices = Layer.Success<ReturnType<typeof buildAppLayer>>;
@@ -154,7 +157,7 @@ export const configureApp = Effect.fn("features.admin.configureApp")(function* (
   options: AppOptions,
 ) {
   const world = yield* World;
-  const events = Ref.makeUnsafe<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+  const events = Ref.makeUnsafe<ReadonlyArray<WorldEvent>>([]);
   const app = TestAuth.app(buildAppLayer(options, events), { baseUrl: ORIGIN });
   yield* Ref.set(world.app, { app, events });
 });

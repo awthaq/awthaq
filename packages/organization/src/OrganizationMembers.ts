@@ -26,6 +26,7 @@ import * as OrganizationAuthority from "./OrganizationAuthority.ts";
 import { OrganizationConfig } from "./OrganizationConfig.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationErrors from "./OrganizationErrors.ts";
+import * as OrganizationEvents from "./OrganizationEvents.ts";
 import * as OrganizationHooks from "./OrganizationHooks.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
 import * as TeamRecords from "./TeamRecords.ts";
@@ -241,8 +242,7 @@ export class OrganizationMembers extends Context.Service<
               "MembershipRecords/OwnedLimitReached": Effect.die,
             }),
           );
-        yield* events.publish({
-          _tag: "auth.organization.memberAdded",
+        yield* events.emit(OrganizationEvents.OrganizationMemberAddedEvent, {
           actorUserId: OrganizationActor.userIdOf(actor),
           organizationId,
           userId,
@@ -298,8 +298,7 @@ export class OrganizationMembers extends Context.Service<
           const updated = yield* members
             .updateRole(userId, organizationId, vetoed.role)
             .pipe(Effect.catchTags(concurrentWriteWon));
-          yield* events.publish({
-            _tag: "auth.organization.memberRoleUpdated",
+          yield* events.emit(OrganizationEvents.OrganizationMemberRoleUpdatedEvent, {
             actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
             userId,
@@ -339,15 +338,13 @@ export class OrganizationMembers extends Context.Service<
               }),
             )
             .pipe(Effect.catchTag("SqlError", Effect.die));
-          yield* events.publish({
-            _tag: "auth.organization.memberRemoved",
+          yield* events.emit(OrganizationEvents.OrganizationMemberRemovedEvent, {
             actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
             userId,
           });
           for (const teamId of leftTeams) {
-            yield* events.publish({
-              _tag: "auth.organization.teamMemberRemoved",
+            yield* events.emit(OrganizationEvents.OrganizationTeamMemberRemovedEvent, {
               actorUserId: OrganizationActor.userIdOf(actor),
               organizationId,
               teamId,

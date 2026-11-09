@@ -33,6 +33,7 @@ import { SqlError, UnknownError } from "effect/sql/SqlError";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Admin from "../src/Admin.ts";
+import { type AdminTestEvent, adminTestEvents } from "./support/events.ts";
 import * as AdminAccounts from "../src/AdminAccounts.ts";
 import { TestAuth } from "@awthaq/test";
 import { createHash } from "node:crypto";
@@ -125,8 +126,9 @@ const seed = Effect.gen(function* () {
 
 const collectEvents = Effect.gen(function* () {
   const events = yield* AuthEvents.AuthEvents;
-  const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+  const seen = yield* Ref.make<ReadonlyArray<AdminTestEvent>>([]);
   yield* events.stream.pipe(
+    Stream.filter(AuthEvents.is(adminTestEvents)),
     Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
     Effect.forkScoped({ startImmediately: true }),
   );

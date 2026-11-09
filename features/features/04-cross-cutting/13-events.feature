@@ -112,6 +112,25 @@ Feature: Events
       When a new event tag is added to the registry
       Then the existing subscriber continues to receive and handle "auth.user.created" events unaffected
 
+    @REQ-EA-1510
+    Scenario: A composed plugin contributes its own event tag to the registry
+      Given a composition of core and the "roles" plugin, which declares "auth.roles.assigned"
+      When a role is assigned to a user
+      Then an "auth.roles.assigned" event is published and recorded with its actor
+      And the composition's registry declares "auth.roles.assigned" beside core's tags
+
+    @REQ-EA-1511
+    Scenario: A stored event whose plugin is no longer composed stays readable and erasable
+      Given an audit row recorded through a plugin event definition that declares "note" as personal data
+      And a composition that does not include that plugin
+      When the audit log is listed and replayed, and the row's user is erased
+      Then the row is read as a foreign event with its tag and fields, nothing fails, and "note" is blanked
+
+    @REQ-EA-1512
+    Scenario: The composed registry classifies exactly the documented attempt events
+      Given a composition of every first-party plugin
+      Then exactly these tags are attempt events: the documented set of ten
+
   # BEH-EA-102 — spec/behaviors/13-events.md
   @BEH-EA-102
   Rule: The raw event stream is available for direct, low-level consumption

@@ -40,6 +40,7 @@ import {
 } from "@awthaq/core";
 import { SubjectResolver as QadiSubjectResolver } from "@awthaq/qadi";
 import * as RoleAssignments from "./RoleAssignments.ts";
+import * as RolesEvents from "./RolesEvents.ts";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -159,8 +160,7 @@ const rolesMake = Effect.gen(function* () {
         if (!catalog.has(roleName)) return yield* Effect.fail(new UnknownRole({ roleName }));
         // RRM-005: only a real change is audited.
         if (yield* store.add(userId, roleName)) {
-          yield* events.publish({
-            _tag: "auth.roles.assigned",
+          yield* events.emit(RolesEvents.RolesAssignedEvent, {
             userId,
             roleName,
             actorUserId: options?.actorId,
@@ -170,8 +170,7 @@ const rolesMake = Effect.gen(function* () {
     revoke: (userId, roleName, options) =>
       Effect.gen(function* () {
         if (yield* store.remove(userId, roleName)) {
-          yield* events.publish({
-            _tag: "auth.roles.revoked",
+          yield* events.emit(RolesEvents.RolesRevokedEvent, {
             userId,
             roleName,
             actorUserId: options?.actorId,
@@ -322,6 +321,8 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
     roles_assignments: AuthPlugin.Table.global("global roles, ADR-EA-025"),
   },
   migrations: rolesMigrations,
+  // ADR-EA-049: the events this plugin publishes, defined in `RolesEvents.ts`.
+  events: RolesEvents.events,
   // Plan 08 (BEH-EA-T4): the assignment store, memory and SQL, matched. The catalog (`Roles.config`) stays config.
   records: RoleAssignments.records,
   // The catalog is listed by role name (each `Role` carries its whole permission tree).

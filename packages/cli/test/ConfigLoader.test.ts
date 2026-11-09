@@ -61,6 +61,18 @@ describe("Config.layerFile", () => {
     }),
   );
 
+  // ADR-EA-049: a duplicate event tag is a link problem too, not a generic load failure.
+  it.effect("hands an Auth/EventTagConflict over as a LinkProblem naming the code", () =>
+    Effect.gen(function* () {
+      const error = yield* load("event-conflict.config.ts").pipe(Effect.flip);
+      assert.strictEqual(error._tag, "LinkProblem");
+      if (error._tag === "LinkProblem") {
+        assert.strictEqual(error.code, "Auth/EventTagConflict");
+        assert.include(error.message, "auth.user.created");
+      }
+    }),
+  );
+
   it.effect("fails ConfigUnavailable saying what a module has to export", () =>
     Effect.gen(function* () {
       const error = yield* load("empty.config.ts").pipe(Effect.flip);

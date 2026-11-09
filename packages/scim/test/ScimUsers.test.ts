@@ -2,7 +2,7 @@
 // ownership, immutability, deactivation and deletion — driven at the domain level over
 // the same layer graph an application builds (`support.ts`).
 import { TestAuth } from "@awthaq/test";
-import { Accounts, AuditLog, AuthEvents, HookPoint, Hooks, Sessions, Users } from "@awthaq/core";
+import { Accounts, AuditLog, HookPoint, Hooks, Sessions, Users } from "@awthaq/core";
 import { OrganizationHooks } from "@awthaq/organization";
 import { InvitationRecords, MembershipRecords } from "@awthaq/organization/records";
 import { assert, describe, it } from "@effect/vitest";
@@ -17,6 +17,7 @@ import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as Scim from "../src/Scim.ts";
 import * as ScimApi from "../src/ScimApi.ts";
+import * as ScimEvents from "../src/ScimEvents.ts";
 import { ScimLive, seedConnection } from "./support.ts";
 import { TenantScoped } from "@awthaq/sql";
 
@@ -303,18 +304,15 @@ describe("SCIM Users: provisioning and ownership (BEH-EA-247)", () => {
       const created = yield* provision(connection);
       const recorded = yield* auditLog.list({ eventTag: "auth.scim.userProvisioned" });
       assert.strictEqual(recorded.length, 1);
-      const payload = recorded[0]?.payload;
-      assert.isTrue(
-        typeof payload === "object" &&
-          payload !== null &&
-          "connectionId" in payload &&
-          payload.connectionId === connection.id &&
-          "organizationId" in payload &&
-          payload.organizationId === organizationId &&
-          "userId" in payload &&
-          payload.userId === created.id,
+      const [row] = recorded;
+      assert.isDefined(row);
+      if (row === undefined) return;
+      // Core stores the plugin's event as a foreign one; the plugin decodes its own row (ADR-EA-049).
+      const payload = AuditLog.payloadAs(ScimEvents.ScimUserProvisionedEvent)(row);
+      assert.deepStrictEqual(
+        Option.map(payload, (event) => [event.connectionId, event.organizationId, event.userId]),
+        Option.some([connection.id, organizationId, created.id]),
       );
-      void AuthEvents;
     }).pipe(TestAuth.withoutRequest, Effect.provide(ScimLive())),
   );
 });

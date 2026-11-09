@@ -257,6 +257,53 @@ describe("plugin list --rules", () => {
   );
 });
 
+// ADR-EA-049: `plugin list --events` prints `manifest.events`, every event of the composition.
+describe("plugin list --events", () => {
+  it.effect("prints each event with its owner, actor, personal-data fields and attempt lane", () =>
+    Effect.gen(function* () {
+      const rows = Plugin.events(passwordAndRoles);
+      assert.strictEqual(rows.length, passwordAndRoles.manifest.events.length);
+      assert.deepStrictEqual(
+        rows.find((row) => row.tag === "auth.user.signInFailed"),
+        { tag: "auth.user.signInFailed", owner: "core", actor: "-", pii: [], attempt: true },
+      );
+      // A plugin's own event is listed under the plugin that declares it.
+      assert.deepStrictEqual(
+        rows.find((row) => row.tag === "auth.roles.assigned"),
+        {
+          tag: "auth.roles.assigned",
+          owner: "roles",
+          actor: "actorUserId",
+          pii: [],
+          attempt: false,
+        },
+      );
+      assert.strictEqual(
+        rows.find((row) => row.tag === "auth.authz.denied")?.actor,
+        "subjectId (user:)",
+      );
+      const text = yield* captureStdout(
+        Plugin.show(passwordAndRoles, { graph: false, events: true, format: "text" }),
+      );
+      assert.match(text[0] ?? "", /^TAG\s+OWNER\s+ACTOR\s+PII\s+ATTEMPT/);
+      assert.isTrue(
+        text.some((line) => /^auth\.roles\.assigned\s+roles\s+actorUserId\s+-\s+no$/.test(line)),
+      );
+    }),
+  );
+
+  it.effect("--format json emits the same events as data", () =>
+    Effect.gen(function* () {
+      const { captured, layer } = yield* Output.capture(false);
+      yield* Plugin.show(passwordAndRoles, { graph: false, events: true, format: "json" }).pipe(
+        Effect.provide(layer),
+      );
+      const [doc] = yield* Ref.get(captured.documents);
+      assert.deepStrictEqual(doc, Plugin.events(passwordAndRoles));
+    }),
+  );
+});
+
 describe("openapi", () => {
   it.effect("emits one document covering every installed plugin's contract", () =>
     Effect.gen(function* () {

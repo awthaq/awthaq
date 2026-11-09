@@ -42,6 +42,7 @@ import {
 import * as OrganizationBundle from "./OrganizationBundle.ts";
 import { OrganizationHooksLive } from "./OrganizationHooks.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
+import * as OrganizationEvents from "./OrganizationEvents.ts";
 import * as OrganizationInvitations from "./OrganizationInvitations.ts";
 import * as OrganizationMembers from "./OrganizationMembers.ts";
 import * as OrganizationRoles from "./OrganizationRoles.ts";
@@ -106,6 +107,8 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     apiVersion: 1,
     contract: OrganizationApi.OrganizationApi,
     migrations: organizationMigrations,
+    // ADR-EA-049: the events this plugin publishes, defined in `OrganizationEvents.ts`.
+    events: OrganizationEvents.events,
     // Plan 17: the sealed OAuth connection secret, declared beside the records that seal it.
     sealedColumns: [ConnectionRecords.clientSecretColumn],
     // Plan 08 (BEH-EA-T4): the eight record stores, memory and SQL, matched.

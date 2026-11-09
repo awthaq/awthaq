@@ -7,6 +7,8 @@
 // The app is built lazily on first use, inside the scenario's own fiber, so every clock read (the
 // backoff schedule, the rotation grace window, leases, retention) goes through the scenario's
 // `TestClock`. A second, HTTP-served composition is built only by the scenarios about the admin tier.
+import { Admin } from "@awthaq/admin";
+import { Organization, OrganizationEvents } from "@awthaq/organization";
 import { Api } from "@awthaq/api";
 import { Auth, AuditLog, AuthEvents, DataExport, Erasure, Users } from "@awthaq/core";
 import { Encryption, HostResolver, RateLimiter, RelayCursorStore, Tenant } from "@awthaq/ports";
@@ -23,6 +25,7 @@ import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
@@ -182,9 +185,11 @@ const gateFor = (gate: Gate): Webhooks.WebhooksConfigShape["canManageWebhooks"] 
   }
 };
 
-const built = Auth.make([Webhooks.Webhooks]);
+// Admin and Organization are composed beside webhooks for their events (ADR-EA-049): an endpoint registers
+// for and receives `auth.admin.*` or `auth.organization.*` only when a composed plugin declares the tag.
+export const built = Auth.make([Webhooks.Webhooks, Admin.Admin, Organization.Organization]);
 
-/** `Auth.make([Webhooks])` through the harness; only the programmable receiver, resolver, limiter and configuration are this World's own. */
+/** `Auth.make([Webhooks, Admin, Organization])` through the harness; only the programmable receiver, resolver, limiter and configuration are this World's own. */
 const composition = (
   options: Options,
   receiver: ReturnType<typeof makeReceiver>,
@@ -296,7 +301,7 @@ export interface WorldShape {
   readonly httpApp: Ref.Ref<HttpApp | undefined>;
   readonly endpoints: ReturnType<typeof makeNamedRegistry<NamedEndpoint>>;
   readonly secrets: ReturnType<typeof makeNamedRegistry<string>>;
-  readonly events: ReturnType<typeof makeNamedRegistry<AuthEvents.Published>>;
+  readonly events: ReturnType<typeof makeNamedRegistry<AuthEvents.PublishedAny>>;
   readonly out: Effect.Success<typeof makeOutcomes>;
   readonly replies: Ref.Ref<Replies>;
   /** The delivery counter per outcome when the scenario began (the counter is process-wide). */
@@ -329,7 +334,7 @@ export const WorldLive = Layer.effect(
       httpApp: yield* Ref.make<HttpApp | undefined>(undefined),
       endpoints: makeNamedRegistry<NamedEndpoint>("endpoint"),
       secrets: makeNamedRegistry<string>("secret"),
-      events: makeNamedRegistry<AuthEvents.Published>("event"),
+      events: makeNamedRegistry<AuthEvents.PublishedAny>("event"),
       out: yield* makeOutcomes,
       replies: yield* Ref.make<Replies>({ base: () => ({ status: 200 }), byUrl: {} }),
       metricBase: yield* Effect.map(Effect.forEach(OUTCOMES, metricCount), (counts) =>
@@ -404,14 +409,14 @@ export const otherAdmin = new Api.UserPrincipal({
 let counter = 0;
 
 /** A published event with its envelope, `occurredAt` at the scenario's clock. */
-export const publishedEvent = (
-  event: AuthEvents.AuthEvent,
+export const publishedEvent = <E extends AuthEvents.AnyEvent>(
+  event: E,
   extra: Partial<AuthEvents.EventMetadata> = {},
 ) =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;
     counter += 1;
-    const published: AuthEvents.Published = {
+    const published: AuthEvents.Published<E> = {
       ...event,
       eventId: `018f0000-0000-7000-8000-${String(counter).padStart(12, "0")}`,
       occurredAt: now,
@@ -426,8 +431,8 @@ export const publishedEvent = (
     return published;
   });
 
-/** The event a scenario names by tag: only the shapes the scenarios use. */
-export const eventOfTag = (tag: string, userId: string): Effect.Effect<AuthEvents.AuthEvent> => {
+/** The event a scenario names by tag, core's or the organization plugin's: only the shapes the scenarios use. */
+export const eventOfTag = (tag: string, userId: string): Effect.Effect<AuthEvents.AnyEvent> => {
   switch (tag) {
     case "auth.user.signedIn":
       return Effect.succeed({
@@ -442,22 +447,33 @@ export const eventOfTag = (tag: string, userId: string): Effect.Effect<AuthEvent
         _tag: "auth.organization.created",
         organizationId: "org-1",
         creatorUserId: Users.UserId(userId),
-      });
+      } satisfies OrganizationEvents.OrganizationCreatedEvent);
     case "auth.organization.updated":
-      return Effect.succeed({ _tag: "auth.organization.updated", organizationId: "org-1" });
+      return Effect.succeed({
+        _tag: "auth.organization.updated",
+        organizationId: "org-1",
+      } satisfies OrganizationEvents.OrganizationUpdatedEvent);
     default:
       return Effect.die(new Error(`the World has no sample event for "${tag}"`));
   }
 };
 
+/** A core event a scenario publishes on the bus (`AuthEvents.publish` takes core's events only). */
+export const coreEventOfTag = (tag: string, userId: string) =>
+  Effect.flatMap(eventOfTag(tag, userId), (event) =>
+    Schema.is(AuthEvents.AuthEventSchema)(event)
+      ? Effect.succeed(event)
+      : Effect.die(new Error(`"${tag}" is not a core event`)),
+  );
+
 // ---- delivery ------------------------------------------------------------------------------------
 
-export const enqueue = (events: ReadonlyArray<AuthEvents.Published>) =>
+export const enqueue = (events: ReadonlyArray<AuthEvents.PublishedAny>) =>
   run(WebhookDelivery.enqueue(events));
 
 export const drain = run(WebhookDelivery.drainDue);
 
-export const deliver = (events: ReadonlyArray<AuthEvents.Published>) =>
+export const deliver = (events: ReadonlyArray<AuthEvents.PublishedAny>) =>
   Effect.gen(function* () {
     const queued = yield* enqueue(events);
     const attempted = yield* drain;

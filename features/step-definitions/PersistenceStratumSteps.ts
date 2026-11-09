@@ -20,6 +20,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import * as SchemaAST from "effect/SchemaAST";
 import * as Tracer from "effect/Tracer";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -28,6 +29,7 @@ import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as SqlClient from "effect/sql/SqlClient";
 import { cell, put, take, type World } from "./FoundationsWorld.ts";
+import { everyFirstPartyPlugin } from "./shared/FirstPartyComposition.ts";
 import {
   collectSpans,
   insertAccount,
@@ -297,12 +299,19 @@ export const persistenceStratumSteps = defineSteps<World>(({ Given, When, Then }
       return yield* Effect.exit(guard.assertNoLeaks);
     }).pipe(Effect.provide(RedactionGuard.layer));
     assert.equal(control._tag, "Failure");
-    // Events: no published event schema has a place to carry a token or hash at all.
-    for (const member of AuthEvents.AuthEventSchema.members) {
-      for (const name of Object.keys(member.fields)) {
+    // Events: no event schema of the composed registry (core's and every first-party plugin's, ADR-EA-049)
+    // has a place to carry a token or hash at all.
+    const definitions = everyFirstPartyPlugin().events.definitions;
+    assert.ok(definitions.length > AuthEvents.eventTags.length);
+    for (const definition of definitions) {
+      const names = SchemaAST.isObjects(definition.ast)
+        ? definition.ast.propertySignatures.map((property) => String(property.name))
+        : [];
+      assert.ok(names.length > 0, "an event definition is not a struct");
+      for (const name of names) {
         assert.ok(
           !["passwordHash", "accessToken", "refreshToken", "idToken"].includes(name),
-          `an event schema (${Object.keys(member.fields).join(", ")}) carries a secret-shaped field "${name}"`,
+          `an event schema (${names.join(", ")}) carries a secret-shaped field "${name}"`,
         );
       }
     }

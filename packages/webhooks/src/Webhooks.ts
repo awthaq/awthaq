@@ -49,6 +49,7 @@ import * as Redacted from "effect/Redacted";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as WebhookDelivery from "./WebhookDelivery.ts";
+import * as WebhookEvents from "./WebhookEvents.ts";
 import * as WebhookHeaders from "./WebhookHeaders.ts";
 import * as WebhookPayload from "./WebhookPayload.ts";
 import * as WebhookRecords from "./WebhookRecords.ts";
@@ -398,6 +399,8 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
     WebhookRecords.headersColumn,
   ],
   migrations: webhooksMigrations,
+  // ADR-EA-049: the events this plugin publishes, defined in `WebhookEvents.ts`.
+  events: WebhookEvents.events,
   // Plan 08 (BEH-EA-T4): the endpoint and delivery store, memory and SQL, matched.
   records: WebhookRecords.records,
   config: [ConfigDescriptor.make(WebhooksConfig.WebhooksConfig)],
@@ -505,6 +508,8 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
       const random = yield* SecureRandom.SecureRandom;
       const events = yield* AuthEvents.AuthEvents;
       const resolver = yield* HostResolver.HostResolver;
+      // ADR-EA-049: the composition's event registry (`auth.eventsLayer`; core's alone when it is not provided).
+      const registry = yield* AuthEvents.EventRegistry;
       // EP-007: the knobs are decided per operation, so a tenant's `Webhooks.config(...)` in the calling
       // fiber applies; with none, the build-time value does. (The background worker is deployment-wide
       // and reads the build-time value.)
@@ -588,13 +593,14 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
         const normalized = WebhookHeaders.normalize(headers);
         return { value: normalized, names: WebhookHeaders.namesOf(normalized) };
       };
+      /** BEH-EA-278, ADR-EA-049: every pattern matches a tag of this composition's registry. */
       const validateTags = (tags: ReadonlyArray<string>) => {
-        const unknown = WebhookPayload.unknownPattern(tags);
+        const unknown = WebhookPayload.unknownPattern(tags, registry.tags);
         return unknown === undefined
           ? Effect.void
           : Effect.fail(
               new WebhooksApi.InvalidWebhookEndpoint({
-                reason: `eventTags: "${unknown}" matches no event the library publishes`,
+                reason: `eventTags: "${unknown}" matches no event this composition publishes`,
               }),
             );
       };
@@ -638,8 +644,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
               ),
             );
           yield* Effect.logInfo("awthaq/webhooks: endpoint created", { endpointId: id });
-          yield* events.publish({
-            _tag: "auth.webhooks.endpointCreated",
+          yield* events.emit(WebhookEvents.WebhookEndpointCreatedEvent, {
             adminUserId: adminId(caller),
             endpointId: id,
           });
@@ -699,8 +704,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
               records.setDisabled(endpointId, input.enabled ? null : { at: now, reason: "manual" }),
             );
           }
-          yield* events.publish({
-            _tag: "auth.webhooks.endpointUpdated",
+          yield* events.emit(WebhookEvents.WebhookEndpointUpdatedEvent, {
             adminUserId: adminId(caller),
             endpointId,
             // Names only: a URL or a description never enters the audit trail.
@@ -722,8 +726,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
               ),
             );
           yield* Effect.logInfo("awthaq/webhooks: endpoint deleted", { endpointId });
-          yield* events.publish({
-            _tag: "auth.webhooks.endpointDeleted",
+          yield* events.emit(WebhookEvents.WebhookEndpointDeletedEvent, {
             adminUserId: adminId(caller),
             endpointId,
           });
@@ -754,8 +757,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
               ),
             );
           yield* Effect.logInfo("awthaq/webhooks: endpoint secret rotated", { endpointId });
-          yield* events.publish({
-            _tag: "auth.webhooks.secretRotated",
+          yield* events.emit(WebhookEvents.WebhookSecretRotatedEvent, {
             adminUserId: adminId(caller),
             endpointId,
           });
@@ -838,8 +840,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
               nextAttemptAt: now,
             },
           ]);
-          yield* events.publish({
-            _tag: "auth.webhooks.testQueued",
+          yield* events.emit(WebhookEvents.WebhookTestQueuedEvent, {
             adminUserId: adminId(caller),
             endpointId,
           });

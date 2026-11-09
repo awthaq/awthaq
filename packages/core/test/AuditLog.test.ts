@@ -6,7 +6,10 @@
 // all-or-nothing rewrite, byte-order paging, the filter before the row) is `StoreContract.auditLog`,
 // run on the `Ref`, SQLite and Postgres adapters; the SQL adapter's own failure mapping is
 // `packages/sql/test/AuditLogStoreSql.test.ts`.
+import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { AuditLogStore } from "@awthaq/ports";
+import { CoreMigrations } from "@awthaq/sql";
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -16,10 +19,13 @@ import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
+import * as Migrator from "effect/sql/Migrator";
 import * as Stream from "effect/Stream";
 import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
+import * as EventDefinition from "../src/EventDefinition.ts";
 import * as Observability from "../src/Observability.ts";
 import { StoreUnavailable } from "../src/Errors.ts";
 import { UserId } from "../src/Users.ts";
@@ -44,6 +50,77 @@ const stamped = (event: AuthEvents.AuthEvent, n: number, ms = 1_700_000_000_000 
   return published;
 };
 
+/**
+ * Test-local plugin events that declare personal data (ADR-EA-049), shaped like `@awthaq/admin`'s
+ * impersonation and ban events: since those moved to the admin plugin, no core event declares any.
+ */
+const Impersonated = EventDefinition.define(
+  "auth.local.impersonationStarted",
+  {
+    adminUserId: EventDefinition.UserId,
+    targetUserId: EventDefinition.UserId,
+    reason: Schema.String,
+    sessionId: EventDefinition.SessionId,
+  },
+  { actor: EventDefinition.Actor.field("adminUserId"), pii: ["reason"] },
+);
+const Banned = EventDefinition.define(
+  "auth.local.userBanned",
+  {
+    adminUserId: EventDefinition.UserId,
+    userId: EventDefinition.UserId,
+    reason: Schema.NullOr(Schema.String),
+  },
+  { actor: EventDefinition.Actor.field("adminUserId"), pii: ["reason"] },
+);
+
+/** Test-local plugin definitions, one per actor rule (`Actor.field`, optional `field`, `prefixed`, `none`). */
+const ByField = EventDefinition.define(
+  "auth.local.byField",
+  { byUserId: EventDefinition.UserId, userId: EventDefinition.UserId },
+  { actor: EventDefinition.Actor.field("byUserId"), pii: [] },
+);
+const ByOptional = EventDefinition.define(
+  "auth.local.byOptional",
+  { userId: Schema.optionalKey(EventDefinition.UserId) },
+  { actor: EventDefinition.Actor.field("userId"), pii: [] },
+);
+const ByPrefix = EventDefinition.define(
+  "auth.local.byPrefix",
+  { subjectId: Schema.String },
+  { actor: EventDefinition.Actor.prefixed("subjectId", "user:"), pii: [] },
+);
+const ByNone = EventDefinition.define(
+  "auth.local.byNone",
+  { userId: EventDefinition.UserId },
+  { actor: EventDefinition.Actor.none, pii: [] },
+);
+
+/** `stamped` for an event core does not define, recorded with its own definition. */
+const stampedPlugin = <E extends AuthEvents.AnyEvent>(event: E, n: number) => {
+  const published: AuthEvents.Published<E> = {
+    ...event,
+    eventId: `018f0000-0000-7000-8000-${String(n).padStart(12, "0")}`,
+    occurredAt: DateTime.makeUnsafe(1_700_000_000_000 + n * 1000),
+    correlationId: Option.none(),
+    traceId: Option.none(),
+    spanId: Option.none(),
+    ip: Option.none(),
+    userAgent: Option.none(),
+    tenantId: Option.none(),
+  };
+  return published;
+};
+
+/** The impersonation a test records: the administrator acted on `userId`, with a justification. */
+const impersonation = {
+  _tag: "auth.local.impersonationStarted",
+  adminUserId: otherUserId,
+  targetUserId: userId,
+  reason: "customer asked us to reproduce a billing bug",
+  sessionId,
+} satisfies EventDefinition.TypeOf<typeof Impersonated>;
+
 const suite = (
   name: string,
   layer: Layer.Layer<AuditLog.AuditLog | AuditLogStore.AuditLogStore, unknown, never>,
@@ -57,27 +134,10 @@ const suite = (
         const cases: ReadonlyArray<readonly [AuthEvents.AuthEvent, Option.Option<string>]> = [
           // Actor.field("userId")
           [samples["auth.user.created"], Option.some(userId)],
-          [samples["auth.organization.permissionDenied"], Option.some(userId)],
           // Actor.field("adminUserId"): the administrator, not the target
           [
-            samples["auth.admin.userUpdated"],
-            Option.some(samples["auth.admin.userUpdated"].adminUserId),
-          ],
-          // Actor.field("actorUserId") on an organization event (plan 04, F11): who acted, not who it was about;
-          // absent when the actor names no user (a directory, the application)
-          [samples["auth.organization.created"], Option.some(otherUserId)],
-          [
-            {
-              _tag: "auth.organization.memberRemoved",
-              organizationId: "org-1",
-              userId,
-              actorUserId: otherUserId,
-            },
+            { ...samples["auth.admin.actionDenied"], targetUserId: userId },
             Option.some(otherUserId),
-          ],
-          [
-            { _tag: "auth.organization.memberRemoved", organizationId: "org-1", userId },
-            Option.none(),
           ],
           // optional actor fields: present, then absent
           [
@@ -85,17 +145,11 @@ const suite = (
             Option.some(otherUserId),
           ],
           [{ _tag: "auth.mail.failed", template: "verify" }, Option.none()],
-          [
-            { _tag: "auth.roles.assigned", userId, roleName: "admin", actorUserId: otherUserId },
-            Option.some(otherUserId),
-          ],
-          [{ _tag: "auth.roles.assigned", userId, roleName: "admin" }, Option.none()],
           // Actor.prefixed("subjectId", "user:"): only a user subject names an awthaq user
           [{ ...samples["auth.authz.denied"], subjectId: `user:${userId}` }, Option.some(userId)],
           [{ ...samples["auth.authz.denied"], subjectId: "apikey:k-1" }, Option.none()],
           // Actor.none: a directory, the CLI, an anonymous attempt
           [samples["auth.token.replay"], Option.none()],
-          [samples["auth.scim.userProvisioned"], Option.none()],
           [samples["auth.admin.seeded"], Option.none()],
           [samples["auth.admin.seedRefused"], Option.none()],
           [samples["auth.import.completed"], Option.none()],
@@ -108,6 +162,58 @@ const suite = (
           const id = `018f0000-0000-7000-8000-${String(index + 1).padStart(12, "0")}`;
           const row = recorded.find((r) => r.id === id);
           assert.deepStrictEqual(row?.actorUserId, actor, `${event._tag} #${index}`);
+        }
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // ADR-EA-049: a plugin's row takes its actor from the definition it is recorded with, by the same
+    // rules. One test-local definition per rule, so the proof does not lean on a core event's shape.
+    it.effect("records the actor a plugin's definition declares, one rule each", () =>
+      Effect.gen(function* () {
+        const auditLog = yield* AuditLog.AuditLog;
+        const byField = {
+          _tag: "auth.local.byField",
+          byUserId: userId,
+          userId: otherUserId,
+        } satisfies EventDefinition.TypeOf<typeof ByField>;
+        const withActor = {
+          _tag: "auth.local.byOptional",
+          userId: otherUserId,
+        } satisfies EventDefinition.TypeOf<typeof ByOptional>;
+        const withoutActor = {
+          _tag: "auth.local.byOptional",
+        } satisfies EventDefinition.TypeOf<typeof ByOptional>;
+        const userSubject = {
+          _tag: "auth.local.byPrefix",
+          subjectId: `user:${userId}`,
+        } satisfies EventDefinition.TypeOf<typeof ByPrefix>;
+        const keySubject = {
+          _tag: "auth.local.byPrefix",
+          subjectId: "apikey:k-1",
+        } satisfies EventDefinition.TypeOf<typeof ByPrefix>;
+        const byNone = {
+          _tag: "auth.local.byNone",
+          userId,
+        } satisfies EventDefinition.TypeOf<typeof ByNone>;
+        yield* auditLog.record(stampedPlugin(byField, 1), ByField);
+        yield* auditLog.record(stampedPlugin(withActor, 2), ByOptional);
+        yield* auditLog.record(stampedPlugin(withoutActor, 3), ByOptional);
+        yield* auditLog.record(stampedPlugin(userSubject, 4), ByPrefix);
+        yield* auditLog.record(stampedPlugin(keySubject, 5), ByPrefix);
+        yield* auditLog.record(stampedPlugin(byNone, 6), ByNone);
+        const expected = [
+          Option.some(userId),
+          Option.some(otherUserId),
+          Option.none(),
+          Option.some(userId),
+          Option.none(),
+          Option.none(),
+        ];
+        const recorded = yield* auditLog.list();
+        for (const [index, actor] of expected.entries()) {
+          const id = `018f0000-0000-7000-8000-${String(index + 1).padStart(12, "0")}`;
+          const row = recorded.find((r) => r.id === id);
+          assert.deepStrictEqual(row?.actorUserId, actor, `row #${index + 1}`);
         }
       }).pipe(Effect.provide(layer)),
     );
@@ -223,7 +329,7 @@ const suite = (
         Effect.gen(function* () {
           const auditLog = yield* AuditLog.AuditLog;
           yield* auditLog.record(stamped(samples["auth.user.created"], 1));
-          yield* auditLog.record(stamped(samples["auth.admin.impersonationStarted"], 2));
+          yield* auditLog.record(stampedPlugin(impersonation, 2), Impersonated);
           yield* auditLog.record(stamped(samples["auth.authz.denied"], 3));
           yield* auditLog.record(
             stamped({ _tag: "auth.token.replay", identifier: `verify-email:${userId}` }, 4),
@@ -231,7 +337,16 @@ const suite = (
           yield* auditLog.record(stamped({ _tag: "auth.user.created", userId: otherUserId }, 5));
           // The ban note is operator free text about the banned person (plan 09 phase 4).
           yield* auditLog.record(
-            stamped({ ...samples["auth.admin.userBanned"], reason: "spamming the forum" }, 6),
+            stampedPlugin(
+              {
+                _tag: "auth.local.userBanned",
+                adminUserId: otherUserId,
+                userId,
+                reason: "spamming the forum",
+              } satisfies EventDefinition.TypeOf<typeof Banned>,
+              6,
+            ),
+            Banned,
           );
 
           const rewritten = yield* auditLog.pseudonymizeActor(userId);
@@ -252,14 +367,15 @@ const suite = (
           const alias = Option.getOrUndefined(created?.actorUserId ?? Option.none());
           assert.isDefined(alias);
           assert.notStrictEqual(alias, userId);
-          const impersonation = rows.find(
-            (row) => row.eventTag === "auth.admin.impersonationStarted",
+          const impersonated = rows.find(
+            (row) => row.eventTag === "auth.local.impersonationStarted",
           );
-          assert.strictEqual(
-            impersonation?.payload._tag === "auth.admin.impersonationStarted"
-              ? impersonation.payload.targetUserId
-              : "",
-            alias,
+          assert.deepStrictEqual(
+            Option.map(
+              Option.flatMap(Option.fromNullishOr(impersonated), AuditLog.payloadAs(Impersonated)),
+              (event) => event.targetUserId,
+            ),
+            Option.fromNullishOr(alias),
           );
           // ...another user's rows are untouched, and nothing lists the erased id any more.
           assert.strictEqual((yield* auditLog.list({ actorUserId: userId })).length, 0);
@@ -273,16 +389,16 @@ const suite = (
         const auditLog = yield* AuditLog.AuditLog;
         const unrelated = UserId("44444444-4444-4444-4444-444444444444");
         yield* auditLog.record(
-          stamped(
+          stampedPlugin(
             {
-              _tag: "auth.admin.impersonationStarted",
+              ...impersonation,
               adminUserId: userId,
               targetUserId: otherUserId,
               reason: "billing bug",
-              sessionId,
             },
             1,
           ),
+          Impersonated,
         );
         const rewritten = yield* auditLog.pseudonymizeActor(unrelated);
         assert.strictEqual(rewritten, 0);
@@ -397,6 +513,240 @@ describe("AuditLog: ESA-007 stored-row decoding", () => {
         });
       }).pipe(Effect.provide(MemoryLayer)),
   );
+});
+
+// ---- ADR-EA-049: an event core does not define (plan 29 ticket 05) ----------------------------
+
+/** A plugin's event, defined outside core's registry: `note` is declared personal data. */
+const LocalDef = EventDefinition.define(
+  "auth.local.happened",
+  { userId: EventDefinition.UserId, note: Schema.String },
+  { actor: EventDefinition.Actor.field("userId"), pii: ["note"] },
+);
+
+const local = (n: number, note = "met at the café") => {
+  const published: AuthEvents.Published<EventDefinition.TypeOf<typeof LocalDef>> = {
+    _tag: "auth.local.happened",
+    userId,
+    note,
+    eventId: `018f0000-0000-7000-8000-${String(n).padStart(12, "0")}`,
+    occurredAt: DateTime.makeUnsafe(1_700_000_000_000 + n * 1000),
+    correlationId: Option.none(),
+    traceId: Option.some("trace-1"),
+    spanId: Option.none(),
+    ip: Option.none(),
+    userAgent: Option.none(),
+    tenantId: Option.none(),
+  };
+  return published;
+};
+
+const storedPayload = (id: string) =>
+  Effect.gen(function* () {
+    const store = yield* AuditLogStore.AuditLogStore;
+    const rows = yield* store.select(
+      {
+        eventTag: Option.none(),
+        actorUserId: Option.none(),
+        from: Option.none(),
+        to: Option.none(),
+      },
+      "authoritative",
+    );
+    const row = rows.find((candidate) => candidate.id === id);
+    assert.isDefined(row);
+    return row === undefined ? {} : JSON.parse(row.payloadJson);
+  });
+
+const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLayer = AuditLog.layer.pipe(
+  Layer.provideMerge(Persistence.sql().pipe(Layer.provide(TestEncryption.layer))),
+  Layer.provideMerge(
+    Layer.effectDiscard(Migrator.make({})({ loader: CoreMigrations.coreMigrations })),
+  ),
+  Layer.provideMerge(SqlLive),
+);
+
+const foreignSuite = (
+  name: string,
+  layer: Layer.Layer<AuditLog.AuditLog | AuditLogStore.AuditLogStore, unknown, never>,
+): void => {
+  describe(name, () => {
+    it.effect(
+      "A1: a plugin event is recorded through its definition and read back as a ForeignEvent",
+      () =>
+        Effect.gen(function* () {
+          const auditLog = yield* AuditLog.AuditLog;
+          const event = local(1);
+          yield* auditLog.record(event, LocalDef);
+          const [row] = yield* auditLog.list({ eventTag: "auth.local.happened" });
+          assert.isDefined(row);
+          if (row === undefined) return;
+          assert.strictEqual(row.eventTag, "auth.local.happened");
+          assert.deepStrictEqual(row.actorUserId, Option.some(userId));
+          assert.deepStrictEqual(row.traceId, Option.some("trace-1"));
+          assert.deepStrictEqual(row.payload, {
+            _tag: AuthEvents.ForeignEventTag,
+            tag: "auth.local.happened",
+            fields: { userId, note: "met at the café" },
+          });
+          assert.deepStrictEqual(
+            AuditLog.payloadAs(LocalDef)(row),
+            Option.some({ _tag: "auth.local.happened", userId, note: "met at the café" }),
+          );
+          const stored = yield* storedPayload(event.eventId);
+          assert.deepStrictEqual(stored.meta, { traceId: "trace-1", pii: ["note"] });
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("A2: an event that declares no personal data stores today's shape, no pii key", () =>
+      Effect.gen(function* () {
+        const auditLog = yield* AuditLog.AuditLog;
+        const event = stamped(samples["auth.user.created"], 2);
+        yield* auditLog.record(event);
+        assert.deepStrictEqual(yield* storedPayload(event.eventId), {
+          _tag: "auth.user.created",
+          userId: samples["auth.user.created"].userId,
+          version: AuthEvents.EVENT_VERSION,
+          meta: {},
+        });
+        // A core event decodes as itself; payloadAs refuses another definition's tag.
+        const [row] = yield* auditLog.list();
+        assert.strictEqual(row?.payload._tag, "auth.user.created");
+        assert.isTrue(row !== undefined && Option.isNone(AuditLog.payloadAs(LocalDef)(row)));
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "A3: erasure blanks a plugin row's declared personal data with no registry in scope",
+      () =>
+        Effect.gen(function* () {
+          const auditLog = yield* AuditLog.AuditLog;
+          yield* auditLog.record(local(3), LocalDef);
+          assert.strictEqual(yield* auditLog.pseudonymizeActor(userId), 1);
+          const [row] = yield* auditLog.list();
+          const text = JSON.stringify(row?.payload);
+          assert.notInclude(text, userId);
+          assert.notInclude(text, "café");
+          assert.isTrue(
+            row !== undefined &&
+              row.payload._tag === AuthEvents.ForeignEventTag &&
+              row.payload.fields["note"] === "",
+          );
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "A4: a row written before ADR-EA-049 (no meta.pii) is scrubbed through the frozen table",
+      () =>
+        Effect.gen(function* () {
+          const store = yield* AuditLogStore.AuditLogStore;
+          const auditLog = yield* AuditLog.AuditLog;
+          yield* store.append(
+            rawRow(
+              "018f0000-0000-7000-8000-000000000004",
+              "auth.admin.userBanned",
+              JSON.stringify({
+                _tag: "auth.admin.userBanned",
+                adminUserId: otherUserId,
+                targetUserId: userId,
+                reason: "spamming the forum",
+                version: 1,
+                meta: {},
+              }),
+              otherUserId,
+            ),
+          );
+          assert.strictEqual(yield* auditLog.pseudonymizeActor(userId), 1);
+          const payload = yield* storedPayload("018f0000-0000-7000-8000-000000000004");
+          assert.strictEqual(payload.reason, "");
+          assert.notStrictEqual(payload.targetUserId, userId);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "A5: list and replay read a foreign row; a core row that fails to decode still fails",
+      () =>
+        Effect.gen(function* () {
+          const store = yield* AuditLogStore.AuditLogStore;
+          const auditLog = yield* AuditLog.AuditLog;
+          // A removed plugin's row: core has no definition for it, and nothing in scope has one.
+          yield* store.append(
+            rawRow(
+              "018f0000-0000-7000-8000-000000000005",
+              "auth.removed.happened",
+              JSON.stringify({ _tag: "auth.removed.happened", thing: 1, version: 1, meta: {} }),
+            ),
+          );
+          const listed = yield* auditLog.list();
+          assert.deepStrictEqual(
+            listed.map((row) => row.payload),
+            [
+              {
+                _tag: AuthEvents.ForeignEventTag,
+                tag: "auth.removed.happened",
+                fields: { thing: 1 },
+              },
+            ],
+          );
+          const replayed = yield* auditLog.replay().pipe(Stream.runCollect);
+          assert.strictEqual(replayed.length, 1);
+          // A foreign row that is not a JSON object is still a decode error.
+          yield* store.append(
+            rawRow("018f0000-0000-7000-8000-000000000006", "auth.removed.happened", "[1]"),
+          );
+          const failure = yield* auditLog.list().pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "AuditLogDecodeError");
+        }).pipe(Effect.provide(layer)),
+    );
+  });
+};
+
+foreignSuite("AuditLog: foreign events over memory", MemoryLayer);
+foreignSuite("AuditLog: foreign events over SQLite", SqlLayer);
+
+describe("AuditLog: foreign events, pure parts", () => {
+  it("the frozen pre-ADR-EA-049 personal-data table holds exactly the three tags declaring pii then", () => {
+    assert.deepStrictEqual(AuditLog.PRE_ADR_049_PII, {
+      "auth.admin.impersonationStarted": ["reason"],
+      "auth.admin.userBanned": ["reason"],
+      "auth.admin.organizationSuspended": ["reason"],
+    });
+  });
+
+  it("A6: toPublished unwraps a foreign record into the event as it was published", () => {
+    const record: AuditLog.AuditLogRecord = {
+      id: "018f0000-0000-7000-8000-000000000007",
+      eventTag: "auth.local.happened",
+      actorUserId: Option.some(userId),
+      occurredAt: DateTime.makeUnsafe(1_700_000_000_000),
+      correlationId: Option.none(),
+      traceId: Option.none(),
+      spanId: Option.none(),
+      ip: Option.none(),
+      userAgent: Option.none(),
+      tenantId: Option.none(),
+      payload: {
+        _tag: AuthEvents.ForeignEventTag,
+        tag: "auth.local.happened",
+        fields: { userId, note: "n" },
+      },
+    };
+    const published = {
+      _tag: "auth.local.happened",
+      userId,
+      note: "n",
+      eventId: record.id,
+      occurredAt: record.occurredAt,
+      correlationId: Option.none(),
+      traceId: Option.none(),
+      spanId: Option.none(),
+      ip: Option.none(),
+      userAgent: Option.none(),
+      tenantId: Option.none(),
+    };
+    assert.deepStrictEqual(AuditLog.toPublished(record), published);
+  });
 });
 
 describe("AuditLog: what the store makes true", () => {

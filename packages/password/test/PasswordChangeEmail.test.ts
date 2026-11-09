@@ -148,7 +148,10 @@ describe("BAM-009: confirm", () => {
       const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
       const subscription = yield* events.subscribe;
       yield* Effect.forkScoped(
-        subscription.pipe(Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event]))),
+        subscription.pipe(
+          Stream.filter(AuthEvents.is(AuthEvents.eventTags)),
+          Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
+        ),
         { startImmediately: true },
       );
       const users = yield* Users.Users;

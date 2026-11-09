@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-03 |
-> | Revision | 1.5 |
-> | Effective Date | 2026-11-08 |
+> | Revision | 1.6 |
+> | Effective Date | 2026-11-09 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-006, previously uncited by any behavior file (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-024 rate-limit example uses a `rateLimitRules` table and `RateLimits.budget` (plan 06)  <br> 1.4 (2026-10-14): BEH-EA-335: a plugin declares the hook points it owns (architecture plan 08) <br> 1.5 (2026-11-08): BEH-EA-335: `AuthHost.layer` provides every declared point once, beneath the host's `taps`, in production as in the harness (reverses plan 08 Q5; ADR-EA-044, architecture plan 15) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added a cross-reference to ADR-EA-006, previously uncited by any behavior file (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): BEH-EA-024 rate-limit example uses a `rateLimitRules` table and `RateLimits.budget` (plan 06)  <br> 1.4 (2026-10-14): BEH-EA-335: a plugin declares the hook points it owns (architecture plan 08) <br> 1.5 (2026-11-08): BEH-EA-335: `AuthHost.layer` provides every declared point once, beneath the host's `taps`, in production as in the harness (reverses plan 08 Q5; ADR-EA-044, architecture plan 15) <br> 1.6 (2026-11-09): BEH-EA-024: user fields and event definitions are registries composed statically by `Auth.make`, and a duplicate event tag is a composition error (ADR-EA-049, architecture plan 29) |
 
 ---
 
@@ -192,6 +192,8 @@ REQUIREMENT: Tapping a hook point MUST place that point's service in the
 ```
 
 `archive/design/plugins-as-layers.md` §3.4 and §3.6 draw the contrast this entry is built on: a slot is exclusive because two overrides of one `Context.Reference` are ambiguous, while a registry (hook taps, event subscribers, rate-limit rules, session claims, OpenAPI tags) is designed to aggregate because many contributions to it are exactly what is wanted. `archive/design/plugins-as-layers.md` §1 lists "a plugin taps a hook point nobody defines" as a row in its compiler-catches-this table with the same enforcement mechanism as a missing port: the point's service remains in `RIn` until some plugin's `ROut` supplies it, so a mistyped hook-point key or a tap left behind after its defining plugin is uninstalled is a type error, never a silent no-op.
+
+*As shipped ([ADR-EA-035](../decisions/035-user-field-extension-point.md), [ADR-EA-049](../decisions/049-plugins-own-event-definitions.md)):* user fields and event definitions are registries composed statically by `Auth.make` from the plugins' declarations, not through `Layer.effectDiscard`, because they must be known without building a layer. A duplicate event tag is a composition error (`Auth/EventTagConflict`, BEH-EA-346): a tag is an identity, like a group id.
 
 _Previous: [BEH-EA-016](02-plugin-composition-validate.md#beh-ea-016-the-linker-still-performs-two-runtime-checks-the-type-system-cannot-express-cycle-detection-and-migration-ordering)_
 _Next: [BEH-EA-335](03-ports-slots-hooks-registries.md#beh-ea-335-a-plugin-declares-the-hook-points-it-owns)_

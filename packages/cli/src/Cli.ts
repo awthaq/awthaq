@@ -9,7 +9,7 @@
 //   awthaq [--config <path>] [--json]
 //     doctor [--build] [--production]
 //     config list
-//     plugin list [--graph | --hooks | --rules] [--format text|json|dot]
+//     plugin list [--graph | --hooks | --rules | --events] [--format text|json|dot]
 //     routes
 //     openapi [--out <file>]
 //     migration status | apply [--yes] [--dry-run] [--allow-empty]      (--database-url)
@@ -178,6 +178,12 @@ const pluginList = Command.make(
       Flag.withDescription("Print every plugin's declared rate-limit rules (the defaults)"),
       Flag.withDefault(false),
     ),
+    events: Flag.Boolean("events").pipe(
+      Flag.withDescription(
+        "Print every event of the composition: owner, actor, personal-data fields, attempt lane",
+      ),
+      Flag.withDefault(false),
+    ),
     format: Flag.Literals("format", ["text", "json", "dot"]).pipe(
       Flag.withDescription("text | json | dot"),
       Flag.withDefault("text"),
@@ -191,6 +197,7 @@ const pluginList = Command.make(
             graph: args.graph,
             hooks: args.hooks,
             rules: args.rules,
+            events: args.events,
             format: args.format,
           }),
         ),

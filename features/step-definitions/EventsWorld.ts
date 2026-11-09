@@ -7,7 +7,7 @@
 // BEH-EA-103 is about — or, where the raw stream is the point, `AuthEvents.subscribe`/`stream`.
 // Subscriptions are built late (into the app's scope, over its context) so a Given may add one
 // after another Given has already signed a user up.
-import { AuthEvents } from "@awthaq/core";
+import { type AuditLog, AuthEvents, type EventDefinition } from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -23,7 +23,7 @@ import { letForkedFibersRun, STRONG_PASSWORD } from "./shared/Harness.ts";
 
 /** What a named subscriber saw: every event it was handed, on which fibers, and whether it finished handling. */
 export interface Probe {
-  readonly handled: Ref.Ref<ReadonlyArray<AuthEvents.Published>>;
+  readonly handled: Ref.Ref<ReadonlyArray<AuthEvents.PublishedAny>>;
   readonly fibers: Ref.Ref<ReadonlyArray<number>>;
   /** Handlers that ran to completion (a gated or failing one never counts). */
   readonly completed: Ref.Ref<number>;
@@ -54,6 +54,18 @@ export interface WorldShape {
   readonly lagging: Cell<string>;
   /** The tag the scenario's `Given` named for the sign-in's event. */
   readonly tag: Ref.Ref<AuthEvents.AuthEventTag | undefined>;
+  /** ADR-EA-049: a composition other than the world's, named by a Given (its event registry). */
+  readonly registry: Cell<EventDefinition.Registry<AuthEvents.AnyEvent>>;
+  /** ADR-EA-049: what a composed plugin's action left in that composition's audit log. */
+  readonly composedRows: Cell<ReadonlyArray<AuditLog.AuditLogRecord>>;
+  /** ADR-EA-049: a foreign row as listed, as replayed, and after its user was erased. */
+  readonly foreign: Cell<ForeignRun>;
+}
+
+export interface ForeignRun {
+  readonly listed: ReadonlyArray<AuditLog.AuditLogRecord>;
+  readonly replayed: ReadonlyArray<AuditLog.AuditLogRecord>;
+  readonly erased: ReadonlyArray<AuditLog.AuditLogRecord>;
 }
 
 /** A write-once-per-scenario slot: `get` dies with the slot's name if a Then reads what no When set. */
@@ -93,6 +105,9 @@ export const WorldLive = Layer.effect(
       queried: yield* makeCell<ReadonlyArray<LogRecord>>("queried logs"),
       lagging: yield* makeCell<string>("failing subscriber name"),
       tag: yield* Ref.make<AuthEvents.AuthEventTag | undefined>(undefined),
+      registry: yield* makeCell<EventDefinition.Registry<AuthEvents.AnyEvent>>("event registry"),
+      composedRows: yield* makeCell<ReadonlyArray<AuditLog.AuditLogRecord>>("composed audit rows"),
+      foreign: yield* makeCell<ForeignRun>("foreign row"),
     });
   }),
 );
@@ -109,7 +124,7 @@ const makeProbe = (options: { readonly gated: boolean; readonly failing: boolean
   Effect.gen(function* () {
     const gate = options.gated ? yield* Deferred.make<void>() : undefined;
     const probe: Probe = {
-      handled: yield* Ref.make<ReadonlyArray<AuthEvents.Published>>([]),
+      handled: yield* Ref.make<ReadonlyArray<AuthEvents.PublishedAny>>([]),
       fibers: yield* Ref.make<ReadonlyArray<number>>([]),
       completed: yield* Ref.make(0),
       gate,
@@ -119,7 +134,7 @@ const makeProbe = (options: { readonly gated: boolean; readonly failing: boolean
   });
 
 /** What every probed subscriber does with an event: record it and the fiber it runs on, wait at its gate if it has one, fail if told to, else complete. */
-const handle = (probe: Probe, event: AuthEvents.Published) =>
+const handle = (probe: Probe, event: AuthEvents.PublishedAny) =>
   Effect.gen(function* () {
     yield* Ref.update(probe.handled, (existing) => [...existing, event]);
     const fiber = yield* Effect.fiberId;

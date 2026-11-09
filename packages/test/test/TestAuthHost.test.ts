@@ -1,8 +1,8 @@
 // BEH-EA-342 (plan 15): the harness and a production host share the wiring by construction. `TestAuth.layer` is
 // `AuthHost.layer` over the test ports, the redaction guard and the HTTP platform, so building both for the same
-// composition must give the same services except the guard's. A hand-forked base in the harness fails this. Under
+// composition must give the same services except the guard's and the undeclared-event policy (ADR-EA-049). A hand-forked base in the harness fails this. Under
 // `pnpm test:pg` the SQL case is the Postgres run of `AuthHost`'s SQL mode (through `TestSql`).
-import { Auth } from "@awthaq/core";
+import { Auth, AuthEvents } from "@awthaq/core";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { AuthHost, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -77,7 +77,14 @@ describe("TestAuth.layer over AuthHost (BEH-EA-342)", () => {
       const missing = [...host].filter((key) => !harness.has(key));
       const extra = [...harness].filter((key) => !host.has(key)).sort();
       assert.deepStrictEqual(missing, [], "the harness serves everything the host module derives");
-      assert.deepStrictEqual(extra, [...guard].filter((key) => !host.has(key)).sort());
+      // ADR-EA-049: plus the undeclared-event policy, "die" under the harness.
+      assert.deepStrictEqual(
+        extra,
+        [
+          ...[...guard].filter((key) => !host.has(key)),
+          AuthEvents.UndeclaredEventPolicy.key,
+        ].sort(),
+      );
       assert.include(extra, RedactionGuard.RedactionGuard.key);
     });
   }

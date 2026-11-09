@@ -209,6 +209,9 @@ export const pluginContractSteps = defineSteps<World>(({ Given, When, Then }) =>
     assert.deepEqual([...built.keys].sort(), [
       "adminApi",
       "api",
+      // ADR-EA-049: the composed event registry and the layer that provides it.
+      "events",
+      "eventsLayer",
       "layer",
       "manifest",
       "migrations",

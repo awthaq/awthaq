@@ -34,6 +34,7 @@ import * as OrganizationAuthority from "./OrganizationAuthority.ts";
 import { OrganizationConfig } from "./OrganizationConfig.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationErrors from "./OrganizationErrors.ts";
+import * as OrganizationEvents from "./OrganizationEvents.ts";
 import * as OrganizationHooks from "./OrganizationHooks.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
 import * as TeamRecords from "./TeamRecords.ts";
@@ -267,8 +268,7 @@ export class OrganizationInvitations extends Context.Service<
             Effect.catchTag("InvitationRecordNotFound", () => Effect.succeed(false)),
             Effect.tap((cancelled) =>
               cancelled
-                ? events.publish({
-                    _tag: "auth.organization.invitationCanceled",
+                ? events.emit(OrganizationEvents.OrganizationInvitationCanceledEvent, {
                     actorUserId: OrganizationActor.userIdOf(actor),
                     invitationId: record.id,
                     organizationId: record.organizationId,
@@ -420,8 +420,7 @@ export class OrganizationInvitations extends Context.Service<
               const rotated = yield* invitations
                 .setTokenHash(existing.value.organizationId, existing.value.id, fresh.tokenHash)
                 .pipe(Effect.catchTag("InvitationRecordNotFound", Effect.die));
-              yield* events.publish({
-                _tag: "auth.organization.invitationCreated",
+              yield* events.emit(OrganizationEvents.OrganizationInvitationCreatedEvent, {
                 actorUserId: OrganizationActor.userIdOf(actor),
                 invitationId: rotated.id,
                 organizationId,
@@ -461,8 +460,7 @@ export class OrganizationInvitations extends Context.Service<
             );
           // The record exists from here on, so its creation is published before the mail attempt: a
           // delivery failure leaves a pending invitation, not a phantom one.
-          yield* events.publish({
-            _tag: "auth.organization.invitationCreated",
+          yield* events.emit(OrganizationEvents.OrganizationInvitationCreatedEvent, {
             actorUserId: OrganizationActor.userIdOf(actor),
             invitationId: record.id,
             organizationId,
@@ -498,8 +496,7 @@ export class OrganizationInvitations extends Context.Service<
             .pipe(Effect.catchTag("InvitationRecordNotFound", () => Effect.succeed(false)));
           // D8: an invitation that lapsed is announced, once (a concurrent expiry already said so).
           if (expired) {
-            yield* events.publish({
-              _tag: "auth.organization.invitationExpired",
+            yield* events.emit(OrganizationEvents.OrganizationInvitationExpiredEvent, {
               actorUserId: OrganizationActor.userIdOf(actor),
               invitationId,
               organizationId: record.organizationId,
@@ -621,23 +618,20 @@ export class OrganizationInvitations extends Context.Service<
           )
           .pipe(Effect.catchTag("SqlError", Effect.die));
 
-        yield* events.publish({
-          _tag: "auth.organization.invitationAccepted",
+        yield* events.emit(OrganizationEvents.OrganizationInvitationAcceptedEvent, {
           actorUserId: OrganizationActor.userIdOf(actor),
           invitationId,
           organizationId: record.organizationId,
           userId,
         });
-        yield* events.publish({
-          _tag: "auth.organization.memberAdded",
+        yield* events.emit(OrganizationEvents.OrganizationMemberAddedEvent, {
           actorUserId: OrganizationActor.userIdOf(actor),
           organizationId: record.organizationId,
           userId,
           role: membership.role,
         });
         if (joinedTeam && Option.isSome(record.teamId)) {
-          yield* events.publish({
-            _tag: "auth.organization.teamMemberAdded",
+          yield* events.emit(OrganizationEvents.OrganizationTeamMemberAddedEvent, {
             actorUserId: OrganizationActor.userIdOf(actor),
             organizationId: record.organizationId,
             teamId: record.teamId.value,
@@ -685,8 +679,7 @@ export class OrganizationInvitations extends Context.Service<
           .pipe(Effect.catchTag("InvitationRecordNotFound", () => Effect.succeed(false)));
         // Plan 25: a concurrent accept, cancel or expiry won.
         if (!rejected) return yield* new OrganizationErrors.InvitationNotPending();
-        yield* events.publish({
-          _tag: "auth.organization.invitationRejected",
+        yield* events.emit(OrganizationEvents.OrganizationInvitationRejectedEvent, {
           actorUserId: OrganizationActor.userIdOf(actor),
           invitationId,
           organizationId: record.organizationId,

@@ -1,11 +1,49 @@
 // BEH-EA-277/278 (spec/behaviors/34-webhooks.md): what leaves the process — identifiers only, free text
 // and client context withheld — and the per-endpoint event filters.
-import { AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuthEvents, EventDefinition, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as WebhookPayload from "../src/WebhookPayload.ts";
 import { published, signedIn } from "./support.ts";
+
+// ADR-EA-049: a plugin's event declares its own personal data, and a composition's registry holds it. These
+// mirror `@awthaq/admin`'s impersonation and ban events and `@awthaq/organization`'s suspension event
+// (webhooks depends on neither plugin).
+const Impersonated = EventDefinition.define(
+  "auth.admin.impersonationStarted",
+  {
+    adminUserId: EventDefinition.UserId,
+    targetUserId: EventDefinition.UserId,
+    reason: Schema.String,
+    sessionId: EventDefinition.SessionId,
+  },
+  { actor: EventDefinition.Actor.field("adminUserId"), pii: ["reason"] },
+);
+const Banned = EventDefinition.define(
+  "auth.admin.userBanned",
+  {
+    adminUserId: EventDefinition.UserId,
+    userId: EventDefinition.UserId,
+    reason: Schema.NullOr(Schema.String),
+    until: Schema.NullOr(Schema.String),
+  },
+  { actor: EventDefinition.Actor.field("adminUserId"), pii: ["reason"] },
+);
+const Suspended = EventDefinition.define(
+  "auth.admin.organizationSuspended",
+  {
+    adminUserId: EventDefinition.UserId,
+    organizationId: Schema.String,
+    reason: Schema.NullOr(Schema.String),
+  },
+  { actor: EventDefinition.Actor.field("adminUserId"), pii: ["reason"] },
+);
+const composed = EventDefinition.make(
+  [...AuthEvents.coreDefinitions, Impersonated, Banned, Suspended],
+  "composition",
+);
 
 const withContext = { includeClientContext: true } as const;
 const withoutContext = { includeClientContext: false } as const;
@@ -17,7 +55,11 @@ describe("WebhookPayload.toBody: identifiers only", () => {
         correlationId: Option.some("corr-1"),
         traceId: Option.some("trace-1"),
       });
-      const body = WebhookPayload.toBody(event, withoutContext);
+      const body = WebhookPayload.toBody(
+        event,
+        withoutContext,
+        AuthEvents.CoreRegistry.piiFieldsOf(event._tag),
+      );
       assert.strictEqual(body.version, 1);
       assert.strictEqual(body.type, "auth.user.signedIn");
       assert.strictEqual(body.id, event.eventId);
@@ -40,11 +82,21 @@ describe("WebhookPayload.toBody: identifiers only", () => {
         },
         { ip: Option.some("203.0.113.9"), userAgent: Option.some("Mozilla/5.0") },
       );
-      const off = JSON.stringify(WebhookPayload.toBody(failed, withoutContext));
+      const off = JSON.stringify(
+        WebhookPayload.toBody(
+          failed,
+          withoutContext,
+          AuthEvents.CoreRegistry.piiFieldsOf(failed._tag),
+        ),
+      );
       assert.notInclude(off, "203.0.113.9");
       assert.notInclude(off, "Mozilla");
       assert.include(off, "abc123");
-      const on = WebhookPayload.toBody(failed, withContext);
+      const on = WebhookPayload.toBody(
+        failed,
+        withContext,
+        AuthEvents.CoreRegistry.piiFieldsOf(failed._tag),
+      );
       assert.deepStrictEqual(on.client, { ip: "203.0.113.9", userAgent: "Mozilla/5.0" });
       assert.strictEqual(on.data["clientIp"], "203.0.113.9");
     }),
@@ -61,7 +113,9 @@ describe("WebhookPayload.toBody: identifiers only", () => {
           reason: "Customer jane.doe@example.com reported fraud",
           sessionId: Sessions.SessionId("s-1"),
         });
-        const text = JSON.stringify(WebhookPayload.toBody(started, withContext));
+        const text = JSON.stringify(
+          WebhookPayload.toBody(started, withContext, composed.piiFieldsOf(started._tag)),
+        );
         assert.notInclude(text, "jane.doe@example.com");
         assert.notInclude(text, "fraud");
         assert.include(text, "user-2");
@@ -77,7 +131,9 @@ describe("WebhookPayload.toBody: identifiers only", () => {
         reason: "harassed jane.doe@example.com",
         until: null,
       });
-      const bannedText = JSON.stringify(WebhookPayload.toBody(banned, withContext));
+      const bannedText = JSON.stringify(
+        WebhookPayload.toBody(banned, withContext, composed.piiFieldsOf(banned._tag)),
+      );
       assert.notInclude(bannedText, "harassed");
       assert.include(bannedText, "user-2");
       const suspended = yield* published({
@@ -86,7 +142,9 @@ describe("WebhookPayload.toBody: identifiers only", () => {
         organizationId: "org-1",
         reason: "unpaid invoice for Jane Doe",
       });
-      const suspendedText = JSON.stringify(WebhookPayload.toBody(suspended, withContext));
+      const suspendedText = JSON.stringify(
+        WebhookPayload.toBody(suspended, withContext, composed.piiFieldsOf(suspended._tag)),
+      );
       assert.notInclude(suspendedText, "Jane Doe");
       assert.include(suspendedText, "org-1");
     }),
@@ -107,12 +165,29 @@ describe("WebhookPayload.toBody: identifiers only", () => {
           phone: "+15551234567",
           note: "kept",
         };
-        const body = WebhookPayload.toBody(careless, withContext);
+        const body = WebhookPayload.toBody(
+          careless,
+          withContext,
+          AuthEvents.CoreRegistry.piiFieldsOf(careless._tag),
+        );
         const text = JSON.stringify(body);
         for (const leaked of ["ada@example.com", "hunter2", "t-1", "+15551234567"]) {
           assert.notInclude(text, leaked);
         }
         assert.strictEqual(body.data["note"], "kept");
+      }),
+  );
+
+  it.effect(
+    "W2: drops exactly the personal-data fields it is handed (the registry's, for a plugin event)",
+    () =>
+      Effect.gen(function* () {
+        const base = yield* published(signedIn("u-1"));
+        const local = { ...base, _tag: "auth.local.happened", note: "about jane", userId: "u-1" };
+        const body = WebhookPayload.toBody(local, withContext, ["note"]);
+        assert.isUndefined(body.data["note"]);
+        assert.strictEqual(body.data["userId"], "u-1");
+        assert.strictEqual(body.type, "auth.local.happened");
       }),
   );
 
@@ -146,19 +221,30 @@ describe("WebhookPayload filters", () => {
     assert.isFalse(WebhookPayload.matchesAny([], "auth.session.revoked"));
   });
 
-  it("knows every tag the library publishes, and refuses a filter that can match none", () => {
-    assert.include(WebhookPayload.knownEventTags, "auth.user.signedIn");
-    assert.include(WebhookPayload.knownEventTags, "auth.organization.memberAdded");
-    assert.isAbove(WebhookPayload.knownEventTags.length, 50);
-    assert.deepStrictEqual(WebhookPayload.knownEventTags, AuthEvents.eventTags);
-    assert.isUndefined(WebhookPayload.unknownPattern(["*", "auth.user.*", "auth.session.revoked"]));
+  // ADR-EA-049: a filter is checked against the composition's registry, not a fixed list.
+  it("refuses a filter that can match no tag of the registry it is given", () => {
+    const tags = AuthEvents.CoreRegistry.tags;
+    assert.isUndefined(
+      WebhookPayload.unknownPattern(["*", "auth.user.*", "auth.session.revoked"], tags),
+    );
     assert.strictEqual(
-      WebhookPayload.unknownPattern(["auth.user.signedIn", "auth.user.signedInn"]),
+      WebhookPayload.unknownPattern(["auth.user.signedIn", "auth.user.signedInn"], tags),
       "auth.user.signedInn",
     );
-    assert.strictEqual(WebhookPayload.unknownPattern(["nothing.*"]), "nothing.*");
-    // Every tag really is matched by its own family pattern.
-    const tags: ReadonlyArray<AuthEvents.AuthEventTag> = ["auth.user.created"];
-    assert.isTrue(tags.every((tag) => WebhookPayload.knownEventTags.includes(tag)));
+    assert.strictEqual(WebhookPayload.unknownPattern(["nothing.*"], tags), "nothing.*");
+  });
+
+  it("W1: a plugin family is accepted with a composed registry holding its tag, refused with core's", () => {
+    const LocalDef = EventDefinition.define(
+      "auth.local.happened",
+      { note: Schema.String },
+      { actor: EventDefinition.Actor.none, pii: ["note"] },
+    );
+    const composed = EventDefinition.make([...AuthEvents.coreDefinitions, LocalDef], "composition");
+    assert.isUndefined(WebhookPayload.unknownPattern(["auth.local.*"], composed.tags));
+    assert.strictEqual(
+      WebhookPayload.unknownPattern(["auth.local.*"], AuthEvents.CoreRegistry.tags),
+      "auth.local.*",
+    );
   });
 });

@@ -24,7 +24,7 @@
 // Delivery is at-least-once: a worker that dies between the POST and the row update leaves the lease
 // to lapse and the delivery is sent again, with the same `webhook-id`. Receivers deduplicate on it.
 
-import { type AuditLog, EventRelay } from "@awthaq/core";
+import { type AuditLog, AuthEvents, EventRelay } from "@awthaq/core";
 import { HostResolver, OutboundUrl, RateLimiter, type RelayCursorStore } from "@awthaq/ports";
 import { type StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Cause from "effect/Cause";
@@ -62,7 +62,12 @@ const relay = TenantScoped.crossTenant("webhooks relay: tenantRoutes decides del
 
 // ---- enqueue: the EventTransport ---------------------------------------------------------------
 
-/** Turns a relayed batch into queued deliveries. Requires the records, `SecureRandom` (ids) and the plugin config. */
+/**
+ * Turns a relayed batch into queued deliveries. Requires the records, `SecureRandom` (ids) and the plugin config,
+ * and reads the composition's `AuthEvents.EventRegistry` (ADR-EA-049): an event whose tag it does not hold (a removed
+ * plugin's history, or a host that did not provide `auth.eventsLayer`) is not enqueued, because without its
+ * definition its personal-data fields are unknown (BEH-EA-277). Each skip logs `auth.webhooks.unknownEvent`.
+ */
 // The explicit types on `enqueue` and `drainDue` are the narrow exception the plugins document
 // (TS2883): declaration emit cannot name `StoreUnavailable` through the records' inferred error.
 export const enqueue = (
@@ -76,13 +81,22 @@ export const enqueue = (
     const records = yield* WebhookRecords.WebhookRecords;
     const random = yield* SecureRandom.SecureRandom;
     const settings = yield* WebhooksConfig.WebhooksConfig;
+    const registry = yield* AuthEvents.EventRegistry;
     const endpoints = yield* records.listEnabledEndpoints(relay);
     if (endpoints.length === 0 || events.length === 0) return 0;
     const now = yield* DateTime.now;
     const rows: Array<WebhookRecords.NewDelivery> = [];
     for (const event of events) {
+      if (!registry.isTag(event._tag)) {
+        yield* Effect.logWarning("auth.webhooks.unknownEvent", { tag: event._tag });
+        continue;
+      }
       const body = JSON.stringify(
-        WebhookPayload.toBody(event, { includeClientContext: settings.includeClientContext }),
+        WebhookPayload.toBody(
+          event,
+          { includeClientContext: settings.includeClientContext },
+          registry.piiFieldsOf(event._tag),
+        ),
       );
       const subjectUserId = WebhookPayload.subjectUserId(event);
       for (const endpoint of endpoints) {
@@ -121,12 +135,15 @@ export const transportLayer = Layer.effect(
     const records = yield* WebhookRecords.WebhookRecords;
     const random = yield* SecureRandom.SecureRandom;
     const settings = yield* WebhooksConfig.WebhooksConfig;
+    // ADR-EA-049: the registry where the transport is built, so the relay fiber delivers against the composition's.
+    const registry = yield* AuthEvents.EventRegistry;
     return EventRelay.EventTransport.of({
       deliver: (events) =>
         enqueue(events).pipe(
           Effect.provideService(WebhookRecords.WebhookRecords, records),
           Effect.provideService(SecureRandom.SecureRandom, random),
           Effect.provideService(WebhooksConfig.WebhooksConfig, settings),
+          Effect.provideService(AuthEvents.EventRegistry, registry),
           Effect.asVoid,
         ),
     });

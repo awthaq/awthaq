@@ -8,6 +8,7 @@
 // spec/behaviors/34-webhooks.md, BEH-EA-275 through 282 and BEH-EA-308 through 313. See spec/overview.md for the full package map.
 
 export * as WebhookDelivery from "./WebhookDelivery.ts";
+export * as WebhookEvents from "./WebhookEvents.ts";
 export * as WebhookHeaders from "./WebhookHeaders.ts";
 export * as WebhookPayload from "./WebhookPayload.ts";
 export * as WebhookRecords from "./WebhookRecords.ts";

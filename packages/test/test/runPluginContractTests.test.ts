@@ -6,12 +6,13 @@
 // proves every check passes cleanly; small deliberately-broken fixture
 // plugins each prove one specific check actually catches its violation.
 import { Password } from "@awthaq/password";
-import { Auth, AuthPlugin, HookPoint, Hooks } from "@awthaq/core";
+import { Auth, AuthPlugin, EventDefinition, HookPoint, Hooks } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as RedactionGuard from "../src/RedactionGuard.ts";
@@ -143,6 +144,114 @@ const composable = (id: string, overrides: Partial<AuthPlugin.Any>): AuthPlugin.
     contract: { identifier: "auth", groups: { [id]: HttpApiGroup.make(id) } },
     ...overrides,
   });
+
+// ADR-EA-049 (plan 29 ticket 08): every declared event is checked, always.
+describe("runPluginContractTests — declared events (ADR-EA-049)", () => {
+  const Noted = EventDefinition.define(
+    "auth.fake.noted",
+    { userId: EventDefinition.UserId, note: Schema.String },
+    { actor: EventDefinition.Actor.field("userId"), pii: [] },
+  );
+  const Clean = EventDefinition.define(
+    "auth.fake.happened",
+    { userId: EventDefinition.UserId, reason: Schema.NullOr(Schema.String) },
+    { actor: EventDefinition.Actor.field("userId"), pii: ["reason"] },
+  );
+  const eventChecks = (sink: Recorder) =>
+    [...sink.passed, ...sink.failed].filter((name) => name.includes("declared event"));
+
+  it("a plugin with an undeclared free-text field fails, naming tag.field", async () => {
+    const sink = new Recorder();
+    TestAuth.runPluginContractTests(
+      recordingFramework(sink),
+      () => fakePlugin({ events: [Noted] }),
+      {
+        options: [{}],
+      },
+    );
+    await sink.settled();
+    const failed = sink.failed.filter((name) =>
+      name.includes("every declared event is well-formed"),
+    );
+    assert.strictEqual(failed.length, 1);
+    assert.include(failed[0] ?? "", "auth.fake.noted.note");
+  });
+
+  it("the same field listed as not personal passes", async () => {
+    const sink = new Recorder();
+    TestAuth.runPluginContractTests(
+      recordingFramework(sink),
+      () => fakePlugin({ events: [Noted] }),
+      {
+        options: [{}],
+        events: { notPersonal: ["auth.fake.noted.note"] },
+      },
+    );
+    await sink.settled();
+    assert.deepStrictEqual(
+      sink.failed.filter((name) => name.includes("declared event")),
+      [],
+    );
+    assert.strictEqual(eventChecks(sink).length, 2);
+  });
+
+  it("a well-formed event passes both the data check and the sampled erasure/actor check", async () => {
+    const sink = new Recorder();
+    TestAuth.runPluginContractTests(
+      recordingFramework(sink),
+      () => fakePlugin({ events: [Clean] }),
+      {
+        options: [{}],
+      },
+    );
+    await sink.settled();
+    assert.deepStrictEqual(
+      sink.failed.filter((name) => name.includes("declared event")),
+      [],
+    );
+    assert.strictEqual(eventChecks(sink).length, 2);
+  });
+
+  it("a declared personal-data field whose blank does not decode fails the sampled check (P3)", async () => {
+    // A hand-built declaration (a JavaScript author's): `define` refuses `pii: ["code"]` on a literal at compile time.
+    const Coded = EventDefinition.define(
+      "auth.fake.coded",
+      { code: Schema.Literals(["a", "b"]) },
+      { actor: EventDefinition.Actor.none, pii: [] },
+    );
+    Reflect.set(Coded, EventDefinition.MetaKey, {
+      tag: "auth.fake.coded",
+      actor: { _tag: "None" },
+      pii: ["code"],
+      attempt: false,
+    });
+    const sink = new Recorder();
+    TestAuth.runPluginContractTests(
+      recordingFramework(sink),
+      () => fakePlugin({ events: [Coded] }),
+      {
+        options: [{}],
+      },
+    );
+    await sink.settled();
+    const failed = sink.failed.filter((name) => name.includes("declared event"));
+    assert.strictEqual(failed.length, 1);
+    assert.include(failed[0] ?? "", "(P3)");
+  });
+
+  it("a plugin declaring no events passes vacuously", async () => {
+    const sink = new Recorder();
+    TestAuth.runPluginContractTests(recordingFramework(sink), () => fakePlugin({}), {
+      options: [{}],
+    });
+    await sink.settled();
+    assert.strictEqual(eventChecks(sink).length, 2);
+    assert.deepStrictEqual(
+      sink.failed.filter((name) => name.includes("declared event")),
+      [],
+    );
+  });
+});
 
 describe("runPluginContractTests — migrations are actually applied twice (SSMS-004, REQ-EA-563)", () => {
   const createTable = (table: string) =>

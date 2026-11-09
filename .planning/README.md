@@ -309,6 +309,7 @@ Wave E: the deepenings
 | 30 Wave A · tickets 05–12 | Done on `feat/organization-access` (not pushed): `OrganizationAccess`, compiler-owned ceiling, generated matrix, static guard, ADR-EA-040 1.1; REQ-EA-1503–1504 |
 | 30 ticket 21 | Done: plan 17 verified on the merged base, no regression; R1 NO-GO (no pre-1.3 environment), so 22–23 are closed |
 | 25 | Done: Wave 0 (02–03, PR #49), Wave E (04, 06–14, PR #55, with 28 ticket 03), Wave F (15–25, PRs #57/#58), Wave G (26–27, `docs/record-store-contract-close`); ticket 01 skipped. Left as follow-ups: sealed-column suites over `recordsBase`, the PG-only cases proven only by CI's `pnpm test:pg` (see plan 25 "Decisions taken") |
+| 29 | Done on `feat/plugin-owned-events` (draft PR #62): tickets 01–25; core keeps 24 events, 73 moved into eleven plugins; ADR-EA-049 Accepted, BEH-EA-346, REQ-EA-1510–1513 (see plan 29 "Decisions taken") |
 | Wave E (rest) | Not started |
 
 Each plan's "Decisions taken" section records what its Wave 0 PR decided and where the plan was stale. Numbers
@@ -328,6 +329,7 @@ Why this order:
 | ADR-EA-047 | 26 | Request facts are read from `AuthRequestContext`; reverses plan 01 decision 7 (26 Q1) |
 | ADR-EA-048 | 27 | The password credential is one module of `@awthaq/password`, under one policy |
 | ADR-EA-049 | 29 | Plugins own their event definitions; BEH-EA-101 reworded |
+| BEH-EA-346, REQ-EA-1510–1513 | 29 | `Auth.make` composes event definitions and refuses a duplicate tag; the four §6.5 scenarios (1505–1509 left free) |
 | BEH-EA-345 | 27 | Every path that verifies, sets or rehashes a password goes through one module (338–344 are taken: 340–342 plan 15, 343 plan 21, 344 plan 20) |
 | ADR-EA-041 decision 9 | 25 | Plugin record stores meet a data-driven contract; 28 ticket 03 rewrites decision 5 in the same revision |
 | ADR-EA-040 rev 1.1 | 27, 30 A | Both add a revision note; assign the revision in landing order |

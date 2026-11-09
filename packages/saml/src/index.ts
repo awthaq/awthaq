@@ -14,6 +14,7 @@ export * as SamlAdmin from "./SamlAdmin.ts";
 export * as SamlApi from "./SamlApi.ts";
 export * as SamlAssertion from "./SamlAssertion.ts";
 export * as SamlConnections from "./SamlConnections.ts";
+export * as SamlEvents from "./SamlEvents.ts";
 export * as SamlKeys from "./SamlKeys.ts";
 export * as SamlLogout from "./SamlLogout.ts";
 export * as SamlMetadataFetcher from "./SamlMetadataFetcher.ts";

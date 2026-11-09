@@ -190,3 +190,7 @@ entries:
     file: "048-password-credential-module.md"
     title: "The Password Credential Is One Module of `@awthaq/password`, Under One Policy"
     status: "Accepted — implemented"
+  - id: "ADR-EA-049"
+    file: "049-plugins-own-event-definitions.md"
+    title: "Plugins Own Their Event Definitions; a Composition's Event Set Is Core's Plus Every Composed Plugin's"
+    status: "Accepted — implemented"

@@ -54,6 +54,7 @@ import * as DomainClaims from "./DomainClaims.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
 import * as OrganizationDeletion from "./OrganizationDeletion.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
+import * as OrganizationEvents from "./OrganizationEvents.ts";
 
 // ---- provider ids -------------------------------------------------------------
 
@@ -499,8 +500,7 @@ export const layerStore = Layer.effect(
           }),
         );
         yield* map.invalidate(input.organizationId);
-        yield* events.publish({
-          _tag: "auth.organization.connectionCreated",
+        yield* events.emit(OrganizationEvents.OrganizationConnectionCreatedEvent, {
           organizationId: input.organizationId,
           connectionId: record.id,
           actorUserId: OrganizationActor.userIdOf(actor),
@@ -561,8 +561,7 @@ export const layerStore = Layer.effect(
               update,
             );
         yield* map.invalidate(organizationId);
-        yield* events.publish({
-          _tag: "auth.organization.connectionUpdated",
+        yield* events.emit(OrganizationEvents.OrganizationConnectionUpdatedEvent, {
           organizationId,
           connectionId,
           fields: Object.entries(patch).flatMap(([field, value]) =>
@@ -584,8 +583,7 @@ export const layerStore = Layer.effect(
           records.remove(organizationId, connectionId),
         );
         yield* map.invalidate(organizationId);
-        yield* events.publish({
-          _tag: "auth.organization.connectionDeleted",
+        yield* events.emit(OrganizationEvents.OrganizationConnectionDeletedEvent, {
           organizationId,
           connectionId,
           actorUserId: OrganizationActor.userIdOf(actor),

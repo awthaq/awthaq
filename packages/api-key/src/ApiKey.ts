@@ -72,6 +72,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ApiKeyApi from "./ApiKeyApi.ts";
 import * as ApiKeyClientRecords from "./ApiKeyClientRecords.ts";
+import * as ApiKeyEvents from "./ApiKeyEvents.ts";
 import * as ApiKeyRecords from "./ApiKeyRecords.ts";
 
 // ---- config: a Context.Reference with a default (ADR-EA-011) ---------------------
@@ -753,6 +754,8 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
     apikey_client: AuthPlugin.Table.global("service clients are deployment-wide"),
   },
   migrations: apiKeyMigrations,
+  // ADR-EA-049: the events this plugin publishes, defined in `ApiKeyEvents.ts`.
+  events: ApiKeyEvents.events,
   // Plan 08 (BEH-EA-T4): the key and client stores, memory and SQL, matched.
   records: {
     memory: Layer.mergeAll(ApiKeyRecords.layerMemory, ApiKeyClientRecords.layerMemory),
@@ -894,8 +897,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
             rotatedFrom: Option.none(),
           });
           yield* records.insert(record);
-          yield* events.publish({
-            _tag: "auth.apiKey.created",
+          yield* events.emit(ApiKeyEvents.ApiKeyCreatedEvent, {
             userId: ownerId,
             keyId: created.view.id,
           });
@@ -910,8 +912,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
           const revoked = yield* records.revoke(record.id, yield* DateTime.now);
           // F10: only the call that revoked the key announces it; a repeat (or a lost race) is a no-op.
           if (revoked) {
-            yield* events.publish({
-              _tag: "auth.apiKey.revoked",
+            yield* events.emit(ApiKeyEvents.ApiKeyRevokedEvent, {
               userId: ownerId,
               keyId: record.id,
             });
@@ -944,8 +945,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
               now,
             });
             if (outcome === "notLive") return yield* new ApiKeyApi.ApiKeyNotFound();
-            yield* events.publish({
-              _tag: "auth.apiKey.rotated",
+            yield* events.emit(ApiKeyEvents.ApiKeyRotatedEvent, {
               userId: ownerId,
               keyId: record.id,
               successorKeyId: successor.record.id,
@@ -1024,8 +1024,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
               revokedAt: Option.none(),
             };
             yield* clients.insert(record);
-            yield* events.publish({
-              _tag: "auth.apiKey.clientRegistered",
+            yield* events.emit(ApiKeyEvents.ApiKeyClientRegisteredEvent, {
               userId: ownerId,
               clientId,
             });
@@ -1048,8 +1047,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
           function* (ownerId, clientId) {
             const record = yield* ownedClient(ownerId, clientId);
             yield* clients.revoke(record.clientId, yield* DateTime.now);
-            yield* events.publish({
-              _tag: "auth.apiKey.clientRevoked",
+            yield* events.emit(ApiKeyEvents.ApiKeyClientRevokedEvent, {
               userId: ownerId,
               clientId: record.clientId,
             });
@@ -1068,8 +1066,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
               secretHash: yield* SecretHash.digest(hasher, secret).pipe(Effect.orDie),
               previousExpiresAt: DateTime.addDuration(now, grace),
             });
-            yield* events.publish({
-              _tag: "auth.apiKey.clientSecretRotated",
+            yield* events.emit(ApiKeyEvents.ApiKeyClientSecretRotatedEvent, {
               userId: ownerId,
               clientId: record.clientId,
             });

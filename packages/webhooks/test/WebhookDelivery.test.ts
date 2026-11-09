@@ -10,6 +10,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
@@ -122,18 +123,15 @@ describe("enqueue and the event relay", () => {
       Effect.gen(function* () {
         const records = yield* WebhookRecords.WebhookRecords;
         const users = (yield* seedEndpoint({ id: "users", eventTags: ["auth.user.*"] })).endpoint;
-        const orgs = (yield* seedEndpoint({
-          id: "orgs",
-          eventTags: ["auth.organization.created", "auth.session.*"],
+        // Core's events only: an organization event needs the organization plugin composed (ADR-EA-049).
+        const replays = (yield* seedEndpoint({
+          id: "replays",
+          eventTags: ["auth.token.replay", "auth.session.*"],
         })).endpoint;
         const all = (yield* seedEndpoint({ id: "all", eventTags: ["*"] })).endpoint;
         const signedInEvent = yield* published(signedIn("u-1"));
-        const orgEvent = yield* published({
-          _tag: "auth.organization.created",
-          organizationId: "org-1",
-          creatorUserId: Users.UserId("u-1"),
-        });
-        const batch = [signedInEvent, orgEvent];
+        const replayEvent = yield* published({ _tag: "auth.token.replay", identifier: "verify:1" });
+        const batch = [signedInEvent, replayEvent];
         assert.strictEqual(yield* WebhookDelivery.enqueue(batch), 4);
         // The same batch again (the relay crashed before its cursor write): nothing new.
         assert.strictEqual(yield* WebhookDelivery.enqueue(batch), 0);
@@ -142,11 +140,38 @@ describe("enqueue and the event relay", () => {
             .listDeliveries({ endpointId: id, limit: 10 })
             .pipe(Effect.map((rows) => rows.map((row) => row.eventTag).sort()));
         assert.deepStrictEqual(yield* tags(users.id), ["auth.user.signedIn"]);
-        assert.deepStrictEqual(yield* tags(orgs.id), ["auth.organization.created"]);
-        assert.deepStrictEqual(yield* tags(all.id), [
-          "auth.organization.created",
-          "auth.user.signedIn",
-        ]);
+        assert.deepStrictEqual(yield* tags(replays.id), ["auth.token.replay"]);
+        assert.deepStrictEqual(yield* tags(all.id), ["auth.token.replay", "auth.user.signedIn"]);
+      }).pipe(Effect.provide(deliveryLayer())),
+  );
+
+  // ADR-EA-049, BEH-EA-277: without a definition there is no personal-data list, so the event is not sent.
+  it.effect(
+    "W3: an event whose tag the registry does not hold is not enqueued, and the skip is logged",
+    () =>
+      Effect.gen(function* () {
+        const all = (yield* seedEndpoint({ id: "all-unknown", eventTags: ["*"] })).endpoint;
+        const base = yield* published(signedIn("u-1"));
+        const removed = { ...base, _tag: "auth.removed.happened", reason: "free text" };
+        const logs: Array<string> = [];
+        const queued = yield* WebhookDelivery.enqueue([removed, base]).pipe(
+          Effect.provide(
+            Logger.layer([
+              Logger.make((options) => void logs.push(JSON.stringify(options.message))),
+            ]),
+          ),
+        );
+        assert.strictEqual(queued, 1);
+        assert.deepStrictEqual(
+          (yield* deliveriesOf(all.id)).map((row) => row.eventTag),
+          ["auth.user.signedIn"],
+        );
+        assert.isTrue(
+          logs.some(
+            (line) =>
+              line.includes("auth.webhooks.unknownEvent") && line.includes("auth.removed.happened"),
+          ),
+        );
       }).pipe(Effect.provide(deliveryLayer())),
   );
 

@@ -65,10 +65,11 @@ import type { TestFramework } from "./TestFramework.ts";
 import { Api } from "@awthaq/api";
 import {
   Auth,
-  type AuthEvents,
+  AuthEvents,
   AuthPlugin,
   type DataExport,
   type Erasure,
+  EventDefinition,
   HookPoint,
   Migrations,
   type Retention,
@@ -88,6 +89,7 @@ import * as TestSql from "./TestSql.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { createHmac, randomBytes } from "node:crypto";
+import * as Arbitrary from "effect/Arbitrary";
 import * as Cause from "effect/Cause";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Clock from "effect/Clock";
@@ -319,6 +321,8 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
   };
   const platform = <A, E, R>(host: Layer.Layer<A, E, R>) =>
     host.pipe(
+      // ADR-EA-049: a plugin that emits an event it did not list in its `events` fails its own tests.
+      Layer.provideMerge(Layer.succeed(AuthEvents.UndeclaredEventPolicy, "die")),
       Layer.provideMerge(testPorts(options.rateLimiter, options.clientAddress)),
       Layer.provideMerge(HttpServer.layerServices),
       Layer.provideMerge(HttpRouter.layer),
@@ -858,7 +862,62 @@ export interface ContractTestOptions<O, R = never> {
     readonly point: { readonly id: string };
     readonly input: unknown;
   }>;
+  /**
+   * ADR-EA-049: the plugin's declared `events` are always checked (`EventDefinition.problems`, plus sampled
+   * erasure and actor properties). `notPersonal` lists `"<tag>.<field>"` free-text-looking fields that hold no
+   * personal data (give each a comment saying why); every other such field must be declared `pii`.
+   */
+  readonly events?: { readonly notPersonal?: ReadonlyArray<string> };
 }
+
+/** Events sampled per declared definition by the contract runner's erasure/actor check. */
+const EVENT_SAMPLES = 25;
+
+/**
+ * ADR-EA-049: plan 09 T3's sampled properties of each declared event. P3: blanking its declared personal-data
+ * fields still decodes, so erasure never makes its audit row unreadable. P4: its actor is absent or a value the
+ * event carries. Deterministic: each definition is sampled with its tag as the seed.
+ */
+const sampledEventProblems = (definitions: ReadonlyArray<EventDefinition.Any>) =>
+  Effect.map(
+    Effect.forEach(definitions, (definition) =>
+      Effect.gen(function* () {
+        const meta = definition[EventDefinition.MetaKey];
+        const samples = yield* Arbitrary.sampleEffect(Arbitrary.schema(definition), {
+          count: EVENT_SAMPLES,
+          seed: meta.tag,
+        }).pipe(Effect.orElseSucceed(() => []));
+        const found = new Set<string>();
+        for (const event of samples) {
+          const encoded = Schema.encodeUnknownOption(definition)(event);
+          const blanked = Option.map(encoded, (value) =>
+            typeof value === "object" && value !== null
+              ? Object.fromEntries(
+                  Object.entries(value).map(([key, item]) => [
+                    key,
+                    meta.pii.includes(key) ? "" : item,
+                  ]),
+                )
+              : value,
+          );
+          if (Option.isNone(Option.flatMap(blanked, Schema.decodeUnknownOption(definition)))) {
+            found.add(`${meta.tag}: blanking its pii fields makes the event undecodable (P3)`);
+          }
+          const actor = EventDefinition.actorValue(meta, event);
+          if (
+            Option.isSome(actor) &&
+            !Object.values(event).some(
+              (value) => typeof value === "string" && value.endsWith(actor.value),
+            )
+          ) {
+            found.add(`${meta.tag}: the actor is not a value the event carries (P4)`);
+          }
+        }
+        return [...found];
+      }),
+    ),
+    (perDefinition) => perDefinition.flat(),
+  );
 
 export type { TestFramework } from "./TestFramework.ts";
 
@@ -1218,6 +1277,26 @@ export const runPluginContractTests = <O, P extends AuthPlugin.Any, R = never>(
             framework.fail(
               `plugin "${plugin.id}": these endpoints do not declare Api.RequestContext last: ${missing.join(", ")}`,
             );
+          }
+        },
+      );
+
+      // ADR-EA-049: the plugin's own events, always (vacuous for a plugin that publishes none).
+      framework.it(`${label}: every declared event is well-formed`, () => {
+        const problems = EventDefinition.problems(plugin.events ?? [], {
+          notPersonal: config.events?.notPersonal ?? [],
+        });
+        if (problems.length > 0) {
+          framework.fail(`plugin "${plugin.id}": ${problems.join("; ")}`);
+        }
+      });
+
+      framework.it(
+        `${label}: every declared event survives erasure and names an actor it carries (sampled)`,
+        async () => {
+          const problems = await Effect.runPromise(sampledEventProblems(plugin.events ?? []));
+          if (problems.length > 0) {
+            framework.fail(`plugin "${plugin.id}": ${problems.join("; ")}`);
           }
         },
       );

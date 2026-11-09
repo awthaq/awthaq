@@ -26,6 +26,7 @@ import * as OrganizationAuthority from "../OrganizationAuthority.ts";
 import { OrganizationConfig } from "../OrganizationConfig.ts";
 import * as OrganizationDirectory from "../OrganizationDirectory.ts";
 import * as OrganizationErrors from "../OrganizationErrors.ts";
+import * as OrganizationEvents from "../OrganizationEvents.ts";
 import * as OrganizationInvitations from "../OrganizationInvitations.ts";
 import * as OrganizationMembers from "../OrganizationMembers.ts";
 import * as OrganizationRoles from "../OrganizationRoles.ts";
@@ -103,8 +104,7 @@ export const make = Effect.gen(function* () {
     wanted: Statement,
     reason: "notMember" | "missingStatement",
   ) =>
-    events.publish({
-      _tag: "auth.organization.permissionDenied",
+    events.emit(OrganizationEvents.OrganizationPermissionDeniedEvent, {
       organizationId,
       userId: callerId(caller),
       resource: wanted.resource,

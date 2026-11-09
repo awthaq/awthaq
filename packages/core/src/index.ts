@@ -49,6 +49,7 @@ export * as EffectiveConfig from "./EffectiveConfig.ts";
 export * as EmailChange from "./EmailChange.ts";
 export * as Erasure from "./Erasure.ts";
 export * as Errors from "./Errors.ts";
+export * as EventDefinition from "./EventDefinition.ts";
 export * as EventRelay from "./EventRelay.ts";
 export * as HookPoint from "./HookPoint.ts";
 export * as Hooks from "./Hooks.ts";

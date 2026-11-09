@@ -36,11 +36,9 @@ const asCaller = (id: string): Api.UserPrincipal =>
     sessionId: `${id}-session`,
   });
 
-/** An audit record's `payload` is opaque (`unknown`); narrow it to a plain record for assertions. */
-const payloadOf = (record: { readonly payload: unknown } | undefined): Record<string, unknown> =>
-  typeof record?.payload === "object" && record.payload !== null
-    ? Object.fromEntries(Object.entries(record.payload))
-    : {};
+/** An audit record's event as published (core stores the plugin's event as a foreign one, ADR-EA-049), as a plain record. */
+const payloadOf = (record: AuditLog.AuditLogRecord | undefined): Record<string, unknown> =>
+  record === undefined ? {} : Object.fromEntries(Object.entries(AuditLog.toPublished(record)));
 
 /**
  * MTI-010: the invitation capability only ever travels by email — read it back

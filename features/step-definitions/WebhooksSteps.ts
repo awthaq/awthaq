@@ -35,6 +35,7 @@ import {
   advance,
   allRequests,
   configure,
+  coreEventOfTag,
   deliver,
   deliveriesOf,
   drain,
@@ -50,6 +51,7 @@ import {
   World,
   type SentRequest,
   anyTenant,
+  built,
 } from "./WebhooksWorld.ts";
 import { isRecord, parseJson } from "./shared/WireJson.ts";
 import { isNumber, isString } from "./shared/Outcomes.ts";
@@ -262,7 +264,7 @@ const OPERATIONS = [
 
 const expectQueued = (
   rows: ReadonlyArray<{ readonly eventId: string }>,
-  event: AuthEvents.Published,
+  event: AuthEvents.PublishedAny,
 ) => rows.some((row) => row.eventId === event.eventId);
 
 const deliveredHeadersCount = (request: SentRequest) =>
@@ -505,8 +507,8 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* run(
         Effect.gen(function* () {
           const events = yield* AuthEvents.AuthEvents;
-          yield* events.publish(yield* eventOfTag(tagA, userA));
-          yield* events.publish(yield* eventOfTag(tagB, userB));
+          yield* events.publish(yield* coreEventOfTag(tagA, userA));
+          yield* events.publish(yield* coreEventOfTag(tagB, userB));
         }),
       );
     },
@@ -798,7 +800,13 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     "the payload of event {string} is built with includeClientContext",
     function* (name: string) {
       const world = yield* World;
-      const body = WebhookPayload.toBody(yield* eventNamed(name), { includeClientContext: true });
+      const event = yield* eventNamed(name);
+      const body = WebhookPayload.toBody(
+        event,
+        { includeClientContext: true },
+        // The composed registry: a plugin's event declares its own personal data (ADR-EA-049).
+        built.events.piiFieldsOf(event._tag),
+      );
       yield* world.out.set("payload", JSON.stringify(body));
     },
   );
@@ -1059,11 +1067,8 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* run(
       Effect.flatMap(AuthEvents.AuthEvents, (events) =>
         events.stream.pipe(
-          Stream.runForEach((event) =>
-            event._tag === "auth.admin.actionDenied"
-              ? Ref.update(seen, (all) => [...all, event.action])
-              : Effect.void,
-          ),
+          Stream.filter(AuthEvents.is("auth.admin.actionDenied")),
+          Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event.action])),
           Effect.forkIn(world.scope, { startImmediately: true }),
         ),
       ),

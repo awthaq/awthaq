@@ -51,6 +51,7 @@ import { type TwoFactorMethodUsed, type VerifiedChallenge, verified } from "./Ch
 import { SecondFactor, failureRule, type Purpose } from "./SecondFactor.ts";
 import { TwoFactorConfig } from "./TwoFactorConfig.ts";
 import * as TwoFactorApi from "./TwoFactorApi.ts";
+import * as TwoFactorEvents from "./TwoFactorEvents.ts";
 import {
   TwoFactorRecoveryCodes,
   TwoFactorSecrets,
@@ -426,6 +427,8 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
   // Plan 17: the sealed TOTP secret, declared beside the records that seal it.
   sealedColumns: [secretColumn],
   migrations,
+  // ADR-EA-049: the events this plugin publishes (`SecondFactor` emits them), defined in `TwoFactorEvents.ts`.
+  events: TwoFactorEvents.events,
   // Plan 08 (BEH-EA-T4): the secret and recovery-code stores, memory and SQL, matched.
   records: twoFactorRecords,
   // ECS-008/BEH-EA-229: the default issuer is the classic thing left in production — the label users see in their authenticator app.

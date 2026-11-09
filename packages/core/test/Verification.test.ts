@@ -151,7 +151,7 @@ const suite = (
         // that hasn't registered with the PubSub yet.
         const replayed = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.token.replay"),
+            Stream.filter(AuthEvents.is("auth.token.replay")),
             Stream.take(2),
             Stream.runCollect,
           ),
@@ -242,7 +242,7 @@ const suite = (
         const { value } = yield* verification.issue({ identifier, ttl: Duration.minutes(10) });
         const replays = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.token.replay"),
+            Stream.filter(AuthEvents.is("auth.token.replay")),
             Stream.take(1),
             Stream.runCollect,
           ),
@@ -518,7 +518,7 @@ const suite = (
       Effect.flatMap(AuthEvents.AuthEvents, (events) =>
         Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.token.replay"),
+            Stream.filter(AuthEvents.is("auth.token.replay")),
             Stream.take(take),
             Stream.runCollect,
           ),
@@ -688,7 +688,7 @@ const suite = (
         const { value } = yield* issueOne(identifier);
         const replays = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.token.replay"),
+            Stream.filter(AuthEvents.is("auth.token.replay")),
             Stream.take(1),
             Stream.runCollect,
           ),

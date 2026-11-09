@@ -21,6 +21,7 @@ import {
   ADMIN,
   app,
   configure,
+  coreEventOfTag,
   deliveriesOf,
   deliver,
   eventOfTag,
@@ -75,7 +76,7 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
     "a {string} event for user {string} is published inside tenant {string} and relayed from the audit log",
     function* (tag: string, user: string, tenant: string) {
       const world = yield* World;
-      const event = yield* eventOfTag(tag, user);
+      const event = yield* coreEventOfTag(tag, user);
       yield* run(
         Effect.flatMap(AuthEvents.AuthEvents, (events) => events.publish(event)).pipe(
           Tenant.withTenant(tenant),
@@ -97,7 +98,7 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
     "a {string} event for user {string} is published outside a tenant and relayed from the audit log",
     function* (tag: string, user: string) {
       const world = yield* World;
-      const event = yield* eventOfTag(tag, user);
+      const event = yield* coreEventOfTag(tag, user);
       yield* run(Effect.flatMap(AuthEvents.AuthEvents, (events) => events.publish(event)));
       const rows = yield* run(
         Effect.flatMap(AuditLog.AuditLog, (auditLog) => auditLog.replay().pipe(Stream.runCollect)),
@@ -382,8 +383,10 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
       const rows = (yield* webhookAuditRows).filter((row) => row.eventTag === tag);
       assert.equal(rows.length, 1, `one "${tag}" event`);
       assert.deepEqual(rows[0]?.actorUserId, Option.some(admin));
-      const payload = rows[0]?.payload;
-      assert.ok(payload !== undefined && Reflect.get(payload, "endpointId") === endpoint.id);
+      // The event as published: core stores the plugin's event as a foreign one (ADR-EA-049).
+      const row = rows[0];
+      assert.ok(row !== undefined);
+      assert.equal(Reflect.get(AuditLog.toPublished(row), "endpointId"), endpoint.id);
     },
   );
   Then(
@@ -391,8 +394,10 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
     function* (tag: string, name: string, first: string, second: string) {
       const endpoint = yield* endpointNamed(name);
       const rows = (yield* webhookAuditRows).filter((row) => row.eventTag === tag);
-      const payload = rows.at(-1)?.payload;
-      assert.ok(payload !== undefined && Reflect.get(payload, "endpointId") === endpoint.id);
+      const row = rows.at(-1);
+      assert.ok(row !== undefined);
+      const payload = AuditLog.toPublished(row);
+      assert.equal(Reflect.get(payload, "endpointId"), endpoint.id);
       const fields = Reflect.get(payload, "fields");
       assert.ok(Array.isArray(fields));
       assert.deepEqual([...fields].sort(), [first, second].sort());

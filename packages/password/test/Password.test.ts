@@ -25,6 +25,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Password from "../src/Password.ts";
+import * as PasswordEvents from "../src/PasswordEvents.ts";
 import { makeTestLayer, NoBreachHttpClient, tokenOf } from "./harness.ts";
 
 /** The composition every test shares: `Auth.make([Password])` through `TestAuth.layer` (`harness.ts`). */
@@ -265,7 +266,7 @@ describe("Password", () => {
         yield* users.setStatus(user.id, "suspended", { reason: "fraud" });
         const collected = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.user.signInFailed"),
+            Stream.filter(AuthEvents.is("auth.user.signInFailed")),
             Stream.take(2),
             Stream.runCollect,
           ),
@@ -322,7 +323,7 @@ describe("Password", () => {
 
         const failed = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.user.signInFailed"),
+            Stream.filter(AuthEvents.is("auth.user.signInFailed")),
             Stream.take(1),
             Stream.runCollect,
           ),
@@ -357,7 +358,7 @@ describe("Password", () => {
 
         const failed = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.user.signInFailed"),
+            Stream.filter(AuthEvents.is("auth.user.signInFailed")),
             Stream.take(1),
             Stream.runCollect,
           ),
@@ -490,9 +491,15 @@ describe("Password", () => {
         const requested = yield* auditLog.list({ eventTag: "auth.password.resetRequested" });
         assert.strictEqual(requested.length, 1);
         const [row] = requested;
-        assert.strictEqual(
-          row?.payload._tag === "auth.password.resetRequested" ? row.payload.userId : "",
-          issued.session.userId,
+        assert.deepStrictEqual(
+          Option.map(
+            Option.flatMap(
+              Option.fromNullishOr(row),
+              AuditLog.payloadAs(PasswordEvents.PasswordResetRequestedEvent),
+            ),
+            (payload) => payload.userId,
+          ),
+          Option.some(issued.session.userId),
         );
       }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
@@ -507,7 +514,7 @@ describe("Password", () => {
 
         const issuedEvents = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.session.issued"),
+            Stream.filter(AuthEvents.is("auth.session.issued")),
             Stream.take(2),
             Stream.runCollect,
           ),
@@ -694,9 +701,7 @@ describe("Password", () => {
         const captured = yield* Effect.forkChild(
           events.stream.pipe(
             Stream.filter(
-              (event) =>
-                event._tag === "auth.password.resetCompleted" ||
-                event._tag === "auth.session.revoked",
+              AuthEvents.is([PasswordEvents.PasswordResetCompletedEvent, "auth.session.revoked"]),
             ),
             Stream.take(2),
             Stream.runCollect,
@@ -814,10 +819,11 @@ describe("Password", () => {
         const captured = yield* Effect.forkChild(
           events.stream.pipe(
             Stream.filter(
-              (event) =>
-                event._tag === "auth.password.changed" ||
-                event._tag === "auth.session.revoked" ||
-                event._tag === "auth.session.issued",
+              AuthEvents.is([
+                "auth.password.changed",
+                "auth.session.revoked",
+                "auth.session.issued",
+              ]),
             ),
             Stream.take(3),
             Stream.runCollect,

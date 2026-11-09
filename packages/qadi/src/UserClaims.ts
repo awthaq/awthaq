@@ -47,6 +47,7 @@ import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
+import * as UserClaimsEvents from "./UserClaimsEvents.ts";
 
 const USER_SUBJECT_PREFIX = "user:";
 
@@ -130,8 +131,7 @@ const make = Effect.gen(function* () {
       const { before, after } = yield* store.modify(userId, change);
       const keys = changedKeys(before, after);
       if (keys.length > 0) {
-        yield* events.publish({
-          _tag: "auth.user.claimsUpdated",
+        yield* events.emit(UserClaimsEvents.UserClaimsUpdatedEvent, {
           userId,
           keys,
           actorUserId: options?.actorId,
@@ -290,6 +290,8 @@ export class UserClaims extends AuthPlugin.Service<UserClaims, UserClaimsShape>(
     claims_user: AuthPlugin.Table.global("per-user claims document; the directory is global"),
   },
   migrations: userClaimsMigrations,
+  // ADR-EA-049: the event this plugin publishes, defined in `UserClaimsEvents.ts`.
+  events: UserClaimsEvents.events,
   // Plan 08 (BEH-EA-T4): the claims document store, memory and SQL, matched.
   records,
 }) {

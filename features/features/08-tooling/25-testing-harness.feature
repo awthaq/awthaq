@@ -295,7 +295,7 @@ Feature: Testing Harness
     Scenario: The harness serves the same wiring a host composition serves
       Given one composition built through "TestAuth.layer" and through "AuthHost.layer" over the same ports
       When both are built
-      Then the harness holds every service the host composition holds, plus only the redaction guard's
+      Then the harness holds every service the host composition holds, plus only the redaction guard's and the undeclared-event policy
 
   # BEH-EA-336 — spec/behaviors/25-testing-harness.md
   @BEH-EA-336

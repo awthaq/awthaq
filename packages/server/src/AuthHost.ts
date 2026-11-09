@@ -296,6 +296,9 @@ const makeLayer = (built: AnyBuilt, options: AnyOptions): Layer.Layer<never, unk
     Layer.provideMerge(base),
     // SAM-004: the composition's declared user fields, last, so `Users` and the account handler both see it.
     Layer.provideMerge(built.userFieldsLayer),
+    // ADR-EA-049: the composition's event registry, last for the same reason: `AuthEvents` (emit's undeclared-event
+    // check), webhook filters and payloads, and Retention rules read it.
+    Layer.provideMerge(built.eventsLayer),
   );
 };
 
@@ -303,7 +306,8 @@ const makeLayer = (built: AnyBuilt, options: AnyOptions): Layer.Layer<never, unk
  * ADR-EA-044: `AuthHost.layer(Auth.make([...]), { persistence, csrf, ... })` is the servable layer. It derives the
  * routes (for `tier`), core's handlers, every composed plugin's records bundle for the chosen persistence and its
  * declared hook points, core's services and registries, the host middleware the groups declare, the user-field
- * registry (the request context's populator among the middleware, ADR-EA-047) and `BodyLimit.layer`; in SQL mode it applies or verifies the migrations before
+ * registry, the event registry (ADR-EA-049), the request context's populator among the middleware (ADR-EA-047) and
+ * `BodyLimit.layer`; in SQL mode it applies or verifies the migrations before
  * anything is built over the client. Its `RIn` is the ports, adapters and platform services the host owns.
  *
  * Merge host-owned jobs and edge middleware (`Retention.layerScheduled`, `SecuritySignals.layer`,

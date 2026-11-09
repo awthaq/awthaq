@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Saml from "../src/Saml.ts";
+import * as SamlEvents from "../src/SamlEvents.ts";
 import * as SamlMetadataFetcher from "../src/SamlMetadataFetcher.ts";
 import * as SamlRecords from "../src/SamlRecords.ts";
 import * as SamlSpKeys from "../src/SamlSpKeys.ts";
@@ -388,11 +389,15 @@ describe("editing and removing a connection", () => {
         const events = yield* Effect.flatMap(AuditLog.AuditLog, (log) =>
           log.list({ eventTag: "auth.saml.connectionUpdated" }),
         );
-        const payload = events[0]?.payload;
-        assert.strictEqual(payload?._tag, "auth.saml.connectionUpdated");
+        // Core stores the plugin's event as a foreign one; the plugin's definition decodes it (ADR-EA-049).
+        const [row] = events;
+        assert.isDefined(row);
+        if (row === undefined) return;
         assert.deepStrictEqual(
-          payload?._tag === "auth.saml.connectionUpdated" ? [...payload.fields].toSorted() : [],
-          ["authnRequestsSigned", "emailDomains", "name", "ssoUrl"],
+          Option.map(AuditLog.payloadAs(SamlEvents.SamlConnectionUpdatedEvent)(row), (payload) =>
+            [...payload.fields].toSorted(),
+          ),
+          Option.some(["authnRequestsSigned", "emailDomains", "name", "ssoUrl"]),
         );
         // Names, never values.
         assert.notInclude(JSON.stringify(events.map((row) => row.payload)), "secret-looking");

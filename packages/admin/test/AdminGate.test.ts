@@ -23,6 +23,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Admin from "../src/Admin.ts";
+import { type AdminTestEvent, adminTestEvents } from "./support/events.ts";
 import * as AdminAccounts from "../src/AdminAccounts.ts";
 import * as AdminTenants from "../src/AdminTenants.ts";
 import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
@@ -279,12 +280,12 @@ const scenario = (options: {
     const events = yield* AuthEvents.AuthEvents;
     const seen = yield* Ref.make<ReadonlyArray<string>>([]);
     yield* events.stream.pipe(
+      Stream.filter(AuthEvents.is(["auth.admin.actionDenied", "auth.admin.impersonationDenied"])),
       Stream.runForEach((event) =>
-        event._tag === "auth.admin.actionDenied"
-          ? Ref.update(seen, (all) => [...all, event.action])
-          : event._tag === "auth.admin.impersonationDenied"
-            ? Ref.update(seen, (all) => [...all, event.operation])
-            : Effect.void,
+        Ref.update(seen, (all) => [
+          ...all,
+          event._tag === "auth.admin.actionDenied" ? event.action : event.operation,
+        ]),
       ),
       Effect.forkScoped({ startImmediately: true }),
     );
@@ -351,8 +352,9 @@ describe("the admin gate (plan 13)", () => {
   it.effect("BEH-EA-224: a denial names the target or organization the call named", () =>
     Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;
-      const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+      const seen = yield* Ref.make<ReadonlyArray<AdminTestEvent>>([]);
       yield* events.stream.pipe(
+        Stream.filter(AuthEvents.is(adminTestEvents)),
         Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
         Effect.forkScoped({ startImmediately: true }),
       );
@@ -403,8 +405,9 @@ describe("the admin gate (plan 13)", () => {
         const sessions = yield* Sessions.Sessions;
         const admin = yield* Admin.Admin;
         const events = yield* AuthEvents.AuthEvents;
-        const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+        const seen = yield* Ref.make<ReadonlyArray<AdminTestEvent>>([]);
         yield* events.stream.pipe(
+          Stream.filter(AuthEvents.is(adminTestEvents)),
           Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
           Effect.forkScoped({ startImmediately: true }),
         );
@@ -436,8 +439,9 @@ describe("the admin gate (plan 13)", () => {
         const admin = yield* Admin.Admin;
         const records = yield* ImpersonationRecords.ImpersonationRecords;
         const events = yield* AuthEvents.AuthEvents;
-        const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+        const seen = yield* Ref.make<ReadonlyArray<AdminTestEvent>>([]);
         yield* events.stream.pipe(
+          Stream.filter(AuthEvents.is(adminTestEvents)),
           Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
           Effect.forkScoped({ startImmediately: true }),
         );

@@ -110,7 +110,7 @@ export interface AppHandle {
   /** Runs `effect` against the exact services `handler` runs on (the same memo map). */
   readonly withContext: <A, E>(effect: Effect.Effect<A, E, Layer.Success<AppLayer>>) => Promise<A>;
   readonly sentMail: Effect.Effect<ReadonlyArray<Mailer.MailMessage>>;
-  readonly publishedEvents: Effect.Effect<ReadonlyArray<AuthEvents.AuthEvent>>;
+  readonly publishedEvents: Effect.Effect<ReadonlyArray<AuthEvents.PublishedAny>>;
   /** Releases the built layer; the World does this when the scenario ends. */
   readonly close: Effect.Effect<void>;
 }
@@ -119,7 +119,7 @@ const buildApp = (options: AppOptions = {}): AppHandle => {
   const { layer: mailer, sent } = makeCapturingMailer();
   // Subscribing to the real `AuthEvents` stream, as `PasswordWorld` does: the capture cell
   // lives outside the layer graph so a step can read it after the graph is sealed.
-  const events = Effect.runSync(Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]));
+  const events = Effect.runSync(Ref.make<ReadonlyArray<AuthEvents.PublishedAny>>([]));
   const eventsLayer = Layer.effectDiscard(
     Effect.gen(function* () {
       const authEvents = yield* AuthEvents.AuthEvents;
@@ -127,6 +127,7 @@ const buildApp = (options: AppOptions = {}): AppHandle => {
       // would register only once the forked fiber first ran, and could miss an early event.
       const subscription = yield* authEvents.subscribe;
       yield* subscription.pipe(
+        // Every event, core's and the organization plugin's (ADR-EA-049): this world reads them back by tag.
         Stream.runForEach((event) => Ref.update(events, (existing) => [...existing, event])),
         Effect.forkScoped,
       );

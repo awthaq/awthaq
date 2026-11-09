@@ -172,6 +172,7 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
       exposes: [],
       config: [],
       userFields: [],
+      events: [],
     };
     yield* updateConfig({ auth: { ...passwordAndRoles, manifest }, config: goodConfig });
   });

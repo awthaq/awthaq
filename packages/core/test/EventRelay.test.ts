@@ -8,6 +8,7 @@ import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -16,14 +17,16 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
+import * as EventDefinition from "../src/EventDefinition.ts";
 import * as EventRelay from "../src/EventRelay.ts";
-import type { Published } from "../src/AuthEventSchemas.ts";
+import type { PublishedAny } from "../src/AuthEventSchemas.ts";
 import * as Users from "../src/Users.ts";
 
 /** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
@@ -36,7 +39,7 @@ const makeTransport = Effect.gen(function* () {
   const batches = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
   const failing = yield* Ref.make(false);
   const transport: EventRelay.EventTransportShape = {
-    deliver: (events: ReadonlyArray<Published>) =>
+    deliver: (events: ReadonlyArray<PublishedAny>) =>
       Effect.gen(function* () {
         if (yield* Ref.get(failing)) return yield* new BrokerUnavailable();
         yield* Ref.update(batches, (all) => [...all, events.map((event) => event.eventId)]);
@@ -187,14 +190,14 @@ const suite = (
             const events = yield* AuthEvents.AuthEvents;
             yield* publishN(events, 2);
             yield* events.publish({
-              _tag: "auth.user.emailVerified",
+              _tag: "auth.user.created",
               userId: Users.UserId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
             });
             yield* TestClock.adjust(SETTLE);
 
             assert.strictEqual(
               yield* EventRelay.drainOnce(
-                options("only-verified", { eventTag: "auth.user.emailVerified" }),
+                options("only-created", { eventTag: "auth.user.created" }),
               ),
               1,
             );
@@ -202,7 +205,7 @@ const suite = (
             assert.strictEqual(yield* EventRelay.drainOnce(options("everything")), 3);
             assert.strictEqual(
               yield* EventRelay.drainOnce(
-                options("only-verified", { eventTag: "auth.user.emailVerified" }),
+                options("only-created", { eventTag: "auth.user.created" }),
               ),
               0,
             );
@@ -300,6 +303,48 @@ const suite = (
             );
           }).pipe(Effect.provide(base)),
         ),
+    );
+
+    // ADR-EA-030 decision 5 as amended by ADR-EA-049: a row core does not define is relayed as stored.
+    it.effect("relays a row whose tag core does not define, unchanged", () =>
+      Effect.gen(function* () {
+        const LocalDef = EventDefinition.define(
+          "auth.local.happened",
+          { userId: EventDefinition.UserId, note: Schema.String },
+          { actor: EventDefinition.Actor.field("userId"), pii: ["note"] },
+        );
+        const auditLog = yield* AuditLog.AuditLog;
+        const seen = yield* Ref.make<ReadonlyArray<PublishedAny>>([]);
+        const userId = Users.UserId("u-relay");
+        yield* auditLog.record(
+          {
+            _tag: "auth.local.happened",
+            userId,
+            note: "n",
+            eventId: "018f0000-0000-7000-8000-000000000001",
+            occurredAt: yield* DateTime.now,
+            correlationId: Option.none(),
+            traceId: Option.none(),
+            spanId: Option.none(),
+            ip: Option.none(),
+            userAgent: Option.none(),
+            tenantId: Option.none(),
+          },
+          LocalDef,
+        );
+        yield* TestClock.adjust(SETTLE);
+        const relayed = yield* EventRelay.drainOnce(options()).pipe(
+          Effect.provideService(
+            EventRelay.EventTransport,
+            EventRelay.EventTransport.of({ deliver: (events) => Ref.set(seen, events) }),
+          ),
+        );
+        assert.strictEqual(relayed, 1);
+        const [event] = yield* Ref.get(seen);
+        assert.strictEqual(event?._tag, "auth.local.happened");
+        assert.isTrue(event !== undefined && Schema.is(LocalDef)(event));
+        assert.strictEqual(event?.eventId, "018f0000-0000-7000-8000-000000000001");
+      }).pipe(Effect.provide(base)),
     );
   });
 

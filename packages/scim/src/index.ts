@@ -10,4 +10,5 @@
 export * as Scim from "./Scim.ts";
 export * as ScimApi from "./ScimApi.ts";
 export * as ScimConnections from "./ScimConnections.ts";
+export * as ScimEvents from "./ScimEvents.ts";
 export * as ScimRecords from "./ScimRecords.ts";

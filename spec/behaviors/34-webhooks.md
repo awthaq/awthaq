@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-34 |
-> | Revision | 1.7 |
-> | Effective Date | 2026-11-08 |
+> | Revision | 1.8 |
+> | Effective Date | 2026-11-09 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release, the first-party opt-in `@awthaq/webhooks` plugin over the event relay (CWM-004, MAPS-010; [ADR-EA-030](../decisions/030-event-delivery-outbox-relay.md) Decision 7) <br> 1.1 (2026-09-29): per-tenant endpoints and the tenant on the event envelope (BEH-EA-308, 300), the test ping (301), audit events for administrative mutations (302) connection pinning against DNS rebinding (303) and per-endpoint custom headers (304) <br> 1.2 (2026-10-13): The admin rate-limit rule is declared, registered and tunable with `RateLimits.overrides` (plan 06) <br> 1.3 (2026-10-13): BEH-EA-277 reads the personal-data fields each event declares instead of `PII_FIELDS` (plan 09) <br> 1.4 (2026-10-13): the ban note and the organization suspension note are no longer in `data` (plan 09 phase 4) <br> 1.5 (2026-10-13): BEH-EA-309: administration is scoped by the store, not the service; relay and worker methods take a CrossTenant witness (plan 05 phase 2) <br> 1.6 (2026-10-13): Sealed columns and the store-outage policy as shipped (plan 05 phase 4) <br> 1.7 (2026-11-08): BEH-EA-281/309: `maxEndpoints` holds under concurrency, decided by the store with the insert per tenant; an administrator's edit and the worker's failure count no longer overwrite each other, and an endpoint's deletion takes its deliveries in one transaction (architecture plan 25 ticket 16) |
+> | Change History | 1.0 (2026-09-29): Initial release, the first-party opt-in `@awthaq/webhooks` plugin over the event relay (CWM-004, MAPS-010; [ADR-EA-030](../decisions/030-event-delivery-outbox-relay.md) Decision 7) <br> 1.1 (2026-09-29): per-tenant endpoints and the tenant on the event envelope (BEH-EA-308, 300), the test ping (301), audit events for administrative mutations (302) connection pinning against DNS rebinding (303) and per-endpoint custom headers (304) <br> 1.2 (2026-10-13): The admin rate-limit rule is declared, registered and tunable with `RateLimits.overrides` (plan 06) <br> 1.3 (2026-10-13): BEH-EA-277 reads the personal-data fields each event declares instead of `PII_FIELDS` (plan 09) <br> 1.4 (2026-10-13): the ban note and the organization suspension note are no longer in `data` (plan 09 phase 4) <br> 1.5 (2026-10-13): BEH-EA-309: administration is scoped by the store, not the service; relay and worker methods take a CrossTenant witness (plan 05 phase 2) <br> 1.6 (2026-10-13): Sealed columns and the store-outage policy as shipped (plan 05 phase 4) <br> 1.7 (2026-11-08): BEH-EA-281/309: `maxEndpoints` holds under concurrency, decided by the store with the insert per tenant; an administrator's edit and the worker's failure count no longer overwrite each other, and an endpoint's deletion takes its deliveries in one transaction (architecture plan 25 ticket 16) <br> 1.8 (2026-11-09): BEH-EA-277/278: filters, payloads and the queue read the composition's event registry; an event whose tag that registry does not hold is not delivered (ADR-EA-049, architecture plan 29) |
 ---
 
 > `@awthaq/webhooks` composes as `Auth.make([..., Webhooks])` for the administrator's API and `Webhooks.background()` for the delivery machinery. It is a consumer of the event relay ([BEH-EA-100](13-events.md)): it never widens the in-process bus, and it puts no network call on any operation's path. Everything below is what a receiver (a billing service, a CRM sync, a migrated Clerk webhook handler) relies on, and the safety rules that keep an administrator-supplied URL from becoming a way into the network.
@@ -68,10 +68,14 @@ REQUIREMENT: The delivered document MUST be `{ version, type, id, timestamp,
              set (default off), and MUST drop any field whose name reads as a
              credential or contact detail (`email`, `phone`, `password`,
              `token`, `secret`, `hash`, `authorization`, `cookie`) whatever an
-             event schema declares.
+             event schema declares. An event whose tag the composition's
+             event registry does not hold MUST NOT be delivered: its
+             personal-data fields are unknown.
 ```
 
 An event is already identifiers, never contact details ([ADR-EA-029](../decisions/029-event-pii-posture.md)); this rule keeps that true when the reader is a third party and a future event is added carelessly. The delivery log stores the same body only so a delivery can be retried; it is never returned by the API and is removed with the endpoint and, per [BEH-EA-282](34-webhooks.md#beh-ea-282-the-delivery-log-takes-part-in-erasure-and-export-and-is-pruned), with the user it names.
+
+*As shipped (ADR-EA-049):* the personal-data fields come from the composition's event registry (`EventRegistry`, core's definitions plus every composed plugin's, provided by `auth.eventsLayer`; `AuthHost.layer` and `TestAuth.layer` provide it). A row whose tag that registry lacks (its plugin removed) is not enqueued, so a `*` endpoint fails closed rather than receive fields nobody declared.
 
 _Previous: [BEH-EA-276](34-webhooks.md#beh-ea-276-each-endpoint-has-its-own-secret-shown-once-stored-sealed-and-rotatable-with-an-overlap) | Next: [BEH-EA-278](34-webhooks.md#beh-ea-278-an-endpoint-subscribes-to-named-events-and-hears-only-what-happens-after-it-exists)_
 
@@ -81,7 +85,8 @@ _Previous: [BEH-EA-276](34-webhooks.md#beh-ea-276-each-endpoint-has-its-own-secr
 REQUIREMENT: An endpoint MUST list the event tags it wants: exact tags
              (`auth.user.signedIn`), families (`auth.organization.*`) or `*`;
              the list MUST be non-empty, and every pattern MUST match at
-             least one tag the library can publish (a typo is refused at
+             least one tag of the composition's event registry (core's
+             events plus every composed plugin's; a typo is refused at
              registration, not silently delivered nowhere). An event MUST be
              queued only for endpoints that are enabled, whose filter matches
              it, and which were registered no later than the event occurred:

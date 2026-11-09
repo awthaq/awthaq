@@ -18,6 +18,10 @@
 // PV-241/BEH-EA-111: `--rules` prints `manifest.rateLimits`, the rate-limit rules plugins declare
 // statically (`AuthPlugin.Service`'s `rateLimits`): the defaults, which a configurable plugin may
 // tune at build.
+//
+// ADR-EA-049: `--events` prints `manifest.events`, every event of the composition (core's, then each
+// plugin's declared `events` in link order) with its owner, who acts, its personal-data fields and its
+// lane (an attempt is recorded whether or not its unit of work commits).
 
 import type { TenantScoped } from "@awthaq/sql";
 import * as Duration from "effect/Duration";
@@ -204,13 +208,57 @@ export const renderRules = (rows: ReadonlyArray<RuleRow>) => {
   );
 };
 
-/** `plugin list` (ids in link order), `--graph` with edges, ports and taps, `--hooks` with the resolved tap chains, or `--rules` with the declared rate limits, as text, JSON or DOT. */
+/** ADR-EA-049: one event of the composition, its actor rendered (`userId`, `subjectId (user:)`, `-` for none). */
+export interface EventRow {
+  readonly tag: string;
+  readonly owner: string;
+  readonly actor: string;
+  readonly pii: ReadonlyArray<string>;
+  readonly attempt: boolean;
+}
+
+export const events = (auth: LoadedAuth): ReadonlyArray<EventRow> =>
+  auth.manifest.events.map((event) => ({
+    tag: event.tag,
+    owner: event.owner,
+    actor:
+      event.actor._tag === "None"
+        ? "-"
+        : event.actor._tag === "Field"
+          ? event.actor.field
+          : `${event.actor.field} (${event.actor.prefix})`,
+    pii: event.pii,
+    attempt: event.attempt,
+  }));
+
+const EVENT_HEADER = ["TAG", "OWNER", "ACTOR", "PII", "ATTEMPT"];
+
+export const renderEvents = (rows: ReadonlyArray<EventRow>) => {
+  const cells = rows.map((row) => [
+    row.tag,
+    row.owner,
+    row.actor,
+    row.pii.length === 0 ? "-" : row.pii.join(","),
+    row.attempt ? "yes" : "no",
+  ]);
+  const widths = EVENT_HEADER.map((title, column) =>
+    Math.max(title.length, ...cells.map((cell) => (cell[column] ?? "").length)),
+  );
+  return [EVENT_HEADER, ...cells].map((cell) =>
+    cell
+      .map((text, column) => (column === cell.length - 1 ? text : text.padEnd(widths[column] ?? 0)))
+      .join("  "),
+  );
+};
+
+/** `plugin list` (ids in link order), `--graph` with edges, ports and taps, `--hooks` with the resolved tap chains, `--rules` with the declared rate limits, or `--events` with the composition's events, as text, JSON or DOT. */
 export const show = (
   auth: LoadedAuth,
   options: {
     readonly graph: boolean;
     readonly hooks?: boolean | undefined;
     readonly rules?: boolean | undefined;
+    readonly events?: boolean | undefined;
     readonly format: Format;
   },
 ) =>
@@ -223,6 +271,10 @@ export const show = (
     if (options.rules === true) {
       if (options.format === "json" || out.json) return yield* out.document(rules(auth));
       return yield* Effect.forEach(renderRules(rules(auth)), out.line, { discard: true });
+    }
+    if (options.events === true) {
+      if (options.format === "json" || out.json) return yield* out.document(events(auth));
+      return yield* Effect.forEach(renderEvents(events(auth)), out.line, { discard: true });
     }
     const nodes = graph(auth);
     if (options.format === "dot") {

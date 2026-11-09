@@ -34,17 +34,22 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import { Defects } from "@awthaq/ports";
 import { AuditLog } from "./AuditLog.ts";
-import type { AuthEventTag } from "./AuthEventSchemas.ts";
+import { EventRegistry } from "./AuthEventSchemas.ts";
 import { RetentionRegistry } from "./RetentionRegistry.ts";
 import { Sessions } from "./Sessions.ts";
 import { Verification } from "./Verification.ts";
 
 export * from "./RetentionRegistry.ts";
 
-/** Rows of these event tags are kept for `keepFor`, whatever `AuditRetention.default` says. */
+/**
+ * Rows of these event tags are kept for `keepFor`, whatever `AuditRetention.default` says. A tag must be one of the
+ * composition's events (`AuthEvents.EventRegistry`, ADR-EA-049: provide `auth.eventsLayer` to name a plugin's): any
+ * other is a configuration defect, so a typo cannot silently keep a class of rows forever.
+ */
 export interface AuditRetentionRule {
-  readonly tags: ReadonlyArray<AuthEventTag>;
+  readonly tags: ReadonlyArray<string>;
   readonly keepFor: Duration.Duration;
 }
 
@@ -104,6 +109,20 @@ export interface SweepReport {
   }>;
 }
 
+/** ADR-EA-049: every rule tag is an event of the composition; otherwise the configuration is refused, naming the tag. */
+const checkRuleTags = (settings: RetentionConfigShape) =>
+  Effect.flatMap(EventRegistry, (events) => {
+    const unknown = settings.auditLog.rules
+      .flatMap((rule) => rule.tags)
+      .find((tag) => !events.isTag(tag));
+    return unknown === undefined
+      ? Effect.void
+      : Defects.invalidConfiguration(
+          "Retention.auditLog.rules",
+          `awthaq: the retention rule tag "${unknown}" is not an event of this composition (provide auth.eventsLayer for a plugin's events)`,
+        );
+  });
+
 const cutoff = (now: DateTime.Utc, window: Duration.Duration): DateTime.Utc =>
   DateTime.subtractDuration(now, window);
 
@@ -114,6 +133,7 @@ const cutoff = (now: DateTime.Utc, window: Duration.Duration): DateTime.Utc =>
  */
 export const sweep = Effect.gen(function* () {
   const settings = yield* RetentionConfig;
+  yield* checkRuleTags(settings);
   const sessions = yield* Sessions;
   const verification = yield* Verification;
   const auditLog = yield* AuditLog;
@@ -128,7 +148,7 @@ export const sweep = Effect.gen(function* () {
   // One delete per rule (a tag named by an earlier rule is left to it), then the default
   // window over every tag no rule named.
   let auditRowsDeleted = 0;
-  const named: Array<AuthEventTag> = [];
+  const named: Array<string> = [];
   for (const rule of settings.auditLog.rules) {
     const tags = rule.tags.filter((tag) => !named.includes(tag));
     named.push(...tags);
@@ -179,6 +199,8 @@ export const sweep = Effect.gen(function* () {
 export const layerScheduled = Layer.effectDiscard(
   Effect.gen(function* () {
     const settings = yield* RetentionConfig;
+    // Refused at build, loudly: the tick below logs and retries a failed sweep, which would hide a typo.
+    yield* checkRuleTags(settings);
     const tick = sweep.pipe(
       Effect.tap((report) => Effect.logInfo("awthaq.retention.sweep", report)),
       Effect.catchCause((cause) => Effect.logError("awthaq.retention.sweep.failed", cause)),

@@ -838,7 +838,7 @@ describe("Assertions", () => {
             const arranged = yield* arrange(kind, { counter: 5 });
             const seen = yield* Effect.forkChild(
               events.stream.pipe(
-                Stream.filter((event) => event._tag === "auth.passkey.counterAnomaly"),
+                Stream.filter(AuthEvents.is("auth.passkey.counterAnomaly")),
                 Stream.take(1),
                 Stream.runCollect,
               ),

@@ -70,11 +70,8 @@ describe("the gate is fail-closed", () => {
         const records = yield* WebhookRecords.WebhookRecords;
         const seen = yield* Ref.make<ReadonlyArray<string>>([]);
         yield* events.stream.pipe(
-          Stream.runForEach((event) =>
-            event._tag === "auth.admin.actionDenied"
-              ? Ref.update(seen, (all) => [...all, event.action])
-              : Effect.void,
-          ),
+          Stream.filter(AuthEvents.is("auth.admin.actionDenied")),
+          Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event.action])),
           Effect.forkScoped({ startImmediately: true }),
         );
         const denied = [

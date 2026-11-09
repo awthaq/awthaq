@@ -13,4 +13,5 @@
 export * as ApiKey from "./ApiKey.ts";
 export * as ApiKeyApi from "./ApiKeyApi.ts";
 export * as ApiKeyClientRecords from "./ApiKeyClientRecords.ts";
+export * as ApiKeyEvents from "./ApiKeyEvents.ts";
 export * as ApiKeyRecords from "./ApiKeyRecords.ts";

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-035 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-11-08 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-11-09 |
 > | Status | Accepted — implemented for `users` (core `UserFields`, `AuthPlugin`'s `userFields`, `Auth.make`'s generated migrations, `Users.getFields`/`setFields`/`typedFields`, the profile endpoint, the client helper); `Account` and `Session` extension not built |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (SAM-004, BE-007; decision A of the plan) <br> 1.1 (2026-11-08): Decision 5: `AuthHost.layer` (and therefore `TestAuth.layer`) provides the registry (ADR-EA-044, architecture plan 15) |
+> | Change History | 1.0 (2026-09-29): Initial release (SAM-004, BE-007; decision A of the plan) <br> 1.1 (2026-11-08): Decision 5: `AuthHost.layer` (and therefore `TestAuth.layer`) provides the registry (ADR-EA-044, architecture plan 15) <br> 1.2 (2026-11-09): Related: ADR-EA-049, the same declared-extension pattern carries event definitions (architecture plan 29) |
 
 ---
 
@@ -45,4 +45,4 @@ Apps migrating from Supabase (`raw_user_meta_data`, `raw_app_meta_data`) or bett
 
 **Negative**: the declared fields are read with a second query (`getFields`), not on `UserRecord`; an added field is a migration that must sort last on a migrated database; `updatedAt` is not bumped by `setFields`; scalar-only, so structured data still belongs in a plugin's own table or in `metadata`. `Account` and `Session` extension (BEH-EA-048 names them too) has no implementation.
 
-_Related: [BEH-EA-040](../behaviors/05-persistence-stratum.md), [BEH-EA-048](../behaviors/06-domain-users-accounts.md), [ADR-EA-028](028-infrastructure-error-policy.md)._
+_Related: [BEH-EA-040](../behaviors/05-persistence-stratum.md), [BEH-EA-048](../behaviors/06-domain-users-accounts.md), [ADR-EA-028](028-infrastructure-error-policy.md), [ADR-EA-049](049-plugins-own-event-definitions.md) (the same declared-extension pattern carries event definitions)._

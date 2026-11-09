@@ -59,7 +59,7 @@ export interface Faults {
 export interface Probes {
   readonly faults: Ref.Ref<Faults>;
   readonly sightings: Ref.Ref<ReadonlyArray<TransactionSighting>>;
-  readonly events: Ref.Ref<ReadonlyArray<AuthEvents.Published>>;
+  readonly events: Ref.Ref<ReadonlyArray<AuthEvents.PublishedAny>>;
 }
 
 // BEH-EA-048/254: the composition carries one plugin, `profile`, that declares user fields and
@@ -187,7 +187,7 @@ const makeProbes = () => ({
     allowZeroAccounts: false,
   }),
   sightings: Ref.makeUnsafe<ReadonlyArray<TransactionSighting>>([]),
-  events: Ref.makeUnsafe<ReadonlyArray<AuthEvents.Published>>([]),
+  events: Ref.makeUnsafe<ReadonlyArray<AuthEvents.PublishedAny>>([]),
 });
 
 const built = Auth.make([Profile, Password.Password]);

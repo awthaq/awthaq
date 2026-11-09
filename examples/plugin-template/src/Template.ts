@@ -7,7 +7,15 @@
 // through this file top to bottom; `test/Template.test.ts` keeps it honest.
 
 import { Api } from "@awthaq/api";
-import { CurrentUser, AuthPlugin, HookPoint, Migrations, RateLimits } from "@awthaq/core";
+import {
+  AuthEvents,
+  AuthPlugin,
+  CurrentUser,
+  HookPoint,
+  Migrations,
+  RateLimits,
+  Users,
+} from "@awthaq/core";
 import { RateLimiter, Tenant } from "@awthaq/ports";
 import { Models as SqlModels, SqlStore, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
@@ -23,6 +31,7 @@ import * as Schema from "effect/Schema";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
+import * as NotesEvents from "./NotesEvents.ts";
 import * as TemplateApi from "./TemplateApi.ts";
 
 // ---- config: a Context.Reference with a default (BEH-EA-017) -----------------------
@@ -384,6 +393,9 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
   // The hook points this plugin owns (`BeforeCreateNote`/`AfterCreateNote`): a plugin layer that requires a
   // point it does not declare here does not compile, and `TestAuth.layer` provides the declared ones.
   hookPoints: NotesHooksLive,
+  // The events this plugin publishes (ADR-EA-049), defined in `NotesEvents.ts`: `Auth.make` composes them, and
+  // `TestAuth.layer` fails a test that emits an event not listed here.
+  events: NotesEvents.events,
 }) {
   static readonly layer = AuthPlugin.layer(Notes, {
     // The port the budget consumes through: declared, and checked for completeness by the compiler.
@@ -398,6 +410,7 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
       const settingsNow = Tenant.configInForce(NotesConfig, yield* NotesConfig);
       const beforeCreate = yield* BeforeCreateNote;
       const afterCreate = yield* AfterCreateNote;
+      const events = yield* AuthEvents.AuthEvents;
       // One budget, opened once: `limits.spend("createByUser", { userId })` is checked against the table
       // above (an unknown name or a missing field is a compile error), and a breach is published, logged,
       // counted and answered with `Api.RateLimited` (429). No annotation or comment is needed here.
@@ -428,6 +441,12 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
             ),
           );
         yield* afterCreate.run({ owner, text: vetoed.text, noteId: record.id });
+        // The audit row (actor: the caller) and every subscriber; `_tag` is filled in by the definition.
+        // `Users.UserId` is a `Brand.nominal` constructor, not an assertion.
+        yield* events.emit(NotesEvents.NoteCreatedEvent, {
+          userId: Users.UserId(caller.ref.id),
+          noteId: record.id,
+        });
         return record;
       });
 

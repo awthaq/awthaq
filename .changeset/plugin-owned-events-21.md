@@ -1,0 +1,8 @@
+---
+"@awthaq/core": minor
+"@awthaq/organization": minor
+---
+
+`@awthaq/organization` owns its events (ADR-EA-049): the 25 `auth.organization.*` definitions and `auth.admin.organization{Suspended, Unsuspended}` moved from `@awthaq/core` to `OrganizationEvents`, are declared on the plugin's `events`, and are published with `AuthEvents.emit` by the plugin's system modules and its authorization primitive. Tags, payloads, actors, personal-data fields and attempt lanes are unchanged: `auth.organization.permissionDenied` keeps `attempt: true`, and a suspension row now records `meta.pii: ["reason"]` (rows written before keep falling back to `AuditLog.PRE_ADR_049_PII`). Core now defines 24 events, none of which declares personal data.
+
+Migration: the 25 `AuthEvents.Organization*Event` constants, `AuthEvents.AdminOrganizationSuspendedEvent` and `AuthEvents.AdminOrganizationUnsuspendedEvent` → `OrganizationEvents.<same name>` from `@awthaq/organization`. `AuthEvents.AuthEventTag`/`AuthEvent` no longer include `auth.organization.*` or the two suspension tags: subscribe with `AuthEvents.on(OrganizationEvents.OrganizationCreatedEvent, …)`, narrow the stream with `AuthEvents.is(OrganizationEvents.OrganizationCreatedEvent)`, decode an audit row with `AuditLog.payloadAs(OrganizationEvents.OrganizationCreatedEvent)`, and replace `AuthEvents.payloadOf(e)` with `Schema.decodeUnknownSync(OrganizationEvents.OrganizationCreatedEvent)(e)`. A module that uses an organization system module (the connection store, the directory) outside the `Organization` plugin must compose the plugin, or its events are undeclared. ADR-EA-049, BEH-EA-101.

@@ -2,6 +2,7 @@
 // organization row's lifecycle: creating one atomically with its creator's membership, updating, deleting
 // with its cascade, and a platform suspension that runs a veto and an observe point (BEH-EA-237).
 import { Auth, HookPoint, Users } from "@awthaq/core";
+import { AuditLogStore } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import { Rendezvous, TestAuth, TestSql } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
@@ -9,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
@@ -33,6 +35,15 @@ const buildLayer = (
 const application = OrganizationActor.application("OrganizationDirectory.test");
 const admin = OrganizationActor.platformAdmin(Users.UserId("admin-1"));
 const owner = Users.UserId("owner-1");
+
+/** The stored row's envelope: the personal-data fields it recorded, if any. */
+const decodeStored = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      meta: Schema.optional(Schema.Struct({ pii: Schema.optional(Schema.Array(Schema.String)) })),
+    }),
+  ),
+);
 
 const flipTag = <A, E extends { readonly _tag: string }, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
@@ -210,6 +221,34 @@ describe("OrganizationDirectory.suspend and reinstate (BEH-EA-237)", () => {
       assert.strictEqual(yield* flipTag(directory.requireActive(org.id)), "OrganizationNotFound");
       yield* directory.reinstate(admin, { organizationId: org.id });
       assert.isTrue(Option.isSome(yield* directory.findActive(org.id)));
+    }).pipe(Effect.provide(buildLayer())),
+  );
+
+  // ADR-EA-049: the suspension event belongs to this plugin now. A row written through its definition records
+  // the declared operator note (`meta.pii`), so erasure scrubs it without the frozen pre-ADR-EA-049 table;
+  // the reinstatement declares none and records no `meta.pii`.
+  it.effect("a suspension row written by the plugin's definition records meta.pii: [reason]", () =>
+    Effect.gen(function* () {
+      const directory = yield* OrganizationDirectory.OrganizationDirectory;
+      const store = yield* AuditLogStore.AuditLogStore;
+      const org = yield* make();
+      yield* directory.suspend(admin, { organizationId: org.id, reason: "unpaid invoice" });
+      yield* directory.reinstate(admin, { organizationId: org.id });
+      const rows = yield* store.select(
+        {
+          eventTag: Option.none(),
+          actorUserId: Option.none(),
+          from: Option.none(),
+          to: Option.none(),
+        },
+        "authoritative",
+      );
+      const piiOf = (tag: string) =>
+        rows
+          .filter((row) => row.eventTag === tag)
+          .map((row) => decodeStored(row.payloadJson).meta?.pii);
+      assert.deepStrictEqual(piiOf("auth.admin.organizationSuspended"), [["reason"]]);
+      assert.deepStrictEqual(piiOf("auth.admin.organizationUnsuspended"), [undefined]);
     }).pipe(Effect.provide(buildLayer())),
   );
 

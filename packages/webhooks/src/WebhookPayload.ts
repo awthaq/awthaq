@@ -66,8 +66,16 @@ export interface WebhookBody {
   readonly client?: { readonly ip?: string; readonly userAgent?: string };
 }
 
-export const toBody = (event: AuthEvents.Published, options: PayloadOptions): WebhookBody => {
-  const scrubbed = new Set(AuthEvents.piiFieldsOf(event._tag));
+/**
+ * The delivered document. `pii` is the event's declared personal-data fields, from the composition's registry
+ * (`AuthEvents.EventRegistry`'s `piiFieldsOf`, ADR-EA-049): they are never sent (BEH-EA-277).
+ */
+export const toBody = (
+  event: AuthEvents.PublishedAny,
+  options: PayloadOptions,
+  pii: ReadonlyArray<string>,
+): WebhookBody => {
+  const scrubbed = new Set(pii);
   const data: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(event)) {
     if (ENVELOPE_FIELDS.has(key) || scrubbed.has(key) || NEVER_SENT.test(key)) continue;
@@ -100,7 +108,7 @@ export const toBody = (event: AuthEvents.Published, options: PayloadOptions): We
 };
 
 /** The user an event is about, for erasure and export of the delivery log: the first identifier field that names a user. */
-export const subjectUserId = (event: AuthEvents.Published): string | undefined => {
+export const subjectUserId = (event: AuthEvents.PublishedAny): string | undefined => {
   for (const key of ["userId", "targetUserId", "adminUserId"]) {
     const value: unknown = Reflect.get(event, key);
     if (typeof value === "string") return value;
@@ -147,9 +155,6 @@ export const testBody = (input: {
 
 // ---- filters ---------------------------------------------------------------------------------
 
-/** Every tag the library can publish. */
-export const knownEventTags: ReadonlyArray<string> = AuthEvents.eventTags;
-
 /** `*`, a family `prefix.*`, or an exact tag. */
 export const patternMatches = (pattern: string, tag: string): boolean =>
   pattern === "*" ||
@@ -158,6 +163,12 @@ export const patternMatches = (pattern: string, tag: string): boolean =>
 export const matchesAny = (patterns: ReadonlyArray<string>, tag: string): boolean =>
   patterns.some((pattern) => patternMatches(pattern, tag));
 
-/** The first pattern that matches no publishable tag (a typo), or `undefined` when all do. */
-export const unknownPattern = (patterns: ReadonlyArray<string>): string | undefined =>
-  patterns.find((pattern) => !knownEventTags.some((tag) => patternMatches(pattern, tag)));
+/**
+ * The first pattern that matches none of `tags` (a typo, or a family whose plugin is not composed), or
+ * `undefined` when all do. `tags` is the composition's registry (`AuthEvents.EventRegistry`'s `tags`, ADR-EA-049).
+ */
+export const unknownPattern = (
+  patterns: ReadonlyArray<string>,
+  tags: ReadonlyArray<string>,
+): string | undefined =>
+  patterns.find((pattern) => !tags.some((tag) => patternMatches(pattern, tag)));

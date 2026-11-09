@@ -537,10 +537,9 @@ describe("the chain refuses, uniformly", () => {
         const events = yield* AuthEvents.AuthEvents;
         const seen = yield* Ref.make<ReadonlyArray<string>>([]);
         yield* events.stream.pipe(
+          Stream.filter(AuthEvents.is("auth.user.signInFailed")),
           Stream.runForEach((event) =>
-            event._tag === "auth.user.signInFailed"
-              ? Ref.update(seen, (all) => [...all, `${event.strategy}|${event.reason}`])
-              : Effect.void,
+            Ref.update(seen, (all) => [...all, `${event.strategy}|${event.reason}`]),
           ),
           Effect.forkScoped({ startImmediately: true }),
         );
