@@ -107,8 +107,11 @@ export const emptySpec: AppSpec = {
   rateLimiter: undefined,
 };
 
+/** The composition every cross-cutting scenario runs: core plus the password plugin. Its `events` is the registry (ADR-EA-049). */
+export const composition = Auth.make([Password.Password]);
+
 const appLayer = (spec: AppSpec) =>
-  TestAuth.layer(Auth.make([Password.Password]), {
+  TestAuth.layer(composition, {
     services: Layer.mergeAll(
       NoBreachHttpClient,
       Password.config(spec.passwordConfig),

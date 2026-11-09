@@ -237,3 +237,14 @@ Feature: Plugin Composition and Validate<P>
       When "Auth.make" runs Kahn's algorithm over the composed "dependsOn" graph
       Then a cycle is detected
       And the report names the full cycle path "A" -> "B" -> "C" -> "A"
+
+  # BEH-EA-346 — spec/behaviors/02-plugin-composition-validate.md
+  # A runtime check, like BEH-EA-016's: a tag is an identity, refused at Auth.make like a duplicate group id.
+  @BEH-EA-346
+  Rule: Auth.make composes event definitions and refuses a duplicate tag
+
+    @REQ-EA-1513
+    Scenario: Auth.make refuses two declarations of one event tag
+      Given two plugins that both declare the event tag "auth.dup.happened"
+      When they are composed with Auth.make
+      Then the composition is refused with "Auth/EventTagConflict" naming both plugins

@@ -3,15 +3,30 @@
 // to deliver if the guarantee broke. The mutation check for what ESS-001 exists to catch
 // (`PubSub.dropping` reverted to `PubSub.bounded`) is that the publisher-never-awaits
 // scenarios park their publisher at event CAPACITY + 1 and fail on the poll below.
-import { AuditLog, AuthEvents, Sessions, Users } from "@awthaq/core";
+import {
+  AuditLog,
+  Auth,
+  AuthEvents,
+  Erasure,
+  EventDefinition,
+  Sessions,
+  Users,
+} from "@awthaq/core";
 import { SqlTransaction } from "@awthaq/ports";
+import { Roles, RolesEvents } from "@awthaq/roles";
+import { TestAuth } from "@awthaq/test";
+import { role } from "@qadi/core";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import { composition } from "./CrossCuttingApp.ts";
+import { everyFirstPartyPlugin } from "./shared/FirstPartyComposition.ts";
 import {
   errorLogsNamed,
   getProbe,
@@ -27,11 +42,50 @@ import {
   capturedLogs,
 } from "./EventsWorld.ts";
 
-/** A Gherkin-named tag must be one the registry declares; anything else is a typo in the scenario, not a reason to pass. */
+/**
+ * A Gherkin-named tag must be one the world's composed registry declares (ADR-EA-049); anything else is a typo in
+ * the scenario, not a reason to pass. The subscribers here select by tag, so the tag must also be core's.
+ */
 const tagNamed = (tag: string): AuthEvents.AuthEventTag => {
-  if (!AuthEvents.isEventTag(tag)) throw new Error(`"${tag}" is not a declared AuthEvents tag`);
+  if (!composition.events.isTag(tag)) {
+    throw new Error(`"${tag}" is not declared by the composition's event registry`);
+  }
+  if (!AuthEvents.isEventTag(tag)) {
+    throw new Error(`"${tag}" is a plugin's tag: select it with its definition`);
+  }
   return tag;
 };
+
+// ---- ADR-EA-049: compositions other than the world's ----
+
+/** Core and the roles plugin, with a one-role catalog. */
+const rolesComposition = Auth.make([Roles.Roles]);
+const rolesApp = TestAuth.layer(rolesComposition, {
+  services: Roles.config([role({ name: "member", permissions: [] })]),
+});
+
+/** A plugin's event the world's composition does not declare: its plugin is not (or no longer) composed. */
+const NoteAddedEvent = EventDefinition.define(
+  "auth.notes.added",
+  { userId: EventDefinition.UserId, note: Schema.String },
+  { actor: EventDefinition.Actor.field("userId"), pii: ["note"] },
+);
+const NOTE = "asked us to call back after five";
+const NOTE_ROW_ID = "018f0000-0000-7000-8000-00000000f00d";
+
+/** ADR-EA-037 Q8 + ADR-EA-049: the attempt events of a composition of every first-party plugin. */
+const documentedAttemptTags = [
+  "auth.user.signInFailed",
+  "auth.token.replay",
+  "auth.rateLimit.exceeded",
+  "auth.admin.actionDenied",
+  "auth.admin.impersonationDenied",
+  "auth.authz.denied",
+  "auth.twoFactor.challengeFailed",
+  "auth.twoFactor.locked",
+  "auth.deviceAuthorization.denied",
+  "auth.organization.permissionDenied",
+];
 
 const replay = (identifier: string): AuthEvents.AuthEvent => ({
   _tag: "auth.token.replay",
@@ -409,7 +463,7 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
     "the event registry declares {string}, {string}, {string}, and {string}",
     function* (a: string, b: string, c: string, d: string) {
       for (const tag of [a, b, c, d]) {
-        assert.ok(AuthEvents.isEventTag(tag), `"${tag}" is not declared by the event registry`);
+        assert.ok(composition.events.isTag(tag), `"${tag}" is not declared by the event registry`);
       }
       yield* subscribe("watcher", [tagNamed(a), tagNamed(b), tagNamed(c), tagNamed(d)]);
     },
@@ -426,10 +480,10 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
     const seen = yield* Ref.get((yield* getProbe("watcher")).handled);
     assert.equal(seen.length, 2);
     for (const event of seen)
-      assert.ok(AuthEvents.isEventTag(event._tag), `${event._tag} is not declared`);
-    // The audit log holds the same tags, and a value outside the union does not decode.
-    assert.ok((yield* auditRows).every((row) => AuthEvents.isEventTag(row.eventTag)));
-    assert.equal(Schema.is(AuthEvents.AuthEventSchema)({ _tag: "auth.not.declared" }), false);
+      assert.ok(composition.events.isTag(event._tag), `${event._tag} is not declared`);
+    // The audit log holds the same tags, and a value outside the composed set is refused.
+    assert.ok((yield* auditRows).every((row) => composition.events.isTag(row.eventTag)));
+    assert.equal(composition.events.is({ _tag: "auth.not.declared" }), false);
   });
 
   When("the registry's declarations are read for every declared tag", function* () {
@@ -442,23 +496,182 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then(
     "every tag has an actor rule the sample event satisfies and personal-data fields the event carries",
     function* () {
-      // The personal-data fields each tag declares are fields the event carries.
-      for (const member of AuthEvents.AuthEventSchema.members) {
-        const tag = member.fields._tag.ast.literal;
-        assert.ok(typeof tag === "string" && AuthEvents.isEventTag(tag), `${String(tag)}`);
-        const carried = Object.keys(member.fields);
-        for (const field of AuthEvents.piiFieldsOf(tag)) {
-          assert.ok(carried.includes(field), `${tag}: pii field ${field} is not carried`);
-        }
-      }
+      // Every definition the composition holds, core's and the password plugin's, names an actor field and
+      // personal-data fields the event carries (P2/P3), and its free text is declared (P6).
+      assert.ok(composition.events.tags.length > AuthEvents.eventTags.length);
+      assert.deepEqual(
+        EventDefinition.problems(composition.events.definitions, {
+          notPersonal: ["auth.authz.denied.reason"],
+        }),
+        [],
+      );
       // The actor column of each durable row is the actor its event declares.
       const rows = yield* auditRows;
       assert.ok(rows.length >= 3);
       for (const row of rows) {
-        assert.deepEqual(row.actorUserId, AuthEvents.actorOf(row.payload), row.eventTag);
+        assert.deepEqual(
+          row.actorUserId,
+          composition.events.actorOf(AuditLog.toPublished(row)),
+          row.eventTag,
+        );
       }
     },
   );
+
+  // ---- ADR-EA-049: a composition's registry is core's events plus every composed plugin's ----
+
+  Given(
+    "a composition of core and the {string} plugin, which declares {string}",
+    function* (plugin: string, tag: string) {
+      assert.equal(plugin, "roles");
+      const owner = rolesComposition.manifest.events.find((event) => event.tag === tag);
+      assert.equal(owner?.owner, "roles", `"${tag}" is not declared by the roles plugin`);
+      yield* (yield* World).registry.set(rolesComposition.events);
+    },
+  );
+
+  When("a role is assigned to a user", function* () {
+    const { composedRows } = yield* World;
+    const target = Users.UserId("00000000-0000-4000-8000-0000000000a1");
+    const operator = Users.UserId("00000000-0000-4000-8000-0000000000a2");
+    const run = Effect.gen(function* () {
+      const events = yield* AuthEvents.AuthEvents;
+      const stream = yield* events.subscribe;
+      const seen = yield* stream.pipe(
+        Stream.filter(AuthEvents.is(RolesEvents.RolesAssignedEvent)),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      const roles = yield* Roles.Roles;
+      yield* roles.assign(target, "member", { actorId: operator });
+      const delivered = yield* Fiber.join(seen);
+      assert.equal(delivered.length, 1, "the assignment was not delivered on the stream");
+      assert.equal(delivered[0]?.userId, target);
+      return yield* Effect.flatMap(AuditLog.AuditLog, (log) => log.list());
+    }).pipe(TestAuth.withoutRequest, Effect.scoped, Effect.provide(rolesApp), Effect.orDie);
+    yield* composedRows.set(yield* run);
+  });
+
+  Then("an {string} event is published and recorded with its actor", function* (tag: string) {
+    const rows = (yield* (yield* World).composedRows.get).filter((row) => row.eventTag === tag);
+    assert.equal(rows.length, 1, `no single "${tag}" row`);
+    const [row] = rows;
+    if (row === undefined) return;
+    const payload = AuditLog.payloadAs(RolesEvents.RolesAssignedEvent)(row);
+    assert.ok(Option.isSome(payload), "the row does not decode as the roles plugin's definition");
+    // The actor is the operator who assigned the role, not the user who received it.
+    assert.deepEqual(row.actorUserId, Option.some("00000000-0000-4000-8000-0000000000a2"));
+    assert.equal(payload.value.userId, "00000000-0000-4000-8000-0000000000a1");
+  });
+
+  Then("the composition's registry declares {string} beside core's tags", function* (tag: string) {
+    const registry = yield* (yield* World).registry.get;
+    assert.equal(registry.origin, "composition");
+    assert.ok(registry.isTag(tag), `"${tag}" is not declared`);
+    for (const core of AuthEvents.eventTags) assert.ok(registry.isTag(core), core);
+    assert.equal(registry.tags.length, AuthEvents.eventTags.length + RolesEvents.events.length);
+  });
+
+  Given(
+    "an audit row recorded through a plugin event definition that declares {string} as personal data",
+    function* (field: string) {
+      assert.deepEqual(EventDefinition.problems([NoteAddedEvent]), []);
+      assert.ok(NoteAddedEvent[EventDefinition.MetaKey].pii.includes(field));
+      yield* signUpUser("alice");
+      const userId = Users.UserId(yield* userIdOf("alice"));
+      const { host } = yield* World;
+      yield* host.run(
+        Effect.gen(function* () {
+          const log = yield* AuditLog.AuditLog;
+          const event = {
+            _tag: "auth.notes.added",
+            userId,
+            note: NOTE,
+          } satisfies EventDefinition.TypeOf<typeof NoteAddedEvent>;
+          // What `AuthEvents.emit` records under a composition that declares the definition.
+          yield* log.record(
+            {
+              ...event,
+              eventId: NOTE_ROW_ID,
+              occurredAt: yield* DateTime.now,
+              correlationId: Option.none(),
+              traceId: Option.none(),
+              spanId: Option.none(),
+              ip: Option.none(),
+              userAgent: Option.none(),
+              tenantId: Option.none(),
+            },
+            NoteAddedEvent,
+          );
+        }).pipe(Effect.orDie),
+      );
+    },
+  );
+
+  Given("a composition that does not include that plugin", function* () {
+    yield* Effect.void; // an assertion-only step: the world's composition is core and password
+    assert.equal(composition.events.isTag(NoteAddedEvent[EventDefinition.MetaKey].tag), false);
+  });
+
+  When("the audit log is listed and replayed, and the row's user is erased", function* () {
+    const { host, foreign } = yield* World;
+    const userId = Users.UserId(yield* userIdOf("alice"));
+    const run = host.run(
+      Effect.gen(function* () {
+        const log = yield* AuditLog.AuditLog;
+        const listed = yield* log.list();
+        const replayed = yield* Stream.runCollect(log.replay());
+        const erasure = yield* Erasure.AccountErasure;
+        yield* erasure.eraseAccount(userId, Erasure.ErasureInitiator.Self());
+        const erased = yield* log.list();
+        return { listed, replayed, erased };
+      }).pipe(Effect.orDie),
+    );
+    yield* foreign.set(yield* run);
+  });
+
+  Then(
+    "the row is read as a foreign event with its tag and fields, nothing fails, and {string} is blanked",
+    function* (field: string) {
+      const { listed, replayed, erased } = yield* (yield* World).foreign.get;
+      const userId = yield* userIdOf("alice");
+      const listedRow = listed.find((row) => row.id === NOTE_ROW_ID);
+      assert.ok(listedRow !== undefined, "the foreign row was not listed");
+      assert.equal(listedRow.eventTag, "auth.notes.added");
+      assert.equal(listedRow.payload._tag, AuthEvents.ForeignEventTag);
+      assert.deepEqual(listedRow.payload, {
+        _tag: AuthEvents.ForeignEventTag,
+        tag: "auth.notes.added",
+        fields: { userId, [field]: NOTE },
+      });
+      assert.deepEqual(listedRow.actorUserId, Option.some(userId));
+      assert.ok(
+        replayed.some((row) => row.id === NOTE_ROW_ID),
+        "the foreign row was not replayed",
+      );
+      // The owning plugin, were it composed again, still decodes its row, before and after erasure.
+      const before = AuditLog.payloadAs(NoteAddedEvent)(listedRow);
+      assert.ok(Option.isSome(before) && before.value.note === NOTE);
+      const erasedRow = erased.find((row) => row.id === NOTE_ROW_ID);
+      assert.ok(erasedRow !== undefined, "the foreign row did not survive erasure");
+      const after = AuditLog.payloadAs(NoteAddedEvent)(erasedRow);
+      assert.ok(Option.isSome(after), "the erased row no longer decodes");
+      assert.equal(after.value.note, "", `"${field}" was not blanked`);
+      assert.notEqual(after.value.userId, userId, "the user id was not pseudonymized");
+    },
+  );
+
+  Given("a composition of every first-party plugin", function* () {
+    yield* (yield* World).registry.set(everyFirstPartyPlugin().events);
+  });
+
+  Then("exactly these tags are attempt events: the documented set of ten", function* () {
+    const registry = yield* (yield* World).registry.get;
+    const attempts = registry.tags.filter((tag) => registry.isAttempt(tag));
+    assert.equal(documentedAttemptTags.length, 10);
+    assert.deepEqual(attempts.toSorted(), documentedAttemptTags.toSorted());
+  });
 
   Given("a subscriber handling events tagged {string}", function* (tag: string) {
     yield* subscribe("handler", tagNamed(tag));

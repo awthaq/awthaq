@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-02 |
-> | Revision | 1.3 |
-> | Effective Date | 2026-11-08 |
+> | Revision | 1.4 |
+> | Effective Date | 2026-11-09 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): BEH-EA-329, `AuthPlugin.layer`'s `exposes` option and `Validate<P>`'s `ExposerNotDependedOn` problem (ADR-EA-040, architecture plan 04) <br> 1.3 (2026-11-08): BEH-EA-340, `AuthHost.layer` derives the servable layer from `Auth.make` and its requirements are exactly what the host owns; BEH-EA-014 *As shipped* (ADR-EA-044, architecture plan 15) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.2 (2026-10-13): BEH-EA-329, `AuthPlugin.layer`'s `exposes` option and `Validate<P>`'s `ExposerNotDependedOn` problem (ADR-EA-040, architecture plan 04) <br> 1.3 (2026-11-08): BEH-EA-340, `AuthHost.layer` derives the servable layer from `Auth.make` and its requirements are exactly what the host owns; BEH-EA-014 *As shipped* (ADR-EA-044, architecture plan 15) <br> 1.4 (2026-11-09): BEH-EA-346, `Auth.make` composes core's and every composed plugin's event definitions and refuses a duplicate tag with `Auth/EventTagConflict` (ADR-EA-049, architecture plan 29) |
 
 ---
 
@@ -232,6 +232,32 @@ REQUIREMENT: `AuthHost.layer(built, options)` MUST serve `built.api` (or the
 `Auth.make` returns a value (`api`, `layer`, `plugins`, `migrations`, `userFieldsLayer`), not something a host can serve, and a host used to assemble the rest by hand: the routes and core's handlers, each plugin's records and hook points, the core services over a store bundle, the registries, the derived middleware, the user-field registry and, over SQL, the migrations. The compiler guards most of that list (a missing record store, hook point or middleware stays in `RIn`), but not the two items that are not services: the migrations and the user-field registry (a `Context.Reference` with an empty default). The hand-written SQL example missed both and answered 503 for every request to a table-owning plugin. `AuthHost` is the one derivation: the composition-owned elements are a function of the plugin tuple and are assembled once; the host passes what only it can choose (`persistence`, `csrf`, an optional `principalResolver`, `services`, `taps`, `decorate`, `tier`, the `requestContext` and `bodyLimit` dials, the documentation paths) and provides its ports. A tap on a point no composed plugin declares stays in `RIn` (INV-EA-005). The module requires `HttpRouter` rather than providing it, so a host merges its own routes onto the same router, and host jobs and edge middleware (`Retention.layerScheduled`, `SecuritySignals.layer`, `SecurityHeaders.layer`, `AuthHttp.cors`) stay beside it.
 
 *Implementation* (`packages/server/src/AuthHost.ts`; `test/AuthHost.test.ts` over the `Ledger` fixture in both persistence modes, `test/AuthHost.types.test.ts` pins `RIn` for core plus the fixture as `RateLimiter | SecureRandom | Digest | Mac | AuthHost.Serving`, adding `Encryption` in SQL mode, and checks the required options with `@ts-expect-error`).
+
+## BEH-EA-346: `Auth.make` composes event definitions and refuses a duplicate tag
+
+> **See:** [ADR-EA-049](../decisions/049-plugins-own-event-definitions.md)
+
+```ts
+class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
+  apiVersion: 1,
+  contract: NotesApi,
+  events: NotesEvents.events,
+}) {}
+const auth = Auth.make([Notes])
+auth.events.isTag("auth.notes.created") // true, beside core's tags
+```
+
+```text
+REQUIREMENT: `Auth.make` MUST compose core's event definitions with every
+             composed plugin's declared `events` into `Built.events`, list
+             them in `manifest.events`, provide them through
+             `Built.eventsLayer`, and refuse, with `Auth/EventTagConflict`
+             naming both owners, a tag declared twice (core's included).
+```
+
+A plugin defines the events it publishes in its own package and declares them on its class; the composition's event set is core's plus every composed plugin's, so it is closed per composition and known without building a layer (BEH-EA-101). Like cycle detection (BEH-EA-016), the duplicate-tag check is a runtime step of `Auth.make`, not a `Validate<P>` problem: a pairwise type-level check would cost type-checking time on every composition, and the linker already refuses a duplicate group id or route the same way. A tag is an identity, not a contribution: two plugins declaring one tag would make a subscriber's payload shape depend on link order, so the composition is refused. The reserved foreign-event tag (`awthaq.foreignEvent`) is refused too, and `awthaq plugin list --events` prints `manifest.events` with each tag's owner.
+
+*Implementation* (`packages/core/src/Auth.ts` `composeEvents`; `packages/core/test/EventComposition.test.ts` C1–C6; `features/features/00-foundations/02-plugin-composition-validate.feature` REQ-EA-1513).
 
 _Previous: [BEH-EA-008](01-plugin-contract.md#beh-ea-008-dependson-declares-both-ordering-and-a-typed-requirement-in-one-static-array)_
 _Next: [BEH-EA-017](03-ports-slots-hooks-registries.md#beh-ea-017-configuration-is-a-contextreference-with-a-default-value)_

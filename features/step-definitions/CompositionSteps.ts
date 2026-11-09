@@ -4,7 +4,7 @@
 // compiler-enforced halves are asserted through `PluginTypeGates.ts` — see `assertTypeGate`.
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
-import { Auth, type AuthPlugin } from "@awthaq/core";
+import { Auth, type AuthPlugin, EventDefinition } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
 import { ClientAddress, Mailer, RateLimiter } from "@awthaq/ports";
 import { AuthHost, Csrf } from "@awthaq/server";
@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
+import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { assertTypeGate, cell, isObject, put, take, World } from "./FoundationsWorld.ts";
 import { migrateSqlite, MigPassword, MigTwoFactor } from "./MigrationFixtures.ts";
 import {
@@ -88,6 +89,26 @@ const migrationRun = cell(
 );
 
 const cycle = cell("cycle", (value): value is ReadonlyArray<string> => Array.isArray(value));
+
+const eventConflict = cell(
+  "eventConflict",
+  (value): value is Auth.EventTagConflict => value instanceof Auth.EventTagConflict,
+);
+
+/** BEH-EA-346: stand-in plugins (values, one group each) that declare whatever `events` they are given. */
+const declaring = <const Id extends string>(
+  id: Id,
+  events: ReadonlyArray<EventDefinition.Any>,
+): AuthPlugin.Any & { readonly id: Id } => ({
+  id,
+  apiVersion: 1,
+  contract: { identifier: "auth", groups: { [id]: HttpApiGroup.make(id) } },
+  tables: [],
+  migrations: [],
+  dependsOn: [],
+  layer: Layer.empty,
+  events,
+});
 
 const thrownOf = (error: unknown) => ({
   tag:
@@ -760,6 +781,41 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.deepEqual(yield* take(cycle), path);
     },
   );
+
+  // ---- BEH-EA-346: Auth.make composes event definitions and refuses a duplicate tag ----
+
+  Given("two plugins that both declare the event tag {string}", function* (tag: string) {
+    yield* Effect.void; // an assertion-only step: the plugins are built by the When
+    assert.equal(tag, "auth.dup.happened");
+  });
+
+  When("they are composed with Auth.make", function* () {
+    const happened = EventDefinition.define(
+      "auth.dup.happened",
+      {},
+      { actor: EventDefinition.Actor.none, pii: [] },
+    );
+    // Each alone composes: the registry holds core's tags plus the plugin's.
+    const alone = Auth.make([declaring("first", [happened])]);
+    assert.ok(alone.events.isTag("auth.dup.happened"));
+    assert.ok(alone.manifest.events.some((event) => event.owner === "first"));
+    try {
+      Auth.make([declaring("first", [happened]), declaring("second", [happened])]);
+    } catch (error) {
+      assert.ok(error instanceof Auth.EventTagConflict, String(error));
+      yield* put(eventConflict, error);
+      return;
+    }
+    throw new Error("Auth.make accepted two declarations of one event tag");
+  });
+
+  Then("the composition is refused with {string} naming both plugins", function* (tag: string) {
+    const error = yield* take(eventConflict);
+    assert.equal(error._tag, tag);
+    assert.equal(error.tag, "auth.dup.happened");
+    assert.deepEqual([error.firstOwner, error.secondOwner], ["first", "second"]);
+    assert.match(error.message, /"first".*"second"/);
+  });
 
   // ---- BEH-EA-340: AuthHost ----
 
