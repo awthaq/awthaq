@@ -35,6 +35,7 @@ import * as Scheduler from "effect/Scheduler";
 import * as AttributeResolvers from "../src/AttributeResolvers.ts";
 import * as Resolvers from "../src/Resolvers.ts";
 import * as UserClaims from "../src/UserClaims.ts";
+import * as UserClaimsEvents from "../src/UserClaimsEvents.ts";
 import { TestSql } from "@awthaq/test";
 
 const CoreLive = AuthEvents.layer.pipe(
@@ -217,12 +218,10 @@ for (const [name, store] of [
         const recorded = yield* auditLog.list({ eventTag: "auth.user.claimsUpdated" });
         assert.deepStrictEqual(
           recorded
-            .flatMap((row) => {
-              const payload = row.payload;
-              return typeof payload === "object" && payload !== null && "keys" in payload
-                ? [JSON.stringify(payload.keys)]
-                : [];
-            })
+            .flatMap((row) =>
+              Option.toArray(AuditLog.payloadAs(UserClaimsEvents.UserClaimsUpdatedEvent)(row)),
+            )
+            .map((payload) => JSON.stringify(payload.keys))
             .sort(),
           keys.map((key) => JSON.stringify([key])),
         );

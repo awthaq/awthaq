@@ -254,12 +254,6 @@ export const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.Ev
     action: "read",
     reason: "no matching permit",
   },
-  "auth.user.claimsUpdated": {
-    _tag: "auth.user.claimsUpdated",
-    userId,
-    keys: ["plan"],
-    actorUserId: otherUserId,
-  },
   "auth.rateLimit.exceeded": {
     _tag: "auth.rateLimit.exceeded",
     group: "password",

@@ -1401,26 +1401,6 @@ export const AuthorizationDeniedEvent = EventDefinition.define(
 export type AuthorizationDeniedEvent = typeof AuthorizationDeniedEvent.Type;
 
 /**
- * FAMS-004: published by `@awthaq/qadi`'s `UserClaims` on a real change. `keys` names the
- * claim keys that changed — never their values, which may be sensitive and must not enter the
- * audit trail; `actorUserId` is who made the change, when known.
- */
-export const UserClaimsUpdatedEvent = EventDefinition.define(
-  "auth.user.claimsUpdated",
-  {
-    userId: EventDefinition.UserId,
-    keys: Schema.Array(Schema.String),
-    actorUserId: Schema.optional(EventDefinition.UserId),
-  },
-  {
-    // The actor is who *changed* the claims, not whose claims changed.
-    actor: EventDefinition.Actor.field("actorUserId"),
-    pii: [],
-  },
-);
-export type UserClaimsUpdatedEvent = typeof UserClaimsUpdatedEvent.Type;
-
-/**
  * EOTS-007: published by a rate-limit budget (`RateLimits.budget`: `spend` or `guard`) on every rate-limit breach.
  * Deliberately carries no bucket key, email or IP (BEH-EA-108): it names the
  * rule that fired, so a defender can see which throttle is being hit and how
@@ -1744,7 +1724,6 @@ export const CoreRegistry = EventDefinition.make(
     OrganizationTeamMemberRemovedEvent,
     OrganizationPermissionDeniedEvent,
     AuthorizationDeniedEvent,
-    UserClaimsUpdatedEvent,
     RateLimitExceededEvent,
     MailFailedEvent,
     ApiKeyCreatedEvent,
