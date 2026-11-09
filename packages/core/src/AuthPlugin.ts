@@ -19,6 +19,7 @@ import { type SealedColumn, TenantScoped } from "@awthaq/sql";
 import type * as HookPoint from "./HookPoint.ts";
 import type * as Hooks from "./Hooks.ts";
 import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
+import type * as EventDefinition from "./EventDefinition.ts";
 import type { Migrations } from "./Migrations.ts";
 import * as RateLimitModel from "./RateLimitModel.ts";
 import type { RateLimitDeclaration } from "./RateLimitModel.ts";
@@ -86,6 +87,7 @@ export interface Class<
   Limits extends RateLimitModel.Table = {},
   Records extends AnyRecords = NoRecords,
   Points extends Layer.Layer<never, unknown, unknown> = Layer.Layer<never>,
+  Events extends ReadonlyArray<EventDefinition.Any> = readonly [],
 > extends Context.ServiceClass<Self, Key<Id>, Shape> {
   readonly id: Id;
   readonly apiVersion: 1;
@@ -144,6 +146,13 @@ export interface Class<
    * per composition by the host. `Layer.empty` when it owns none.
    */
   readonly hookPoints: Points;
+  /**
+   * ADR-EA-049: the event definitions this plugin publishes (`events.emit`), declared statically (none when it
+   * publishes none). `Auth.make` composes them with core's into `Built.events` and refuses a tag declared twice.
+   */
+  readonly events: ReadonlyArray<EventDefinition.Any>;
+  /** Type-only: the declared list, which `Auth.EventsOf` folds. Never assigned, for the reason `"~userFields"` is not. */
+  readonly "~events"?: Events;
 }
 
 /**
@@ -367,6 +376,8 @@ export interface Any {
   readonly records?: AnyRecords;
   /** Plan 08: optional so a hand-built plugin value need not declare any; every plugin made with `Service` carries the layer. */
   readonly hookPoints?: Layer.Layer<never, unknown, unknown>;
+  /** ADR-EA-049: optional so a hand-built plugin value need not declare any; every plugin made with `Service` carries the list. */
+  readonly events?: ReadonlyArray<EventDefinition.Any>;
   readonly layer: Layer.Layer<never, unknown, unknown>;
 }
 
@@ -408,6 +419,9 @@ const exposesByPlugin = new WeakMap<object, ReadonlyArray<string>>();
 
 const noExposes: ReadonlyArray<string> = [];
 
+/** ADR-EA-049: a plugin that publishes no event of its own declares none. */
+const noEvents: ReadonlyArray<EventDefinition.Any> = [];
+
 /**
  * ELC-006: `AuthPlugin.layer` was called a second time for one plugin class with a
  * different `dependsOn` set. The side table above is keyed by class identity, so the
@@ -441,6 +455,7 @@ export const Service = <Self, Shape>() => {
     const Limits extends RateLimitModel.Table<GroupIdOf<Groups>> = {},
     const Records extends AnyRecords = NoRecords,
     Points extends Layer.Layer<never, unknown, unknown> = Layer.Layer<never>,
+    const Events extends ReadonlyArray<EventDefinition.Any> = readonly [],
   >(
     id: Id,
     options: {
@@ -489,8 +504,14 @@ export const Service = <Self, Shape>() => {
        * layer. A plugin layer that requires a non-core hook point it does not declare here does not compile.
        */
       readonly hookPoints?: Points;
+      /**
+       * ADR-EA-049: every event this plugin publishes, each made with `EventDefinition.define` in the plugin's own
+       * package, and published with `events.emit(definition, input)`. A tag core or another plugin declares is
+       * refused by `Auth.make` (`Auth/EventTagConflict`); `runPluginContractTests` checks each definition.
+       */
+      readonly events?: Events;
     } & RecordsLegal<Records>,
-  ): Class<Self, Id, Shape, Groups, Fields, Limits, Records, Points>;
+  ): Class<Self, Id, Shape, Groups, Fields, Limits, Records, Points, Events>;
   function build(
     id: string,
     options: {
@@ -505,6 +526,7 @@ export const Service = <Self, Shape>() => {
       readonly userFields?: UserFields.Declarations;
       readonly records?: AnyRecords;
       readonly hookPoints?: Layer.Layer<never, unknown, unknown>;
+      readonly events?: ReadonlyArray<EventDefinition.Any>;
     },
   ): object {
     const key: Key<string> = `awthaq/plugin/${id}`;
@@ -542,6 +564,7 @@ export const Service = <Self, Shape>() => {
       exposes: noExposes,
       records: options.records ?? noRecords,
       hookPoints: options.hookPoints ?? Layer.empty,
+      events: options.events ?? noEvents,
     });
     // A regular (not arrow) function, so `this` is whatever the getter is
     // actually read off — `Pong`, say, when a subclass reads `Pong.dependsOn` —
@@ -720,6 +743,7 @@ export function layer<
   Limits extends RateLimitModel.Table,
   Records extends AnyRecords,
   Points extends Layer.Layer<never, unknown, unknown>,
+  Events extends ReadonlyArray<EventDefinition.Any>,
   E,
   R,
   HE,
@@ -734,7 +758,7 @@ export function layer<
   XE = never,
   XR = never,
 >(
-  plugin: Class<Self, Id, Shape, Groups, Fields, Limits, Records, Points>,
+  plugin: Class<Self, Id, Shape, Groups, Fields, Limits, Records, Points, Events>,
   options: {
     readonly dependsOn?: Deps;
     readonly taps?: Taps;
@@ -770,6 +794,7 @@ export function layer<
   Limits extends RateLimitModel.Table,
   Records extends AnyRecords,
   Points extends Layer.Layer<never, unknown, unknown>,
+  Events extends ReadonlyArray<EventDefinition.Any>,
   E,
   R,
   Deps extends ReadonlyArray<Any> = readonly [],
@@ -782,7 +807,7 @@ export function layer<
   XE = never,
   XR = never,
 >(
-  plugin: Class<Self, Id, Shape, Groups, Fields, Limits, Records, Points>,
+  plugin: Class<Self, Id, Shape, Groups, Fields, Limits, Records, Points, Events>,
   options: {
     readonly dependsOn?: Deps;
     readonly taps?: Taps;
@@ -816,6 +841,7 @@ export function layer<
   Limits extends RateLimitModel.Table,
   Records extends AnyRecords,
   Points extends Layer.Layer<never, unknown, unknown>,
+  Events extends ReadonlyArray<EventDefinition.Any>,
   E,
   R,
   HE = never,
@@ -830,7 +856,7 @@ export function layer<
   XE = never,
   XR = never,
 >(
-  plugin: Class<Self, Id, Shape, Groups, Fields, Limits, Records, Points>,
+  plugin: Class<Self, Id, Shape, Groups, Fields, Limits, Records, Points, Events>,
   options: {
     readonly dependsOn?: Deps;
     readonly taps?: Taps;

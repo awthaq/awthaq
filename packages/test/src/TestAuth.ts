@@ -65,7 +65,7 @@ import type { TestFramework } from "./TestFramework.ts";
 import { Api } from "@awthaq/api";
 import {
   Auth,
-  type AuthEvents,
+  AuthEvents,
   AuthPlugin,
   type DataExport,
   type Erasure,
@@ -319,6 +319,8 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
   };
   const platform = <A, E, R>(host: Layer.Layer<A, E, R>) =>
     host.pipe(
+      // ADR-EA-049: a plugin that emits an event it did not list in its `events` fails its own tests.
+      Layer.provideMerge(Layer.succeed(AuthEvents.UndeclaredEventPolicy, "die")),
       Layer.provideMerge(testPorts(options.rateLimiter, options.clientAddress)),
       Layer.provideMerge(HttpServer.layerServices),
       Layer.provideMerge(HttpRouter.layer),

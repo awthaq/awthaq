@@ -2,6 +2,7 @@
 // composition over memory and over SQL, `TestAuth.app` shares one context between its handler and its runner, and
 // `pnpm check:contract-tests` fails a plugin package with no contract-test call. The compile-time claims of
 // BEH-EA-334/335 are `PluginTypeGates.ts`'s.
+import { AuthEvents } from "@awthaq/core";
 import { ClientAddress, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { AuthHost, Csrf } from "@awthaq/server";
 import { RedactionGuard, TestAuth } from "@awthaq/test";
@@ -330,7 +331,7 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
   });
 
   Then(
-    "the harness holds every service the host composition holds, plus only the redaction guard's",
+    "the harness holds every service the host composition holds, plus only the redaction guard's and the undeclared-event policy",
     function* () {
       const { outcomes } = yield* World;
       const harness = yield* outcomes.getAs("harnessKeys", isStringArray);
@@ -340,9 +341,14 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
         host.filter((key) => !harness.includes(key)),
         [],
       );
+      // ADR-EA-049: the harness also sets `UndeclaredEventPolicy` to "die", so a plugin that emits an event it did
+      // not declare fails its own tests.
       assert.deepEqual(
-        harness.filter((key) => !host.includes(key)),
-        guard.filter((key) => !host.includes(key)),
+        harness.filter((key) => !host.includes(key)).toSorted(),
+        [
+          ...guard.filter((key) => !host.includes(key)),
+          AuthEvents.UndeclaredEventPolicy.key,
+        ].toSorted(),
       );
     },
   );

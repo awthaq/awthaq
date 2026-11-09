@@ -16,6 +16,7 @@ import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as OpenApi from "effect/http-api/OpenApi";
 import { SessionLifecycle } from "@awthaq/api";
+import * as AuthEvents from "../src/AuthEvents.ts";
 import * as Auth from "../src/Auth.ts";
 import * as AuthPlugin from "../src/AuthPlugin.ts";
 import * as Slots from "../src/Slots.ts";
@@ -358,7 +359,13 @@ describe("Auth.make", () => {
         ["0001_ping_create_ping_state", "0002_pong_create_pong_state"],
       );
 
-      assert.deepStrictEqual(auth.manifest, {
+      // ADR-EA-049: the events listing is core's own here (neither plugin declares one); `EventComposition.test.ts`.
+      const { events, ...manifest } = auth.manifest;
+      assert.deepStrictEqual(
+        events.map((event) => event.owner),
+        AuthEvents.eventTags.map(() => "core"),
+      );
+      assert.deepStrictEqual(manifest, {
         plugins: [
           {
             id: "ping",

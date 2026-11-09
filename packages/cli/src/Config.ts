@@ -112,6 +112,13 @@ const linkErrorCodes: ReadonlySet<string> = new Set([
   "GroupIdConflict",
   "RouteConflict",
   "LinkerInvariantViolation",
+  "UndeclaredTableDependency",
+  "Auth/TenancyDeclarationInvalid",
+  "Auth/SealedColumnDeclarationInvalid",
+  "Auth/MigrationDeclarationInvalid",
+  "UserFieldConflict",
+  // ADR-EA-049: two declarations of one event tag.
+  "Auth/EventTagConflict",
 ]);
 
 /** `Auth.make` raises a tagged link error while the module is evaluated; anything else is just a load failure. */

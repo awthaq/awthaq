@@ -19,7 +19,9 @@ import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as OpenApi from "effect/http-api/OpenApi";
 import type * as SqlClient from "effect/sql/SqlClient";
 import { type SealedColumn, TenantScope, type TenantScoped } from "@awthaq/sql";
+import * as AuthEventSchemas from "./AuthEventSchemas.ts";
 import * as AuthPlugin from "./AuthPlugin.ts";
+import * as EventDefinition from "./EventDefinition.ts";
 import * as HookPoint from "./HookPoint.ts";
 import type { ConfigDescriptor } from "./ConfigDescriptor.ts";
 import type { Migrations } from "./Migrations.ts";
@@ -136,6 +138,19 @@ export class MigrationDeclarationInvalid extends Data.TaggedError(
 )<{
   readonly pluginId: string;
   readonly migration: string;
+  readonly message: string;
+}> {}
+
+/**
+ * ADR-EA-049: two declarations of one event tag in a composition, core's included (or a plugin declaring the
+ * tag reserved for foreign events). A tag is an event's identity, so a second declaration is a plugin-authoring
+ * defect, found at link time like `GroupIdConflict`.
+ */
+export class EventTagConflict extends Data.TaggedError("Auth/EventTagConflict")<{
+  readonly tag: string;
+  /** `"core"` or the plugin id that declared the tag first, in link order. */
+  readonly firstOwner: string;
+  readonly secondOwner: string;
   readonly message: string;
 }> {}
 
@@ -417,6 +432,18 @@ export interface Manifest {
   readonly config: ReadonlyArray<ManifestConfig>;
   /** SAM-004: every plugin-declared user field the linker adds a column for, in link order. */
   readonly userFields: ReadonlyArray<ManifestUserField>;
+  /** ADR-EA-049: every event of the composition, core's then each plugin's in link order — static, no Layer evaluated. */
+  readonly events: ReadonlyArray<ManifestEvent>;
+}
+
+/** ADR-EA-049: one event of the composition as the manifest reports it (`awthaq plugin list --events`). */
+export interface ManifestEvent {
+  readonly tag: string;
+  /** `"core"` or the id of the plugin that declares it. */
+  readonly owner: string;
+  readonly actor: EventDefinition.EventMeta["actor"];
+  readonly pii: ReadonlyArray<string>;
+  readonly attempt: boolean;
 }
 
 /** SAM-004: one declared user field as the manifest reports it (the schema itself lives in `Built.userFields`). */
@@ -462,6 +489,21 @@ type UserFieldsOfPlugin<Plugin> = Plugin extends {
 export type UserFieldsOf<P extends ReadonlyArray<AuthPlugin.Any>> = Types.UnionToIntersection<
   UserFieldsOfPlugin<P[number]>
 >;
+
+/** ADR-EA-049: one plugin's declared events, read off the type-only `"~events"` member; none when it declares none. */
+type EventsOfPlugin<Plugin> = Plugin extends { readonly "~events"?: infer Events }
+  ? NonNullable<Events> extends ReadonlyArray<infer D extends EventDefinition.Any>
+    ? EventDefinition.TypeOf<D>
+    : never
+  : never;
+
+/**
+ * ADR-EA-049: every event a composition can publish, core's plus each composed plugin's declared events, as one
+ * union narrowable by `_tag`. The type of `Built.events`; `AuthEvents.typed(auth.events)` consumes it.
+ */
+export type EventsOf<P extends ReadonlyArray<AuthPlugin.Any>> =
+  | AuthEventSchemas.AuthEvent
+  | EventsOfPlugin<P[number]>;
 
 /**
  * MW-002 (wayfinder ticket 26): core's own `session`/`account` groups, read off
@@ -595,6 +637,17 @@ export interface Built<
    * declares a field.
    */
   readonly userFieldsLayer: Layer.Layer<never>;
+  /**
+   * ADR-EA-049: core's event definitions plus every composed plugin's declared `events`, typed by the tuple
+   * (`EventsOf<P>`): `tags`, `isTag`, `definitionOf`, the readers and a validating `is`. Static, so the manifest,
+   * webhook filters and typed views read it without building a layer.
+   */
+  readonly events: EventDefinition.Registry<EventsOf<P>>;
+  /**
+   * ADR-EA-049: provides `AuthEvents.EventRegistry` for `events`, read by webhook filters and payloads, Retention
+   * rules and `emit`'s undeclared-event check. Provide it last, like `userFieldsLayer`; `AuthHost.layer` does.
+   */
+  readonly eventsLayer: Layer.Layer<never>;
 }
 
 // ---------------------------------------------------------------------------
@@ -911,7 +964,54 @@ const buildHooks = (
   );
 };
 
-const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
+/**
+ * ADR-EA-049: composes core's event definitions with every plugin's declared `events`, in link order, refusing a
+ * tag declared twice (core's included) or the reserved foreign-event tag. Returns the registry and who owns each tag.
+ */
+const composeEvents = (order: ReadonlyArray<AuthPlugin.Any>) => {
+  const owners = new Map<string, string>([
+    [AuthEventSchemas.ForeignEventTag, CORE_OWNER],
+    ...AuthEventSchemas.coreDefinitions.map((definition): [string, string] => [
+      definition[EventDefinition.MetaKey].tag,
+      CORE_OWNER,
+    ]),
+  ]);
+  const declared: Array<ManifestEvent> = AuthEventSchemas.coreDefinitions.map((definition) =>
+    manifestEvent(definition, CORE_OWNER),
+  );
+  for (const plugin of order) {
+    for (const definition of plugin.events ?? []) {
+      const tag = definition[EventDefinition.MetaKey].tag;
+      const first = owners.get(tag);
+      if (first !== undefined) {
+        throw new EventTagConflict({
+          tag,
+          firstOwner: first,
+          secondOwner: plugin.id,
+          message: `awthaq: E_EVENT_TAG_CONFLICT: event "${tag}" is declared by "${first}" and by plugin "${plugin.id}"`,
+        });
+      }
+      owners.set(tag, plugin.id);
+      declared.push(manifestEvent(definition, plugin.id));
+    }
+  }
+  // Typed at the widest event, like the rest of `make`'s implementation; the overload declares `EventsOf<P>`.
+  const registry: EventDefinition.Registry<AuthEventSchemas.AnyEvent> = EventDefinition.make(
+    [...AuthEventSchemas.coreDefinitions, ...order.flatMap((plugin) => plugin.events ?? [])],
+    "composition",
+  );
+  return { registry, manifest: declared };
+};
+
+const manifestEvent = (definition: EventDefinition.Any, owner: string): ManifestEvent => {
+  const meta = definition[EventDefinition.MetaKey];
+  return { tag: meta.tag, owner, actor: meta.actor, pii: meta.pii, attempt: meta.attempt };
+};
+
+const buildManifest = (
+  order: ReadonlyArray<AuthPlugin.Any>,
+  events: ReadonlyArray<ManifestEvent>,
+): Manifest => ({
   plugins: order.map((plugin) => ({
     id: plugin.id,
     apiVersion: plugin.apiVersion,
@@ -934,6 +1034,7 @@ const buildManifest = (order: ReadonlyArray<AuthPlugin.Any>): Manifest => ({
   userFields: UserFields.describeAll(composeUserFields(order)).map(
     ({ key, column, kind, clientWritable }) => ({ key, column, kind, clientWritable }),
   ),
+  events,
 });
 
 const hasRoute = (
@@ -1156,6 +1257,7 @@ export function make(
   checkTenancy(order);
   checkSealedColumns(order);
   checkMigrationNames(order);
+  const events = composeEvents(order);
   const extraGroups = options?.extraGroups ?? [];
   return {
     plugins,
@@ -1164,10 +1266,12 @@ export function make(
     adminApi: composeTier(order, extraGroups, true),
     layer: composeLayer(order),
     migrations: renumberMigrations(order),
-    manifest: buildManifest(order),
+    manifest: buildManifest(order, events.manifest),
     tenancy: declaredTenancy(order),
     sealedColumns: declaredSealedColumns(order),
     userFields: composeUserFields(order),
     userFieldsLayer: UserFields.layer(composeUserFields(order)),
+    events: events.registry,
+    eventsLayer: AuthEventSchemas.eventRegistryLayer(events.registry),
   };
 }

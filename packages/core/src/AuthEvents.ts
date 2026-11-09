@@ -574,3 +574,45 @@ export const onBatch = <const S extends Select>(
     ),
   );
 };
+
+// ---- the composition-typed view ------------------------------------------------
+
+/**
+ * ADR-EA-049: the events of one composition, typed by its plugin tuple: `AuthEvents.typed(auth.events)`, the
+ * `Users.typedFields(auth.userFields)` precedent. `auth.events` is `Built.events`, a registry typed
+ * `Auth.EventsOf<P>`, so `is` narrows the open stream to that union, `subscribe` yields only its events, and
+ * `on(tag, handler)` takes any of its tags with the handler typed exactly. Every guard validates against the
+ * registry's definitions.
+ */
+export const typed = <E extends AnyEvent>(registry: EventDefinition.Registry<E>) => {
+  const isEvent = (event: PublishedAny): event is Published<E> => registry.is(event);
+  return {
+    is: isEvent,
+    /** `AuthEvents.subscribe`, keeping only this composition's events, typed. */
+    subscribe: Effect.map(
+      Effect.flatMap(AuthEvents, (events) => events.subscribe),
+      (stream) => Stream.filter(stream, isEvent),
+    ),
+    on: <const Tag extends E["_tag"]>(
+      select: Tag | ReadonlyArray<Tag>,
+      handler: (
+        event: Published<Extract<E, { readonly _tag: Tag }>>,
+      ) => Effect.Effect<void, unknown>,
+    ) => {
+      const wanted = new Set<string>(typeof select === "string" ? [select] : select);
+      const isSelected = (
+        event: PublishedAny,
+      ): event is Published<Extract<E, { readonly _tag: Tag }>> =>
+        wanted.has(event._tag) && registry.is(event);
+      const label = [...wanted].join(",");
+      return Layer.effectDiscard(
+        supervise(label, (stream) =>
+          stream.pipe(
+            Stream.filter(isSelected),
+            Stream.runForEach((event) => isolate(label, event, handler(event))),
+          ),
+        ),
+      );
+    },
+  };
+};
