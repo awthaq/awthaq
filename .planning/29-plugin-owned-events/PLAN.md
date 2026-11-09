@@ -1820,3 +1820,17 @@ plugin, password after 27, organization last and before 30. Either order with ba
 ---
 
 ## Decisions taken (implementation record)
+
+### Wave 1 (tickets 01–10): the core interface, nothing moved yet
+
+Branch `feat/plugin-owned-events`, from `origin/main` @ `3c2cdd86` (plans 25, 26 and 27 landed).
+
+**Baseline (ticket 01).** Recorded in `.scratch/29-plugin-owned-events/baseline.md` (untracked), with the 25 issue
+files and the recreated plan 09 Q4 file (`.scratch/09-event-definitions/issues/01-relay-scrub-declared-pii.md`,
+`needs-triage`). Every §2.1 number matches the plan except `AuditLog.layer` sites (88, not 91) and raw stream uses
+(62, not 61). The move table is unchanged: 24 stay, 73 move. The moved blocks span **1,083** lines (each block from its
+JSDoc to its `export type`, blank separators excluded; script at `.scratch/29-plugin-owned-events/measure-moved.py`);
+the plan's 1,156 came from a script not on file. `auth.user.signInFailed` is now named only by core's `src` (plan 27),
+which does not change its place. `packages/core/lib/AuthEventSchemas.d.ts` is 6,318 lines. `pnpm typecheck` takes
+4.0 s warm (three runs: 4.00, 4.06, 4.03). `pnpm test`: 5,812 passed, 1 expected fail, 16 skipped. `pnpm test:bdd`:
+1,551 passed, 44 skipped, 1 failed (the known local `useInvalidate` flake).
