@@ -3,13 +3,17 @@
 // handler with a real session cookie, and aborts an operation with a veto tap, in BOTH record modes: the template's
 // `records` bundle is what makes the same suite run over memory and over a migrated database.
 import { Api } from "@awthaq/api";
-import { Auth, HookPoint } from "@awthaq/core";
+import { AuditLog, Auth, AuthEvents, HookPoint } from "@awthaq/core";
 import { Rendezvous, TestAuth } from "@awthaq/test";
 import { afterAll, assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Result from "effect/Result";
+import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as NotesEvents from "../src/NotesEvents.ts";
 import * as Template from "../src/Template.ts";
 
 const ORIGIN = "http://localhost:3000";
@@ -216,6 +220,83 @@ for (const records of TestAuth.recordModes) {
         ]);
         assert.strictEqual((yield* notes.list(caller)).length, 3);
       }).pipe(Effect.provide(quota(Template.BeforeCreateNote.tap(Rendezvous.held(8))))),
+    );
+  });
+}
+
+// ADR-EA-049: the plugin owns its event. It is defined in `NotesEvents.ts`, declared on the class, published with
+// `emit`, recorded in the audit log with its actor, readable with `payloadAs`, and typed for subscribers.
+for (const records of TestAuth.recordModes) {
+  describe(`plugin-template: its own event (${records} records)`, () => {
+    const caller = new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id: "event-user" }),
+      sessionId: "event-session",
+    });
+    const layer =
+      records === "sql"
+        ? TestAuth.layer(built, { ...common, records, suite: "template_events" })
+        : TestAuth.layer(built, common);
+
+    it("is declared in the composition and its manifest", () => {
+      assert.isTrue(built.events.isTag("auth.notes.created"));
+      assert.deepStrictEqual(
+        built.manifest.events.find((event) => event.tag === "auth.notes.created"),
+        {
+          tag: "auth.notes.created",
+          owner: "notes",
+          actor: { _tag: "Field", field: "userId" },
+          pii: [],
+          attempt: false,
+        },
+      );
+    });
+
+    it.effect("creating a note records auth.notes.created with the caller as actor", () =>
+      Effect.gen(function* () {
+        const notes = yield* Template.Notes;
+        const auditLog = yield* AuditLog.AuditLog;
+        const note = yield* notes.create(caller, "hello");
+        const rows = yield* auditLog.list({ eventTag: "auth.notes.created" });
+        assert.strictEqual(rows.length, 1);
+        const [row] = rows;
+        assert.isDefined(row);
+        if (row === undefined) return;
+        assert.deepStrictEqual(Option.map(row.actorUserId, String), Option.some("event-user"));
+        // Core reads a row it does not define as a foreign event; the plugin decodes its own.
+        const decoded = AuditLog.payloadAs(NotesEvents.NoteCreatedEvent)(row);
+        assert.isTrue(Option.isSome(decoded));
+        if (Option.isSome(decoded)) assert.strictEqual(decoded.value.noteId, note.id);
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("a subscriber receives it typed, by definition and through the composition", () =>
+      Effect.gen(function* () {
+        const notes = yield* Template.Notes;
+        const events = yield* AuthEvents.AuthEvents;
+        const seen = yield* Queue.unbounded<string>();
+        const typed = AuthEvents.typed(built.events);
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            // `event.noteId` is typed: the handler receives `NoteCreatedEvent` with its envelope.
+            yield* Layer.build(
+              AuthEvents.on(NotesEvents.NoteCreatedEvent, (event) =>
+                Queue.offer(seen, event.noteId),
+              ),
+            );
+            const stream = yield* events.subscribe;
+            const note = yield* notes.create(caller, "typed");
+            assert.strictEqual(yield* Queue.take(seen), note.id);
+            const [first] = yield* stream.pipe(
+              Stream.filter(typed.is),
+              Stream.filter((event) => event._tag === "auth.notes.created"),
+              Stream.take(1),
+              Stream.runCollect,
+            );
+            // `typed.is` narrows the open stream to the composition's union, so `_tag` narrows to this event.
+            assert.strictEqual(first?._tag === "auth.notes.created" ? first.noteId : "", note.id);
+          }),
+        );
+      }).pipe(Effect.provide(layer)),
     );
   });
 }

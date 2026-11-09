@@ -188,6 +188,13 @@ describe("problems", () => {
       { actor: Actor.none, pii: ["message"] },
     );
     assert.deepStrictEqual(problems([Declared]), []);
+    // An identifier named like free text (`noteId`, `messageIds`) is an id by convention, not free text.
+    const Identified = define(
+      "auth.local.identified",
+      { noteId: Schema.String, messageIds: Schema.Array(Schema.String) },
+      { actor: Actor.none, pii: [] },
+    );
+    assert.deepStrictEqual(problems([Identified]), []);
   });
 
   it("N: a tag that is not auth.<namespace>.<event>", () => {

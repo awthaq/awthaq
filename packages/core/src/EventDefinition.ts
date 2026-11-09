@@ -232,8 +232,12 @@ export const make = <const Members extends ReadonlyArray<Any>>(
 
 // ---- problems: the data-level well-formedness check ------------------------------------------
 
-/** A field name that suggests operator or user free text (plan 09 T3 P6). */
-const looksLikeFreeText = /reason|note|justification|description|comment|message|text/i;
+/**
+ * A field name that suggests operator or user free text (plan 09 T3 P6). A name ending in `Id`/`Ids` is an
+ * identifier by convention (`noteId`, `messageIds`), never free text.
+ */
+const looksLikeFreeText = (name: string) =>
+  /reason|note|justification|description|comment|message|text/i.test(name) && !/Ids?$/.test(name);
 
 /** A third-party-safe tag: `auth.<namespace>.<event>`, camelCase segments (every shipped tag matches). */
 const tagPattern = /^auth\.[a-z][A-Za-z0-9]*\.[a-z][A-Za-z0-9]*$/;
@@ -298,7 +302,7 @@ const problemsOf = (definition: Any, notPersonal: ReadonlySet<string>): Readonly
   }
   for (const property of properties) {
     const name = String(property.name);
-    if (name === "_tag" || !looksLikeFreeText.test(name) || !isFreeText(property.type)) continue;
+    if (name === "_tag" || !looksLikeFreeText(name) || !isFreeText(property.type)) continue;
     if (meta.pii.includes(name) || notPersonal.has(`${meta.tag}.${name}`)) continue;
     found.push(
       `${meta.tag}.${name}: a free-text field is neither declared pii nor listed as not personal (P6)`,
