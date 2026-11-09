@@ -21,6 +21,7 @@ import {
   ADMIN,
   app,
   configure,
+  coreEventOfTag,
   deliveriesOf,
   deliver,
   eventOfTag,
@@ -75,7 +76,7 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
     "a {string} event for user {string} is published inside tenant {string} and relayed from the audit log",
     function* (tag: string, user: string, tenant: string) {
       const world = yield* World;
-      const event = yield* eventOfTag(tag, user);
+      const event = yield* coreEventOfTag(tag, user);
       yield* run(
         Effect.flatMap(AuthEvents.AuthEvents, (events) => events.publish(event)).pipe(
           Tenant.withTenant(tenant),
@@ -97,7 +98,7 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
     "a {string} event for user {string} is published outside a tenant and relayed from the audit log",
     function* (tag: string, user: string) {
       const world = yield* World;
-      const event = yield* eventOfTag(tag, user);
+      const event = yield* coreEventOfTag(tag, user);
       yield* run(Effect.flatMap(AuthEvents.AuthEvents, (events) => events.publish(event)));
       const rows = yield* run(
         Effect.flatMap(AuditLog.AuditLog, (auditLog) => auditLog.replay().pipe(Stream.runCollect)),

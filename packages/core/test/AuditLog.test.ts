@@ -112,27 +112,10 @@ const suite = (
         const cases: ReadonlyArray<readonly [AuthEvents.AuthEvent, Option.Option<string>]> = [
           // Actor.field("userId")
           [samples["auth.user.created"], Option.some(userId)],
-          [samples["auth.organization.permissionDenied"], Option.some(userId)],
           // Actor.field("adminUserId"): the administrator, not the target
           [
             { ...samples["auth.admin.actionDenied"], targetUserId: userId },
             Option.some(otherUserId),
-          ],
-          // Actor.field("actorUserId") on an organization event (plan 04, F11): who acted, not who it was about;
-          // absent when the actor names no user (a directory, the application)
-          [samples["auth.organization.created"], Option.some(otherUserId)],
-          [
-            {
-              _tag: "auth.organization.memberRemoved",
-              organizationId: "org-1",
-              userId,
-              actorUserId: otherUserId,
-            },
-            Option.some(otherUserId),
-          ],
-          [
-            { _tag: "auth.organization.memberRemoved", organizationId: "org-1", userId },
-            Option.none(),
           ],
           // optional actor fields: present, then absent
           [

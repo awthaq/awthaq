@@ -68,9 +68,14 @@ describe("organization authorization boundary", () => {
   });
 
   it("only internal/access.ts publishes auth.organization.permissionDenied", () => {
+    // ADR-EA-049: the tag is named once, by its definition; publishing it means emitting that definition.
     assert.deepStrictEqual(filesMatching(sources, /auth\.organization\.permissionDenied/), [
-      "internal/access.ts",
+      "OrganizationEvents.ts",
     ]);
+    assert.deepStrictEqual(
+      filesMatching(sources, /\.emit\(\s*OrganizationEvents\.OrganizationPermissionDeniedEvent\b/),
+      ["internal/access.ts"],
+    );
   });
 
   it("the scan catches a planted token", () => {

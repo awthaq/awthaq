@@ -8,6 +8,7 @@
 // backoff schedule, the rotation grace window, leases, retention) goes through the scenario's
 // `TestClock`. A second, HTTP-served composition is built only by the scenarios about the admin tier.
 import { Admin } from "@awthaq/admin";
+import { Organization, OrganizationEvents } from "@awthaq/organization";
 import { Api } from "@awthaq/api";
 import { Auth, AuditLog, AuthEvents, DataExport, Erasure, Users } from "@awthaq/core";
 import { Encryption, HostResolver, RateLimiter, RelayCursorStore, Tenant } from "@awthaq/ports";
@@ -24,6 +25,7 @@ import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
@@ -183,11 +185,11 @@ const gateFor = (gate: Gate): Webhooks.WebhooksConfigShape["canManageWebhooks"] 
   }
 };
 
-// Admin is composed beside webhooks for its events (ADR-EA-049): an endpoint registers for and receives
-// `auth.admin.impersonationStarted` only when a composed plugin declares it.
-export const built = Auth.make([Webhooks.Webhooks, Admin.Admin]);
+// Admin and Organization are composed beside webhooks for their events (ADR-EA-049): an endpoint registers
+// for and receives `auth.admin.*` or `auth.organization.*` only when a composed plugin declares the tag.
+export const built = Auth.make([Webhooks.Webhooks, Admin.Admin, Organization.Organization]);
 
-/** `Auth.make([Webhooks, Admin])` through the harness; only the programmable receiver, resolver, limiter and configuration are this World's own. */
+/** `Auth.make([Webhooks, Admin, Organization])` through the harness; only the programmable receiver, resolver, limiter and configuration are this World's own. */
 const composition = (
   options: Options,
   receiver: ReturnType<typeof makeReceiver>,
@@ -429,8 +431,8 @@ export const publishedEvent = <E extends AuthEvents.AnyEvent>(
     return published;
   });
 
-/** The event a scenario names by tag: only the shapes the scenarios use. */
-export const eventOfTag = (tag: string, userId: string): Effect.Effect<AuthEvents.AuthEvent> => {
+/** The event a scenario names by tag, core's or the organization plugin's: only the shapes the scenarios use. */
+export const eventOfTag = (tag: string, userId: string): Effect.Effect<AuthEvents.AnyEvent> => {
   switch (tag) {
     case "auth.user.signedIn":
       return Effect.succeed({
@@ -445,13 +447,24 @@ export const eventOfTag = (tag: string, userId: string): Effect.Effect<AuthEvent
         _tag: "auth.organization.created",
         organizationId: "org-1",
         creatorUserId: Users.UserId(userId),
-      });
+      } satisfies OrganizationEvents.OrganizationCreatedEvent);
     case "auth.organization.updated":
-      return Effect.succeed({ _tag: "auth.organization.updated", organizationId: "org-1" });
+      return Effect.succeed({
+        _tag: "auth.organization.updated",
+        organizationId: "org-1",
+      } satisfies OrganizationEvents.OrganizationUpdatedEvent);
     default:
       return Effect.die(new Error(`the World has no sample event for "${tag}"`));
   }
 };
+
+/** A core event a scenario publishes on the bus (`AuthEvents.publish` takes core's events only). */
+export const coreEventOfTag = (tag: string, userId: string) =>
+  Effect.flatMap(eventOfTag(tag, userId), (event) =>
+    Schema.is(AuthEvents.AuthEventSchema)(event)
+      ? Effect.succeed(event)
+      : Effect.die(new Error(`"${tag}" is not a core event`)),
+  );
 
 // ---- delivery ------------------------------------------------------------------------------------
 

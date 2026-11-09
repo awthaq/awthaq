@@ -9,7 +9,8 @@ import * as WebhookPayload from "../src/WebhookPayload.ts";
 import { published, signedIn } from "./support.ts";
 
 // ADR-EA-049: a plugin's event declares its own personal data, and a composition's registry holds it. These
-// mirror `@awthaq/admin`'s impersonation and ban events (webhooks does not depend on the admin plugin).
+// mirror `@awthaq/admin`'s impersonation and ban events and `@awthaq/organization`'s suspension event
+// (webhooks depends on neither plugin).
 const Impersonated = EventDefinition.define(
   "auth.admin.impersonationStarted",
   {
@@ -30,8 +31,17 @@ const Banned = EventDefinition.define(
   },
   { actor: EventDefinition.Actor.field("adminUserId"), pii: ["reason"] },
 );
+const Suspended = EventDefinition.define(
+  "auth.admin.organizationSuspended",
+  {
+    adminUserId: EventDefinition.UserId,
+    organizationId: Schema.String,
+    reason: Schema.NullOr(Schema.String),
+  },
+  { actor: EventDefinition.Actor.field("adminUserId"), pii: ["reason"] },
+);
 const composed = EventDefinition.make(
-  [...AuthEvents.coreDefinitions, Impersonated, Banned],
+  [...AuthEvents.coreDefinitions, Impersonated, Banned, Suspended],
   "composition",
 );
 
@@ -133,11 +143,7 @@ describe("WebhookPayload.toBody: identifiers only", () => {
         reason: "unpaid invoice for Jane Doe",
       });
       const suspendedText = JSON.stringify(
-        WebhookPayload.toBody(
-          suspended,
-          withContext,
-          AuthEvents.CoreRegistry.piiFieldsOf(suspended._tag),
-        ),
+        WebhookPayload.toBody(suspended, withContext, composed.piiFieldsOf(suspended._tag)),
       );
       assert.notInclude(suspendedText, "Jane Doe");
       assert.include(suspendedText, "org-1");

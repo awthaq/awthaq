@@ -5,7 +5,7 @@
 // never locks the user out.
 import { TestAuth } from "@awthaq/test";
 import { AuditLog, Users } from "@awthaq/core";
-import { Organization, OrganizationHooks } from "@awthaq/organization";
+import { Organization, OrganizationEvents, OrganizationHooks } from "@awthaq/organization";
 import { MembershipRecords } from "@awthaq/organization/records";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -498,10 +498,11 @@ describe("a sign-in through a connection with a role mapping", () => {
           log.list({ eventTag: "auth.organization.memberAdded" }),
         );
         // The founder's own membership (creation) and ada's, whose event names the mapped role.
-        const ada = added.find(
-          (row) =>
-            row.payload._tag === "auth.organization.memberAdded" &&
-            row.payload.role.includes("admin"),
+        const ada = added.find((row) =>
+          Option.exists(
+            AuditLog.payloadAs(OrganizationEvents.OrganizationMemberAddedEvent)(row),
+            (event) => event.role.includes("admin"),
+          ),
         );
         assert.isDefined(ada);
         assert.deepStrictEqual(ada?.tenantId, Option.some(organizationId));

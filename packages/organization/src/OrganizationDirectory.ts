@@ -26,6 +26,7 @@ import * as OrganizationActor from "./OrganizationActor.ts";
 import { OrganizationConfig } from "./OrganizationConfig.ts";
 import * as OrganizationDeletion from "./OrganizationDeletion.ts";
 import * as OrganizationErrors from "./OrganizationErrors.ts";
+import * as OrganizationEvents from "./OrganizationEvents.ts";
 import * as OrganizationHooks from "./OrganizationHooks.ts";
 import * as OrganizationRecords from "./OrganizationRecords.ts";
 import * as OrgRoleRecords from "./OrgRoleRecords.ts";
@@ -277,14 +278,12 @@ export class OrganizationDirectory extends Context.Service<
               }),
             )
             .pipe(Effect.catchTag("SqlError", Effect.die));
-          yield* events.publish({
-            _tag: "auth.organization.created",
+          yield* events.emit(OrganizationEvents.OrganizationCreatedEvent, {
             actorUserId: OrganizationActor.userIdOf(actor),
             organizationId: record.id,
             creatorUserId: owner,
           });
-          yield* events.publish({
-            _tag: "auth.organization.memberAdded",
+          yield* events.emit(OrganizationEvents.OrganizationMemberAddedEvent, {
             actorUserId: OrganizationActor.userIdOf(actor),
             organizationId: record.id,
             userId: owner,
@@ -327,8 +326,7 @@ export class OrganizationDirectory extends Context.Service<
                 Effect.fail(new OrganizationErrors.OrganizationSlugTaken()),
               ),
             );
-          yield* events.publish({
-            _tag: "auth.organization.updated",
+          yield* events.emit(OrganizationEvents.OrganizationUpdatedEvent, {
             actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
           });
@@ -372,8 +370,7 @@ export class OrganizationDirectory extends Context.Service<
               }),
             )
             .pipe(Effect.catchTag("SqlError", Effect.die));
-          yield* events.publish({
-            _tag: "auth.organization.deleted",
+          yield* events.emit(OrganizationEvents.OrganizationDeletedEvent, {
             actorUserId: OrganizationActor.userIdOf(actor),
             organizationId,
           });
@@ -415,8 +412,7 @@ export class OrganizationDirectory extends Context.Service<
                   Effect.fail(new OrganizationErrors.OrganizationNotFound()),
                 ),
               );
-          yield* events.publish({
-            _tag: "auth.admin.organizationSuspended",
+          yield* events.emit(OrganizationEvents.AdminOrganizationSuspendedEvent, {
             adminUserId: Users.UserId(actor.adminUserId),
             organizationId,
             reason: reason ?? null,
@@ -440,8 +436,7 @@ export class OrganizationDirectory extends Context.Service<
                 Effect.fail(new OrganizationErrors.OrganizationNotFound()),
               ),
             );
-          yield* events.publish({
-            _tag: "auth.admin.organizationUnsuspended",
+          yield* events.emit(OrganizationEvents.AdminOrganizationUnsuspendedEvent, {
             adminUserId: Users.UserId(actor.adminUserId),
             organizationId,
           });

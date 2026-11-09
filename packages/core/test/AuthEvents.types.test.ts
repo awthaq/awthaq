@@ -1,6 +1,6 @@
-// GC-007/ESA-005: the event union's id fields are branded, and the invitation
-// event carries no contact detail. Nothing here executes — the assertions are the
-// `@ts-expect-error` directives, checked by `tsc -p tsconfig.test.json`.
+// GC-007: the event union's id fields are branded. Nothing here executes — the assertions are the
+// `@ts-expect-error` directives, checked by `tsc -p tsconfig.test.json`. (ESA-005's "no email on
+// invitationCreated" moved with the event: `packages/organization/test/OrganizationEvents.types.test.ts`.)
 import { describe, it } from "@effect/vitest";
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -28,17 +28,6 @@ describe("AuthEvent types", () => {
     };
     void branded;
     void raw;
-  });
-
-  it("the invitation-created event carries no email (ESA-005)", () => {
-    const event: AuthEvents.AuthEvent = {
-      _tag: "auth.organization.invitationCreated",
-      invitationId: "i-1",
-      organizationId: "o-1",
-      // @ts-expect-error identifiers only: the invitee's email is not on the bus
-      email: "invitee@example.com",
-    };
-    void event;
   });
 
   // ADR-EA-049 (plan 29 ticket 06): plugin events through definitions; the bus is open and narrowed by guards.

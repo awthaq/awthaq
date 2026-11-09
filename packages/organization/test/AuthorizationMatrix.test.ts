@@ -16,6 +16,7 @@ import * as InvitationRecords from "../src/InvitationRecords.ts";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationApi from "../src/OrganizationApi.ts";
+import * as OrganizationEvents from "../src/OrganizationEvents.ts";
 import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import type { OrganizationShape } from "../src/OrganizationShape.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
@@ -225,7 +226,9 @@ const denials = Effect.flatMap(AuditLog.AuditLog, (auditLog) =>
 ).pipe(
   Effect.map((records) =>
     records.flatMap((record) =>
-      record.payload._tag === "auth.organization.permissionDenied" ? [record.payload] : [],
+      Option.toArray(
+        AuditLog.payloadAs(OrganizationEvents.OrganizationPermissionDeniedEvent)(record),
+      ),
     ),
   ),
 );

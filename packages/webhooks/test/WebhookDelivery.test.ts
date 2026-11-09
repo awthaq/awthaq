@@ -123,18 +123,15 @@ describe("enqueue and the event relay", () => {
       Effect.gen(function* () {
         const records = yield* WebhookRecords.WebhookRecords;
         const users = (yield* seedEndpoint({ id: "users", eventTags: ["auth.user.*"] })).endpoint;
-        const orgs = (yield* seedEndpoint({
-          id: "orgs",
-          eventTags: ["auth.organization.created", "auth.session.*"],
+        // Core's events only: an organization event needs the organization plugin composed (ADR-EA-049).
+        const replays = (yield* seedEndpoint({
+          id: "replays",
+          eventTags: ["auth.token.replay", "auth.session.*"],
         })).endpoint;
         const all = (yield* seedEndpoint({ id: "all", eventTags: ["*"] })).endpoint;
         const signedInEvent = yield* published(signedIn("u-1"));
-        const orgEvent = yield* published({
-          _tag: "auth.organization.created",
-          organizationId: "org-1",
-          creatorUserId: Users.UserId("u-1"),
-        });
-        const batch = [signedInEvent, orgEvent];
+        const replayEvent = yield* published({ _tag: "auth.token.replay", identifier: "verify:1" });
+        const batch = [signedInEvent, replayEvent];
         assert.strictEqual(yield* WebhookDelivery.enqueue(batch), 4);
         // The same batch again (the relay crashed before its cursor write): nothing new.
         assert.strictEqual(yield* WebhookDelivery.enqueue(batch), 0);
@@ -143,11 +140,8 @@ describe("enqueue and the event relay", () => {
             .listDeliveries({ endpointId: id, limit: 10 })
             .pipe(Effect.map((rows) => rows.map((row) => row.eventTag).sort()));
         assert.deepStrictEqual(yield* tags(users.id), ["auth.user.signedIn"]);
-        assert.deepStrictEqual(yield* tags(orgs.id), ["auth.organization.created"]);
-        assert.deepStrictEqual(yield* tags(all.id), [
-          "auth.organization.created",
-          "auth.user.signedIn",
-        ]);
+        assert.deepStrictEqual(yield* tags(replays.id), ["auth.token.replay"]);
+        assert.deepStrictEqual(yield* tags(all.id), ["auth.token.replay", "auth.user.signedIn"]);
       }).pipe(Effect.provide(deliveryLayer())),
   );
 

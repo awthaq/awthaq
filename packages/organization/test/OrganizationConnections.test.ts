@@ -398,8 +398,11 @@ const ConnectionsStore = Layer.mergeAll(
   ),
 );
 
-const OAuthLive = TestAuth.layer(Auth.make([OAuth.OAuth]), {
+// Organization is composed for its events (ADR-EA-049): the connection store emits
+// `auth.organization.connection*`, which only the composed plugin declares.
+const OAuthLive = TestAuth.layer(Auth.make([OAuth.OAuth, Organization.Organization]), {
   services: Layer.mergeAll(
+    Organization.config({}),
     ConnectionsStore,
     fakeHttpClient({
       "/token": { access_token: "at-1" },

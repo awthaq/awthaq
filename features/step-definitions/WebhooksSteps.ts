@@ -35,6 +35,7 @@ import {
   advance,
   allRequests,
   configure,
+  coreEventOfTag,
   deliver,
   deliveriesOf,
   drain,
@@ -506,8 +507,8 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* run(
         Effect.gen(function* () {
           const events = yield* AuthEvents.AuthEvents;
-          yield* events.publish(yield* eventOfTag(tagA, userA));
-          yield* events.publish(yield* eventOfTag(tagB, userB));
+          yield* events.publish(yield* coreEventOfTag(tagA, userA));
+          yield* events.publish(yield* coreEventOfTag(tagB, userB));
         }),
       );
     },

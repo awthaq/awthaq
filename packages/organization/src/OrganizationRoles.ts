@@ -17,6 +17,7 @@ import * as OrganizationActor from "./OrganizationActor.ts";
 import { OrganizationConfig } from "./OrganizationConfig.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationErrors from "./OrganizationErrors.ts";
+import * as OrganizationEvents from "./OrganizationEvents.ts";
 import * as OrganizationHooks from "./OrganizationHooks.ts";
 import * as OrgRoleRecords from "./OrgRoleRecords.ts";
 import * as PermissionEngine from "./PermissionEngine.ts";
@@ -173,8 +174,7 @@ export class OrganizationRoles extends Context.Service<OrganizationRoles, Organi
                 Effect.fail(new OrganizationErrors.RoleLimitReached()),
             }),
           );
-        yield* events.publish({
-          _tag: "auth.organization.roleCreated",
+        yield* events.emit(OrganizationEvents.OrganizationRoleCreatedEvent, {
           actorUserId: OrganizationActor.userIdOf(actor),
           organizationId,
           role: record.role,
@@ -197,8 +197,7 @@ export class OrganizationRoles extends Context.Service<OrganizationRoles, Organi
             Effect.fail(new OrganizationErrors.OrgRoleNotFound()),
           ),
         );
-        yield* events.publish({
-          _tag: "auth.organization.roleUpdated",
+        yield* events.emit(OrganizationEvents.OrganizationRoleUpdatedEvent, {
           actorUserId: OrganizationActor.userIdOf(actor),
           organizationId,
           role: updated.role,
@@ -220,8 +219,7 @@ export class OrganizationRoles extends Context.Service<OrganizationRoles, Organi
             Effect.fail(new OrganizationErrors.OrgRoleNotFound()),
           ),
         );
-        yield* events.publish({
-          _tag: "auth.organization.roleDeleted",
+        yield* events.emit(OrganizationEvents.OrganizationRoleDeletedEvent, {
           actorUserId: OrganizationActor.userIdOf(actor),
           organizationId,
           role: existing.role,
