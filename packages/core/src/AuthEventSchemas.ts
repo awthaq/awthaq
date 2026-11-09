@@ -601,78 +601,6 @@ export const AdminOrganizationUnsuspendedEvent = EventDefinition.define(
 export type AdminOrganizationUnsuspendedEvent = typeof AdminOrganizationUnsuspendedEvent.Type;
 
 /**
- * Published by `@awthaq/webhooks`' administrative operations after each SUCCESSFUL mutation
- * (identifiers only: the administrator, the endpoint, and for an update the names of the fields
- * changed, never their values, so a URL or a description never enters the audit trail).
- */
-export const WebhookEndpointCreatedEvent = EventDefinition.define(
-  "auth.webhooks.endpointCreated",
-  {
-    adminUserId: EventDefinition.UserId,
-    endpointId: Schema.String,
-  },
-  {
-    actor: EventDefinition.Actor.field("adminUserId"),
-    pii: [],
-  },
-);
-export type WebhookEndpointCreatedEvent = typeof WebhookEndpointCreatedEvent.Type;
-
-export const WebhookEndpointUpdatedEvent = EventDefinition.define(
-  "auth.webhooks.endpointUpdated",
-  {
-    adminUserId: EventDefinition.UserId,
-    endpointId: Schema.String,
-    fields: Schema.Array(Schema.String),
-  },
-  {
-    actor: EventDefinition.Actor.field("adminUserId"),
-    pii: [],
-  },
-);
-export type WebhookEndpointUpdatedEvent = typeof WebhookEndpointUpdatedEvent.Type;
-
-export const WebhookSecretRotatedEvent = EventDefinition.define(
-  "auth.webhooks.secretRotated",
-  {
-    adminUserId: EventDefinition.UserId,
-    endpointId: Schema.String,
-  },
-  {
-    actor: EventDefinition.Actor.field("adminUserId"),
-    pii: [],
-  },
-);
-export type WebhookSecretRotatedEvent = typeof WebhookSecretRotatedEvent.Type;
-
-export const WebhookEndpointDeletedEvent = EventDefinition.define(
-  "auth.webhooks.endpointDeleted",
-  {
-    adminUserId: EventDefinition.UserId,
-    endpointId: Schema.String,
-  },
-  {
-    actor: EventDefinition.Actor.field("adminUserId"),
-    pii: [],
-  },
-);
-export type WebhookEndpointDeletedEvent = typeof WebhookEndpointDeletedEvent.Type;
-
-/** A test ping was queued for an endpoint (`@awthaq/webhooks`): the administrator caused an outbound call. */
-export const WebhookTestQueuedEvent = EventDefinition.define(
-  "auth.webhooks.testQueued",
-  {
-    adminUserId: EventDefinition.UserId,
-    endpointId: Schema.String,
-  },
-  {
-    actor: EventDefinition.Actor.field("adminUserId"),
-    pii: [],
-  },
-);
-export type WebhookTestQueuedEvent = typeof WebhookTestQueuedEvent.Type;
-
-/**
  * ECS-006: published by `awthaq seed admin` after it grants the administrative role
  * (BEH-EA-206). `outcome` says whether the account was created or an existing one
  * promoted; `forced` that the grant went past an existing administrator. Carries the
@@ -1251,11 +1179,6 @@ export const CoreRegistry = EventDefinition.make(
     AdminSessionRevokedEvent,
     AdminOrganizationSuspendedEvent,
     AdminOrganizationUnsuspendedEvent,
-    WebhookEndpointCreatedEvent,
-    WebhookEndpointUpdatedEvent,
-    WebhookSecretRotatedEvent,
-    WebhookEndpointDeletedEvent,
-    WebhookTestQueuedEvent,
     OrganizationConnectionCreatedEvent,
     OrganizationConnectionUpdatedEvent,
     OrganizationConnectionDeletedEvent,

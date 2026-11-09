@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as WebhookDelivery from "../src/WebhookDelivery.ts";
+import * as WebhookEvents from "../src/WebhookEvents.ts";
 import * as WebhookRecords from "../src/WebhookRecords.ts";
 import * as WebhookSignature from "../src/WebhookSignature.ts";
 import * as Webhooks from "../src/Webhooks.ts";
@@ -161,9 +162,12 @@ describe("successful administrative mutations are audited, identifiers only", ()
         const updated = webhookRows.filter(
           (row) => row.eventTag === "auth.webhooks.endpointUpdated",
         );
-        const fields = updated.map((row) =>
-          row.payload._tag === "auth.webhooks.endpointUpdated" ? row.payload.fields : [],
-        );
+        // Core stores the plugin's event as a foreign one; the plugin's definition decodes it (ADR-EA-049).
+        const fields = updated
+          .flatMap((row) =>
+            Option.toArray(AuditLog.payloadAs(WebhookEvents.WebhookEndpointUpdatedEvent)(row)),
+          )
+          .map((payload) => payload.fields);
         assert.deepStrictEqual(
           fields.map((names) => [...names].sort()).sort((a, b) => a.length - b.length),
           [["enabled"], ["description", "enabled", "url"]],

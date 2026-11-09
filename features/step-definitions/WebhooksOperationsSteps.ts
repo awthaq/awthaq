@@ -382,8 +382,10 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
       const rows = (yield* webhookAuditRows).filter((row) => row.eventTag === tag);
       assert.equal(rows.length, 1, `one "${tag}" event`);
       assert.deepEqual(rows[0]?.actorUserId, Option.some(admin));
-      const payload = rows[0]?.payload;
-      assert.ok(payload !== undefined && Reflect.get(payload, "endpointId") === endpoint.id);
+      // The event as published: core stores the plugin's event as a foreign one (ADR-EA-049).
+      const row = rows[0];
+      assert.ok(row !== undefined);
+      assert.equal(Reflect.get(AuditLog.toPublished(row), "endpointId"), endpoint.id);
     },
   );
   Then(
@@ -391,8 +393,10 @@ export const webhooksOperationsSteps = defineSteps<World>(({ Given, When, Then }
     function* (tag: string, name: string, first: string, second: string) {
       const endpoint = yield* endpointNamed(name);
       const rows = (yield* webhookAuditRows).filter((row) => row.eventTag === tag);
-      const payload = rows.at(-1)?.payload;
-      assert.ok(payload !== undefined && Reflect.get(payload, "endpointId") === endpoint.id);
+      const row = rows.at(-1);
+      assert.ok(row !== undefined);
+      const payload = AuditLog.toPublished(row);
+      assert.equal(Reflect.get(payload, "endpointId"), endpoint.id);
       const fields = Reflect.get(payload, "fields");
       assert.ok(Array.isArray(fields));
       assert.deepEqual([...fields].sort(), [first, second].sort());

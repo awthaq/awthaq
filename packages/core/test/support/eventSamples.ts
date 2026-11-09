@@ -290,32 +290,6 @@ export const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.Ev
     adminUserId: otherUserId,
     organizationId: "org-1",
   },
-  "auth.webhooks.endpointCreated": {
-    _tag: "auth.webhooks.endpointCreated",
-    adminUserId: userId,
-    endpointId: "ep-1",
-  },
-  "auth.webhooks.endpointUpdated": {
-    _tag: "auth.webhooks.endpointUpdated",
-    adminUserId: userId,
-    endpointId: "ep-1",
-    fields: ["url"],
-  },
-  "auth.webhooks.secretRotated": {
-    _tag: "auth.webhooks.secretRotated",
-    adminUserId: userId,
-    endpointId: "ep-1",
-  },
-  "auth.webhooks.endpointDeleted": {
-    _tag: "auth.webhooks.endpointDeleted",
-    adminUserId: userId,
-    endpointId: "ep-1",
-  },
-  "auth.webhooks.testQueued": {
-    _tag: "auth.webhooks.testQueued",
-    adminUserId: userId,
-    endpointId: "ep-1",
-  },
   "auth.admin.seeded": {
     _tag: "auth.admin.seeded",
     targetUserId: userId,
