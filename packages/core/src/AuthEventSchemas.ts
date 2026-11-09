@@ -1385,91 +1385,6 @@ export const MailFailedEvent = EventDefinition.define(
 export type MailFailedEvent = typeof MailFailedEvent.Type;
 
 /**
- * OCM-002/OCM-005 (`@awthaq/api-key`): the lifecycle of a long-lived API key and of a
- * `client_credentials` client. `userId` is the owner who acted; `keyId`/`clientId`
- * are the public ids (never a secret or a hash). `rotated` names the predecessor
- * (`keyId`) and its successor.
- */
-export const ApiKeyCreatedEvent = EventDefinition.define(
-  "auth.apiKey.created",
-  {
-    userId: EventDefinition.UserId,
-    keyId: Schema.String,
-  },
-  {
-    actor: EventDefinition.Actor.field("userId"),
-    pii: [],
-  },
-);
-export type ApiKeyCreatedEvent = typeof ApiKeyCreatedEvent.Type;
-
-export const ApiKeyRevokedEvent = EventDefinition.define(
-  "auth.apiKey.revoked",
-  {
-    userId: EventDefinition.UserId,
-    keyId: Schema.String,
-  },
-  {
-    actor: EventDefinition.Actor.field("userId"),
-    pii: [],
-  },
-);
-export type ApiKeyRevokedEvent = typeof ApiKeyRevokedEvent.Type;
-
-export const ApiKeyRotatedEvent = EventDefinition.define(
-  "auth.apiKey.rotated",
-  {
-    userId: EventDefinition.UserId,
-    keyId: Schema.String,
-    successorKeyId: Schema.String,
-  },
-  {
-    actor: EventDefinition.Actor.field("userId"),
-    pii: [],
-  },
-);
-export type ApiKeyRotatedEvent = typeof ApiKeyRotatedEvent.Type;
-
-export const ApiKeyClientRegisteredEvent = EventDefinition.define(
-  "auth.apiKey.clientRegistered",
-  {
-    userId: EventDefinition.UserId,
-    clientId: Schema.String,
-  },
-  {
-    actor: EventDefinition.Actor.field("userId"),
-    pii: [],
-  },
-);
-export type ApiKeyClientRegisteredEvent = typeof ApiKeyClientRegisteredEvent.Type;
-
-export const ApiKeyClientRevokedEvent = EventDefinition.define(
-  "auth.apiKey.clientRevoked",
-  {
-    userId: EventDefinition.UserId,
-    clientId: Schema.String,
-  },
-  {
-    actor: EventDefinition.Actor.field("userId"),
-    pii: [],
-  },
-);
-export type ApiKeyClientRevokedEvent = typeof ApiKeyClientRevokedEvent.Type;
-
-export const ApiKeyClientSecretRotatedEvent = EventDefinition.define(
-  "auth.apiKey.clientSecretRotated",
-  {
-    userId: EventDefinition.UserId,
-    clientId: Schema.String,
-  },
-  {
-    actor: EventDefinition.Actor.field("userId"),
-    pii: [],
-  },
-);
-export type ApiKeyClientSecretRotatedEvent = typeof ApiKeyClientSecretRotatedEvent.Type;
-
-/**
  * THS-001/AOMS-003/BCR-006 (`@awthaq/two-factor`): the second factor's lifecycle and every
  * failed or successful presentation, so a defender can see enrolment, use of a recovery code
  * (the sign that a device was lost), and lockouts. Identifiers only: no code, secret or hash.
@@ -1662,12 +1577,6 @@ export const CoreRegistry = EventDefinition.make(
     AuthorizationDeniedEvent,
     RateLimitExceededEvent,
     MailFailedEvent,
-    ApiKeyCreatedEvent,
-    ApiKeyRevokedEvent,
-    ApiKeyRotatedEvent,
-    ApiKeyClientRegisteredEvent,
-    ApiKeyClientRevokedEvent,
-    ApiKeyClientSecretRotatedEvent,
     TwoFactorEnabledEvent,
     TwoFactorDisabledEvent,
     TwoFactorVerifiedEvent,

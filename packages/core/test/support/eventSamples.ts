@@ -424,21 +424,6 @@ export const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.Ev
     userId,
   },
   "auth.twoFactor.locked": { _tag: "auth.twoFactor.locked", userId },
-  "auth.apiKey.created": { _tag: "auth.apiKey.created", userId, keyId: "key-1" },
-  "auth.apiKey.revoked": { _tag: "auth.apiKey.revoked", userId, keyId: "key-1" },
-  "auth.apiKey.rotated": {
-    _tag: "auth.apiKey.rotated",
-    userId,
-    keyId: "key-1",
-    successorKeyId: "key-2",
-  },
-  "auth.apiKey.clientRegistered": { _tag: "auth.apiKey.clientRegistered", userId, clientId: "c-1" },
-  "auth.apiKey.clientRevoked": { _tag: "auth.apiKey.clientRevoked", userId, clientId: "c-1" },
-  "auth.apiKey.clientSecretRotated": {
-    _tag: "auth.apiKey.clientSecretRotated",
-    userId,
-    clientId: "c-1",
-  },
   "auth.account.linked": {
     _tag: "auth.account.linked",
     userId,
