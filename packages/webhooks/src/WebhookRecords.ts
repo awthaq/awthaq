@@ -233,7 +233,10 @@ export interface WebhookRecordsShape {
     id: string,
   ) => Effect.Effect<void, WebhookRecordNotFound | StoreFailure.StoreUnavailable>;
   // ---- deliveries
-  /** Inserts the rows not already present for their (endpointId, eventId); returns how many were new. */
+  /**
+   * Inserts the rows not already present for their (endpointId, eventId) whose endpoint still exists (one deleted
+   * since the relay listed it gets none, even racing the delete); returns how many were new.
+   */
   readonly enqueue: (
     rows: ReadonlyArray<NewDelivery>,
   ) => Effect.Effect<number, StoreFailure.StoreUnavailable>;
@@ -502,6 +505,8 @@ export const layerMemory: Layer.Layer<
         return yield* Ref.modify(state, (s) => {
           const added: Array<DeliveryRecord> = [];
           for (const row of rows) {
+            // An endpoint deleted since the relay listed it gets no delivery (the delete removed its log).
+            if (!s.endpoints.some((endpoint) => endpoint.id === row.endpointId)) continue;
             const taken =
               s.deliveries.some(
                 (existing) =>
@@ -1289,19 +1294,34 @@ export const layerSql: Layer.Layer<
           if (removed.length === 0) return yield* Effect.fail(notFound(id));
           yield* sql`DELETE FROM webhooks_delivery WHERE "endpointId" = ${id}`;
         }).pipe(SqlTransaction.transactional(sql), failing("deleteEndpoint")),
+      // A row is stored only while its endpoint exists, so an enqueue racing `deleteEndpoint` never leaves a
+      // delivery whose endpoint is gone (there is no foreign key). Each row is one transaction that first takes
+      // the endpoint row's key-share lock (Postgres `FOR KEY SHARE`, which the delete's row lock conflicts with):
+      // a delete that got there first has committed when the lock is granted, and the row reads as gone; a delete
+      // that comes second waits for this insert to commit, and its delivery DELETE then removes it. Same lock
+      // order as `deleteEndpoint` (the endpoint's row, then a delivery's), so neither waits on the other in a
+      // cycle. SQLite runs one write transaction at a time and needs no lock.
       enqueue: (rows) =>
         Effect.gen(function* () {
           const now = yield* DateTime.now;
           let inserted = 0;
           for (const row of rows) {
-            const wrote = yield* sql`
-              INSERT INTO webhooks_delivery (id, "endpointId", "eventId", "eventTag", "subjectUserId", body, status,
-                attempts, "nextAttemptAt", "createdAt")
-              VALUES (${row.id}, ${row.endpointId}, ${row.eventId}, ${row.eventTag}, ${row.subjectUserId ?? null},
-                ${row.body}, 'pending', 0, ${wireDate(row.nextAttemptAt)}, ${wireDate(now)})
-              ON CONFLICT ("endpointId", "eventId") DO NOTHING
-              RETURNING id`.pipe(failing("enqueue"));
-            inserted += wrote.length;
+            const wrote = yield* Effect.gen(function* () {
+              const live =
+                dialect === "pg"
+                  ? yield* sql`SELECT id FROM webhooks_endpoint WHERE id = ${row.endpointId} FOR KEY SHARE`
+                  : yield* sql`SELECT id FROM webhooks_endpoint WHERE id = ${row.endpointId}`;
+              if (live.length === 0) return 0;
+              const stored = yield* sql`
+                INSERT INTO webhooks_delivery (id, "endpointId", "eventId", "eventTag", "subjectUserId", body,
+                  status, attempts, "nextAttemptAt", "createdAt")
+                VALUES (${row.id}, ${row.endpointId}, ${row.eventId}, ${row.eventTag}, ${row.subjectUserId ?? null},
+                  ${row.body}, 'pending', 0, ${wireDate(row.nextAttemptAt)}, ${wireDate(now)})
+                ON CONFLICT ("endpointId", "eventId") DO NOTHING
+                RETURNING id`;
+              return stored.length;
+            }).pipe(SqlTransaction.transactional(sql), failing("enqueue"));
+            inserted += wrote;
           }
           return inserted;
         }),

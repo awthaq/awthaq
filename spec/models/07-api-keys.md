@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-07 |
-> | Revision | 1.3 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.4 |
+> | Effective Date | 2026-11-09 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): `@awthaq/api-key` implemented — API keys, `client_credentials` clients and service tokens, rotation, the `x-api-key` transport (ADR-EA-022; OCM-001/OCM-002/OCM-005/MAPS-003) <br> 1.2 (2026-09-29): Status vocabulary aligned with the adoption matrix (OCM-008, AOMS-011) <br> 1.3 (2026-11-08): rotation and revocation decided at the store (`ApiKeyRecords.rotate`, `revoke` answering whether it revoked); the store-level suites under `test/contract/` (architecture plan 25 ticket 17) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-29): `@awthaq/api-key` implemented — API keys, `client_credentials` clients and service tokens, rotation, the `x-api-key` transport (ADR-EA-022; OCM-001/OCM-002/OCM-005/MAPS-003) <br> 1.2 (2026-09-29): Status vocabulary aligned with the adoption matrix (OCM-008, AOMS-011) <br> 1.3 (2026-11-08): rotation and revocation decided at the store (`ApiKeyRecords.rotate`, `revoke` answering whether it revoked); the store-level suites under `test/contract/` (architecture plan 25 ticket 17) <br> 1.4 (2026-11-09): `ApiKeyClientRecords.revoke` answers whether it revoked, so `revokeClient` announces a client revocation once (batch 3 follow-up) |
 ---
 
 ## What it is
@@ -73,6 +73,8 @@ bearer token is just such a key, scoped `scim:*` (SCP-002).
   is `ApiKeyNotFound`, no successor) or follows it. `revoke` publishes
   `auth.apiKey.revoked` only from the call that revoked the key; a repeat is a no-op.
 - **Client credentials**: `registerClient`/`revokeClient`/`rotateClientSecret`;
+  `revokeClient` publishes `auth.apiKey.clientRevoked` only from the call that revoked
+  the client (`ApiKeyClientRecords.revoke` answers whether it did); a repeat is a no-op;
   `POST /api-key/token` accepts `grant_type=client_credentials` with
   `client_secret_post` or `client_secret_basic`, negotiates scope (requested ∩
   registered, never more; nothing in common is `invalid_scope`), answers RFC 6749

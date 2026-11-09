@@ -582,6 +582,47 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
     },
   );
 
+  // BEH-EA-237 (plan 30, A-F6's second half): the system `cancel` names an organization through the invitation too.
+  it.effect(
+    "cancel answers InvitationNotFound while the organization is suspended, and writes, vetoes and announces nothing",
+    () => {
+      const seen: Array<string> = [];
+      return Effect.gen(function* () {
+        const { org, invitations, invite } = yield* arrange;
+        const directory = yield* OrganizationDirectory.OrganizationDirectory;
+        const invitation = yield* invite("invitee@example.com");
+        yield* directory.suspend(OrganizationActor.platformAdmin(Users.UserId("admin")), {
+          organizationId: org.id,
+        });
+        assert.strictEqual(
+          yield* flipTag(invitations.cancel(application, { invitationId: invitation.id })),
+          "InvitationNotFound",
+        );
+        assert.strictEqual(
+          Option.getOrThrow(yield* invitations.find(invitation.id)).status,
+          "pending",
+        );
+        assert.deepStrictEqual(seen, []);
+      }).pipe(
+        Effect.provide(
+          buildLayer(
+            { teams: teamsOn },
+            Layer.mergeAll(
+              OrganizationHooks.BeforeCancelInvitation.tap((input) => {
+                seen.push("veto");
+                return Effect.succeed(input);
+              }),
+              OrganizationHooks.AfterCancelInvitation.tap(() => {
+                seen.push("canceled");
+                return Effect.void;
+              }),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
   it.effect("listForUser is the invitee's own address (FAMS-002), nothing for another user", () =>
     Effect.gen(function* () {
       const { invitations, invite } = yield* arrange;

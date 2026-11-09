@@ -1,7 +1,8 @@
 // Plan 25 ticket 17 (ADR-EA-041 decision 9): `ApiKeyClientRecords`' contract, its first adapter-level suite (F11),
 // run on memory and SQL (Postgres under `pnpm test:pg`) from `Contract.test.ts`, a fresh store per case.
 // MOD-EA-007 / ADR-EA-022: a client holds at most two valid secret hashes, and `rotateSecret`'s swap (current to
-// previous, new to current) is one write. A reused client id is a defect on both adapters. Plan 24: an insert
+// previous, new to current) is one write; `revoke` answers whether this call revoked the client, so exactly one of
+// any number of concurrent revocations announces it. A reused client id is a defect on both adapters. Plan 24: an insert
 // outage names `ApiKeyClientRecords.insert`, not a column.
 import { Users } from "@awthaq/core";
 import { RecordsContract, TestSql } from "@awthaq/test";
@@ -111,17 +112,47 @@ export const apiKeyClientRecords = RecordsContract.suite(ApiKeyClientRecords.Api
       ],
     },
     revoke: {
-      write: [
+      atomic: [
         {
-          name: "sets revokedAt once: a second revocation keeps the first time; an unknown id is a no-op",
+          name: "true for the call that revokes, false after; the first revocation time is kept",
           run: Effect.gen(function* () {
             const records = yield* ApiKeyClientRecords.ApiKeyClientRecords;
             yield* records.insert(client("a"));
-            yield* records.revoke("a", at(5_000));
-            yield* records.revoke("a", at(6_000));
+            assert.isTrue(yield* records.revoke("a", at(5_000)));
+            assert.isFalse(yield* records.revoke("a", at(6_000)));
             assert.strictEqual(millisOf((yield* stored("a")).revokedAt), 5_000);
-            yield* records.revoke("nope", at(5_000));
+          }),
+        },
+        {
+          name: "an unknown id answers false and stores nothing",
+          run: Effect.gen(function* () {
+            const records = yield* ApiKeyClientRecords.ApiKeyClientRecords;
+            assert.isFalse(yield* records.revoke("nope", at(5_000)));
             assert.isTrue(yield* absent("nope"));
+          }),
+        },
+      ],
+      race: [
+        {
+          name: "concurrent revokes: exactly one true, and its time is the one kept",
+          run: Effect.gen(function* () {
+            const records = yield* ApiKeyClientRecords.ApiKeyClientRecords;
+            yield* records.insert(client("a"));
+            const outcomes = yield* Effect.all(
+              Array.from({ length: RecordsContract.CONCURRENCY }, (_, n) =>
+                Effect.exit(records.revoke("a", at(5_000 + n))),
+              ),
+              { concurrency: "unbounded" },
+            );
+            const winners = outcomes.flatMap((exit, n) =>
+              Exit.isSuccess(exit) && exit.value ? [n] : [],
+            );
+            assert.isTrue(outcomes.every(Exit.isSuccess));
+            assert.strictEqual(winners.length, 1);
+            assert.strictEqual(
+              millisOf((yield* stored("a")).revokedAt),
+              5_000 + (winners[0] ?? -1),
+            );
           }),
         },
       ],

@@ -1129,3 +1129,7 @@ Gate questions come first. Each has a recommended default.
 - Q8 (R1), answered by the maintainer: no environment holds rows sealed before ADR-EA-019 rev 1.3. Recommended **NO-GO** stands: tickets 22–23 are not built.
 - Stale: BEH-EA-339's heading is at `05-persistence-stratum.md:248`, not `:217`, because plan 15 added behaviours above it. The local `awthaq-pg` container was down, so the Postgres proof is CI's run `42444884626`, which runs all of `pnpm check` with `AWTHAQ_POSTGRES_URL` set.
 
+
+### Follow-up: A-F6 closed, branch `fix/batch-3-followups` (2026-11-09)
+
+- The system `OrganizationInvitations.cancel` now refuses a suspended organization's invitation with `InvitationNotFound` and writes nothing (Wave 0's Q3), checked before the status so suspension does not reveal whether it is pending. Its only in-repo caller is the authorized `cancelInvitation`, which already refused first. Note under BEH-EA-237 (`28-tenancy.md` 1.12). With the Wave A audit half, A-F6 is closed.
