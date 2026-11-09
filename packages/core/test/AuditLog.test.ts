@@ -6,7 +6,10 @@
 // all-or-nothing rewrite, byte-order paging, the filter before the row) is `StoreContract.auditLog`,
 // run on the `Ref`, SQLite and Postgres adapters; the SQL adapter's own failure mapping is
 // `packages/sql/test/AuditLogStoreSql.test.ts`.
+import * as TestEncryption from "../../test/src/TestEncryption.ts";
 import { AuditLogStore } from "@awthaq/ports";
+import { CoreMigrations } from "@awthaq/sql";
+import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -16,10 +19,13 @@ import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
+import * as Migrator from "effect/sql/Migrator";
 import * as Stream from "effect/Stream";
 import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
+import * as EventDefinition from "../src/EventDefinition.ts";
 import * as Observability from "../src/Observability.ts";
 import { StoreUnavailable } from "../src/Errors.ts";
 import { UserId } from "../src/Users.ts";
@@ -397,6 +403,240 @@ describe("AuditLog: ESA-007 stored-row decoding", () => {
         });
       }).pipe(Effect.provide(MemoryLayer)),
   );
+});
+
+// ---- ADR-EA-049: an event core does not define (plan 29 ticket 05) ----------------------------
+
+/** A plugin's event, defined outside core's registry: `note` is declared personal data. */
+const LocalDef = EventDefinition.define(
+  "auth.local.happened",
+  { userId: EventDefinition.UserId, note: Schema.String },
+  { actor: EventDefinition.Actor.field("userId"), pii: ["note"] },
+);
+
+const local = (n: number, note = "met at the café") => {
+  const published: AuthEvents.Published<EventDefinition.TypeOf<typeof LocalDef>> = {
+    _tag: "auth.local.happened",
+    userId,
+    note,
+    eventId: `018f0000-0000-7000-8000-${String(n).padStart(12, "0")}`,
+    occurredAt: DateTime.makeUnsafe(1_700_000_000_000 + n * 1000),
+    correlationId: Option.none(),
+    traceId: Option.some("trace-1"),
+    spanId: Option.none(),
+    ip: Option.none(),
+    userAgent: Option.none(),
+    tenantId: Option.none(),
+  };
+  return published;
+};
+
+const storedPayload = (id: string) =>
+  Effect.gen(function* () {
+    const store = yield* AuditLogStore.AuditLogStore;
+    const rows = yield* store.select(
+      {
+        eventTag: Option.none(),
+        actorUserId: Option.none(),
+        from: Option.none(),
+        to: Option.none(),
+      },
+      "authoritative",
+    );
+    const row = rows.find((candidate) => candidate.id === id);
+    assert.isDefined(row);
+    return row === undefined ? {} : JSON.parse(row.payloadJson);
+  });
+
+const SqlLive = SqliteClient.layer({ filename: ":memory:" });
+const SqlLayer = AuditLog.layer.pipe(
+  Layer.provideMerge(Persistence.sql().pipe(Layer.provide(TestEncryption.layer))),
+  Layer.provideMerge(
+    Layer.effectDiscard(Migrator.make({})({ loader: CoreMigrations.coreMigrations })),
+  ),
+  Layer.provideMerge(SqlLive),
+);
+
+const foreignSuite = (
+  name: string,
+  layer: Layer.Layer<AuditLog.AuditLog | AuditLogStore.AuditLogStore, unknown, never>,
+): void => {
+  describe(name, () => {
+    it.effect(
+      "A1: a plugin event is recorded through its definition and read back as a ForeignEvent",
+      () =>
+        Effect.gen(function* () {
+          const auditLog = yield* AuditLog.AuditLog;
+          const event = local(1);
+          yield* auditLog.record(event, LocalDef);
+          const [row] = yield* auditLog.list({ eventTag: "auth.local.happened" });
+          assert.isDefined(row);
+          if (row === undefined) return;
+          assert.strictEqual(row.eventTag, "auth.local.happened");
+          assert.deepStrictEqual(row.actorUserId, Option.some(userId));
+          assert.deepStrictEqual(row.traceId, Option.some("trace-1"));
+          assert.deepStrictEqual(row.payload, {
+            _tag: AuthEvents.ForeignEventTag,
+            tag: "auth.local.happened",
+            fields: { userId, note: "met at the café" },
+          });
+          assert.deepStrictEqual(
+            AuditLog.payloadAs(LocalDef)(row),
+            Option.some({ _tag: "auth.local.happened", userId, note: "met at the café" }),
+          );
+          const stored = yield* storedPayload(event.eventId);
+          assert.deepStrictEqual(stored.meta, { traceId: "trace-1", pii: ["note"] });
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("A2: an event that declares no personal data stores today's shape, no pii key", () =>
+      Effect.gen(function* () {
+        const auditLog = yield* AuditLog.AuditLog;
+        const event = stamped(samples["auth.user.created"], 2);
+        yield* auditLog.record(event);
+        assert.deepStrictEqual(yield* storedPayload(event.eventId), {
+          _tag: "auth.user.created",
+          userId: samples["auth.user.created"].userId,
+          version: AuthEvents.EVENT_VERSION,
+          meta: {},
+        });
+        // A core event decodes as itself; payloadAs refuses another definition's tag.
+        const [row] = yield* auditLog.list();
+        assert.strictEqual(row?.payload._tag, "auth.user.created");
+        assert.isTrue(row !== undefined && Option.isNone(AuditLog.payloadAs(LocalDef)(row)));
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "A3: erasure blanks a plugin row's declared personal data with no registry in scope",
+      () =>
+        Effect.gen(function* () {
+          const auditLog = yield* AuditLog.AuditLog;
+          yield* auditLog.record(local(3), LocalDef);
+          assert.strictEqual(yield* auditLog.pseudonymizeActor(userId), 1);
+          const [row] = yield* auditLog.list();
+          const text = JSON.stringify(row?.payload);
+          assert.notInclude(text, userId);
+          assert.notInclude(text, "café");
+          assert.isTrue(
+            row !== undefined &&
+              row.payload._tag === AuthEvents.ForeignEventTag &&
+              row.payload.fields["note"] === "",
+          );
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "A4: a row written before ADR-EA-049 (no meta.pii) is scrubbed through the frozen table",
+      () =>
+        Effect.gen(function* () {
+          const store = yield* AuditLogStore.AuditLogStore;
+          const auditLog = yield* AuditLog.AuditLog;
+          yield* store.append(
+            rawRow(
+              "018f0000-0000-7000-8000-000000000004",
+              "auth.admin.userBanned",
+              JSON.stringify({
+                _tag: "auth.admin.userBanned",
+                adminUserId: otherUserId,
+                targetUserId: userId,
+                reason: "spamming the forum",
+                version: 1,
+                meta: {},
+              }),
+              otherUserId,
+            ),
+          );
+          assert.strictEqual(yield* auditLog.pseudonymizeActor(userId), 1);
+          const payload = yield* storedPayload("018f0000-0000-7000-8000-000000000004");
+          assert.strictEqual(payload.reason, "");
+          assert.notStrictEqual(payload.targetUserId, userId);
+        }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect(
+      "A5: list and replay read a foreign row; a core row that fails to decode still fails",
+      () =>
+        Effect.gen(function* () {
+          const store = yield* AuditLogStore.AuditLogStore;
+          const auditLog = yield* AuditLog.AuditLog;
+          // A removed plugin's row: core has no definition for it, and nothing in scope has one.
+          yield* store.append(
+            rawRow(
+              "018f0000-0000-7000-8000-000000000005",
+              "auth.removed.happened",
+              JSON.stringify({ _tag: "auth.removed.happened", thing: 1, version: 1, meta: {} }),
+            ),
+          );
+          const listed = yield* auditLog.list();
+          assert.deepStrictEqual(
+            listed.map((row) => row.payload),
+            [
+              {
+                _tag: AuthEvents.ForeignEventTag,
+                tag: "auth.removed.happened",
+                fields: { thing: 1 },
+              },
+            ],
+          );
+          const replayed = yield* auditLog.replay().pipe(Stream.runCollect);
+          assert.strictEqual(replayed.length, 1);
+          // A foreign row that is not a JSON object is still a decode error.
+          yield* store.append(
+            rawRow("018f0000-0000-7000-8000-000000000006", "auth.removed.happened", "[1]"),
+          );
+          const failure = yield* auditLog.list().pipe(Effect.flip);
+          assert.strictEqual(failure._tag, "AuditLogDecodeError");
+        }).pipe(Effect.provide(layer)),
+    );
+  });
+};
+
+foreignSuite("AuditLog: foreign events over memory", MemoryLayer);
+foreignSuite("AuditLog: foreign events over SQLite", SqlLayer);
+
+describe("AuditLog: foreign events, pure parts", () => {
+  it("the frozen pre-ADR-EA-049 personal-data table holds exactly the three tags declaring pii then", () => {
+    assert.deepStrictEqual(AuditLog.PRE_ADR_049_PII, {
+      "auth.admin.impersonationStarted": ["reason"],
+      "auth.admin.userBanned": ["reason"],
+      "auth.admin.organizationSuspended": ["reason"],
+    });
+  });
+
+  it("A6: toPublished unwraps a foreign record into the event as it was published", () => {
+    const record: AuditLog.AuditLogRecord = {
+      id: "018f0000-0000-7000-8000-000000000007",
+      eventTag: "auth.local.happened",
+      actorUserId: Option.some(userId),
+      occurredAt: DateTime.makeUnsafe(1_700_000_000_000),
+      correlationId: Option.none(),
+      traceId: Option.none(),
+      spanId: Option.none(),
+      ip: Option.none(),
+      userAgent: Option.none(),
+      tenantId: Option.none(),
+      payload: {
+        _tag: AuthEvents.ForeignEventTag,
+        tag: "auth.local.happened",
+        fields: { userId, note: "n" },
+      },
+    };
+    const published = {
+      _tag: "auth.local.happened",
+      userId,
+      note: "n",
+      eventId: record.id,
+      occurredAt: record.occurredAt,
+      correlationId: Option.none(),
+      traceId: Option.none(),
+      spanId: Option.none(),
+      ip: Option.none(),
+      userAgent: Option.none(),
+      tenantId: Option.none(),
+    };
+    assert.deepStrictEqual(AuditLog.toPublished(record), published);
+  });
 });
 
 describe("AuditLog: what the store makes true", () => {

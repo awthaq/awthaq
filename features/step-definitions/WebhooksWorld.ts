@@ -452,12 +452,12 @@ export const eventOfTag = (tag: string, userId: string): Effect.Effect<AuthEvent
 
 // ---- delivery ------------------------------------------------------------------------------------
 
-export const enqueue = (events: ReadonlyArray<AuthEvents.Published>) =>
+export const enqueue = (events: ReadonlyArray<AuthEvents.PublishedAny>) =>
   run(WebhookDelivery.enqueue(events));
 
 export const drain = run(WebhookDelivery.drainDue);
 
-export const deliver = (events: ReadonlyArray<AuthEvents.Published>) =>
+export const deliver = (events: ReadonlyArray<AuthEvents.PublishedAny>) =>
   Effect.gen(function* () {
     const queued = yield* enqueue(events);
     const attempted = yield* drain;

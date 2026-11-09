@@ -45,7 +45,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { RelayCursorStore } from "@awthaq/ports";
 import * as AuditLog from "./AuditLog.ts";
-import type { AuthEventTag, Published } from "./AuthEventSchemas.ts";
+import type { PublishedAny } from "./AuthEventSchemas.ts";
 import * as Observability from "./Observability.ts";
 
 /**
@@ -54,7 +54,7 @@ import * as Observability from "./Observability.ts";
  * relay retry the same batch. It must be idempotent on `eventId`.
  */
 export interface EventTransportShape {
-  readonly deliver: (events: ReadonlyArray<Published>) => Effect.Effect<void, unknown>;
+  readonly deliver: (events: ReadonlyArray<PublishedAny>) => Effect.Effect<void, unknown>;
 }
 
 export class EventTransport extends Context.Service<EventTransport, EventTransportShape>()(
@@ -71,7 +71,7 @@ export interface EventRelayOptions {
   /** An event is relayed once it is this old (see the module header). Default 2 seconds. */
   readonly settleDelay?: Duration.Input;
   /** Relay only this event tag. Default: every event. */
-  readonly eventTag?: AuthEventTag;
+  readonly eventTag?: string;
   /** Where a relay with no stored position starts, after this event id. Default: the beginning of the log. */
   readonly startAfter?: string;
 }

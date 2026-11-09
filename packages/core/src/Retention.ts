@@ -35,7 +35,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import { AuditLog } from "./AuditLog.ts";
-import type { AuthEventTag } from "./AuthEventSchemas.ts";
 import { RetentionRegistry } from "./RetentionRegistry.ts";
 import { Sessions } from "./Sessions.ts";
 import { Verification } from "./Verification.ts";
@@ -44,7 +43,7 @@ export * from "./RetentionRegistry.ts";
 
 /** Rows of these event tags are kept for `keepFor`, whatever `AuditRetention.default` says. */
 export interface AuditRetentionRule {
-  readonly tags: ReadonlyArray<AuthEventTag>;
+  readonly tags: ReadonlyArray<string>;
   readonly keepFor: Duration.Duration;
 }
 
@@ -128,7 +127,7 @@ export const sweep = Effect.gen(function* () {
   // One delete per rule (a tag named by an earlier rule is left to it), then the default
   // window over every tag no rule named.
   let auditRowsDeleted = 0;
-  const named: Array<AuthEventTag> = [];
+  const named: Array<string> = [];
   for (const rule of settings.auditLog.rules) {
     const tags = rule.tags.filter((tag) => !named.includes(tag));
     named.push(...tags);

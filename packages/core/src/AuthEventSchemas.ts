@@ -1862,6 +1862,22 @@ export const EventRegistry = Context.Reference<EventDefinition.Registry<AnyEvent
   { defaultValue: () => CoreRegistry },
 );
 
+/** ADR-EA-049: the tag of a `ForeignEvent`; reserved, so no definition may use it (`EventDefinition.problems`, `Auth.make`). */
+export const ForeignEventTag = EventDefinition.ForeignEventTag;
+
+/**
+ * ADR-EA-049: a stored event whose tag core does not define, a plugin's (still composed or removed), as
+ * `AuditLog` reads it. Core decodes nothing of it; the plugin decodes its own rows with
+ * `AuditLog.payloadAs(definition)`. The fixed literal tag keeps `AuthEvent | ForeignEvent` narrowable.
+ */
+export const ForeignEvent = Schema.TaggedStruct(ForeignEventTag, {
+  /** The stored tag (`AuditLogRecord.eventTag`). */
+  tag: Schema.String,
+  /** The event's stored fields, without `_tag`, `version` and `meta`. */
+  fields: Schema.Record(Schema.String, Schema.Unknown),
+});
+export type ForeignEvent = typeof ForeignEvent.Type;
+
 /** Provides `EventRegistry`; `Auth.make` returns one for its composed set as `eventsLayer`. */
 export const eventRegistryLayer = (registry: EventDefinition.Registry<AnyEvent>) =>
   Layer.succeed(EventRegistry, registry);
@@ -1922,4 +1938,3 @@ export const upcastPayload = (_version: number, payload: unknown): unknown => pa
 export const decodeEvent = Schema.decodeUnknownEffect(AuthEventSchema);
 /** The event alone, without its envelope (decoding keeps only the declared fields) — what tests and relays compare. Throws on a value that is not an `AuthEvent`. */
 export const payloadOf = Schema.decodeUnknownSync(AuthEventSchema);
-export const encodeEvent = Schema.encodeEffect(AuthEventSchema);

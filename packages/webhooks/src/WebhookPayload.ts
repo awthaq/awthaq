@@ -66,7 +66,7 @@ export interface WebhookBody {
   readonly client?: { readonly ip?: string; readonly userAgent?: string };
 }
 
-export const toBody = (event: AuthEvents.Published, options: PayloadOptions): WebhookBody => {
+export const toBody = (event: AuthEvents.PublishedAny, options: PayloadOptions): WebhookBody => {
   const scrubbed = new Set(AuthEvents.piiFieldsOf(event._tag));
   const data: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(event)) {
@@ -100,7 +100,7 @@ export const toBody = (event: AuthEvents.Published, options: PayloadOptions): We
 };
 
 /** The user an event is about, for erasure and export of the delivery log: the first identifier field that names a user. */
-export const subjectUserId = (event: AuthEvents.Published): string | undefined => {
+export const subjectUserId = (event: AuthEvents.PublishedAny): string | undefined => {
   for (const key of ["userId", "targetUserId", "adminUserId"]) {
     const value: unknown = Reflect.get(event, key);
     if (typeof value === "string") return value;
