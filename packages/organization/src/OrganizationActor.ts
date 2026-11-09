@@ -6,10 +6,10 @@
 // restricts who can construct the call, not what the call may do (ADR-EA-040, plan 04 §3.2).
 //
 // `Bound` is the grant ceiling of a role-conferring operation (RRM-001, OHS-004, BEH-EA-288/316):
-// `Ceiling` carries the statements the source holds; `Unbounded` is the deliberate, greppable
-// choice of a trusted source (the application, a directory's configured role).
+// `Ceiling` carries the statements the source holds, minted only by `OrganizationAuthority`;
+// `Unbounded` is the deliberate, greppable choice of a trusted source (the application, a
+// directory's configured role). The authorized layer's `User` actor comes from an access proof.
 
-import type { Api } from "@awthaq/api";
 import { Users } from "@awthaq/core";
 import type * as Brand from "effect/Brand";
 import * as Data from "effect/Data";
@@ -31,8 +31,6 @@ export const ActorSchema = Schema.TaggedUnion({
 export type Actor = typeof ActorSchema.Type;
 export type PlatformAdminActor = typeof ActorSchema.cases.PlatformAdmin.Type;
 
-export const user = (principal: Api.UserPrincipal) =>
-  ActorSchema.cases.User.make({ userId: principal.ref.id, sessionId: principal.sessionId });
 export const directory = (connectionId: string) =>
   ActorSchema.cases.Directory.make({ connectionId });
 export const identityProvider = (connectionId: string) =>
@@ -49,12 +47,15 @@ export const userIdOf = (actor: Actor) =>
       ? Users.UserId(actor.adminUserId)
       : undefined;
 
-/** Statements a ceiling was minted over; only `OrganizationAuthority` brands them (plan 30). */
+/**
+ * Statements a ceiling was minted over. Only `OrganizationAuthority` brands them (plan 30, ADR-EA-040
+ * decision 6), so outside it a `Ceiling` comes from `OrganizationAuthority.ceilingOf` or an access proof.
+ */
 export type CeilingStatements = PermissionEngine.Statements &
   Brand.Brand<"awthaq/organization/CeilingStatements">;
 
 export type Bound = Data.TaggedEnum<{
   Unbounded: {};
-  Ceiling: { readonly statements: PermissionEngine.Statements };
+  Ceiling: { readonly statements: CeilingStatements };
 }>;
 export const Bound = Data.taggedEnum<Bound>();

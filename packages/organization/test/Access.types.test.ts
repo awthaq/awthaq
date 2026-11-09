@@ -1,14 +1,16 @@
-// Plan 30 tickets 05 and 07: the brand idiom the access proof and the grant ceiling rely on. These are
+// Plan 30 tickets 05, 07 and 10: the brand idiom the access proof and the grant ceiling rely on. These are
 // compile-time checks (`tsc -p tsconfig.test.json` is the assertion) with token runtime tests so the file
-// is a suite. The proofs are the real `internal/access.ts` ones; the Ceiling mirror below becomes the real
-// `OrganizationActor.Bound` in ticket 10.
-import type { Api } from "@awthaq/api";
+// is a suite: the real `internal/access.ts` proofs and the real `OrganizationActor.Bound`.
+import { Api } from "@awthaq/api";
+import { Auth } from "@awthaq/core";
+import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
-import * as Brand from "effect/Brand";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as OrganizationAccess from "../src/internal/access.ts";
 import { policy } from "../src/internal/policy.ts";
+import * as Organization from "../src/Organization.ts";
+import * as OrganizationActor from "../src/OrganizationActor.ts";
+import * as OrganizationAuthority from "../src/OrganizationAuthority.ts";
 import type { OrganizationShape } from "../src/OrganizationShape.ts";
 
 type Statements = { readonly [resource: string]: ReadonlyArray<string> };
@@ -23,19 +25,13 @@ export const forgedStatement = (
   // @ts-expect-error a MemberAccess is not a StatementAccess
   access;
 
-// 3. `Data.taggedEnum` over a branded field: a plain `Statements` no longer builds a `Ceiling`.
-type CeilingStatements = Statements & Brand.Brand<"spike/CeilingStatements">;
-type Bound = Data.TaggedEnum<{
-  Unbounded: {};
-  Ceiling: { readonly statements: CeilingStatements };
-}>;
-const Bound = Data.taggedEnum<Bound>();
-const ceilingStatements = Brand.nominal<CeilingStatements>();
+// 3. `Bound.Ceiling` needs `CeilingStatements`, which only `OrganizationAuthority` brands (ticket 10): a plain
+// `Statements` no longer builds one, while `Unbounded()` and `$match` still work.
 // @ts-expect-error `{}` is a plain Statements, not CeilingStatements
-export const plainCeiling = Bound.Ceiling({ statements: {} });
-const ceiling = Bound.Ceiling({ statements: ceilingStatements({ team: ["update"] }) });
+export const plainCeiling = OrganizationActor.Bound.Ceiling({ statements: {} });
 // A CeilingStatements still reads as Statements (internal/bound.ts needs no change).
-export const readsAsStatements: Statements = ceiling.statements;
+export const readsAsStatements = (statements: OrganizationActor.CeilingStatements): Statements =>
+  statements;
 
 // 4. The generic entry points keep the statement's literals at the call site.
 const roleCreate = (access: Access, caller: Api.UserPrincipal) =>
@@ -68,16 +64,32 @@ export const memberNeverDenies: [
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 export const policyCoversTheShape: Same<keyof typeof policy, keyof OrganizationShape> = true;
 
-describe("access brands (plan 30 tickets 05, 07)", () => {
+describe("access brands (plan 30 tickets 05, 07, 10)", () => {
   it("Unbounded and $match still work over the branded Ceiling", () => {
-    const describeBound = (bound: Bound) =>
-      Bound.$match(bound, {
+    const describeBound = (bound: OrganizationActor.Bound) =>
+      OrganizationActor.Bound.$match(bound, {
         Unbounded: () => "unbounded",
         Ceiling: ({ statements }) => Object.keys(statements).join(","),
       });
-    assert.strictEqual(describeBound(Bound.Unbounded()), "unbounded");
-    assert.strictEqual(describeBound(ceiling), "team");
+    assert.strictEqual(describeBound(OrganizationActor.Bound.Unbounded()), "unbounded");
   });
+
+  it.effect("OrganizationAuthority mints the Ceiling", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const authority = yield* OrganizationAuthority.OrganizationAuthority;
+      const org = yield* organization.create({
+        caller: new Api.UserPrincipal({
+          ref: new Api.PrincipalRef({ type: "user", id: "owner" }),
+          sessionId: "owner-session",
+        }),
+        name: "Acme",
+        slug: "acme",
+      });
+      const bound = yield* authority.ceilingOf(org.id, ["member"]);
+      assert.strictEqual(bound._tag, "Ceiling");
+    }).pipe(Effect.provide(TestAuth.layer(Auth.make([Organization.Organization])))),
+  );
 
   it("statement keeps its resource and action", () => {
     assert.deepStrictEqual(OrganizationAccess.statement("role", "create"), {

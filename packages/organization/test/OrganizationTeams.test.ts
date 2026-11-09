@@ -14,6 +14,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as MembershipRecords from "../src/MembershipRecords.ts";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationActor from "../src/OrganizationActor.ts";
+import * as OrganizationAuthority from "../src/OrganizationAuthority.ts";
 import * as OrganizationHooks from "../src/OrganizationHooks.ts";
 import * as OrganizationTeams from "../src/OrganizationTeams.ts";
 import * as TeamRecords from "../src/TeamRecords.ts";
@@ -540,12 +541,18 @@ describe("OrganizationTeams: rosters", () => {
     const config = {
       teams: teamsOn(),
       teamStatements: { lead: { team: ["update"] }, chief: { team: ["update", "delete"] } },
+      // A ceiling is minted only by `OrganizationAuthority` (plan 30): this role's statements are the one wanted.
+      permissionStatements: { teamEditor: { team: ["update"] } },
     } satisfies Partial<Organization.OrganizationConfigShape>;
-    const ceiling = OrganizationActor.Bound.Ceiling({ statements: { team: ["update"] } });
+    const ceilingIn = (organizationId: string) =>
+      Effect.flatMap(OrganizationAuthority.OrganizationAuthority, (authority) =>
+        authority.ceilingOf(organizationId, ["teamEditor"]),
+      );
 
     it.effect("a Ceiling refuses a role that confers more; Unbounded admits it", () =>
       Effect.gen(function* () {
         const { org, teams } = yield* arrange(["u1", "u2"]);
+        const ceiling = yield* ceilingIn(org.id);
         const team = (yield* teams.create(application, { organizationId: org.id, name: "Eng" }))
           .team;
         const base = { organizationId: org.id, teamId: team.id };
@@ -580,6 +587,7 @@ describe("OrganizationTeams: rosters", () => {
     it.effect("setMemberRole bounds the requested role and the role the member holds now", () =>
       Effect.gen(function* () {
         const { org, teams } = yield* arrange(["u1"]);
+        const ceiling = yield* ceilingIn(org.id);
         const team = (yield* teams.create(application, { organizationId: org.id, name: "Eng" }))
           .team;
         const base = { organizationId: org.id, teamId: team.id, userId: userId("u1") };
