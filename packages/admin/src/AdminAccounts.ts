@@ -1,7 +1,8 @@
 // @awthaq/admin — AdminAccounts
 //
-// BAM-005/BAM-009 (BEH-EA-221, BEH-EA-225): deleting a user, setting a user's email and setting a
-// user's password, as an opt-in plugin beside `Admin`: `Auth.make([Admin, AdminAccounts])`.
+// BAM-005/BAM-009 (BEH-EA-221, BEH-EA-224): deleting a user, setting a user's email and setting a
+// user's password, as an opt-in plugin beside `Admin` and `Password`:
+// `Auth.make([Admin, Password, AdminAccounts])` (it lists `Password` in `dependsOn`, ADR-EA-048).
 // Every operation is behind its own fail-closed predicate (`AdminConfig.canDeleteUsers`,
 // `canManageCredentials`), gate first and existence second, and publishes an audited
 // `auth.admin.*` event naming the administrator.
@@ -15,10 +16,12 @@
 //   and the address is replaced only when its owner confirms at `POST /change-email/confirm`
 //   (`@awthaq/password`), which also marks it verified. That endpoint is part of the password
 //   plugin, so a deployment without it can request but not complete a change.
-// - `setUserPassword` writes the hash through the `PasswordHasher` port (never a hash of this
-//   package's own), replaces the credential — or creates the password credential if the user had
-//   none — and revokes every session of the user (reason `admin`) in the same transaction, so a
-//   session an attacker held does not survive the reset. It consults `Hooks.BeforeCredentialReset`
+// - `setUserPassword` never touches the credential or a hasher itself: `Password`'s exposed
+//   `PasswordCredential` checks the password against `Password.config`'s policy in force for the
+//   request's tenant (minimum length, breach screening; BEH-EA-120) before anything is written,
+//   then, inside one transaction, replaces the credential — or creates the password credential if
+//   the user had none — while every session of the user is revoked (reason `admin`), so a session
+//   an attacker held does not survive the reset. It consults `Hooks.BeforeCredentialReset`
 //   (ARF-005) with no second-factor code, exactly like a self-service reset that has none: for a
 //   user protected by a second factor the veto refuses (`HookAborted`, code `TWO_FACTOR_REQUIRED`)
 //   and nothing is written. An administrator cannot supply the user's factor, so the safe default
@@ -28,7 +31,6 @@
 import { Api } from "@awthaq/api";
 import {
   CurrentUser,
-  Accounts,
   AuthEvents,
   AuthPlugin,
   EmailChange,
@@ -40,11 +42,12 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { Mailer, PasswordHasher, SqlTransaction } from "@awthaq/ports";
+import { Password, PasswordCredential } from "@awthaq/password";
+import { Mailer, SqlTransaction } from "@awthaq/ports";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
+import type * as Redacted from "effect/Redacted";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as AdminAccountsApi from "./AdminAccountsApi.ts";
 import * as AdminApi from "./AdminApi.ts";
@@ -140,16 +143,17 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
   },
 ) {
   static readonly layer = AuthPlugin.layer(AdminAccounts, {
-    ports: [Mailer.Mailer, PasswordHasher.PasswordHasher, SqlTransaction.SqlTransaction],
+    // ADR-EA-048: the password credential, and its one policy, are `Password`'s.
+    dependsOn: [Password.Password],
+    ports: [Mailer.Mailer, SqlTransaction.SqlTransaction],
     handlers: AdminAccountsHandlers,
     make: Effect.gen(function* () {
       const users = yield* Users.Users;
-      const accountStore = yield* Accounts.Accounts;
       const sessions = yield* Sessions.Sessions;
       const verification = yield* Verification.Verification;
       const erasure = yield* Erasure.AccountErasure;
       const events = yield* AuthEvents.AuthEvents;
-      const hasher = yield* PasswordHasher.PasswordHasher;
+      const credential = yield* PasswordCredential.PasswordCredential;
       const mailer = yield* Mailer.Mailer;
       const random = yield* SecureRandom.SecureRandom;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
@@ -225,12 +229,16 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
           if (Option.isNone(Users.emailOf(user))) {
             return yield* Effect.fail(new AdminAccountsApi.AdminNoEmailIdentity());
           }
-          const hints = yield* cleared.config.passwordPolicy(input.password);
-          if (hints.length > 0) {
-            return yield* Effect.fail(new AdminAccountsApi.AdminWeakPassword({ hints }));
-          }
-          // The expensive hash is computed before the transaction opens.
-          const hash = Redacted.make(yield* hasher.hash(input.password));
+          // BEH-EA-120: `Password`'s policy in force for this request's tenant, breach screening
+          // included, before the transaction opens (its breach check is a network call).
+          const password = yield* credential
+            .accept(input.password)
+            .pipe(
+              Effect.catchTag(
+                "WeakPassword",
+                (weak) => new AdminAccountsApi.AdminWeakPassword({ hints: weak.hints }),
+              ),
+            );
           yield* sqlTransaction
             .withTransaction(
               Effect.gen(function* () {
@@ -238,29 +246,8 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
                 yield* HookPoint.aborted(Hooks.BeforeCredentialReset)(
                   beforeCredentialReset.run({ userId }),
                 );
-                const account = yield* accountStore.findByProviderSubject(
-                  Accounts.PASSWORD_PROVIDER_ID,
-                  userId,
-                );
-                if (Option.isSome(account)) {
-                  yield* accountStore
-                    .updateCredentialHash(account.value.id, hash)
-                    .pipe(
-                      Effect.catchTag("AccountNotFound", () =>
-                        Effect.fail(new AdminApi.AdminTargetNotFound()),
-                      ),
-                    );
-                } else {
-                  yield* accountStore
-                    .link({
-                      userId,
-                      providerId: Accounts.PASSWORD_PROVIDER_ID,
-                      subject: userId,
-                      credentialHash: hash,
-                    })
-                    // `findByProviderSubject` above just said there is none: a racing link is a defect here.
-                    .pipe(Effect.catchTag("AccountAlreadyLinked", Effect.die));
-                }
+                // Replaces the credential, or links one for a user who had none.
+                yield* credential.set(userId, password);
                 // No session issued before this survives the reset — the classic "attacker holds a
                 // hijacked session through a password change" gap (impersonation sessions included).
                 yield* sessions.revokeAll(userId, "admin");

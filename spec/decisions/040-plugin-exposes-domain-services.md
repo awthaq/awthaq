@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-040 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-10-13 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-13): Initial release (plan 04) |
+> | Change History | 1.0 (2026-10-13): Initial release (plan 04) <br> 1.1 (2026-11-08): revision note under Consequences: the second user, `@awthaq/password`'s `PasswordCredential` (ADR-EA-048, architecture plan 27) |
 
 ---
 
@@ -37,6 +37,8 @@ The fix is a layer of **system interfaces** beneath the authorized one (`Organiz
 **Positive**: a trusted caller gets an interface that owns its invariants, hooks, events and transactions; the dependency is checked by the compiler and visible in `plugin list --graph`; a module can be tested or substituted alone. A system module's invariant over several rows is enforced by a record-store primitive ([ADR-EA-041](041-domain-store-ports.md) decision 9); the module's own check only orders errors.
 
 **Negative**: one option on `AuthPlugin.layer` and one `Validate` rule to maintain. An inline `Layer.succeed(Tag, ...)` as the sole `exposes.layer` does not infer (TypeScript fixes the contravariant `ROut` parameter to `never` while it is still contextually typed); bind the layer to a `const` or build it with `Layer.mergeAll`.
+
+**Revision note (1.1).** Second user: `@awthaq/password` exposes `PasswordCredential` ([ADR-EA-048](048-password-credential-module.md)); `AdminAccounts` lists `Password` in `dependsOn`, as `AdminTenants` lists `Organization`, and `awthaq seed admin` reads it from the application context. No decision text changes.
 
 ## Alternatives considered
 

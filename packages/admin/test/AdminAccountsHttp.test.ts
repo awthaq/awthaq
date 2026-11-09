@@ -2,21 +2,26 @@
 // codes, a real session cookie, the CSRF double-submit: deny-by-default 403, the erasure cascade
 // behind DELETE, the 202 of a mailed email change, the 422 of a weak password.
 import { Accounts, Auth, Sessions, Users } from "@awthaq/core";
+import { Password } from "@awthaq/password";
 import { Mailer } from "@awthaq/ports";
 import { TestAuth, type UserAgent } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Admin from "../src/Admin.ts";
 import * as AdminAccounts from "../src/AdminAccounts.ts";
 
-const built = Auth.make([Admin.Admin, AdminAccounts.AdminAccounts]);
+const built = Auth.make([Admin.Admin, Password.Password, AdminAccounts.AdminAccounts]);
 
 const allow = () => Effect.succeed(true);
 
 const buildHandler = (config: Partial<Admin.AdminConfigShape>) => {
   const app = TestAuth.app(
-    TestAuth.layer(built, { services: Admin.config(config), openapiPath: "/openapi.json" }),
+    TestAuth.layer(built, {
+      services: Layer.merge(Admin.config(config), TestAuth.httpClient.noBreach),
+      openapiPath: "/openapi.json",
+    }),
   );
 
   /** Runs `program` against the same running services the handler uses. */

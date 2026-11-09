@@ -10,7 +10,6 @@
 import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
 import {
   CurrentUser,
-  Accounts,
   AuthEvents,
   AuthPlugin,
   ConfigDescriptor,
@@ -31,108 +30,22 @@ import {
 } from "@awthaq/core";
 import { Defects, Hmac, Mailer, PasswordHasher, RateLimiter, SqlTransaction } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
-import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import * as Digest from "effect/crypto/Digest";
 import * as Mac from "effect/crypto/Mac";
-import * as Data from "effect/Data";
-import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as HttpClient from "effect/http/HttpClient";
-import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as PasswordApi from "./PasswordApi.ts";
+import { PasswordConfig } from "./PasswordConfig.ts";
+import * as PasswordCredential from "./PasswordCredential.ts";
 
-export interface PasswordConfigShape {
-  readonly minLength: number;
-  /**
-   * BEH-EA-119/PHS-006: screening a new password against the HIBP corpus is on
-   * by default (NIST SP 800-63B section 3.1.1.2 makes checking against
-   * compromised-password lists a SHALL; the k-anonymity range API discloses
-   * only a 5-character SHA-1 prefix). `true` fails open when the provider is
-   * unavailable, `{ onUnavailable: "reject" }` fails closed, `false` disables
-   * it (air-gapped deployments).
-   */
-  readonly breachCheck: boolean | { readonly onUnavailable: "allow" | "reject" };
-  /**
-   * PHS-004: how long the breach lookup (request plus body) may take before
-   * it counts as "unavailable" and follows `breachCheck`'s `onUnavailable`,
-   * so a black-holed egress never hangs sign-up.
-   */
-  readonly breachCheckTimeout: Duration.Duration;
-  readonly resetTtl: Duration.Duration;
-  readonly rehashOnLogin: boolean;
-  /**
-   * TSS-006: the minimum time `signIn`'s credential check (lookup plus
-   * verify) takes, so an account whose stored hash is cheaper than the
-   * configured cost (a legacy bcrypt row awaiting rehash) cannot be told
-   * apart from an unknown email by latency. `"calibrated"` (the default)
-   * times the boot-time dummy verify and pads to 1.25 times that; a
-   * `Duration` fixes the floor; `"off"` disables it. A hash costlier than
-   * the floor still takes longer, and stays distinguishable until rehashed.
-   */
-  readonly signInTimingFloor: "calibrated" | "off" | Duration.Duration;
-  /**
-   * TMS-006: maps an address to the per-email rate-limit bucket it is
-   * counted in (sign-up, sign-in, reset, resend). The default
-   * (`RateLimits.Key.emailKey`) trims, lower-cases and strips a `+tag`, so
-   * subaddressed aliases share one budget; delivery still uses the literal
-   * address. Override for providers with other conventions. Read once at boot.
-   */
-  readonly rateLimitEmailKey: (email: string) => string;
-  /**
-   * MLO-009: builds the link mailed for each token, from the token string. When
-   * set, the mail's `data.url` carries it (alongside `token` and `expiresAt`,
-   * which are always present). Point it at a page that consumes the token from
-   * the URL fragment or a form POST — never a query string a GET handler
-   * acts on, which mail scanners prefetch.
-   */
-  readonly links: {
-    readonly verifyEmail?: (token: string) => string;
-    readonly resetPassword?: (token: string) => string;
-    /** BAM-009: the confirmation link mailed to the *new* address of a change-email flow (a user's own request or an administrator's). */
-    readonly changeEmail?: (token: string) => string;
-  };
-  /**
-   * FAMS-003: whether `signIn` refuses an account whose email is unverified
-   * (after the credentials are confirmed, so it is never a password oracle).
-   * Default `true`. A deployment that imported users from a source that
-   * never verified them (or verified differently) may set `false` and
-   * restrict unverified users downstream instead, or call
-   * `Users.verifyEmail` for the imported users the source had verified.
-   */
-  readonly requireVerifiedEmail: boolean;
-  /**
-   * TMS-005: how `signUp` answers an address that already has an account.
-   * `"reveal"` (default) fails with 409 `EmailAlreadyExists` and issues the
-   * session at once. `"conceal"` answers 202 for a fresh and an existing
-   * address alike, issues no session until the mailbox is proven (the
-   * verification mail), and mails the existing owner an `account-exists`
-   * notice. See ADR-EA-018.
-   */
-  readonly signUpEnumeration: "reveal" | "conceal";
-  /**
-   * CSD-004: the secret `auth.user.signInFailed.identifierDigest` is keyed
-   * with. `None` (default) generates a random key per process — enough for a
-   * single-process detector, but digests do not survive a restart or match
-   * across instances; set a stable secret (>= 32 bytes) to correlate attempts
-   * across a fleet and over time.
-   */
-  readonly identifierDigestKey: Option.Option<Redacted.Redacted<string>>;
-  /**
-   * BEH-EA-320: how recent the session's `authenticatedAt` must be to start an email change
-   * (`POST /change-email`); an older session gets `PasswordReauthRequired` and must step up
-   * through `POST /password/reauthenticate` (or a passkey) first. Without it a hijacked cookie
-   * could point the account's address at an attacker's mailbox and then reset the password.
-   * `Duration.infinity` turns the gate off. Default 5 minutes, like passkey enrolment.
-   */
-  readonly reauthMaxAge: Duration.Duration;
-}
+export { PasswordConfig, config } from "./PasswordConfig.ts";
+export type { PasswordConfigShape } from "./PasswordConfig.ts";
 
 // ---- rate limits ------------------------------------------------------------------------------------
 
@@ -307,31 +220,6 @@ const rules = {
     window: minutes15,
   }),
 };
-
-const defaultPasswordConfig: PasswordConfigShape = {
-  minLength: 12,
-  breachCheck: true,
-  breachCheckTimeout: Duration.seconds(3),
-  resetTtl: Duration.hours(1),
-  rehashOnLogin: true,
-  signInTimingFloor: "calibrated",
-  rateLimitEmailKey: RateLimits.Key.emailKey,
-  links: {},
-  requireVerifiedEmail: true,
-  signUpEnumeration: "reveal",
-  identifierDigestKey: Option.none(),
-  reauthMaxAge: Duration.minutes(5),
-};
-
-/** BEH-EA-017's `Context.Reference`-with-default pattern, applied to this plugin's own policy knobs. */
-export const PasswordConfig: Context.Reference<PasswordConfigShape> = Context.Reference(
-  "awthaq/password/Config",
-  { defaultValue: () => defaultPasswordConfig },
-);
-
-/** BEH-EA-018/120: a partial override, type-checked against `PasswordConfigShape`, never runtime-validated. */
-export const config = (partial: Partial<PasswordConfigShape>): Layer.Layer<never> =>
-  Layer.succeed(PasswordConfig, { ...defaultPasswordConfig, ...partial });
 
 export interface PasswordShape {
   /** BEH-EA-113: creates the user, links a password credential, issues a session, and dispatches (never awaits) a verification mail. */
@@ -511,93 +399,11 @@ export interface PasswordShape {
   >;
 }
 
-const { toHex } = Hmac;
-
 // MLO-009: the mailed token's codec is `VerificationLink`'s, shared with every
 // plugin that mails a `Verification` token; these are this plugin's purposes.
 const ResetLink = VerificationLink.forUser({ name: "reset-password" });
 const VerifyLink = VerificationLink.forUser({ name: "verify-email" });
 const VERIFY_TTL = Duration.hours(24);
-
-/** PHS-004: internal only — routed to `onUnavailable` by `isBreached`, never surfaced. */
-class MalformedBreachResponse extends Data.TaggedError("MalformedBreachResponse")<{}> {}
-
-/** One HIBP range line: the 35-hex-character SHA-1 suffix and its breach count. */
-const HIBP_LINE = /^[0-9A-F]{35}:\d+$/i;
-
-/**
- * BEH-EA-119: the k-anonymity HIBP check — only a 5-character SHA-1 prefix
- * ever leaves the process, per the API's own design; a real network/parse
- * failure resolves to `onUnavailable === "reject"`, never re-raised as a
- * distinguishable error (fail-open is a `false` here, fail-closed is `true`
- * — "assume breached" is what actually blocks sign-up).
- */
-const isBreached = (
-  httpClient: HttpClient.HttpClient,
-  digest: Digest.Digest["Service"],
-  password: Redacted.Redacted<string>,
-  onUnavailable: "allow" | "reject",
-  timeout: Duration.Duration,
-): Effect.Effect<boolean> =>
-  Effect.gen(function* () {
-    const sha1 = yield* digest.digest(
-      Digest.sha1,
-      new TextEncoder().encode(Redacted.value(password)),
-    );
-    const hex = toHex(sha1).toUpperCase();
-    const prefix = hex.slice(0, 5);
-    const suffix = hex.slice(5);
-    // CSD-001: `HttpClient` resolves for any status — a 429/503 from HIBP
-    // (its own aggressive throttling is the most common failure mode at
-    // scale) would otherwise read as an ordinary body, fail the suffix
-    // match, and silently report "not breached" even under
-    // `onUnavailable: "reject"`. `filterStatusOk` turns any non-2xx into a
-    // failure, routed to `onUnavailable` by the same catch-all below a
-    // transport error already used.
-    const response = yield* httpClient
-      .get(`https://api.pwnedpasswords.com/range/${prefix}`)
-      .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk));
-    const body = yield* response.text;
-    // PHS-004: a 200 that is not a range listing (an HTML error page from a
-    // proxy, a truncated body) is no evidence of anything — treat it as
-    // unavailable rather than as "not breached". Every real prefix has
-    // hundreds of entries, so an empty body is malformed too.
-    const lines = body
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line !== "");
-    if (lines.length === 0 || !lines.every((line) => HIBP_LINE.test(line))) {
-      return yield* new MalformedBreachResponse();
-    }
-    return lines.some((line) => line.split(":")[0]?.toUpperCase() === suffix);
-  }).pipe(
-    // PHS-004: a black-holed egress follows `onUnavailable` too, not a hang.
-    Effect.timeout(timeout),
-    Effect.catch(() => Effect.succeed(onUnavailable === "reject")),
-  );
-
-const checkPolicy = (
-  httpClient: HttpClient.HttpClient,
-  digest: Digest.Digest["Service"],
-  password: Redacted.Redacted<string>,
-  config: PasswordConfigShape,
-): Effect.Effect<ReadonlyArray<string>> =>
-  Effect.gen(function* () {
-    const hints: Array<string> = [];
-    if (Redacted.value(password).length < config.minLength) {
-      hints.push(`must be at least ${config.minLength} characters`);
-    }
-    if (config.breachCheck !== false) {
-      const onUnavailable =
-        config.breachCheck === true ? "allow" : config.breachCheck.onUnavailable;
-      if (
-        yield* isBreached(httpClient, digest, password, onUnavailable, config.breachCheckTimeout)
-      ) {
-        hints.push("appears in known breaches");
-      }
-    }
-    return hints;
-  });
 
 /**
  * Resolves `Password` once here, in the group-builder generator itself —
@@ -781,26 +587,30 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       RateLimiter.RateLimiter,
       SqlTransaction.SqlTransaction,
     ],
+    // ADR-EA-040 (plan 27): the password credential, built once beneath `make`, for this plugin
+    // and the trusted dependents that list `Password` in `dependsOn`.
+    exposes: {
+      services: [PasswordCredential.PasswordCredential],
+      layer: PasswordCredential.PasswordCredential.layer,
+    },
     handlers: Layer.mergeAll(PasswordHandlers, PasswordAccountHandlers),
     make: Effect.gen(function* () {
+      const credential = yield* PasswordCredential.PasswordCredential;
+      const sqlTransaction = yield* SqlTransaction.SqlTransaction;
       const users = yield* Users.Users;
-      const accounts = yield* Accounts.Accounts;
       const sessions = yield* Sessions.Sessions;
       const verification = yield* Verification.Verification;
-      const hasher = yield* PasswordHasher.PasswordHasher;
       const mailer = yield* Mailer.Mailer;
       const events = yield* AuthEvents.AuthEvents;
       // EP-007 (ADR-EA-018 Decision 8): the policy in force is decided per operation, so a
       // tenant's `Password.config(...)` provided in the calling fiber applies to that request;
       // with none, the build-time value applies exactly as before. What is derived once at boot
-      // from the *built* value stays boot-scoped: the rate-limit email-key
-      // function, the identifier-digest key, and the calibrated timing-floor measurement.
+      // from the *built* value stays boot-scoped: the rate-limit email-key function and the
+      // identifier-digest key (the calibrated timing floor is `PasswordCredential`'s).
       const builtConfig = yield* PasswordConfig;
       const configNow = Tenant.configInForce(PasswordConfig, builtConfig);
       const random = yield* SecureRandom.SecureRandom;
-      const digest = yield* Digest.Digest;
       const mac = yield* Mac.Mac;
-      const httpClient = yield* HttpClient.HttpClient;
       // ERS-002: mail is dispatched in the background (BEH-EA-064/113) by a
       // dispatcher this layer owns — supervised, retried, bounded, observable
       // and drained on shutdown — in place of unowned `forkDetach` fibers.
@@ -818,17 +628,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           digestKey,
           new TextEncoder().encode(`signin-identifier:${builtConfig.rateLimitEmailKey(email)}`),
         ).pipe(Effect.map(Hmac.toHex), Effect.orDie);
-      /**
-       * EOTS-001/ticket 27 §2: the hash check is its own span (`awthaq.password.verify`),
-       * so a trace shows where sign-in latency goes. No attribute is derived from the
-       * password, the hash or the identifier.
-       */
-      const verifyPassword = (candidate: Redacted.Redacted<string>, hash: PasswordHasher.PhcHash) =>
-        hasher.verify(candidate, hash).pipe(
-          Observability.authSpan(Observability.Span.passwordVerify, {
-            [Observability.Field.strategy]: "password",
-          }),
-        );
       /**
        * EOTS-001: every operation is one `awthaq.password.<operation>` span
        * (`awthaq.plugin`, `auth.strategy`); the handlers annotate `user.id` once the
@@ -875,52 +674,6 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         emailKey: builtConfig.rateLimitEmailKey,
       });
 
-      // BEH-EA-114: paid once at boot, not once per unsuccessful attempt —
-      // a real PHC/scrypt-encoded string this plugin's own configured
-      // hasher produced, so `hasher.verify` always does the same real
-      // work whether or not a matching account/credential actually
-      // exists.
-      const dummyPassword = Redacted.make("awthaq/password/dummy");
-      const dummyHash = Redacted.make(yield* hasher.hash(dummyPassword));
-
-      // TSS-006: `hasher.hash` above has already warmed the KDF (WASM
-      // instantiation), so this timing is the steady-state verify cost.
-      // EP-007: measured even when the built value fixes the floor, because a tenant's
-      // configuration may ask for `"calibrated"`; skipped only when the built value is `"off"`
-      // (an air-gapped/test posture that never calibrates).
-      const calibratedFloorMillis = yield* Effect.gen(function* () {
-        if (builtConfig.signInTimingFloor === "off") return 0;
-        const start = DateTime.toEpochMillis(yield* DateTime.now);
-        yield* hasher.verify(dummyPassword, Redacted.value(dummyHash));
-        return 1.25 * (DateTime.toEpochMillis(yield* DateTime.now) - start);
-      });
-      const timingFloorFor = (floor: PasswordConfigShape["signInTimingFloor"]) => {
-        if (floor === "off") return 0;
-        if (Duration.isDuration(floor)) return Duration.toMillis(floor);
-        return calibratedFloorMillis;
-      };
-
-      /**
-       * TSS-006: runs `effect` (success or failure alike) and holds its
-       * result back until at least the floor in force has elapsed, so a
-       * cheap-hash path is not faster than the dummy-hash path.
-       */
-      const withTimingFloor = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        Effect.flatMap(configNow, (config) => {
-          const timingFloorMillis = timingFloorFor(config.signInTimingFloor);
-          return timingFloorMillis <= 0
-            ? effect
-            : Effect.gen(function* () {
-                const start = DateTime.toEpochMillis(yield* DateTime.now);
-                const exit = yield* Effect.exit(effect);
-                const elapsed = DateTime.toEpochMillis(yield* DateTime.now) - start;
-                if (elapsed < timingFloorMillis) {
-                  yield* Effect.sleep(Duration.millis(timingFloorMillis - elapsed));
-                }
-                return yield* exit;
-              });
-        });
-
       /** Issues a verify-email token and mails it; dispatched, never awaited. */
       const dispatchVerificationMail = Effect.fnUntraced(function* (user: Users.UserRecord) {
         // Read here, in the request's fiber: the dispatched work runs detached from it (EP-007).
@@ -949,21 +702,18 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       });
 
       /**
-       * The checks `signUp` and `signUpConcealed` share, in the same order:
-       * rate limits, password policy, the `BeforeSignUp` veto, then the hash.
+       * The checks `signUp` and `signUpConcealed` share, in the same order: rate limits, the
+       * password policy, the `BeforeSignUp` veto, then the hash (`linkFor`). The credential is
+       * linked inside the sign-up's own unit; its subject is the new user's id.
        */
       const prepareSignUp = Effect.fnUntraced(function* (input: {
         readonly email: string;
         readonly password: Redacted.Redacted<string>;
       }) {
-        const config = yield* configNow;
         // AGA-001/NHS-003: per-IP first, cheaper to enforce, bounds mass
         // account creation from one source before the per-email check.
         yield* limits.spend(["signUpByIp", "signUp"], input);
-        const hints = yield* checkPolicy(httpClient, digest, input.password, config);
-        if (hints.length > 0) {
-          return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
-        }
+        const password = yield* credential.accept(input.password);
         // BEH-EA-113's own sketch has no `name` input at all — a `User`
         // record requires one (BEH-EA-041), so the email's local part is
         // used as a placeholder the user can change later via
@@ -978,25 +728,19 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           name,
           strategy: "password",
         });
-        const hash = yield* hasher.hash(input.password);
-        return { vetted, hash };
-      });
-
-      /** The password account linked in the sign-up's own unit: its subject is the new user's id. */
-      const passwordLink = (hash: PasswordHasher.PhcHash) => (user: Users.UserRecord) => ({
-        providerId: Accounts.PASSWORD_PROVIDER_ID,
-        subject: user.id,
-        credentialHash: Redacted.make(hash),
+        // TMS-005: the hash runs here, before the unit, in both enumeration branches.
+        const link = yield* credential.linkFor(password);
+        return { vetted, link };
       });
 
       const signUp: PasswordShape["signUp"] = Effect.fnUntraced(function* (input) {
-        const { vetted, hash } = yield* prepareSignUp(input);
+        const { vetted, link } = yield* prepareSignUp(input);
 
         // RRC-002/BEH-EA-113: "MUST create the user and session in one transaction". ADR-EA-038:
         // `createSignedIn` is that unit, and the first session is a cleared sign-in like any other
         // (the sign-in veto and divert apply, `auth.user.signedIn` is published).
         const issued = yield* creation
-          .createSignedIn(vetted, { link: passwordLink(hash), amr: ["pwd"] })
+          .createSignedIn(vetted, { link, amr: ["pwd"] })
           .pipe(
             Effect.catchTag("SignUp/IdentityTaken", (taken) =>
               taken.kind === "Email"
@@ -1019,11 +763,11 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
 
       const signUpConcealed: PasswordShape["signUpConcealed"] = Effect.fnUntraced(
         function* (input) {
-          const { vetted, hash } = yield* prepareSignUp(input);
+          const { vetted, link } = yield* prepareSignUp(input);
           // TMS-005: the hash above is computed in both branches, so the
           // expensive work does not depend on whether the address exists. A
           // duplicate is caught as a value, and no session is issued either way.
-          const created = yield* creation.create(vetted, { link: passwordLink(hash) }).pipe(
+          const created = yield* creation.create(vetted, { link }).pipe(
             Effect.map(Option.some),
             Effect.catchTag("SignUp/IdentityTaken", (taken) =>
               taken.kind === "Email"
@@ -1059,38 +803,9 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
         // many distinct emails before the per-account check below ever
         // sees them.
         yield* limits.spend(["signInByIp", "signIn"], input);
-        // TSS-006: the whole credential check is held to the timing floor in force.
-        const { userOpt, accountOpt, hashOpt, verified } = yield* withTimingFloor(
-          Effect.gen(function* () {
-            const userOpt = yield* users.findByEmail(input.email);
-            const accountOpt = yield* Option.match(userOpt, {
-              onNone: () => Effect.succeed(Option.none<Accounts.AccountRecord>()),
-              onSome: (user) =>
-                accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, user.id),
-            });
-            const hashOpt = yield* Option.match(accountOpt, {
-              onNone: () =>
-                Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
-              onSome: (account) =>
-                accounts
-                  .findCredentialHash(account.id)
-                  .pipe(Effect.catchTag("AccountNotFound", Effect.die)),
-            });
-            // BEH-EA-114: this call happens on every attempt, real or not —
-            // see `dummyHash`'s own comment.
-            const verified = yield* verifyPassword(
-              input.password,
-              Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
-            );
-            return { userOpt, accountOpt, hashOpt, verified };
-          }),
-        );
-        if (
-          Option.isNone(userOpt) ||
-          Option.isNone(accountOpt) ||
-          Option.isNone(hashOpt) ||
-          !verified
-        ) {
+        // BEH-EA-114/TSS-006: the lookup and the verify, one answer for every refusal, held to the floor.
+        const verdict = yield* credential.verify(users.findByEmail(input.email), input.password);
+        if (verdict._tag === "Refused") {
           // ALF-003: the one forensic signal a brute-force/credential-
           // stuffing campaign otherwise leaves nowhere — see
           // `UserSignInFailedEvent`'s own doc comment for why this
@@ -1099,9 +814,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           yield* publishSignInFailed("invalidCredentials", input);
           return yield* Effect.fail(new Api.InvalidCredentials());
         }
-        const user = userOpt.value;
-        const account = accountOpt.value;
-        const hash = hashOpt.value;
+        const user = verdict.claimant;
         // EOTS-001: the credential is proven, so the span may name the user (an id, never the email).
         yield* Effect.annotateCurrentSpan("user.id", user.id);
 
@@ -1113,12 +826,8 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
           return yield* Effect.fail(new PasswordApi.EmailNotVerified());
         }
 
-        if (config.rehashOnLogin && hasher.needsRehash(Redacted.value(hash))) {
-          const rehashed = yield* hasher.hash(input.password);
-          yield* accounts
-            .updateCredentialHash(account.id, Redacted.make(rehashed))
-            .pipe(Effect.catchTag("AccountNotFound", Effect.die));
-        }
+        // BEH-EA-116: after the verified-email gate, on the proof `verify` minted.
+        yield* credential.rehashIfStale(verdict.proof);
 
         // ADR-EA-038: the credential is proven, so core's sign-in takes over: the suspension gate
         // (published as `signInFailed{suspended}`), the `BeforeSignIn` veto (NAM-002), the MFA
@@ -1170,11 +879,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
               // the same on the response path (BEH-EA-064).
               const to = Users.emailOf(user);
               if (Option.isNone(to)) return;
-              const account = yield* accounts.findByProviderSubject(
-                Accounts.PASSWORD_PROVIDER_ID,
-                user.id,
-              );
-              if (Option.isNone(account)) {
+              if (!(yield* credential.has(user.id))) {
                 yield* mailer.send({ to: to.value, template: "reset-password-unavailable" });
                 return;
               }
@@ -1252,13 +957,16 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       const refusedToken = () => Effect.fail(new PasswordApi.TokenConsumed());
 
       const confirmReset: PasswordShape["confirmReset"] = Effect.fnUntraced(function* (input) {
-        const config = yield* configNow;
         // ARF-001: BEH-EA-058/117 require consuming the token, setting the new password, and
         // revoking every other session to commit as one unit. `Verification.redeem` owns that
         // transaction (ADR-EA-039) and `resetLinks` the order around it: source budget, purpose
         // check, token budget, then the policy below, then the claim. A refusal inside `use` (a
         // veto, `SecondFactorRequired`, a crash) gives the token back; an outage of the
         // transaction itself is the typed `StoreUnavailable` (ADR-EA-028), never a defect.
+        //
+        // The policy's verdict, decided in `beforeClaim` (before the token is touched) and written
+        // in `use` (once it is consumed). The redeemer always runs `beforeClaim` first.
+        const accepted = yield* Deferred.make<PasswordCredential.Accepted>();
         const userId = yield* resetLinks(
           { token: input.token },
           ({ userId }) =>
@@ -1289,30 +997,14 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
                   ),
                 );
 
-              const account = yield* accounts
-                .findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, userId)
-                .pipe(
-                  Effect.flatMap(
-                    Option.match({
-                      // ARF-004: `requestReset` no longer mints a token for a
-                      // credential-less account, but one issued before that
-                      // fix (or a credential unlinked since) can still land
-                      // here — a dead token, not a defect.
-                      onNone: () => Effect.fail(new PasswordApi.TokenConsumed()),
-                      onSome: Effect.succeed,
-                    }),
-                  ),
-                );
-              const hash = yield* hasher.hash(input.password);
-              // ADR-EA-028: an outage is `StoreUnavailable` (503) and rolls the consume back; a
-              // credential unlinked since the lookup above is the same dead token as none at all.
-              yield* accounts
-                .updateCredentialHash(account.id, Redacted.make(hash))
-                .pipe(
-                  Effect.catchTag("AccountNotFound", () =>
-                    Effect.fail(new PasswordApi.TokenConsumed()),
-                  ),
-                );
+              // ARF-004: `requestReset` mints no token for a credential-less account, but one issued
+              // before that fix (or a credential unlinked since) can still land here: a dead token,
+              // not a defect. The new password is hashed only now that the token is consumed, so an
+              // unknown token costs no KDF. An outage is `StoreUnavailable` (503, ADR-EA-028) and
+              // rolls the consume back.
+              if (!(yield* credential.replace(userId, yield* Deferred.await(accepted)))) {
+                return yield* Effect.fail(new PasswordApi.TokenConsumed());
+              }
 
               // ARF-008: consuming a token mailed to the address proves the same mailbox control
               // `verifyEmail` demands: otherwise a user who resets is still refused at `signIn`.
@@ -1335,12 +1027,9 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
             // ARF-002: the policy (including the breach check's network call) is decided before
             // the token is touched, so a weak password never burns the single-use token under any
             // `Verification` store, and no network I/O happens while the transaction is open.
-            beforeClaim: checkPolicy(httpClient, digest, input.password, config).pipe(
-              Effect.flatMap((hints) =>
-                hints.length > 0
-                  ? Effect.fail(new PasswordApi.WeakPassword({ hints }))
-                  : Effect.void,
-              ),
+            beforeClaim: credential.accept(input.password).pipe(
+              Effect.flatMap((password) => Deferred.succeed(accepted, password)),
+              Effect.asVoid,
             ),
           },
         ).pipe(Effect.catchTag("VerificationLink/Refused", refusedToken));
@@ -1441,99 +1130,57 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       );
 
       const changePassword: PasswordShape["changePassword"] = Effect.fnUntraced(function* (input) {
-        const config = yield* configNow;
         // Keyed on `userId` directly — this endpoint is authenticated, so
         // (unlike `signIn`/`requestReset`) there's no need to look up an
         // email first.
         yield* limits.spend("changePassword", input);
-        const accountOpt = yield* accounts.findByProviderSubject(
-          Accounts.PASSWORD_PROVIDER_ID,
-          input.userId,
+        // BEH-EA-114/TSS-006: the same uniform cost as `signIn`, though this endpoint is
+        // authenticated: a caller with no password credential cannot tell "no password set" from
+        // "wrong password" by timing either.
+        const verdict = yield* credential.verify(
+          Effect.succeedSome({ id: input.userId }),
+          input.currentPassword,
         );
-        const hashOpt = yield* Option.match(accountOpt, {
-          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
-          // ADR-EA-028: an outage is `StoreUnavailable`; an account unlinked since the lookup has no hash.
-          onSome: (account) =>
-            accounts
-              .findCredentialHash(account.id)
-              .pipe(Effect.catchTag("AccountNotFound", () => Effect.succeedNone)),
-        });
-        // Same uniform-cost shape as `signIn`'s own `dummyHash` check —
-        // this endpoint is authenticated (no enumeration concern), but
-        // there is no reason to let a caller with no password credential
-        // at all distinguish "wrong password" from "no password set" by
-        // timing, so the real hasher call always runs regardless (TSS-006:
-        // held to the same timing floor as `signIn`).
-        const verified = yield* withTimingFloor(
-          verifyPassword(
-            input.currentPassword,
-            Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
-          ),
-        );
-        if (Option.isNone(accountOpt) || Option.isNone(hashOpt) || !verified) {
-          return yield* Effect.fail(new PasswordApi.WrongPassword());
-        }
-        const account = accountOpt.value;
+        if (verdict._tag === "Refused") return yield* Effect.fail(new PasswordApi.WrongPassword());
 
-        const hints = yield* checkPolicy(httpClient, digest, input.newPassword, config);
-        if (hints.length > 0) {
-          return yield* Effect.fail(new PasswordApi.WeakPassword({ hints }));
-        }
-
-        const hash = yield* hasher.hash(input.newPassword);
-        // ADR-EA-028: an outage is `StoreUnavailable`; a credential unlinked since it was verified is
-        // the same answer as no credential at all.
-        yield* accounts
-          .updateCredentialHash(account.id, Redacted.make(hash))
-          .pipe(
-            Effect.catchTag("AccountNotFound", () => Effect.fail(new PasswordApi.WrongPassword())),
-          );
-        yield* events.publish({ _tag: "auth.password.changed", userId: input.userId });
-
-        // BEH-EA-053: revoke every *other* session first, while
-        // `currentSessionId` still names a live row — then supersede that
-        // row with a freshly minted one. Reversing this order would leave
-        // `revokeOthers` nothing to `keep` (the superseded id no longer
-        // exists once `issue` has run).
-        yield* sessions.revokeOthers(input.userId, input.currentSessionId, "passwordChanged");
-        const issued = yield* sessions.issue({
-          userId: input.userId,
-          supersedes: input.currentSessionId,
-          amr: ["pwd"],
-        });
-        return issued;
+        // Outside the unit: the breach check is a network call (BEH-EA-117).
+        const password = yield* credential.accept(input.newPassword);
+        // BEH-EA-053: the new hash, the revocation of every other session and the rotation of the
+        // caller's own commit together, so a failure part-way leaves no session alive under a
+        // password it did not prove. The events are released when the unit commits (ADR-EA-037).
+        return yield* sqlTransaction
+          .withTransaction(
+            Effect.gen(function* () {
+              // A credential unlinked since it was verified is the same answer as none at all.
+              if (!(yield* credential.replace(input.userId, password))) {
+                return yield* Effect.fail(new PasswordApi.WrongPassword());
+              }
+              yield* events.publish({ _tag: "auth.password.changed", userId: input.userId });
+              // Every *other* session first, while `currentSessionId` still names a live row; then
+              // that row is superseded by a fresh one (the other order leaves `revokeOthers`
+              // nothing to keep).
+              yield* sessions.revokeOthers(input.userId, input.currentSessionId, "passwordChanged");
+              return yield* sessions.issue({
+                userId: input.userId,
+                supersedes: input.currentSessionId,
+                amr: ["pwd"],
+              });
+            }),
+          )
+          // ADR-EA-028: the transaction's own failure is an outage (503), never a defect.
+          .pipe(Effect.catchTag("SqlError", Errors.storeUnavailable("Password.changePassword")));
       });
 
       const reauthenticate: PasswordShape["reauthenticate"] = Effect.fnUntraced(function* (input) {
         // Keyed on `userId` directly — this endpoint is authenticated,
         // mirroring `changePassword`'s own posture.
         yield* limits.spend("reauthenticate", input);
-        const accountOpt = yield* accounts.findByProviderSubject(
-          Accounts.PASSWORD_PROVIDER_ID,
-          input.userId,
+        // BEH-EA-114/TSS-006: the same uniform cost as `changePassword`.
+        const verdict = yield* credential.verify(
+          Effect.succeedSome({ id: input.userId }),
+          input.currentPassword,
         );
-        const hashOpt = yield* Option.match(accountOpt, {
-          onNone: () => Effect.succeed(Option.none<Redacted.Redacted<PasswordHasher.PhcHash>>()),
-          // ADR-EA-028: an outage is `StoreUnavailable`; an account unlinked since the lookup has no hash.
-          onSome: (account) =>
-            accounts
-              .findCredentialHash(account.id)
-              .pipe(Effect.catchTag("AccountNotFound", () => Effect.succeedNone)),
-        });
-        // Same uniform-cost shape as `changePassword`'s own `dummyHash`
-        // check — this endpoint is authenticated (no enumeration
-        // concern), but there is no reason to let a caller with no
-        // password credential at all distinguish "wrong password" from
-        // "no password set" by timing (TSS-006: same timing floor).
-        const verified = yield* withTimingFloor(
-          verifyPassword(
-            input.currentPassword,
-            Redacted.value(Option.getOrElse(hashOpt, () => dummyHash)),
-          ),
-        );
-        if (Option.isNone(accountOpt) || Option.isNone(hashOpt) || !verified) {
-          return yield* Effect.fail(new PasswordApi.WrongPassword());
-        }
+        if (verdict._tag === "Refused") return yield* Effect.fail(new PasswordApi.WrongPassword());
         // BEH-EA-319: the middleware proved this session live before the password
         // hash ran; if it ended since (revoked, superseded, expired), the caller
         // is no longer authenticated: 401, the same answer a session revoked

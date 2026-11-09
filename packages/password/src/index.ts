@@ -12,3 +12,4 @@
 
 export * as Password from "./Password.ts";
 export * as PasswordApi from "./PasswordApi.ts";
+export * as PasswordCredential from "./PasswordCredential.ts";

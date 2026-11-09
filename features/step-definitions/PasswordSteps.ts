@@ -16,6 +16,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { mailedToken } from "./MailedToken.ts";
 import {
   World,
+  administratorOver,
   configureApp,
   createUserWithoutCredential,
   currentActor,
@@ -50,6 +51,8 @@ import { cheapArgon2id, cheapScrypt, awaitMail, STRONG_PASSWORD } from "./shared
 
 const NEW_PASSWORD = "a whole new strong password";
 const WRONG_PASSWORD = "not the right password at all";
+/** BEH-EA-120/345: long enough for `minLength: 12`, refused only because the corpus lists it. */
+const BREACHED_PASSWORD = "hunter2hunter2";
 
 /** REQ-EA-327: an HttpClient that answers any HIBP range lookup with `password`'s own real SHA-1 suffix, so it reads back as "found in a known breach" regardless of which prefix the plugin actually queried. */
 const breachedPasswordHttpClient = (password: string): Layer.Layer<HttpClient.HttpClient> =>
@@ -1047,6 +1050,49 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then('sign-up fails with "422 WeakPassword"', function* () {
     const response = yield* getLastResponse("_last");
     assert.equal(response.status, 422);
+  });
+
+  // ---- BEH-EA-120/345: an administrator's set obeys the same policy ----
+
+  Given("AdminAccounts is installed beside Password", function* () {
+    // The breach corpus lists BREACHED_PASSWORD (as the real one lists "hunter2hunter2"), and
+    // nothing else: the victim's own sign-up still passes.
+    yield* configureApp({
+      adminAccounts: true,
+      breachHttpClient: breachedPasswordHttpClient(BREACHED_PASSWORD),
+    });
+  });
+
+  Given("a user {string} who signed up with a password", function* (name: string) {
+    const email = yield* arrangeVerifiedUser(name);
+    yield* setNote(`hashBefore:${name}`, yield* storedCredentialHash(email));
+  });
+
+  When(
+    "an administrator sets the password of {string} to one that appears in a known breach",
+    function* (name: string) {
+      const actor = yield* getActor(name);
+      const { cookie, targetId } = yield* administratorOver(actor.email);
+      const response = yield* request(
+        `/admin/users/${targetId}/password`,
+        { password: BREACHED_PASSWORD },
+        cookie,
+      );
+      yield* setLastResponse("_last", response);
+    },
+  );
+
+  Then('the administrator\'s set fails with "422 AdminWeakPassword"', function* () {
+    const response = (yield* getLastResponse("_last")).clone();
+    assert.equal(response.status, 422);
+    const body = yield* Effect.promise(() => response.json());
+    assert.ok(typeof body === "object" && body !== null && "_tag" in body);
+    assert.equal(body._tag, "AdminWeakPassword");
+  });
+
+  Then("the password of {string} is unchanged", function* (name: string) {
+    const actor = yield* getActor(name);
+    assert.equal(yield* storedCredentialHash(actor.email), yield* getNote(`hashBefore:${name}`));
   });
 
   Then('the failure carries hints including "appears in known breaches"', function* () {

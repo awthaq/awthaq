@@ -23,7 +23,7 @@ import {
   type OrganizationRoles,
   type OrganizationTeams,
 } from "@awthaq/organization";
-import { Password } from "@awthaq/password";
+import { Password, type PasswordCredential } from "@awthaq/password";
 import {
   ClientAddress,
   Encryption,
@@ -121,6 +121,9 @@ export const makeAppLayer = (httpClient: Layer.Layer<HttpClient.HttpClient>) =>
     Layer.provideMerge(HttpServer.layerServices),
     Layer.provideMerge(HttpRouter.layer),
   );
+
+/** Keeps Password's exposed credential module (in `makeAppLayer`'s output) nameable for declaration emit. @public */
+export type PasswordServices = PasswordCredential.PasswordCredential;
 
 /** Keeps Organization's exposed services (in `makeAppLayer`'s output) nameable for declaration emit. @public */
 export type OrganizationServices =

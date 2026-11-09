@@ -8,6 +8,7 @@
 import { Api } from "@awthaq/api";
 import { Accounts, AuditChain, Auth, AuthEvents, Sessions, Tenant, Users } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
+import { Password } from "@awthaq/password";
 import { Mailer, PasswordHasher } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
@@ -33,12 +34,14 @@ const buildLayer = (build: Partial<Admin.AdminConfigShape>) =>
     Auth.make([
       Organization.Organization,
       Admin.Admin,
+      Password.Password,
       AdminAccounts.AdminAccounts,
       AdminTenants.AdminTenants,
     ]),
     {
       services: Layer.mergeAll(
         Admin.config(build),
+        TestAuth.httpClient.noBreach,
         Organization.config({}),
         AuditChain.config({ key: Redacted.make("admin-gate-chain-key-0123456789abcdef") }),
       ),
@@ -700,8 +703,6 @@ describe("the admin gate (plan 13)", () => {
           canImpersonate: allow,
           canManageCredentials: allow,
           maxDuration: Duration.minutes(5),
-          passwordPolicy: (password) =>
-            Effect.succeed(/\d/.test(Redacted.value(password)) ? [] : ["must contain a digit"]),
           links: { changeEmail: (token) => `https://ops.example/confirm?token=${token}` },
         });
         // maxDuration: the impersonation session expires at the tenant's ceiling.
@@ -713,16 +714,6 @@ describe("the admin gate (plan 13)", () => {
           DateTime.toEpochMillis(issued.session.absoluteExpiresAt) - DateTime.toEpochMillis(now),
           Duration.toMillis(Duration.minutes(5)),
         );
-        // passwordPolicy: refuses with the tenant's hints.
-        const weak = yield* accounts
-          .setUserPassword(adminCaller, target.id, {
-            password: Redacted.make("a thirty character password no digit"),
-          })
-          .pipe(TestAuth.withoutRequest, Effect.provide(ops), Effect.flip);
-        assert.strictEqual(weak._tag, "AdminWeakPassword");
-        if (weak._tag === "AdminWeakPassword") {
-          assert.deepStrictEqual(weak.hints, ["must contain a digit"]);
-        }
         // links.changeEmail: the mailed URL.
         yield* accounts
           .setUserEmail(adminCaller, target.id, { email: "new@example.com" })
