@@ -114,10 +114,10 @@ describe("make (registry readers)", () => {
     assert.isFalse(registry.is(core));
   });
 
-  it("core's registry holds every core event (nothing has moved yet)", () => {
+  it("core's registry holds core's own events, not the moved plugin events", () => {
     assert.strictEqual(AuthEvents.CoreRegistry.origin, "core");
-    assert.strictEqual(AuthEvents.eventTags.length, 97);
-    assert.strictEqual(AuthEvents.coreDefinitions.length, 97);
+    assert.strictEqual(AuthEvents.eventTags.length, 95);
+    assert.strictEqual(AuthEvents.coreDefinitions.length, 95);
   });
 });
 
@@ -271,7 +271,6 @@ describe("attempt events (ADR-EA-037)", () => {
     "auth.admin.impersonationDenied",
     "auth.authz.denied",
     "auth.organization.permissionDenied",
-    "auth.deviceAuthorization.denied",
   ];
 
   it("classifies exactly the documented attempt set; every other registered event is a state change", () => {

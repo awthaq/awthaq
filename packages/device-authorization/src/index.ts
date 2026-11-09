@@ -10,6 +10,7 @@
 
 export * as DeviceAuthorization from "./DeviceAuthorization.ts";
 export * as DeviceAuthorizationApi from "./DeviceAuthorizationApi.ts";
+export * as DeviceAuthorizationEvents from "./DeviceAuthorizationEvents.ts";
 export * as DeviceClientRecords from "./DeviceClientRecords.ts";
 export * as DeviceGrantRecords from "./DeviceGrantRecords.ts";
 export * as UserCode from "./UserCode.ts";

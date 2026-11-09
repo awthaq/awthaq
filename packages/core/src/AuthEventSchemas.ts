@@ -1702,34 +1702,6 @@ export const TwoFactorLockedEvent = EventDefinition.define(
 );
 export type TwoFactorLockedEvent = typeof TwoFactorLockedEvent.Type;
 
-/**
- * BEH-EA-306 (`@awthaq/device-authorization`): a person's decision on a device grant. `userId` is
- * the approver, `clientId` the registered client that asked. The user code, the device code, their
- * hashes and the scope are never carried: identifiers only (ADR-EA-029). The session the approved
- * grant later becomes is announced by the ordinary `auth.session.issued` / `auth.user.signedIn`
- * (strategy `deviceAuthorization`).
- */
-export const DeviceAuthorizationApprovedEvent = EventDefinition.define(
-  "auth.deviceAuthorization.approved",
-  { userId: EventDefinition.UserId, clientId: Schema.String },
-  {
-    actor: EventDefinition.Actor.field("userId"),
-    pii: [],
-  },
-);
-export type DeviceAuthorizationApprovedEvent = typeof DeviceAuthorizationApprovedEvent.Type;
-
-export const DeviceAuthorizationDeniedEvent = EventDefinition.define(
-  "auth.deviceAuthorization.denied",
-  { userId: EventDefinition.UserId, clientId: Schema.String },
-  {
-    actor: EventDefinition.Actor.field("userId"),
-    pii: [],
-    attempt: true,
-  },
-);
-export type DeviceAuthorizationDeniedEvent = typeof DeviceAuthorizationDeniedEvent.Type;
-
 /** BEH-EA-101, ADR-EA-049: core's own event definitions. A composition adds every composed plugin's (`Auth.make`). */
 export const CoreRegistry = EventDefinition.make(
   [
@@ -1828,8 +1800,6 @@ export const CoreRegistry = EventDefinition.make(
     TwoFactorRecoveryCodeUsedEvent,
     TwoFactorRecoveryCodesRegeneratedEvent,
     TwoFactorLockedEvent,
-    DeviceAuthorizationApprovedEvent,
-    DeviceAuthorizationDeniedEvent,
   ],
   "core",
 );

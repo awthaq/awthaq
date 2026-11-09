@@ -59,6 +59,7 @@ import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as DeviceAuthorizationApi from "./DeviceAuthorizationApi.ts";
+import * as DeviceAuthorizationEvents from "./DeviceAuthorizationEvents.ts";
 import * as DeviceClientRecords from "./DeviceClientRecords.ts";
 import * as DeviceGrantRecords from "./DeviceGrantRecords.ts";
 import * as UserCode from "./UserCode.ts";
@@ -699,6 +700,8 @@ export class DeviceAuthorization extends AuthPlugin.Service<
     device_authorization_client: AuthPlugin.Table.global("deployment-wide client registry"),
   },
   migrations: deviceAuthorizationMigrations,
+  // ADR-EA-049: the events this plugin publishes, defined in `DeviceAuthorizationEvents.ts`.
+  events: DeviceAuthorizationEvents.events,
   // Plan 08: the two hook points this plugin owns; `TestAuth.layer` provides them once beneath application taps.
   hookPoints: DeviceAuthorizationHooksLive,
   // Plan 08 (BEH-EA-T4): the grant and client stores, memory and SQL, matched.
@@ -993,14 +996,12 @@ export class DeviceAuthorization extends AuthPlugin.Service<
         });
         // A racing decision (or the clock) won: the code is no longer pending.
         if (!decided) return yield* new DeviceAuthorizationApi.InvalidUserCode();
-        yield* events.publish({
-          _tag:
-            decision === "approve"
-              ? "auth.deviceAuthorization.approved"
-              : "auth.deviceAuthorization.denied",
-          userId: caller.userId,
-          clientId: record.clientId,
-        });
+        yield* events.emit(
+          decision === "approve"
+            ? DeviceAuthorizationEvents.DeviceAuthorizationApprovedEvent
+            : DeviceAuthorizationEvents.DeviceAuthorizationDeniedEvent,
+          { userId: caller.userId, clientId: record.clientId },
+        );
         return { view: viewOf({ ...record, status }, shown, Option.none(), false), record };
       });
 
