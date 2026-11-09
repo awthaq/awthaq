@@ -1,26 +1,30 @@
-// BEH-EA-101 (plan 09): an event's actor and personal-data fields are declared with its schema.
-// T1: the constructor and the generic readers. T3: properties over every registry member.
+// BEH-EA-101 (plan 09, ADR-EA-049): an event's actor and personal-data fields are declared with its schema.
+// T1: the constructor and the generic readers. Registry readers. `problems`: the well-formedness check
+// core's set and every plugin's declared events pass, one failing definition per check. T3: properties
+// sampled over core's set.
 import { assert, describe, it } from "@effect/vitest";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as AuthEvents from "../src/AuthEvents.ts";
 import {
   Actor,
+  type Any,
   EventMetaSchema,
   MetaKey,
+  UserId as UserIdSchema,
   actorValue,
-  defineEvent,
-} from "../src/internal/eventDefinition.ts";
+  define,
+  make,
+  problems,
+} from "../src/EventDefinition.ts";
 
-const UserIdSchema = Schema.String.pipe(Schema.brand("UserId"));
-
-const Throwaway = defineEvent(
+const Throwaway = define(
   "test.x",
   { userId: UserIdSchema, note: Schema.String },
   { actor: Actor.field("userId"), pii: ["note"] },
 );
 
-describe("defineEvent (T1)", () => {
+describe("define (T1)", () => {
   it("returns a working TaggedStruct that carries its declaration", () => {
     const decoded = Schema.decodeUnknownSync(Throwaway)({ _tag: "test.x", userId: "u", note: "n" });
     assert.deepStrictEqual(decoded, { _tag: "test.x", userId: "u", note: "n" });
@@ -36,7 +40,7 @@ describe("defineEvent (T1)", () => {
       pii: ["note"],
       attempt: false,
     });
-    const attempt = defineEvent("test.y", {}, { actor: Actor.none, pii: [], attempt: true });
+    const attempt = define("test.y", {}, { actor: Actor.none, pii: [], attempt: true });
     assert.isTrue(attempt[MetaKey].attempt);
   });
 
@@ -70,36 +74,153 @@ describe("defineEvent (T1)", () => {
   });
 });
 
-// ---- T3: every registry member -------------------------------------------------------------
-const members = AuthEvents.AuthEventSchema.members;
+// ---- registry readers ------------------------------------------------------------------------
+const LocalDef = define(
+  "auth.local.happened",
+  { userId: UserIdSchema, note: Schema.String },
+  { actor: Actor.field("userId"), pii: ["note"], attempt: true },
+);
 
-const decodeMeta = (member: object) =>
-  Schema.decodeUnknownSync(EventMetaSchema)(Reflect.get(member, MetaKey));
+describe("make (registry readers)", () => {
+  const registry = make([LocalDef], "composition");
 
-const fieldNames = (member: { readonly fields: object }) => Object.keys(member.fields);
+  it("knows its origin, definitions and tags", () => {
+    assert.strictEqual(registry.origin, "composition");
+    assert.deepStrictEqual(registry.tags, ["auth.local.happened"]);
+    assert.strictEqual(registry.definitions[0], LocalDef);
+    assert.isTrue(registry.isTag("auth.local.happened"));
+    assert.isFalse(registry.isTag("auth.user.created"));
+  });
 
+  it("definitionOf finds a registered tag only", () => {
+    assert.deepStrictEqual(registry.definitionOf("auth.local.happened"), Option.some(LocalDef));
+    assert.isTrue(Option.isNone(registry.definitionOf("auth.user.created")));
+  });
+
+  it("reads actor, pii and attempt from the definition; an unknown tag has none", () => {
+    const local = { _tag: "auth.local.happened", userId: "u-1", note: "n" };
+    const unknown = { _tag: "auth.nope.x", userId: "u-1" };
+    const partial = { _tag: "auth.local.happened", userId: "u-1" };
+    const core = { _tag: "auth.user.created", userId: "u-1" };
+    assert.deepStrictEqual(registry.actorOf(local), Option.some("u-1"));
+    assert.deepStrictEqual(registry.piiFieldsOf("auth.local.happened"), ["note"]);
+    assert.isTrue(registry.isAttempt("auth.local.happened"));
+    assert.deepStrictEqual(registry.actorOf(unknown), Option.none());
+    assert.deepStrictEqual(registry.piiFieldsOf("auth.nope.x"), []);
+    assert.isFalse(registry.isAttempt("auth.nope.x"));
+    // `is` validates: a registered tag whose shape does not decode is refused.
+    assert.isTrue(registry.is(local));
+    assert.isFalse(registry.is(partial));
+    assert.isFalse(registry.is(core));
+  });
+
+  it("core's registry holds every core event (nothing has moved yet)", () => {
+    assert.strictEqual(AuthEvents.CoreRegistry.origin, "core");
+    assert.strictEqual(AuthEvents.eventTags.length, 97);
+    assert.strictEqual(AuthEvents.coreDefinitions.length, 97);
+  });
+});
+
+// ---- problems: the well-formedness check ----------------------------------------------------
+describe("problems", () => {
+  it("core's own definitions are well formed", () => {
+    assert.deepStrictEqual(
+      problems(AuthEvents.coreDefinitions, {
+        // qadi's denial sentence names attributes, never their values.
+        notPersonal: ["auth.authz.denied.reason"],
+      }),
+      [],
+    );
+  });
+
+  it("P1: a declared tag that is not the schema's _tag literal", () => {
+    const relabeled = Object.assign(Schema.TaggedStruct("auth.local.other", {}), {
+      [MetaKey]: LocalDef[MetaKey],
+    });
+    assert.deepStrictEqual(problems([relabeled]), [
+      "auth.local.happened: the declared tag is not the schema's _tag literal (P1)",
+      'auth.local.happened: the actor field "userId" is not a field of the event (P2)',
+      'auth.local.happened: the pii field "note" is not a field of the event (P3)',
+    ]);
+  });
+
+  // P2 and P3 are compile errors at `define`; a hand-built declaration reaches `problems` only as data.
+  const handBuilt = (meta: typeof EventMetaSchema.Type): Any =>
+    Object.assign(Schema.TaggedStruct(meta.tag, { userId: UserIdSchema }), { [MetaKey]: meta });
+
+  it("P2: an actor field the event does not carry", () => {
+    const definition = handBuilt({
+      tag: "auth.local.happened",
+      actor: { _tag: "Field", field: "actorId" },
+      pii: [],
+      attempt: false,
+    });
+    assert.deepStrictEqual(problems([definition]), [
+      'auth.local.happened: the actor field "actorId" is not a field of the event (P2)',
+    ]);
+  });
+
+  it("P3: a pii entry the event does not carry", () => {
+    const definition = handBuilt({
+      tag: "auth.local.happened",
+      actor: { _tag: "None" },
+      pii: ["reason"],
+      attempt: false,
+    });
+    assert.deepStrictEqual(problems([definition]), [
+      'auth.local.happened: the pii field "reason" is not a field of the event (P3)',
+    ]);
+  });
+
+  it("P6: an undeclared free-text field fails, naming tag.field, unless listed as not personal", () => {
+    const Noted = define(
+      "auth.local.noted",
+      { userId: UserIdSchema, reason: Schema.String, code: Schema.Literals(["a", "b"]) },
+      { actor: Actor.field("userId"), pii: [] },
+    );
+    assert.deepStrictEqual(problems([Noted]), [
+      "auth.local.noted.reason: a free-text field is neither declared pii nor listed as not personal (P6)",
+    ]);
+    assert.deepStrictEqual(problems([Noted], { notPersonal: ["auth.local.noted.reason"] }), []);
+    const Declared = define(
+      "auth.local.declared",
+      { message: Schema.optional(Schema.NullOr(Schema.String)) },
+      { actor: Actor.none, pii: ["message"] },
+    );
+    assert.deepStrictEqual(problems([Declared]), []);
+  });
+
+  it("N: a tag that is not auth.<namespace>.<event>", () => {
+    const definition = define("notes.created", {}, { actor: Actor.none, pii: [] });
+    assert.deepStrictEqual(problems([definition]), [
+      "notes.created: a tag is named auth.<namespace>.<event>, camelCase segments (N)",
+    ]);
+  });
+
+  it("R: the reserved foreign-event tag", () => {
+    const definition = define("awthaq.foreignEvent", {}, { actor: Actor.none, pii: [] });
+    assert.deepStrictEqual(problems([definition]), [
+      "awthaq.foreignEvent: the tag is reserved for events core does not define (R)",
+    ]);
+  });
+
+  it("U: a tag listed twice", () => {
+    assert.deepStrictEqual(problems([LocalDef, LocalDef]), [
+      "auth.local.happened: the tag is listed twice (U)",
+    ]);
+  });
+
+  it("a definition without a valid declaration (a JavaScript author's)", () => {
+    const bare = define("auth.local.bare", {}, { actor: Actor.none, pii: [] });
+    Reflect.set(bare, MetaKey, { tag: "auth.local.bare", actor: { _tag: "Somebody" } });
+    assert.deepStrictEqual(problems([bare]), [
+      "an event definition carries no valid declaration: make it with EventDefinition.define",
+    ]);
+  });
+});
+
+// ---- T3: properties sampled over core's set ---------------------------------------------------
 describe("the event registry (T3)", () => {
-  it("P1: every member carries metadata naming its own tag, and tags are unique", () => {
-    for (const member of members) {
-      assert.strictEqual(decodeMeta(member).tag, member.fields._tag.ast.literal);
-    }
-    assert.strictEqual(new Set(AuthEvents.eventTags).size, members.length);
-    assert.strictEqual(AuthEvents.eventTags.length, members.length);
-  });
-
-  it("P2: every Field/Prefixed actor names a key of its event", () => {
-    for (const member of members) {
-      const { actor } = decodeMeta(member);
-      if (actor._tag !== "None") assert.include(fieldNames(member), actor.field);
-    }
-  });
-
-  it("P3: every pii entry is a key of its event", () => {
-    for (const member of members) {
-      for (const field of decodeMeta(member).pii) assert.include(fieldNames(member), field);
-    }
-  });
-
   it.prop(
     "P3: blanking every declared pii field still decodes (erasure never makes a row undecodable)",
     { event: AuthEvents.AuthEventSchema },
@@ -128,57 +249,6 @@ describe("the event registry (T3)", () => {
       }
     },
   );
-
-  it.prop(
-    "P5: piiFieldsOf is a subset of the event's declared fields",
-    { event: AuthEvents.AuthEventSchema },
-    ({ event }) => {
-      const member = members.find((m) => m.fields._tag.ast.literal === event._tag);
-      assert.isDefined(member);
-      if (member === undefined) return;
-      for (const field of AuthEvents.piiFieldsOf(event._tag)) {
-        assert.include(fieldNames(member), field);
-      }
-    },
-  );
-
-  // P6, the classification guard F1 would have tripped: a field that looks like operator or
-  // user free text must be declared `pii`, or sit in this commented allowlist.
-  const looksLikeFreeText = /reason|note|justification|description|comment|message|text/i;
-  const NOT_PERSONAL: ReadonlySet<string> = new Set([
-    // qadi's denial sentence names attributes, never their values.
-    "auth.authz.denied.reason",
-  ]);
-
-  const isFreeTextSchema = (field: unknown): boolean => {
-    if (!Schema.isSchema(field)) return false;
-    const ast = field.ast;
-    if (ast._tag === "String") return ast.annotations?.["brands"] === undefined;
-    if (ast._tag === "Union") {
-      return (
-        ast.types.every((type) => type._tag !== "Literal") &&
-        ast.types.some(
-          (type) => type._tag === "String" && type.annotations?.["brands"] === undefined,
-        )
-      );
-    }
-    return false;
-  };
-
-  it("P6: free-text-looking string fields are declared pii or explicitly allowlisted", () => {
-    const undeclared: Array<string> = [];
-    for (const member of members) {
-      const tag = decodeMeta(member).tag;
-      for (const name of fieldNames(member)) {
-        if (!looksLikeFreeText.test(name)) continue;
-        if (!isFreeTextSchema(Reflect.get(member.fields, name))) continue;
-        if (AuthEvents.piiFieldsOf(tag).includes(name)) continue;
-        if (NOT_PERSONAL.has(`${tag}.${name}`)) continue;
-        undeclared.push(`${tag}.${name}`);
-      }
-    }
-    assert.deepStrictEqual(undeclared, []);
-  });
 });
 
 describe("attempt events (ADR-EA-037)", () => {

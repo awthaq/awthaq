@@ -1,29 +1,24 @@
 // Plan 29 ticket 02 (ADR-EA-049): the type-level interface of plugin-owned events, pinned. Nothing here executes
 // beyond building schemas: the assertions are the `@ts-expect-error` directives and the assignability constants,
-// checked by `tsc -p tsconfig.test.json`. Stand-ins are local; ticket 04 points them at `EventDefinition`.
+// checked by `tsc -p tsconfig.test.json`. `Any`, `TypeOf`, `Input` and `AnyEvent` are `EventDefinition`'s; the
+// selector, fold and overload stand-ins are local reductions of `AuthEvents`/`Auth`.
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as AuthEvents from "../src/AuthEvents.ts";
-import { Actor, type Defined, defineEvent } from "../src/internal/eventDefinition.ts";
+import {
+  Actor,
+  type Any,
+  type AnyEvent,
+  define,
+  type Input,
+  type TypeOf,
+  UserId as UserIdSchema,
+} from "../src/EventDefinition.ts";
 import { UserId } from "../src/Users.ts";
 
-// ---- stand-ins for the new names (§3.2, §3.4, §3.5) ------------------------------------------
-interface AnyEvent {
-  readonly _tag: string;
-}
-/**
- * Finding (a)/(d): besides the two `never` service pins of §2.6.3, `Any` pins `Type` to `AnyEvent`. Without it
- * `TypeOf<Any>` is `unknown` (`Schema.Top`'s), and `Published<TypeOf<D>>` fails its `AnyEvent` constraint.
- */
-type Any = Schema.Top &
-  Defined & {
-    readonly Type: AnyEvent;
-    readonly EncodingServices: never;
-    readonly DecodingServices: never;
-  };
-type TypeOf<D extends Any> = D["Type"];
-type Input<D extends Any> = D["~type.make.in"];
+// Finding (a)/(d): besides the two `never` service pins of §2.6.3, `Any` pins `Type` to `AnyEvent`. Without it
+// `TypeOf<Any>` is `unknown` (`Schema.Top`'s), and `Published<TypeOf<D>>` fails its `AnyEvent` constraint.
 type Published<E extends AnyEvent = AuthEvents.AuthEvent> = E & AuthEvents.EventMetadata;
 
 /** Mutual assignability, so a mismatch in either direction is a compile error at the call. */
@@ -32,13 +27,12 @@ const same =
   <B extends A>(..._proof: [A] extends [B] ? [] : [never]) =>
     undefined;
 
-const UserIdSchema = Schema.String.pipe(Schema.brand("UserId"));
-const LocalDef = defineEvent(
+const LocalDef = define(
   "auth.local.happened",
   { userId: UserIdSchema, note: Schema.String },
   { actor: Actor.field("userId"), pii: ["note"] },
 );
-const OtherDef = defineEvent(
+const OtherDef = define(
   "auth.other.happened",
   { count: Schema.Number },
   { actor: Actor.none, pii: [] },
