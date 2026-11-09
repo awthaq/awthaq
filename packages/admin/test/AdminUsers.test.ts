@@ -45,6 +45,7 @@ const collectEvents = Effect.gen(function* () {
   const events = yield* AuthEvents.AuthEvents;
   const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
   yield* events.stream.pipe(
+    Stream.filter(AuthEvents.is(AuthEvents.eventTags)),
     Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
     Effect.forkScoped({ startImmediately: true }),
   );

@@ -925,6 +925,7 @@ const reuseSuite = (
           // TIR-008: the reuse is followed by the family's own `auth.session.revoked` (reuseDetected).
           const reused = yield* Effect.forkChild(
             events.stream.pipe(
+              Stream.filter(AuthEvents.is(["auth.session.reuse", "auth.session.revoked"])),
               Stream.filter(
                 (event) =>
                   event._tag === "auth.session.reuse" ||
@@ -1018,6 +1019,7 @@ const reuseSuite = (
           const seen = yield* Ref.make<ReadonlyArray<string>>([]);
           yield* Effect.forkChild(
             events.stream.pipe(
+              Stream.filter(AuthEvents.is(["auth.session.reuse", "auth.session.revoked"])),
               Stream.runForEach((event) =>
                 event._tag === "auth.session.reuse" ||
                 (event._tag === "auth.session.revoked" && event.scope === "family")
@@ -1058,7 +1060,7 @@ const reuseSuite = (
           const superseded = yield* Ref.make(0);
           yield* Effect.forkChild(
             events.stream.pipe(
-              Stream.filter((event) => event._tag === "auth.session.superseded"),
+              Stream.filter(AuthEvents.is("auth.session.superseded")),
               Stream.runForEach(() => Ref.update(superseded, (n) => n + 1)),
             ),
             { startImmediately: true },
@@ -1435,7 +1437,7 @@ const capSuite = (
           const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
           yield* Effect.forkChild(
             events.stream.pipe(
-              Stream.filter((event) => event._tag === "auth.session.revoked"),
+              Stream.filter(AuthEvents.is("auth.session.revoked")),
               Stream.runForEach((event) =>
                 Ref.update(seen, (all) => [...all, AuthEvents.payloadOf(event)]),
               ),
@@ -1790,7 +1792,7 @@ describe("Sessions rotation loser (S-6)", () => {
       const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
       yield* Effect.forkChild(
         events.stream.pipe(
-          Stream.filter((event) => event._tag === "auth.session.expired"),
+          Stream.filter(AuthEvents.is("auth.session.expired")),
           Stream.runForEach((event) =>
             Ref.update(seen, (all) => [...all, AuthEvents.payloadOf(event)]),
           ),

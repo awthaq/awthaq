@@ -6,12 +6,14 @@ import { CoreMigrations, TenantScope } from "@awthaq/sql";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
+import * as EventDefinition from "../src/EventDefinition.ts";
 import * as Users from "../src/Users.ts";
 import * as TestSql from "../../test/src/TestSql.ts";
 
@@ -41,7 +43,7 @@ const observe = <E, R>(body: Effect.Effect<unknown, E, R>) =>
       yield* events.publish({ _tag: "auth.token.replay", identifier: "sentinel" });
       const seen = yield* stream.pipe(
         Stream.takeUntil(
-          (event) => event._tag === "auth.token.replay" && event.identifier === "sentinel",
+          (event) => AuthEvents.is("auth.token.replay")(event) && event.identifier === "sentinel",
         ),
         Stream.runCollect,
       );
@@ -63,7 +65,53 @@ const auditTags = Effect.map(
   (rows) => rows.map((row) => row.eventTag).filter((tag) => tag !== "auth.token.replay"),
 );
 
+// ADR-EA-049: a plugin's events pick their lane from their own definition, exactly like core's.
+const LocalAttempt = EventDefinition.define(
+  "auth.local.attempted",
+  { userId: EventDefinition.UserId },
+  { actor: EventDefinition.Actor.field("userId"), pii: [], attempt: true },
+);
+const LocalChange = EventDefinition.define(
+  "auth.local.changed",
+  { userId: EventDefinition.UserId, label: Schema.String },
+  { actor: EventDefinition.Actor.field("userId"), pii: [] },
+);
+
 describe("AuthEvents inside a unit of work (ADR-EA-037)", () => {
+  it.effect(
+    "E4: a plugin's attempt event emitted in a rolled-back unit is recorded and delivered; its state change is neither",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* AuthEvents.AuthEvents;
+        const sql = yield* SqlClient.SqlClient;
+        const seen = yield* observe(
+          SqlTransaction.transactional(sql)(
+            Effect.gen(function* () {
+              yield* events.emit(LocalChange, { userId, label: "x" });
+              yield* events.emit(LocalAttempt, { userId });
+              return yield* Effect.fail("boom");
+            }),
+          ),
+        );
+        assert.deepStrictEqual(seen, ["auth.local.attempted"]);
+        assert.deepStrictEqual(yield* auditTags, ["auth.local.attempted"]);
+      }).pipe(Effect.provide(Live)),
+  );
+
+  it.effect(
+    "E4: a plugin's state-change event emitted in a committed unit is recorded and delivered",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* AuthEvents.AuthEvents;
+        const sql = yield* SqlClient.SqlClient;
+        const seen = yield* observe(
+          SqlTransaction.transactional(sql)(events.emit(LocalChange, { userId, label: "x" })),
+        );
+        assert.deepStrictEqual(seen, ["auth.local.changed"]);
+        assert.deepStrictEqual(yield* auditTags, ["auth.local.changed"]);
+      }).pipe(Effect.provide(Live)),
+  );
+
   it.effect("a rolled-back unit: the subscriber and the audit log see only the attempt event", () =>
     Effect.gen(function* () {
       const events = yield* AuthEvents.AuthEvents;

@@ -163,6 +163,8 @@ const buildApp = Effect.fn("features.password.buildApp")(function* (options: App
       // `startImmediately`: the stream is a live broadcast, so a publish that beats the
       // subscription is gone for good (AdminWorld's own reproduced race).
       yield* authEvents.stream.pipe(
+        // Core's events (the bus is typed open, ADR-EA-049): this world reads them back by tag.
+        Stream.filter(AuthEvents.is(AuthEvents.eventTags)),
         Stream.runForEach((event) => Ref.update(events, (existing) => [...existing, event])),
         Effect.forkScoped({ startImmediately: true }),
       );

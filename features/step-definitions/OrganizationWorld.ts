@@ -127,6 +127,8 @@ const buildApp = (options: AppOptions = {}): AppHandle => {
       // would register only once the forked fiber first ran, and could miss an early event.
       const subscription = yield* authEvents.subscribe;
       yield* subscription.pipe(
+        // Core's events (the bus is typed open, ADR-EA-049): this world reads them back by tag.
+        Stream.filter(AuthEvents.is(AuthEvents.eventTags)),
         Stream.runForEach((event) => Ref.update(events, (existing) => [...existing, event])),
         Effect.forkScoped,
       );

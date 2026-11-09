@@ -138,7 +138,7 @@ describe("EEM-002/ERS-002: delivery failure policy", () => {
         const events = yield* AuthEvents.AuthEvents;
         const failed = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.mail.failed"),
+            Stream.filter(AuthEvents.is("auth.mail.failed")),
             Stream.take(1),
             Stream.runCollect,
           ),

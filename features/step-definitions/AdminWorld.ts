@@ -97,6 +97,8 @@ const buildAppLayer = (
       // hypothetical — see `packages/core/test/AuthEvents.test.ts`'s own
       // identical fix and its own comment on exactly this race.
       yield* authEvents.stream.pipe(
+        // Core's events (the bus is typed open, ADR-EA-049): this world reads them back by tag.
+        Stream.filter(AuthEvents.is(AuthEvents.eventTags)),
         Stream.runForEach((event) => Ref.update(events, (existing) => [...existing, event])),
         Effect.forkScoped({ startImmediately: true }),
       );

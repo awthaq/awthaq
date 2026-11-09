@@ -23,7 +23,7 @@ import { letForkedFibersRun, STRONG_PASSWORD } from "./shared/Harness.ts";
 
 /** What a named subscriber saw: every event it was handed, on which fibers, and whether it finished handling. */
 export interface Probe {
-  readonly handled: Ref.Ref<ReadonlyArray<AuthEvents.Published>>;
+  readonly handled: Ref.Ref<ReadonlyArray<AuthEvents.PublishedAny>>;
   readonly fibers: Ref.Ref<ReadonlyArray<number>>;
   /** Handlers that ran to completion (a gated or failing one never counts). */
   readonly completed: Ref.Ref<number>;
@@ -109,7 +109,7 @@ const makeProbe = (options: { readonly gated: boolean; readonly failing: boolean
   Effect.gen(function* () {
     const gate = options.gated ? yield* Deferred.make<void>() : undefined;
     const probe: Probe = {
-      handled: yield* Ref.make<ReadonlyArray<AuthEvents.Published>>([]),
+      handled: yield* Ref.make<ReadonlyArray<AuthEvents.PublishedAny>>([]),
       fibers: yield* Ref.make<ReadonlyArray<number>>([]),
       completed: yield* Ref.make(0),
       gate,
@@ -119,7 +119,7 @@ const makeProbe = (options: { readonly gated: boolean; readonly failing: boolean
   });
 
 /** What every probed subscriber does with an event: record it and the fiber it runs on, wait at its gate if it has one, fail if told to, else complete. */
-const handle = (probe: Probe, event: AuthEvents.Published) =>
+const handle = (probe: Probe, event: AuthEvents.PublishedAny) =>
   Effect.gen(function* () {
     yield* Ref.update(probe.handled, (existing) => [...existing, event]);
     const fiber = yield* Effect.fiberId;

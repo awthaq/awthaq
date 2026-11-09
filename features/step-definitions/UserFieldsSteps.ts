@@ -5,7 +5,7 @@
 // (`UserFieldsFixture.ts`), declares three user fields and contributes an export section. The
 // client is a real signed-in user driving `PATCH /user` and `GET /user/export` over the wire; the
 // assertions read the stored rows through the very same services.
-import { Accounts, AuditLog, Users } from "@awthaq/core";
+import { Accounts, AuditLog, AuthEvents, Users } from "@awthaq/core";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
@@ -130,7 +130,7 @@ const exportEvents = Effect.fn("features.userFields.exportEvents")(function* () 
   const { probes } = yield* World;
   // The bus subscriber runs on its own fiber and the real clock: give it a beat to record.
   yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 25)));
-  return (yield* Ref.get(probes.events)).filter((event) => event._tag === "auth.user.dataExported");
+  return (yield* Ref.get(probes.events)).filter(AuthEvents.is("auth.user.dataExported"));
 });
 
 const exportAuditRows = Effect.fn("features.userFields.exportAuditRows")(function* () {
@@ -460,7 +460,7 @@ export const userFieldsSteps = defineSteps<World>(({ Given, When, Then }) => {
       const events = yield* exportEvents();
       assert.equal(events.length, 1);
       const [event] = events;
-      assert.ok(event !== undefined && event._tag === "auth.user.dataExported");
+      assert.ok(event !== undefined);
       assert.equal(event.userId, person.userId.value);
       assert.equal(event.requestedBy, "self");
       // Ids only: past the envelope every published event carries (id, time, trace, request

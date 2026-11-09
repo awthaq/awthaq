@@ -76,6 +76,12 @@ export const eventsDropped = Metric.counter("awthaq_event_dropped_total", {
   incremental: true,
 });
 
+/** ADR-EA-049: `AuthEvents.emit` published a definition its composition does not declare (`UndeclaredEventPolicy` "warn"). */
+export const eventsUndeclared = Metric.counter("awthaq_event_undeclared_total", {
+  description: "AuthEvents.emit calls for an event tag the composed registry does not declare",
+  incremental: true,
+});
+
 /** MA-004/ADR-EA-028: `AuthEvents.publish` could not write the durable audit row (the store was unavailable). */
 export const auditWriteFailures = Metric.counter("awthaq_audit_write_failed_total", {
   description: "AuthEvents publishes whose durable AuditLog row could not be written",

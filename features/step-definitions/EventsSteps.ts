@@ -479,7 +479,7 @@ export const eventsSteps = defineSteps<World>(({ Given, When, Then }) => {
     "those fields are present, shaped exactly as the registry declares for that tag",
     function* () {
       const [event] = yield* Ref.get((yield* getProbe("handler")).handled);
-      assert.ok(event !== undefined && event._tag === "auth.user.signedIn");
+      assert.ok(event !== undefined && AuthEvents.is("auth.user.signedIn")(event));
       const { userId, strategy } = event;
       assert.equal(userId, yield* userIdOf("alice"));
       assert.equal(strategy, "password");

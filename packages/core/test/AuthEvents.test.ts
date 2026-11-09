@@ -11,12 +11,14 @@ import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as References from "effect/References";
+import * as Schema from "effect/Schema";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
+import * as EventDefinition from "../src/EventDefinition.ts";
 import { Api } from "@awthaq/api";
 import * as Observability from "../src/Observability.ts";
 import * as Tenant from "../src/Tenant.ts";
@@ -96,20 +98,16 @@ describe("AuthEvents", () => {
 
         const failing = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((e) => e._tag === "auth.token.replay"),
+            Stream.filter(AuthEvents.is("auth.token.replay")),
             Stream.runForEach(() => Effect.die(new Error("boom"))),
           ),
           { startImmediately: true },
         );
         const healthy = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((e) => e._tag === "auth.token.replay"),
+            Stream.filter(AuthEvents.is("auth.token.replay")),
             Stream.take(1),
-            Stream.runForEach((e) =>
-              e._tag === "auth.token.replay"
-                ? Ref.update(seen, (s) => [...s, e.identifier])
-                : Effect.void,
-            ),
+            Stream.runForEach((e) => Ref.update(seen, (s) => [...s, e.identifier])),
           ),
           { startImmediately: true },
         );
@@ -214,6 +212,7 @@ describe("AuthEvents", () => {
           AuthEvents.AuthEvents,
           AuthEvents.AuthEvents.of({
             publish: () => Effect.void,
+            emit: () => Effect.void,
             stream: Stream.empty,
             subscribe: Ref.updateAndGet(subscriptions, (n) => n + 1).pipe(
               Effect.map((n) =>
@@ -562,6 +561,161 @@ describe("AuthEvents", () => {
           "auth.user.created",
         ]);
       }).pipe(Effect.provide(AuthEventsLive)),
+  );
+});
+
+// ---- ADR-EA-049: emit, guards over the open stream, selectors (plan 29 ticket 06) ---------------
+
+/** A plugin's event, defined outside core: `note` is declared personal data. */
+const LocalDef = EventDefinition.define(
+  "auth.local.happened",
+  { userId: EventDefinition.UserId, note: Schema.String },
+  { actor: EventDefinition.Actor.field("userId"), pii: ["note"] },
+);
+
+/** A composition's registry: core's definitions plus `extra`. */
+const composed = (...extra: ReadonlyArray<EventDefinition.Any>) =>
+  AuthEvents.eventRegistryLayer(
+    EventDefinition.make([...AuthEvents.coreDefinitions, ...extra], "composition"),
+  );
+
+/** `AuthEvents` built over a given registry and undeclared-event policy. */
+const withRegistry = (registry: Layer.Layer<never>, policy: "warn" | "die") =>
+  AuthEvents.layer.pipe(
+    Layer.provideMerge(AuditLog.layer.pipe(Layer.provide(Persistence.memory))),
+    Layer.provide(registry),
+    Layer.provide(Layer.succeed(AuthEvents.UndeclaredEventPolicy, policy)),
+  );
+
+describe("AuthEvents.emit (ADR-EA-049)", () => {
+  it.effect("E1: emit reaches on(definition) with a typed handler and writes the audit row", () =>
+    Effect.gen(function* () {
+      const seen = yield* Queue.unbounded<string>();
+      const events = yield* AuthEvents.AuthEvents;
+      const auditLog = yield* AuditLog.AuditLog;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* Layer.build(AuthEvents.on(LocalDef, (event) => Queue.offer(seen, event.note)));
+          yield* events.emit(LocalDef, { userId, note: "hello" });
+          assert.strictEqual(yield* Queue.take(seen), "hello");
+        }),
+      );
+      const [row] = yield* auditLog.list({ eventTag: "auth.local.happened" });
+      assert.deepStrictEqual(row?.actorUserId, Option.some(userId));
+      assert.isTrue(row !== undefined && Option.isSome(AuditLog.payloadAs(LocalDef)(row)));
+    }).pipe(Effect.provide(AuthEventsLive)),
+  );
+
+  it.effect(
+    "E2: is(definition) refuses an event with the same tag whose shape does not decode",
+    () =>
+      Effect.sync(() => {
+        const envelope = eventFixture("auth.token.replay", "x");
+        const good = { ...envelope, _tag: "auth.local.happened", userId, note: "n" };
+        const forged = { ...envelope, _tag: "auth.local.happened", userId };
+        assert.isTrue(AuthEvents.is(LocalDef)(good));
+        assert.isFalse(AuthEvents.is(LocalDef)(forged));
+        assert.isTrue(AuthEvents.is("auth.token.replay")(envelope));
+        assert.isFalse(AuthEvents.is(LocalDef)(envelope));
+      }),
+  );
+
+  it.effect("E3: a mixed on([tag, definition], h) sees both, and nothing else", () =>
+    Effect.gen(function* () {
+      const seen = yield* Queue.unbounded<string>();
+      const events = yield* AuthEvents.AuthEvents;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* Layer.build(
+            AuthEvents.on(["auth.token.replay", LocalDef], (event) =>
+              Queue.offer(
+                seen,
+                event._tag === "auth.local.happened" ? event.note : event.identifier,
+              ),
+            ),
+          );
+          yield* events.publish({ _tag: "auth.user.created", userId });
+          yield* events.emit(LocalDef, { userId, note: "from-plugin" });
+          yield* events.publish({ _tag: "auth.token.replay", identifier: "from-core" });
+          assert.strictEqual(yield* Queue.take(seen), "from-plugin");
+          assert.strictEqual(yield* Queue.take(seen), "from-core");
+          yield* Effect.yieldNow;
+          assert.strictEqual(yield* Queue.size(seen), 0);
+        }),
+      );
+    }).pipe(Effect.provide(AuthEventsLive)),
+  );
+
+  it.effect('E5: under a composed registry lacking the tag, "die" dies with UndeclaredEvent', () =>
+    Effect.gen(function* () {
+      const events = yield* AuthEvents.AuthEvents;
+      const exit = yield* Effect.exit(events.emit(LocalDef, { userId, note: "n" }));
+      assert.isTrue(
+        exit._tag === "Failure" &&
+          exit.cause.reasons.some(
+            (reason) =>
+              reason._tag === "Die" &&
+              reason.defect instanceof AuthEvents.UndeclaredEvent &&
+              reason.defect.tag === "auth.local.happened",
+          ),
+      );
+    }).pipe(Effect.provide(withRegistry(composed(), "die"))),
+  );
+
+  it.effect('E5: a declared definition is emitted under "die"', () =>
+    Effect.gen(function* () {
+      const events = yield* AuthEvents.AuthEvents;
+      const auditLog = yield* AuditLog.AuditLog;
+      yield* events.emit(LocalDef, { userId, note: "n" });
+      assert.strictEqual((yield* auditLog.list({ eventTag: "auth.local.happened" })).length, 1);
+    }).pipe(Effect.provide(withRegistry(composed(LocalDef), "die"))),
+  );
+
+  it.effect(
+    'E5: "warn" logs auth.event.undeclared and still records; core\'s default registry checks nothing',
+    () => {
+      const records = Ref.makeUnsafe<ReadonlyArray<string>>([]);
+      const Capture = Logger.layer([
+        Logger.make((options) => {
+          Effect.runSync(Ref.update(records, (r) => [...r, JSON.stringify(options.message)]));
+        }),
+      ]);
+      const emitOnce = Effect.gen(function* () {
+        const events = yield* AuthEvents.AuthEvents;
+        const auditLog = yield* AuditLog.AuditLog;
+        yield* events.emit(LocalDef, { userId, note: "n" });
+        return (yield* auditLog.list({ eventTag: "auth.local.happened" })).length;
+      });
+      return Effect.gen(function* () {
+        assert.strictEqual(
+          yield* emitOnce.pipe(
+            Effect.provide(Layer.merge(withRegistry(composed(), "warn"), Capture)),
+          ),
+          1,
+        );
+        assert.isTrue(
+          (yield* Ref.get(records)).some((text) => text.includes("auth.event.undeclared")),
+        );
+        yield* Ref.set(records, []);
+        // Core's default registry knows no plugin, so nothing is checked even under "die".
+        assert.strictEqual(
+          yield* emitOnce.pipe(
+            Effect.provide(
+              Layer.merge(
+                AuthEventsLive.pipe(
+                  Layer.provide(Layer.succeed(AuthEvents.UndeclaredEventPolicy, "die")),
+                ),
+                Capture,
+              ),
+            ),
+          ),
+          1,
+        );
+        assert.isFalse(
+          (yield* Ref.get(records)).some((text) => text.includes("auth.event.undeclared")),
+        );
+      });
+    },
   );
 });
 

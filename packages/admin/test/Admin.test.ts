@@ -102,7 +102,7 @@ describe("Admin", () => {
 
         const seen = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.admin.impersonationDenied"),
+            Stream.filter(AuthEvents.is("auth.admin.impersonationDenied")),
             Stream.take(1),
             Stream.runCollect,
           ),
@@ -286,19 +286,18 @@ describe("Admin", () => {
       }>
     >([]);
     yield* events.stream.pipe(
+      Stream.filter(AuthEvents.is("auth.admin.impersonationStopped")),
       Stream.runForEach((event) =>
-        event._tag === "auth.admin.impersonationStopped"
-          ? Ref.update(seen, (all) => [
-              ...all,
-              {
-                sessionId: event.sessionId,
-                endedBy: event.endedBy,
-                // IDS-006: both parties, so a consumer need not join the audit rows.
-                adminUserId: event.adminUserId,
-                targetUserId: event.targetUserId,
-              },
-            ])
-          : Effect.void,
+        Ref.update(seen, (all) => [
+          ...all,
+          {
+            sessionId: event.sessionId,
+            endedBy: event.endedBy,
+            // IDS-006: both parties, so a consumer need not join the audit rows.
+            adminUserId: event.adminUserId,
+            targetUserId: event.targetUserId,
+          },
+        ]),
       ),
       Effect.forkScoped({ startImmediately: true }),
     );

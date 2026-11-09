@@ -1059,11 +1059,8 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* run(
       Effect.flatMap(AuthEvents.AuthEvents, (events) =>
         events.stream.pipe(
-          Stream.runForEach((event) =>
-            event._tag === "auth.admin.actionDenied"
-              ? Ref.update(seen, (all) => [...all, event.action])
-              : Effect.void,
-          ),
+          Stream.filter(AuthEvents.is("auth.admin.actionDenied")),
+          Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event.action])),
           Effect.forkIn(world.scope, { startImmediately: true }),
         ),
       ),

@@ -523,9 +523,9 @@ export const verificationSteps = defineSteps<World>(({ Given, When, Then }) => {
       const { strings, probes } = yield* World;
       const identifier = yield* strings.get("presented");
       yield* awaitEvent(REPLAY, identifier);
-      const seen = (yield* Ref.get(probes.events)).filter(
-        (event) => event._tag === REPLAY && event.identifier === identifier,
-      );
+      const seen = (yield* Ref.get(probes.events))
+        .filter(AuthEvents.is(REPLAY))
+        .filter((event) => event.identifier === identifier);
       assert.equal(seen.length, 1);
     },
   );

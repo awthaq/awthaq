@@ -609,7 +609,7 @@ describe("TwoFactor: management is rate limited per account (plan 06)", () => {
       const user = yield* enrolledUser("manage@example.com");
       const collected = yield* Effect.forkChild(
         events.stream.pipe(
-          Stream.filter((event) => event._tag === "auth.rateLimit.exceeded"),
+          Stream.filter(AuthEvents.is("auth.rateLimit.exceeded")),
           Stream.take(1),
           Stream.runCollect,
         ),
@@ -710,7 +710,7 @@ describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-259)", () => {
           const rows = yield* audit.list({ eventTag: "auth.twoFactor.challengeFailed" });
           assert.strictEqual(rows.length, 1);
           const seen = yield* stream.pipe(
-            Stream.filter((event) => event._tag === "auth.twoFactor.challengeFailed"),
+            Stream.filter(AuthEvents.is("auth.twoFactor.challengeFailed")),
             Stream.take(1),
             Stream.runCollect,
           );

@@ -279,12 +279,12 @@ const scenario = (options: {
     const events = yield* AuthEvents.AuthEvents;
     const seen = yield* Ref.make<ReadonlyArray<string>>([]);
     yield* events.stream.pipe(
+      Stream.filter(AuthEvents.is(["auth.admin.actionDenied", "auth.admin.impersonationDenied"])),
       Stream.runForEach((event) =>
-        event._tag === "auth.admin.actionDenied"
-          ? Ref.update(seen, (all) => [...all, event.action])
-          : event._tag === "auth.admin.impersonationDenied"
-            ? Ref.update(seen, (all) => [...all, event.operation])
-            : Effect.void,
+        Ref.update(seen, (all) => [
+          ...all,
+          event._tag === "auth.admin.actionDenied" ? event.action : event.operation,
+        ]),
       ),
       Effect.forkScoped({ startImmediately: true }),
     );
@@ -353,6 +353,7 @@ describe("the admin gate (plan 13)", () => {
       const events = yield* AuthEvents.AuthEvents;
       const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
       yield* events.stream.pipe(
+        Stream.filter(AuthEvents.is(AuthEvents.eventTags)),
         Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
         Effect.forkScoped({ startImmediately: true }),
       );
@@ -405,6 +406,7 @@ describe("the admin gate (plan 13)", () => {
         const events = yield* AuthEvents.AuthEvents;
         const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
         yield* events.stream.pipe(
+          Stream.filter(AuthEvents.is(AuthEvents.eventTags)),
           Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
           Effect.forkScoped({ startImmediately: true }),
         );
@@ -438,6 +440,7 @@ describe("the admin gate (plan 13)", () => {
         const events = yield* AuthEvents.AuthEvents;
         const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
         yield* events.stream.pipe(
+          Stream.filter(AuthEvents.is(AuthEvents.eventTags)),
           Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
           Effect.forkScoped({ startImmediately: true }),
         );

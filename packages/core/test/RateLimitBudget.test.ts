@@ -411,7 +411,11 @@ describe("spend (BEH-EA-105/106, EOTS-007)", () => {
       const events = yield* AuthEvents.AuthEvents;
       const limits = yield* RateLimits.budget(inviteOwner);
       const collected = yield* Effect.forkChild(
-        events.stream.pipe(Stream.take(1), Stream.runCollect),
+        events.stream.pipe(
+          Stream.filter(AuthEvents.is("auth.rateLimit.exceeded")),
+          Stream.take(1),
+          Stream.runCollect,
+        ),
         { startImmediately: true },
       );
       yield* limits.spend("createByEmail", { email: "alice@example.com" });
@@ -487,7 +491,11 @@ describe("spend (BEH-EA-105/106, EOTS-007)", () => {
       const events = yield* AuthEvents.AuthEvents;
       const limits = yield* RateLimits.budget(inviteOwner);
       const collected = yield* Effect.forkChild(
-        events.stream.pipe(Stream.take(1), Stream.runCollect),
+        events.stream.pipe(
+          Stream.filter(AuthEvents.is("auth.rateLimit.exceeded")),
+          Stream.take(1),
+          Stream.runCollect,
+        ),
         { startImmediately: true },
       );
       const spend = limits.spend("revokeByUser", { userId: "u1" }, { endpoint: "revoke" });

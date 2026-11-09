@@ -238,16 +238,17 @@ export const layer = Layer.unwrap(
   }),
 );
 
-/** Also inspects every event published on `AuthEvents` — the payload the durable audit row stores. */
+/**
+ * Also inspects every event published on `AuthEvents`, core's or a plugin's (ADR-EA-049): the
+ * published value, which is what the durable audit row stores (the event plus its envelope).
+ */
 export const layerEvents = Layer.effectDiscard(
   Effect.gen(function* () {
     const guard = yield* RedactionGuard;
     const events = yield* AuthEvents.AuthEvents;
     const stream = yield* events.subscribe;
     yield* Effect.forkScoped(
-      Stream.runForEach(stream, (event) =>
-        guard.inspectEvent(event._tag, AuthEvents.payloadOf(event)),
-      ),
+      Stream.runForEach(stream, (event) => guard.inspectEvent(event._tag, event)),
     );
   }),
 );

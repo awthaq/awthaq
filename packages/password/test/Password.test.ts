@@ -265,7 +265,7 @@ describe("Password", () => {
         yield* users.setStatus(user.id, "suspended", { reason: "fraud" });
         const collected = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.user.signInFailed"),
+            Stream.filter(AuthEvents.is("auth.user.signInFailed")),
             Stream.take(2),
             Stream.runCollect,
           ),
@@ -322,7 +322,7 @@ describe("Password", () => {
 
         const failed = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.user.signInFailed"),
+            Stream.filter(AuthEvents.is("auth.user.signInFailed")),
             Stream.take(1),
             Stream.runCollect,
           ),
@@ -357,7 +357,7 @@ describe("Password", () => {
 
         const failed = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.user.signInFailed"),
+            Stream.filter(AuthEvents.is("auth.user.signInFailed")),
             Stream.take(1),
             Stream.runCollect,
           ),
@@ -507,7 +507,7 @@ describe("Password", () => {
 
         const issuedEvents = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter((event) => event._tag === "auth.session.issued"),
+            Stream.filter(AuthEvents.is("auth.session.issued")),
             Stream.take(2),
             Stream.runCollect,
           ),
@@ -693,11 +693,7 @@ describe("Password", () => {
 
         const captured = yield* Effect.forkChild(
           events.stream.pipe(
-            Stream.filter(
-              (event) =>
-                event._tag === "auth.password.resetCompleted" ||
-                event._tag === "auth.session.revoked",
-            ),
+            Stream.filter(AuthEvents.is(["auth.password.resetCompleted", "auth.session.revoked"])),
             Stream.take(2),
             Stream.runCollect,
           ),
@@ -814,10 +810,11 @@ describe("Password", () => {
         const captured = yield* Effect.forkChild(
           events.stream.pipe(
             Stream.filter(
-              (event) =>
-                event._tag === "auth.password.changed" ||
-                event._tag === "auth.session.revoked" ||
-                event._tag === "auth.session.issued",
+              AuthEvents.is([
+                "auth.password.changed",
+                "auth.session.revoked",
+                "auth.session.issued",
+              ]),
             ),
             Stream.take(3),
             Stream.runCollect,
