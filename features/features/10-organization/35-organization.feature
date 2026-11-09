@@ -198,6 +198,39 @@ Feature: Organization
       Then the response is 404
       And the response is byte-identical to the one for an organization that does not exist
 
+    @REQ-EA-1502
+    Scenario Outline: A non-member's attempt at <action> is recorded as a permission denial
+      Given teams are enabled
+      And a signed-in user "alice"
+      And a signed-in user "bob"
+      And "alice" has created the organization "acme"
+      And "bob" has created the organization "beta"
+      When "bob" sends <method> "<path>" with body '<body>'
+      Then the response is 404
+      And the event "auth.organization.permissionDenied" was published once for "bob"
+
+      Examples:
+        | action            | method | path                                          | body                |
+        | removing a member | DELETE | /organization/[org:acme]/members/[user:alice] | -                   |
+        | changing a role   | PATCH  | /organization/[org:acme]/members/[user:alice] | {"role":["member"]} |
+        | creating a team   | POST   | /organization/[org:acme]/teams                | {"name":"pwn"}      |
+
+    @REQ-EA-1503
+    Scenario: A team role held in another organization confers nothing under this organization's path
+      Given teams are enabled
+      And a signed-in user "alice"
+      And a signed-in user "bob"
+      And a signed-in user "carol"
+      And "alice" has created the organization "acme"
+      And "bob" has created the organization "beta"
+      And "carol" has joined the organization "acme" as "member"
+      And "carol" has joined the organization "beta" as "member"
+      And "bob" has created the team "platform" in the organization "beta"
+      And "bob" has added "carol" to the team "platform" of the organization "beta" as "lead"
+      When "carol" sends PATCH "/organization/[org:acme]/teams/[id:team:platform]" with body '{"name":"pwned"}'
+      Then the response is 403
+      And as seen by "bob", the organization "beta" has the teams "platform"
+
     @REQ-EA-721
     Scenario: An outsider cannot make another organization her active organization
       Given a signed-in user "alice"
