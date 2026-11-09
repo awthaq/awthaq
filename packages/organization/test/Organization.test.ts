@@ -123,37 +123,6 @@ describe("Organization", () => {
     }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect("getFull/listMembers/listInvitationsForOrganization are denied to a non-member", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const outsider = asCaller("outsider-1");
-      const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-
-      // MTI-009: a non-member cannot tell an existing organization from a missing one.
-      const fullDenied = yield* organization.getFull(outsider, record.id).pipe(Effect.flip);
-      assert.strictEqual(fullDenied._tag, "OrganizationNotFound");
-
-      const membersDenied = yield* organization.listMembers(outsider, record.id).pipe(Effect.flip);
-      assert.strictEqual(membersDenied._tag, "OrganizationNotFound");
-
-      const invitationsDenied = yield* organization
-        .listInvitationsForOrganization(outsider, record.id)
-        .pipe(Effect.flip);
-      assert.strictEqual(invitationsDenied._tag, "OrganizationNotFound");
-
-      // A real member (not just owner/admin) may still read all three.
-      yield* addMember({
-        organizationId: record.id,
-        userId: Users.UserId("outsider-1"),
-        role: ["member"],
-      });
-      yield* organization.getFull(outsider, record.id);
-      yield* organization.listMembers(outsider, record.id);
-      yield* organization.listInvitationsForOrganization(outsider, record.id);
-    }).pipe(Effect.provide(buildLayer())),
-  );
-
   it.effect("update requires permission and rejects a slug collision", () =>
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;
@@ -865,37 +834,6 @@ describe("Organization", () => {
     );
   });
 
-  // MTI-002: listTeams/listTeamMembers used to take no caller at all — any
-  // authenticated principal of the deployment could enumerate another
-  // tenant's team names and rosters. Mirrors the identical
-  // "getFull/listMembers/... denied to a non-member" test above.
-  it.effect("listTeams/listTeamMembers are denied to a non-member", () =>
-    Effect.gen(function* () {
-      const organization = yield* Organization.Organization;
-      const owner = asCaller("owner-1");
-      const outsider = asCaller("outsider-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const team = yield* organization.createTeam(owner, org.id, "Engineering");
-
-      const teamsDenied = yield* organization.listTeams(outsider, org.id).pipe(Effect.flip);
-      assert.strictEqual(teamsDenied._tag, "OrganizationNotFound");
-
-      const membersDenied = yield* organization
-        .listTeamMembers(outsider, org.id, team.id)
-        .pipe(Effect.flip);
-      assert.strictEqual(membersDenied._tag, "OrganizationNotFound");
-
-      // A real member (not just owner/admin) may still read both.
-      yield* addMember({
-        organizationId: org.id,
-        userId: Users.UserId("outsider-1"),
-        role: ["member"],
-      });
-      yield* organization.listTeams(outsider, org.id);
-      yield* organization.listTeamMembers(outsider, org.id, team.id);
-    }).pipe(Effect.provide(withTeams())),
-  );
-
   it.effect("setActiveTeam round-trips and rejects a non-member", () =>
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;
@@ -1254,21 +1192,6 @@ describe("Organization", () => {
         assert.isFalse("email" in payloadOf(recorded[0]));
       }).pipe(Effect.provide(buildLayer())),
     );
-
-    it.effect("a non-member's denied delete is recorded with reason notMember", () =>
-      Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const auditLog = yield* AuditLog.AuditLog;
-        const org = yield* organization.create({
-          caller: asCaller("owner-1"),
-          name: "Acme",
-          slug: "acme",
-        });
-        yield* organization.delete(asCaller("outsider-1"), org.id).pipe(Effect.flip);
-        const recorded = yield* auditLog.list({ eventTag: "auth.organization.permissionDenied" });
-        assert.strictEqual(payloadOf(recorded[0])["reason"], "notMember");
-      }).pipe(Effect.provide(buildLayer())),
-    );
   });
 });
 
@@ -1378,7 +1301,7 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
   );
 
   it.effect(
-    "EP-003: a suspended organization is refused everywhere, and reinstating restores it",
+    "EP-003: a suspended organization stays listed, flagged, and reinstating restores it",
     () =>
       Effect.gen(function* () {
         const organization = yield* Organization.Organization;
@@ -1392,25 +1315,8 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
         const now = yield* DateTime.now;
         yield* records.setSuspended(grant, org.id, Option.some(now));
 
-        // BEH-EA-237 (plan 30, A-F2/A-F3): the invitation paths that start from an invitation id
-        // check the organization too, and answer like an unknown invitation.
-        const cancel = yield* organization.cancelInvitation(owner, pending.id).pipe(Effect.flip);
-        assert.strictEqual(cancel._tag, "InvitationNotFound");
-        const readInvitation = yield* organization
-          .getInvitation(owner, pending.id)
-          .pipe(Effect.flip);
-        assert.strictEqual(readInvitation._tag, "InvitationNotFound");
-
-        const read = yield* organization.get(owner, org.id).pipe(Effect.flip);
-        assert.strictEqual(read._tag, "OrganizationNotFound");
-        const write = yield* organization
-          .update(owner, org.id, { name: "Renamed" })
-          .pipe(Effect.flip);
-        assert.strictEqual(write._tag, "OrganizationNotFound");
-        const invite = yield* organization
-          .invite(owner, org.id, { email: "x@example.com", role: ["member"] })
-          .pipe(Effect.flip);
-        assert.strictEqual(invite._tag, "OrganizationNotFound");
+        // Every organization-scoped method's refusal (and that nothing is written) is generated by
+        // `AuthorizationMatrix.test.ts`; this keeps the listing and the reinstatement.
         // The member's own listing still shows it, flagged, so they can see why.
         const listed = yield* organization.list(owner);
         assert.strictEqual(listed.length, 1);
@@ -1419,7 +1325,7 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
         yield* records.setSuspended(grant, org.id, Option.none());
         const restored = yield* organization.get(owner, org.id);
         assert.strictEqual(restored.id, org.id);
-        // Nothing was cancelled while suspended: the invitation is pending again, and readable.
+        // The invitation is pending again, and readable.
         assert.strictEqual(
           (yield* organization.getInvitation(owner, pending.id)).status,
           "pending",
