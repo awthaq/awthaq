@@ -1,7 +1,7 @@
 // BAM-005/BAM-009 (BEH-EA-221, BEH-EA-225): AdminAccounts — delete a user through the one erasure
 // cascade, set a user's email through the mailed change-email flow, set a user's password through
-// the PasswordHasher port with every session revoked. Every capability behind its own fail-closed
-// predicate.
+// `Password`'s credential module, under `Password.config`'s policy, with every session revoked
+// (ADR-EA-048). Every capability behind its own fail-closed predicate.
 //
 // Domain-level like `AdminUsers.test.ts`: real in-memory stores and a real argon2id hasher.
 import { Api } from "@awthaq/api";
@@ -15,12 +15,16 @@ import {
   Sessions,
   Users,
   Verification,
+  Tenant,
 } from "@awthaq/core";
+import { Password } from "@awthaq/password";
 import { Mailer, PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import type * as HttpClient from "effect/http/HttpClient";
 import * as Layer from "effect/Layer";
+import * as LayerMap from "effect/LayerMap";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Redacted from "effect/Redacted";
@@ -31,6 +35,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Admin from "../src/Admin.ts";
 import * as AdminAccounts from "../src/AdminAccounts.ts";
 import { TestAuth } from "@awthaq/test";
+import { createHash } from "node:crypto";
 
 const failingMailer = Layer.succeed(
   Mailer.Mailer,
@@ -66,11 +71,16 @@ const buildLayer = (
     readonly veto?: boolean;
     readonly resetVeto?: boolean;
     readonly transaction?: Layer.Layer<SqlTransaction.SqlTransaction>;
+    /** The breach check's transport; by default a corpus that matches nothing. */
+    readonly httpClient?: Layer.Layer<HttpClient.HttpClient>;
+    readonly password?: Partial<Password.PasswordConfigShape>;
   } = {},
 ) =>
-  TestAuth.layer(Auth.make([Admin.Admin, AdminAccounts.AdminAccounts]), {
+  TestAuth.layer(Auth.make([Admin.Admin, Password.Password, AdminAccounts.AdminAccounts]), {
     services: Layer.mergeAll(
       Admin.config(config),
+      Password.config(options.password ?? {}),
+      options.httpClient ?? TestAuth.httpClient.noBreach,
       options.mailer ?? Layer.empty,
       options.transaction ?? Layer.empty,
     ),
@@ -387,21 +397,81 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
     }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
-  it.effect("a host policy replaces the default", () =>
+  // BEH-EA-120 (ADR-EA-048): the one policy is `Password.config`'s, breach screening included.
+  const breached = Redacted.make("a breached but long enough password");
+  const breachedHex = createHash("sha1")
+    .update(Redacted.value(breached))
+    .digest("hex")
+    .toUpperCase();
+  const breachCorpus = TestAuth.httpClient.returning((url) =>
+    url.endsWith(breachedHex.slice(0, 5)) ? `${breachedHex.slice(5)}:5` : `${"F".repeat(35)}:1`,
+  );
+
+  it.effect(
+    "BEH-EA-120: a breached password is refused with Password's hint, and nothing changes",
+    () =>
+      Effect.gen(function* () {
+        const { adminId, targetId, accounts, hasher, oldPassword } = yield* seed;
+        const admin = yield* AdminAccounts.AdminAccounts;
+        const failure = yield* admin
+          .setUserPassword(asCaller(adminId), targetId, { password: breached })
+          .pipe(Effect.flip);
+        assert.deepStrictEqual(failure._tag === "AdminWeakPassword" ? failure.hints : [], [
+          "appears in known breaches",
+        ]);
+        assert.isTrue(yield* hasher.verify(oldPassword, yield* storedHash(accounts, targetId)));
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(
+          buildLayer(manageAll, { httpClient: breachCorpus, password: { breachCheck: true } }),
+        ),
+      ),
+  );
+
+  it.effect("BEH-EA-120: Password.config's minLength governs an administrator-set password", () =>
     Effect.gen(function* () {
       const { adminId, targetId } = yield* seed;
       const admin = yield* AdminAccounts.AdminAccounts;
       const failure = yield* admin
-        .setUserPassword(asCaller(adminId), targetId, { password: newPassword })
+        .setUserPassword(asCaller(adminId), targetId, { password: Redacted.make("twelve chars") })
         .pipe(Effect.flip);
-      assert.deepStrictEqual(failure._tag === "AdminWeakPassword" ? failure.hints : [], [
-        "no passphrases here",
-      ]);
+      assert.strictEqual(failure._tag, "AdminWeakPassword");
+      if (failure._tag === "AdminWeakPassword") {
+        assert.isTrue(failure.hints.some((hint) => hint.includes("16")));
+      }
     }).pipe(
       TestAuth.withoutRequest,
-      Effect.provide(
-        buildLayer({ ...manageAll, passwordPolicy: () => Effect.succeed(["no passphrases here"]) }),
-      ),
+      Effect.provide(buildLayer(manageAll, { password: { minLength: 16 } })),
+    ),
+  );
+
+  /** EP-007: tenant id -> that tenant's `Password.config(...)`. */
+  class TenantPasswordConfig extends LayerMap.Service<TenantPasswordConfig>()(
+    "test/AdminAccounts/TenantPasswordConfig",
+    {
+      lookup: (tenantId: string) =>
+        Layer.merge(
+          Password.config({ minLength: tenantId === "strict" ? 40 : 12 }),
+          Tenant.configApplied(tenantId),
+        ),
+      idleTimeToLive: "1 minute",
+    },
+  ) {}
+
+  it.effect("EP-007: a tenant's Password.config applies to an administrator-set password", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId } = yield* seed;
+      const admin = yield* AdminAccounts.AdminAccounts;
+      const strict = yield* admin
+        .setUserPassword(asCaller(adminId), targetId, { password: newPassword })
+        .pipe(Effect.provide(TenantPasswordConfig.get("strict")), Effect.flip);
+      assert.strictEqual(strict._tag, "AdminWeakPassword");
+      yield* admin
+        .setUserPassword(asCaller(adminId), targetId, { password: newPassword })
+        .pipe(Effect.provide(TenantPasswordConfig.get("lax")));
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(Layer.merge(buildLayer(manageAll), TenantPasswordConfig.layer)),
     ),
   );
 

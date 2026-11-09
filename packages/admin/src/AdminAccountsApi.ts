@@ -8,11 +8,12 @@
 // `canManageCredentials`); a caller who fails it learns nothing about which user ids exist.
 //
 // A separate plugin (`AdminAccounts`), not more endpoints on `Admin`: it needs the erasure
-// cascade, the password hasher and the mailer, and `Admin` must keep composing without them
-// (`AdminTenants` next to `Admin` is the same shape).
+// cascade, the password plugin's credential module and the mailer, and `Admin` must keep composing
+// without them (`AdminTenants` next to `Admin` is the same shape).
 
 import { Api, EmailContract } from "@awthaq/api";
 import { HookPoint } from "@awthaq/core";
+import { PasswordApi } from "@awthaq/password";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
@@ -48,7 +49,7 @@ export class AdminEmailDeliveryFailed extends Schema.TaggedError<AdminEmailDeliv
   { httpApiStatus: 502 },
 ) {}
 
-/** BAM-005: the password violates `AdminConfig.passwordPolicy`; `hints` say how. */
+/** BAM-005/BEH-EA-120: the password violates `Password.config`'s policy in force (minimum length, breach screening); `hints` say how. */
 export class AdminWeakPassword extends Schema.TaggedError<AdminWeakPassword>()(
   "AdminWeakPassword",
   { hints: Schema.Array(Schema.String) },
@@ -59,12 +60,11 @@ export class AdminWeakPassword extends Schema.TaggedError<AdminWeakPassword>()(
 export const SetUserEmailPayload = Schema.Struct({ email: EmailContract.Email });
 export type SetUserEmailPayload = typeof SetUserEmailPayload.Type;
 
-/** Same ceiling `@awthaq/password` puts on a submitted password (ESS-006): the hasher's cost is linear in it. */
-const MAX_PASSWORD_LENGTH = 1024;
-
-/** `POST /admin/users/:userId/password`. */
+/** `POST /admin/users/:userId/password`: the ceiling `@awthaq/password` puts on any submitted password (ESS-006). */
 export const SetUserPasswordPayload = Schema.Struct({
-  password: Schema.Redacted(Schema.String.check(Schema.isMaxLength(MAX_PASSWORD_LENGTH))),
+  password: Schema.Redacted(
+    Schema.String.check(Schema.isMaxLength(PasswordApi.MAX_PASSWORD_LENGTH)),
+  ),
 });
 export type SetUserPasswordPayload = typeof SetUserPasswordPayload.Type;
 

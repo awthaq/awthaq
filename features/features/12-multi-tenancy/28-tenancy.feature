@@ -364,15 +364,15 @@ Feature: Multi-Tenancy
     @REQ-EA-1307
     Scenario: A tenant's administration configuration can refuse deleting a user the platform would allow
       Given a user "victim" exists in a composition whose build-time configuration lets every administrator delete users and manage credentials
-      And the tenant "acme" configures credential administration and a password policy, but no account deletion
+      And the tenant "acme" configures credential administration and a Password policy, but no account deletion
       When an administrator deletes "victim" in a request naming the tenant "acme"
       Then the deletion of "victim" is refused with "AdminActionDenied" and the user still exists
 
     @REQ-EA-1308
-    Scenario: A tenant's administration configuration supplies its own password policy
+    Scenario: A tenant's Password configuration governs a password an administrator sets
       Given a user "victim" exists in a composition whose build-time configuration lets every administrator delete users and manage credentials
-      And the tenant "acme" configures credential administration and a password policy, but no account deletion
-      When an administrator sets a password with no digit for "victim" in a request naming the tenant "acme"
+      And the tenant "acme" configures credential administration and a Password policy, but no account deletion
+      When an administrator sets a password shorter than the tenant's minimum for "victim" in a request naming the tenant "acme"
       Then the password change for "victim" is refused with "AdminWeakPassword"
 
   # BEH-EA-237 — spec/behaviors/28-tenancy.md; see also ADR-EA-018

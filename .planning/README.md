@@ -304,6 +304,7 @@ Wave E: the deepenings
 | Wave 0 · 25 tickets 02–03 | Landed, PR #49 |
 | Wave 0 · 30 tickets 01–04 | Landed, PR #51 |
 | Wave 0 · 27 ticket 04 | Landed, PR #50 |
+| 27 · tickets 01–03, 05–18 | Done on `feat/password-credential` (draft PR #59): Wave E (05–11) and Wave F (12–18); BEH-EA-345, ADR-EA-048, REQ-EA-1502 (see plan 27 "Decisions taken") |
 | Wave 0 · 28 tickets 01–02 | Landed, PR #48 |
 | 30 ticket 21 | Done: plan 17 verified on the merged base, no regression; R1 NO-GO (no pre-1.3 environment), so 22–23 are closed |
 | 25 | Done: Wave 0 (02–03, PR #49), Wave E (04, 06–14, PR #55, with 28 ticket 03), Wave F (15–25, PRs #57/#58), Wave G (26–27, `docs/record-store-contract-close`); ticket 01 skipped. Left as follow-ups: sealed-column suites over `recordsBase`, the PG-only cases proven only by CI's `pnpm test:pg` (see plan 25 "Decisions taken") |

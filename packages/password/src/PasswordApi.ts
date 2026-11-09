@@ -117,7 +117,7 @@ export class EmailChangeNotSupported extends Schema.TaggedError<EmailChangeNotSu
 
 /**
  * ESS-006: config-independent ceiling on a submitted password. `minLength` and
- * the breach check live in `checkPolicy` because they read the runtime
+ * the breach check live in `PasswordCredential.accept` because they read the runtime
  * `PasswordConfig`, which a static schema cannot; the upper bound needs no
  * config and stops a multi-megabyte "password" from reaching the hasher
  * (hash-wasm input cost is linear in its length).

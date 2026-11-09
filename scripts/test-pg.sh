@@ -76,6 +76,7 @@ suites=(
   packages/organization/test/TeamRecords.test.ts
   packages/organization/test/TenantMiddleware.test.ts
   packages/passkey/test/PasskeyCeremony.test.ts
+  packages/password/test/PasswordCredentialSql.test.ts
   packages/password/test/PasswordStoreOutage.test.ts
   packages/qadi/test/UserClaims.test.ts
   packages/two-factor/test/TwoFactorStore.test.ts

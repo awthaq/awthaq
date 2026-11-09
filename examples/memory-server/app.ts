@@ -17,7 +17,7 @@ import {
   type OrganizationRoles,
   type OrganizationTeams,
 } from "@awthaq/organization";
-import { Password } from "@awthaq/password";
+import { Password, type PasswordCredential } from "@awthaq/password";
 import {
   ClientAddress,
   Encryption,
@@ -171,6 +171,9 @@ const LoggingLive = Logger.layer([
 
 /** Keeps `SlotConflict` (a build-time failure `main` can end with) nameable for declaration emit. @public */
 export type StartupConflict = Slots.SlotConflict;
+
+/** Keeps Password's exposed credential module (in `makeAppLayer`'s output) nameable for declaration emit. @public */
+export type PasswordServices = PasswordCredential.PasswordCredential;
 
 /** Keeps Organization's exposed services (in `makeAppLayer`'s output) nameable for declaration emit. @public */
 export type OrganizationServices =

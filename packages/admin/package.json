@@ -28,6 +28,7 @@
     "@awthaq/api": "workspace:*",
     "@awthaq/core": "workspace:*",
     "@awthaq/organization": "workspace:*",
+    "@awthaq/password": "workspace:*",
     "@awthaq/ports": "workspace:*",
     "@awthaq/server": "workspace:*",
     "@awthaq/sql": "workspace:*"

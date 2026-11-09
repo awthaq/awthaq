@@ -1,6 +1,6 @@
 // The application Layer the CLI builds for `seed admin` and `import`, for the suites: the real
-// `Users`/`Accounts`/`AuthEvents`/`AuditLog`/`Roles`/`PasswordHasher` services over a real SQL
-// client (SQLite), exactly what an application's `awthaq.config.ts` exports as `app`. It is a
+// `Users`/`Accounts`/`AuthEvents`/`AuditLog`/`Roles`/`PasswordHasher` services and the Password
+// plugin's exposed `PasswordCredential` (default `Password.config`) over a real SQL client (SQLite), exactly what an application's `awthaq.config.ts` exports as `app`. It is a
 // Layer over a `SqlClient` the *test* owns, so state survives across the separate builds each CLI
 // invocation performs (a fresh runtime per command), the way a database does.
 //
@@ -8,7 +8,7 @@
 // the host module's port block (a hasher with the legacy verifiers, a mailer, a limiter, a client address, a key, a
 // breach-check transport, the HTTP platform) is no shorter than this file. `sqlAppWithoutRoles` also runs over a
 // database migrated for Password + Roles, which `AuthHost`'s `"verify"` mode rightly refuses as ledger drift.
-import { TestEncryption } from "@awthaq/test";
+import { TestAuth, TestEncryption } from "@awthaq/test";
 import {
   Accounts,
   AuditLog,
@@ -20,11 +20,13 @@ import {
   Slots,
   Users,
 } from "@awthaq/core";
+import { PasswordCredential } from "@awthaq/password";
 import { PasswordHasher, SqlTransaction } from "@awthaq/ports";
 import { Roles } from "@awthaq/roles";
 import { BetterAuthScryptVerifier } from "@awthaq/migrate-better-auth";
 import { FirebaseScryptVerifier } from "@awthaq/migrate-firebase";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import type * as HttpClient from "effect/http/HttpClient";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import { role } from "@qadi/core";
@@ -61,12 +63,18 @@ const CoreLive = Layer.mergeAll(
   ),
 );
 
-/** Core services plus the Roles plugin (catalog: `admin`, `editor`) over the given SQL client. */
-export const sqlApp = (sql: SqlClient.SqlClient) =>
+/** The Password plugin's exposed credential module over the core services; its breach check answers over `httpClient`. */
+const withPasswordCredential = (httpClient: Layer.Layer<HttpClient.HttpClient>) =>
+  PasswordCredential.PasswordCredential.layer.pipe(
+    Layer.provide(Layer.merge(httpClient, NodeCrypto.layer)),
+    Layer.provideMerge(CoreLive),
+  );
+
+const withRoles = <A, E, R>(core: Layer.Layer<A, E, R>, sql: SqlClient.SqlClient) =>
   Roles.Roles.layer.pipe(
     Layer.provide(Roles.Roles.records.sql),
     Layer.provide(Roles.config([adminRole, editorRole])),
-    Layer.provideMerge(CoreLive),
+    Layer.provideMerge(core),
     // Exposed as well as provided: `import` keeps its checkpoint ledger on the application's own client.
     Layer.provideMerge(Layer.succeed(SqlClient.SqlClient, sql)),
     // The slot registry `Auth.make` would otherwise provide: `Roles` reads and overrides slots.
@@ -75,6 +83,18 @@ export const sqlApp = (sql: SqlClient.SqlClient) =>
     // (`Hooks.HooksLive` provides them in a full composition).
     Layer.provide(Layer.mergeAll(Erasure.registryLayer, DataExport.registryLayer)),
   );
+
+/**
+ * Core services, the Password plugin's credential module and the Roles plugin (catalog: `admin`,
+ * `editor`) over the given SQL client. The breach check finds nothing unless `httpClient` says otherwise.
+ */
+export const sqlApp = (
+  sql: SqlClient.SqlClient,
+  options: { readonly httpClient?: Layer.Layer<HttpClient.HttpClient> } = {},
+) => withRoles(withPasswordCredential(options.httpClient ?? TestAuth.httpClient.noBreach), sql);
+
+/** Core services and Roles, without the Password plugin: there is no password credential to set. */
+export const sqlAppWithoutPassword = (sql: SqlClient.SqlClient) => withRoles(CoreLive, sql);
 
 /** The same without Roles: there is no administrative role concept to grant. */
 export const sqlAppWithoutRoles = (sql: SqlClient.SqlClient) =>
