@@ -1,7 +1,8 @@
 // Plan 25 ticket 16 (ADR-EA-041 decision 9): `WebhookRecords`' contract, run on memory and SQL (Postgres under
 // `pnpm test:pg`) from `Contract.test.ts`. BEH-EA-281: `maxEndpoints` (`createEndpoint`'s `within`) is decided with
 // the insert, per tenant. Plan 24 C8: an administrator's edit and the worker's failure count are single-statement
-// writes of their own columns, so neither loses the other's. C9: an endpoint and its delivery log go together.
+// writes of their own columns, so neither loses the other's. C9: an endpoint and its delivery log go together, and an
+// `enqueue` racing the endpoint's delete never leaves a delivery whose endpoint is gone (plan 25 Wave F's open gap).
 import { Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import { RecordsContract, type TestAuth, TestSql } from "@awthaq/test";
@@ -86,6 +87,15 @@ const raced = <A, E, R>(writers: ReadonlyArray<Effect.Effect<A, E, R>>) =>
 
 const many = <A>(make: (n: number) => A) =>
   Array.from({ length: RecordsContract.CONCURRENCY }, (_, n) => make(n));
+
+/** Runs `self` after `3n` scheduler yields, so the n-th of several racing writers starts later than the one before. */
+const staggered =
+  (n: number) =>
+  <A, E, R>(self: Effect.Effect<A, E, R>) =>
+    Effect.andThen(
+      Effect.forEach(Array.from({ length: 3 * n }), () => Effect.yieldNow, { discard: true }),
+      self,
+    );
 
 // ---- BEH-EA-309 / plan 05: tenant isolation, once, by the store ------------------------------------
 //
@@ -852,8 +862,48 @@ export const webhookRecords = RecordsContract.suite(WebhookRecords.WebhookRecord
             );
           }),
         },
+        {
+          name: "a row whose endpoint is gone is not stored (the relay listed it before the delete)",
+          run: Effect.gen(function* () {
+            const records = yield* WebhookRecords.WebhookRecords;
+            yield* records.createEndpoint(endpointInput("a"));
+            yield* records.createEndpoint(endpointInput("b"));
+            yield* records.deleteEndpoint("b");
+            assert.strictEqual(
+              yield* records.enqueue([
+                newDelivery("d1", "a", "e1", at(1_000), "user-1"),
+                newDelivery("d2", "b", "e1", at(1_000), "user-1"),
+                newDelivery("d3", "nope", "e1", at(1_000), "user-1"),
+              ]),
+              1,
+            );
+            assert.deepStrictEqual(
+              (yield* records.listBySubject(relay, "user-1")).map((row) => row.id),
+              ["d1"],
+            );
+          }),
+        },
       ],
       race: [
+        {
+          name: "enqueues racing the endpoint's delete leave no delivery whose endpoint is gone",
+          run: Effect.gen(function* () {
+            const records = yield* WebhookRecords.WebhookRecords;
+            yield* records.createEndpoint(endpointInput("a"));
+            const outcomes = yield* raced([
+              Effect.asVoid(records.deleteEndpoint("a")),
+              // Staggered, so the relays' writes land before, during and after the delete.
+              ...many((n) =>
+                Effect.asVoid(
+                  records.enqueue([newDelivery(`d${n}`, "a", `e${n}`, at(1_000), "user-1")]),
+                ).pipe(staggered(n)),
+              ),
+            ]);
+            assert.isTrue(outcomes.every((exit) => exit._tag === "Success"));
+            assert.isTrue(Option.isNone(yield* records.findEndpoint("a")));
+            assert.deepStrictEqual(yield* records.listBySubject(relay, "user-1"), []);
+          }),
+        },
         {
           name: "8 relays enqueueing the same event store it once",
           run: Effect.gen(function* () {
