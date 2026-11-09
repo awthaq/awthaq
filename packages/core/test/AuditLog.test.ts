@@ -74,6 +74,28 @@ const Banned = EventDefinition.define(
   { actor: EventDefinition.Actor.field("adminUserId"), pii: ["reason"] },
 );
 
+/** Test-local plugin definitions, one per actor rule (`Actor.field`, optional `field`, `prefixed`, `none`). */
+const ByField = EventDefinition.define(
+  "auth.local.byField",
+  { byUserId: EventDefinition.UserId, userId: EventDefinition.UserId },
+  { actor: EventDefinition.Actor.field("byUserId"), pii: [] },
+);
+const ByOptional = EventDefinition.define(
+  "auth.local.byOptional",
+  { userId: Schema.optionalKey(EventDefinition.UserId) },
+  { actor: EventDefinition.Actor.field("userId"), pii: [] },
+);
+const ByPrefix = EventDefinition.define(
+  "auth.local.byPrefix",
+  { subjectId: Schema.String },
+  { actor: EventDefinition.Actor.prefixed("subjectId", "user:"), pii: [] },
+);
+const ByNone = EventDefinition.define(
+  "auth.local.byNone",
+  { userId: EventDefinition.UserId },
+  { actor: EventDefinition.Actor.none, pii: [] },
+);
+
 /** `stamped` for an event core does not define, recorded with its own definition. */
 const stampedPlugin = <E extends AuthEvents.AnyEvent>(event: E, n: number) => {
   const published: AuthEvents.Published<E> = {
@@ -140,6 +162,58 @@ const suite = (
           const id = `018f0000-0000-7000-8000-${String(index + 1).padStart(12, "0")}`;
           const row = recorded.find((r) => r.id === id);
           assert.deepStrictEqual(row?.actorUserId, actor, `${event._tag} #${index}`);
+        }
+      }).pipe(Effect.provide(layer)),
+    );
+
+    // ADR-EA-049: a plugin's row takes its actor from the definition it is recorded with, by the same
+    // rules. One test-local definition per rule, so the proof does not lean on a core event's shape.
+    it.effect("records the actor a plugin's definition declares, one rule each", () =>
+      Effect.gen(function* () {
+        const auditLog = yield* AuditLog.AuditLog;
+        const byField = {
+          _tag: "auth.local.byField",
+          byUserId: userId,
+          userId: otherUserId,
+        } satisfies EventDefinition.TypeOf<typeof ByField>;
+        const withActor = {
+          _tag: "auth.local.byOptional",
+          userId: otherUserId,
+        } satisfies EventDefinition.TypeOf<typeof ByOptional>;
+        const withoutActor = {
+          _tag: "auth.local.byOptional",
+        } satisfies EventDefinition.TypeOf<typeof ByOptional>;
+        const userSubject = {
+          _tag: "auth.local.byPrefix",
+          subjectId: `user:${userId}`,
+        } satisfies EventDefinition.TypeOf<typeof ByPrefix>;
+        const keySubject = {
+          _tag: "auth.local.byPrefix",
+          subjectId: "apikey:k-1",
+        } satisfies EventDefinition.TypeOf<typeof ByPrefix>;
+        const byNone = {
+          _tag: "auth.local.byNone",
+          userId,
+        } satisfies EventDefinition.TypeOf<typeof ByNone>;
+        yield* auditLog.record(stampedPlugin(byField, 1), ByField);
+        yield* auditLog.record(stampedPlugin(withActor, 2), ByOptional);
+        yield* auditLog.record(stampedPlugin(withoutActor, 3), ByOptional);
+        yield* auditLog.record(stampedPlugin(userSubject, 4), ByPrefix);
+        yield* auditLog.record(stampedPlugin(keySubject, 5), ByPrefix);
+        yield* auditLog.record(stampedPlugin(byNone, 6), ByNone);
+        const expected = [
+          Option.some(userId),
+          Option.some(otherUserId),
+          Option.none(),
+          Option.some(userId),
+          Option.none(),
+          Option.none(),
+        ];
+        const recorded = yield* auditLog.list();
+        for (const [index, actor] of expected.entries()) {
+          const id = `018f0000-0000-7000-8000-${String(index + 1).padStart(12, "0")}`;
+          const row = recorded.find((r) => r.id === id);
+          assert.deepStrictEqual(row?.actorUserId, actor, `row #${index + 1}`);
         }
       }).pipe(Effect.provide(layer)),
     );

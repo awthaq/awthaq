@@ -227,6 +227,8 @@ describe("problems", () => {
 });
 
 // ---- T3: properties sampled over core's set ---------------------------------------------------
+// ADR-EA-049: core's 24 only. A plugin's declared events get the same P3/P4 sampling from
+// `runPluginContractTests` ("every declared event is well-formed"), in that plugin's own suite.
 describe("the event registry (T3)", () => {
   it.prop(
     "P3: blanking every declared pii field still decodes (erasure never makes a row undecodable)",
@@ -270,6 +272,7 @@ describe("attempt events (ADR-EA-037)", () => {
     "auth.authz.denied",
   ];
 
+  // Core's six; the composed set of every first-party plugin (ten) is asserted in BDD (13-events.feature).
   it("classifies exactly the documented attempt set; every other registered event is a state change", () => {
     assert.deepStrictEqual(
       AuthEvents.eventTags.filter((tag) => AuthEvents.isAttemptEvent(tag)).toSorted(),

@@ -1,6 +1,11 @@
 // @awthaq/core — AuthEventSchemas
 //
-// spec/behaviors/13-events.md, BEH-EA-101: the closed registry of event types.
+// spec/behaviors/13-events.md, BEH-EA-101, ADR-EA-049: core's own event
+// definitions. A composition's closed set of event types is these plus every
+// composed plugin's declared `events` (`Auth.make`); each plugin defines the
+// events it publishes in its own package (`<Plugin>Events.ts`). Core keeps the
+// events core publishes, those several packages publish, those core reads by
+// tag, the CLI's, and `auth.authz.denied` (§3.8 of architecture plan 29).
 // A leaf module (it imports neither `AuthEvents` nor `AuditLog`), so both can
 // depend on it at runtime without a cycle; `AuthEvents` re-exports all of it.
 //
@@ -20,14 +25,16 @@
 //
 // PII posture (ESA-005, ADR-EA-029): payloads carry identifiers, never contact
 // details or free text about a person. A subscriber that needs an email joins
-// through the record store, which the erasure cascade owns. The exceptions are
-// declared with the event (`EventDefinition.define`'s `pii`), so erasure can scrub them and
-// the webhooks payload never sends them: the impersonation justification text.
+// through the record store, which the erasure cascade owns. An event that must
+// carry free text about a person declares it with the event
+// (`EventDefinition.define`'s `pii`), so erasure can scrub it and the webhooks
+// payload never sends it. None of core's events declares any.
 //
-// Every event is declared with `EventDefinition.define(tag, fields, { actor, pii })`
-// (`EventDefinition.ts`): its shape, who acted (the audit row's actor
-// column) and which fields hold free text about a person, checked against the
-// event's own fields. `EventDefinition.make([...])` refuses a member without that declaration.
+// Every core event is declared with `EventDefinition.define(tag, fields, { actor, pii, attempt? })`
+// (`EventDefinition.ts`), the same call a plugin uses: its shape, who acted
+// (the audit row's actor column), which fields hold free text about a person,
+// and whether it records an attempt. `EventDefinition.make([...])` refuses a
+// member whose declaration does not check against its own fields.
 
 import * as Context from "effect/Context";
 import type * as DateTime from "effect/DateTime";
