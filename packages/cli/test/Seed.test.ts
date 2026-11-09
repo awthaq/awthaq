@@ -280,6 +280,25 @@ describe("seed admin", () => {
   );
 
   it.effect(
+    "ADR-EA-028: a store outage while verifying the seeded email is a retryable usage error (exit 2), never a defect",
+    () =>
+      withApp((sql) =>
+        Effect.gen(function* () {
+          // Verifying the email is the only `users` UPDATE `seed admin` makes.
+          yield* sql.unsafe(
+            `CREATE TRIGGER seed_verify_down BEFORE UPDATE ON users
+             BEGIN SELECT RAISE(ABORT, 'injected'); END`,
+          );
+          const exit = yield* seed(input(), sqlApp(sql));
+          assert.strictEqual(exitCode(exit), 2);
+          const error = Exit.findErrorOption(exit);
+          assert.isTrue(Option.isSome(error));
+          if (Option.isSome(error)) assert.include(String(error.value), "database is unavailable");
+        }),
+      ),
+  );
+
+  it.effect(
     "fails ApplicationUnavailable (exit 9) when the module exports no application Layer",
     () =>
       Effect.gen(function* () {

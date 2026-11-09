@@ -128,7 +128,15 @@ export const seedAdmin = (config: CliConfig, input: SeedInput) =>
                 "Users/PhoneAlreadyExists": Effect.die,
               }),
             );
-      yield* users.verifyEmail(user.id).pipe(Effect.orDie);
+      // The account was just found or created by email, so its vanishing or lacking an email
+      // identity is an invariant breach (a defect); an outage flows on to the `StoreUnavailable`
+      // mapping below (ADR-EA-028).
+      yield* users.verifyEmail(user.id).pipe(
+        Effect.catchTags({
+          UserNotFound: Effect.die,
+          IdentityMismatch: Effect.die,
+        }),
+      );
 
       if (Option.isSome(password)) {
         // BEH-EA-206 (plan 27 Q3): the operator's password replaces an existing one, as an
