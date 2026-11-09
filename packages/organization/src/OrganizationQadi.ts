@@ -110,8 +110,8 @@ export class ResourceOrganizationLookup extends Context.Service<
  *   `role:create`, `role:delete` — so that spelling would collide with the
  *   `<resource>:<action>` form below.)
  * - `<resource>:<action>` (e.g. `member:update`) — the membership's *effective*
- *   statements include it: the very `effectivePermissionsOf` result
- *   `requirePermission` gates the plugin's own endpoints with, so a qadi policy
+ *   statements include it: the very `OrganizationAuthority` statements
+ *   `OrganizationAccess` gates the plugin's own endpoints with, so a qadi policy
  *   and the plugin's own gating can never disagree.
  * - `team-member` — the subject is on the team `resourceId` names.
  * - `team-role:<name>` — the subject holds that team role on the team `resourceId`

@@ -10,6 +10,7 @@
 import type { Errors } from "@awthaq/core";
 import { Users } from "@awthaq/core";
 import { Tenant } from "@awthaq/ports";
+import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -40,13 +41,43 @@ export interface OrganizationAuthorityShape {
   readonly teamRoleStatements: Effect.Effect<ReadonlyMap<string, PermissionEngine.Statements>>;
   /**
    * OHS-004: what the user's *team* roles confer on `teamId`: the statements of every role they hold on that
-   * team or any ancestor of it (authority flows down the subtree, never up or sideways).
+   * team or any ancestor of it (authority flows down the subtree, never up or sideways). A team outside
+   * `organizationId` confers nothing (A-F7).
    */
   readonly teamAuthority: (
     userId: Users.UserId,
     organizationId: string,
     teamId: string,
   ) => Effect.Effect<PermissionEngine.Statements, Errors.StoreUnavailable>;
+  /**
+   * The statements a member holds in scope: the membership's organization statements, merged with
+   * `teamAuthority` on `teamId` when one is named (`undefined` = organization level).
+   */
+  readonly scopedStatements: (
+    organizationId: string,
+    membership: MembershipRecords.MembershipRecord,
+    teamId: string | undefined,
+  ) => Effect.Effect<PermissionEngine.Statements, Errors.StoreUnavailable>;
+  /**
+   * `scopedStatements` plus the `Bound.Ceiling` over exactly those statements: the only way a member's
+   * grant ceiling is minted (RRM-001, OHS-004).
+   */
+  readonly scopedCeiling: (
+    organizationId: string,
+    membership: MembershipRecords.MembershipRecord,
+    teamId: string | undefined,
+  ) => Effect.Effect<
+    {
+      readonly statements: PermissionEngine.Statements;
+      readonly bound: OrganizationActor.Bound;
+    },
+    Errors.StoreUnavailable
+  >;
+  /** Pure: whether `statements` hold `wanted` (`PermissionEngine.hasPermission`). */
+  readonly holds: (
+    statements: PermissionEngine.Statements,
+    wanted: { readonly resource: string; readonly action: string },
+  ) => boolean;
   /**
    * The relationship/attribute source of `OrganizationQadi` (the old `Organization.attributesFor`): `None`
    * when `userId` is not a member, otherwise their role names and effective statements.
@@ -86,6 +117,14 @@ export interface OrganizationAuthorityShape {
     OrganizationErrors.UnknownOrgRole | Errors.StoreUnavailable
   >;
 }
+
+/**
+ * The only constructor of `CeilingStatements` (module-local; `AuthorizationBoundary.test.ts` forbids another):
+ * a `Bound.Ceiling` is minted here, for a member's proof (`scopedCeiling`) or an identity provider (`ceilingOf`).
+ */
+const ceilingStatements = Brand.nominal<OrganizationActor.CeilingStatements>();
+const mintCeiling = (statements: PermissionEngine.Statements) =>
+  OrganizationActor.Bound.Ceiling({ statements: ceilingStatements(statements) });
 
 export class OrganizationAuthority extends Context.Service<
   OrganizationAuthority,
@@ -134,6 +173,8 @@ export class OrganizationAuthority extends Context.Service<
 
       const teamAuthority: OrganizationAuthorityShape["teamAuthority"] = Effect.fnUntraced(
         function* (userId, organizationId, teamId) {
+          // A-F7: the named team itself must belong to this organization (the ancestors are scoped already).
+          if (Option.isNone(yield* teams.findTeamById(organizationId, teamId))) return {};
           const roleStatements = yield* teamRoleStatements;
           const ancestors = yield* teams.getAncestors(organizationId, teamId);
           let authority: PermissionEngine.Statements = {};
@@ -149,6 +190,30 @@ export class OrganizationAuthority extends Context.Service<
           return authority;
         },
       );
+
+      const scopedStatements: OrganizationAuthorityShape["scopedStatements"] = Effect.fnUntraced(
+        function* (organizationId, membership, teamId) {
+          const statements = yield* effectivePermissions(organizationId, membership);
+          return teamId === undefined
+            ? statements
+            : PermissionEngine.mergeStatements(
+                statements,
+                yield* teamAuthority(membership.userId, organizationId, teamId),
+              );
+        },
+      );
+
+      const scopedCeiling: OrganizationAuthorityShape["scopedCeiling"] = (
+        organizationId,
+        membership,
+        teamId,
+      ) =>
+        scopedStatements(organizationId, membership, teamId).pipe(
+          Effect.map((statements) => ({ statements, bound: mintCeiling(statements) })),
+        );
+
+      const holds: OrganizationAuthorityShape["holds"] = (statements, wanted) =>
+        PermissionEngine.hasPermission(statements, wanted.resource, wanted.action);
 
       const attributesFor: OrganizationAuthorityShape["attributesFor"] = (organizationId, userId) =>
         members
@@ -189,9 +254,7 @@ export class OrganizationAuthority extends Context.Service<
           if (ceiling.some((name) => !byRole.has(name))) {
             return yield* new OrganizationErrors.UnknownOrgRole();
           }
-          return OrganizationActor.Bound.Ceiling({
-            statements: PermissionEngine.effectivePermissions(ceiling, byRole),
-          });
+          return mintCeiling(PermissionEngine.effectivePermissions(ceiling, byRole));
         },
       );
 
@@ -200,6 +263,9 @@ export class OrganizationAuthority extends Context.Service<
         effectivePermissions,
         teamRoleStatements,
         teamAuthority,
+        scopedStatements,
+        scopedCeiling,
+        holds,
         attributesFor,
         checkRoleCeiling,
         ceilingOf,

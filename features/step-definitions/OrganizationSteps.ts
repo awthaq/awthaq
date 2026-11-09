@@ -438,19 +438,36 @@ export const organizationSteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
+  const addToTeam = Effect.fn("features.organization.addToTeam")(function* (
+    who: string,
+    member: string,
+    team: string,
+    organization: string,
+    role: string | undefined,
+  ) {
+    const world = yield* World;
+    const teamId = yield* world.ids.get(`team:${team}`);
+    const target = yield* world.users.get(member);
+    const response = yield* sendAs(
+      who,
+      "POST",
+      yield* orgPath(organization, `/teams/${teamId}/members`),
+      role === undefined ? { userId: target.userId } : { userId: target.userId, role: [role] },
+    );
+    expectStatus(response, 200, `${who} adding ${member} to "${team}"`);
+  });
+
   Given(
     "{string} has added {string} to the team {string} of the organization {string}",
     function* (who: string, member: string, team: string, organization: string) {
-      const world = yield* World;
-      const teamId = yield* world.ids.get(`team:${team}`);
-      const target = yield* world.users.get(member);
-      const response = yield* sendAs(
-        who,
-        "POST",
-        yield* orgPath(organization, `/teams/${teamId}/members`),
-        { userId: target.userId },
-      );
-      expectStatus(response, 200, `${who} adding ${member} to "${team}"`);
+      yield* addToTeam(who, member, team, organization, undefined);
+    },
+  );
+
+  Given(
+    "{string} has added {string} to the team {string} of the organization {string} as {string}",
+    function* (who: string, member: string, team: string, organization: string, role: string) {
+      yield* addToTeam(who, member, team, organization, role);
     },
   );
 

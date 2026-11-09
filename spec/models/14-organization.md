@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-MOD-14 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-11-09 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Status flipped to Shipped-Unpublished; "What is missing" and "Verification" rewritten against `packages/organization` (AOMS-011, CCR-EA-006) <br> 1.2 (2026-10-13): Module structure: the authorized interface, the eight system modules, the table-ownership table and the actor (ADR-EA-040, architecture plan 04 phase 10) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-002) <br> 1.1 (2026-09-29): Status flipped to Shipped-Unpublished; "What is missing" and "Verification" rewritten against `packages/organization` (AOMS-011, CCR-EA-006) <br> 1.2 (2026-10-13): Module structure: the authorized interface, the eight system modules, the table-ownership table and the actor (ADR-EA-040, architecture plan 04 phase 10) <br> 1.3 (2026-11-09): Module structure: the authorized interface authorizes through `OrganizationAccess` (one primitive, branded proofs); `OrganizationAuthority` mints every grant ceiling (ADR-EA-040 decision 6, plan 30 Part A) |
 ---
 
 ## What it is
@@ -134,7 +134,7 @@ The entities, invitation flow, per-organization roles, teams, the `OrganizationA
 
 ## Module structure (ADR-EA-040, BEH-EA-330)
 
-The plugin has two layers. The **authorized interface** (`Organization`, 41 methods, `Organization.ts`) is what a signed-in member calls over HTTP: membership visibility (MTI-009), the feature gates in PV-300 order, `PermissionEngine` statements with the `permissionDenied` audit event (PERS-005), and the derivation of the caller's grant ceiling (`OrganizationActor.Bound`). Beneath it, `Organization.layer` exposes eight **system modules** (`AuthPlugin.layer({ exposes })`, BEH-EA-329), each taking an explicit `OrganizationActor.Actor` for audit and hook taps and never a request principal:
+The plugin has two layers. The **authorized interface** (`Organization`, 41 methods, `Organization.ts`) is what a signed-in member calls over HTTP: membership visibility (MTI-009), the feature gates in PV-300 order, `PermissionEngine` statements with the `permissionDenied` audit event (PERS-005), and the caller's grant ceiling (`OrganizationActor.Bound`), all through `OrganizationAccess` (one package-private primitive, `internal/access.ts`, whose entry points write that order once and mint branded proofs; a `Bound.Ceiling` is minted only by `OrganizationAuthority`, ADR-EA-040 decision 6). Beneath it, `Organization.layer` exposes eight **system modules** (`AuthPlugin.layer({ exposes })`, BEH-EA-329), each taking an explicit `OrganizationActor.Actor` for audit and hook taps and never a request principal:
 
 ```text
  HTTP (OrganizationHandlers)      SCIM          SAML / Sso      AdminTenants      app code / jobs

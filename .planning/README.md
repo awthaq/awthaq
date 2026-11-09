@@ -306,13 +306,14 @@ Wave E: the deepenings
 | Wave 0 · 27 ticket 04 | Landed, PR #50 |
 | 27 · tickets 01–03, 05–18 | Done on `feat/password-credential` (draft PR #59): Wave E (05–11) and Wave F (12–18); BEH-EA-345, ADR-EA-048, REQ-EA-1502 (see plan 27 "Decisions taken") |
 | Wave 0 · 28 tickets 01–02 | Landed, PR #48 |
+| 30 Wave A · tickets 05–12 | Done on `feat/organization-access` (not pushed): `OrganizationAccess`, compiler-owned ceiling, generated matrix, static guard, ADR-EA-040 1.1; REQ-EA-1503–1504 |
 | 30 ticket 21 | Done: plan 17 verified on the merged base, no regression; R1 NO-GO (no pre-1.3 environment), so 22–23 are closed |
 | 25 | Done: Wave 0 (02–03, PR #49), Wave E (04, 06–14, PR #55, with 28 ticket 03), Wave F (15–25, PRs #57/#58), Wave G (26–27, `docs/record-store-contract-close`); ticket 01 skipped. Left as follow-ups: sealed-column suites over `recordsBase`, the PG-only cases proven only by CI's `pnpm test:pg` (see plan 25 "Decisions taken") |
 | Wave E (rest) | Not started |
 
 Each plan's "Decisions taken" section records what its Wave 0 PR decided and where the plan was stale. Numbers
 taken since this batch was written: BEH-EA-340–342 (plan 15), 343 (21), 344 (20); ADR-EA-044 (15), 045 (21);
-REQ-EA-1321–1334 (15, 21, 20), 1335–1336 (30 Wave 0). Plan 27's behaviour is therefore BEH-EA-345.
+REQ-EA-1321–1334 (15, 21, 20), 1335–1336 (30 Wave 0), 1502–1503 (30 Wave A). Plan 27's behaviour is therefore BEH-EA-345.
 
 Why this order:
 - **25's owner fix first**: it is the only confirmed invariant break (an organization with no owner) and it ships without the refactor.

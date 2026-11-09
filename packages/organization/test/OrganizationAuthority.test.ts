@@ -25,6 +25,15 @@ const buildLayer = (config: Partial<Organization.OrganizationConfigShape> = {}) 
 
 const userId = Users.UserId;
 
+const teamsOn = {
+  teams: {
+    enabled: true,
+    maximumTeams: Infinity,
+    maximumMembersPerTeam: Infinity,
+    allowRemovingAllTeams: true,
+  },
+};
+
 const arrange = Effect.gen(function* () {
   const orgs = yield* OrganizationRecords.OrganizationRecords;
   const members = yield* MembershipRecords.MembershipRecords;
@@ -138,6 +147,94 @@ describe("OrganizationAuthority", () => {
         }),
       ),
     ),
+  );
+
+  it.effect("scopedStatements merges team authority down the subtree only (OHS-004)", () =>
+    Effect.gen(function* () {
+      const { org, authority, join } = yield* arrange;
+      const teams = yield* OrganizationTeams.OrganizationTeams;
+      const records = yield* TeamRecords.TeamRecords;
+      const membership = yield* join("lead", ["member"]);
+      const actor = OrganizationActor.application("test");
+      const make = (name: string, parentId?: string) =>
+        teams
+          .create(actor, { organizationId: org.id, name, parentId })
+          .pipe(Effect.map((created) => created.team));
+      const eng = yield* make("Eng");
+      const platform = yield* make("Platform", eng.id);
+      const sales = yield* make("Sales");
+      yield* records.addTeamMember({ teamId: eng.id, userId: userId("lead"), role: ["lead"] });
+      const canUpdate = (teamId: string | undefined) =>
+        authority
+          .scopedStatements(org.id, membership, teamId)
+          .pipe(
+            Effect.map((statements) =>
+              authority.holds(statements, { resource: "team", action: "update" }),
+            ),
+          );
+      assert.isTrue(yield* canUpdate(eng.id));
+      assert.isTrue(yield* canUpdate(platform.id));
+      assert.isFalse(yield* canUpdate(sales.id));
+      assert.isFalse(yield* canUpdate(undefined));
+      assert.deepStrictEqual(
+        yield* authority.scopedStatements(org.id, membership, undefined),
+        yield* authority.effectivePermissions(org.id, membership),
+      );
+    }).pipe(Effect.provide(buildLayer(teamsOn))),
+  );
+
+  it.effect(
+    "a team role held in another organization confers nothing under this organization's id (A-F7)",
+    () =>
+      Effect.gen(function* () {
+        const { org, orgs, authority, join } = yield* arrange;
+        const members = yield* MembershipRecords.MembershipRecords;
+        const teams = yield* OrganizationTeams.OrganizationTeams;
+        const records = yield* TeamRecords.TeamRecords;
+        const other = yield* orgs.create({ name: "Other", slug: "other" });
+        const membership = yield* join("lead", ["member"]);
+        yield* members.create({
+          userId: userId("lead"),
+          organizationId: other.id,
+          role: ["member"],
+        });
+        const { team: foreign } = yield* teams.create(OrganizationActor.application("test"), {
+          organizationId: other.id,
+          name: "Foreign",
+        });
+        yield* records.addTeamMember({
+          teamId: foreign.id,
+          userId: userId("lead"),
+          role: ["lead"],
+        });
+        assert.deepStrictEqual(
+          yield* authority.teamAuthority(userId("lead"), org.id, foreign.id),
+          {},
+        );
+        const scoped = yield* authority.scopedStatements(org.id, membership, foreign.id);
+        assert.isFalse(authority.holds(scoped, { resource: "team", action: "update" }));
+        // Under its own organization the same role still confers.
+        assert.isTrue(
+          PermissionEngine.hasPermission(
+            yield* authority.teamAuthority(userId("lead"), other.id, foreign.id),
+            "team",
+            "update",
+          ),
+        );
+      }).pipe(Effect.provide(buildLayer(teamsOn))),
+  );
+
+  it.effect("scopedCeiling's bound is Ceiling over exactly the statements it read", () =>
+    Effect.gen(function* () {
+      const { org, authority, join } = yield* arrange;
+      const membership = yield* join("a", ["admin"]);
+      const { statements, bound } = yield* authority.scopedCeiling(org.id, membership, undefined);
+      assert.deepStrictEqual(statements, yield* authority.effectivePermissions(org.id, membership));
+      OrganizationActor.Bound.$match(bound, {
+        Unbounded: () => assert.fail("a member's ceiling is never Unbounded"),
+        Ceiling: (ceiling) => assert.deepStrictEqual(ceiling.statements, statements),
+      });
+    }).pipe(Effect.provide(buildLayer())),
   );
 
   it.effect(
