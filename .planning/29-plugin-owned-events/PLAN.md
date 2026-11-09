@@ -1882,3 +1882,87 @@ Nothing has moved: `AuthEvents.eventTags.length === 97` (asserted in `EventDefin
 - Rows written before a move carry no `meta.pii`; the three `pii` tags are in `PRE_ADR_049_PII`, so ticket 20/21's `meta.pii` test should assert a *new* row carries `meta.pii: ["reason"]`.
 
 **`pnpm check` (end of Wave 1).** Every step through `pnpm coverage` passed (5,920 tests, 1 expected fail, 16 skipped). `pnpm test:bdd` failed one React scenario under load, "A just-revoked permission does not render a stale allow while re-evaluating" (`23-react`); re-run alone it passes, and the file's only failure alone is the known local `useInvalidate` flake (green in CI). `pnpm spec:verify:strict`, which `pnpm check` did not reach, passes on its own (32/32).
+
+### Wave 2 (tickets 11–21): every plugin's events moved into the plugin
+
+Same branch, on top of Wave 1 and the merge of `origin/main` (plan 30 Part A: organization authorization goes through
+`internal/access.ts`/`policy.ts`, which ticket 21 followed instead of the plan's line references).
+
+**Shipped.** One commit per ticket, each green on `tsc -b`, `pnpm typecheck`, the full unit suite, the full BDD suite,
+`lint`, `check:error-tags`, `check:contract-tests`, `knip` and `oxfmt`, with a changeset `plugin-owned-events-NN.md`
+(`"@awthaq/core": minor`, `"@awthaq/<pkg>": minor`, the §6.7 `Migration:` text).
+
+| Ticket | Commit | Moved | Module | Core count after |
+|---|---|---|---|---|
+| 11 | `fcdb1681` | 2 `auth.deviceAuthorization.*` | `@awthaq/device-authorization` `DeviceAuthorizationEvents` | 95 |
+| 12 | `f0f2f3ec` | 2 `auth.roles.*` | `@awthaq/roles` `RolesEvents` | 93 |
+| 13 | `2e564594` | `auth.user.claimsUpdated` | `@awthaq/qadi` `UserClaimsEvents` | 92 |
+| 14 | `ef9846cc` | `auth.user.{emailVerified, emailChanged}`, `auth.password.{resetRequested, resetCompleted}` | `@awthaq/password` `PasswordEvents` | 88 |
+| 15 | `72a2e787` | 6 `auth.apiKey.*` | `@awthaq/api-key` `ApiKeyEvents` | 82 |
+| 16 | `ae1175d8` | 7 `auth.twoFactor.*` (+ `TwoFactorMethod`, `TwoFactorPurpose`) | `@awthaq/two-factor` `TwoFactorEvents` | 75 |
+| 17 | `161d66c2` | 5 `auth.scim.*` | `@awthaq/scim` `ScimEvents` | 70 |
+| 18 | `d3a548fe` | 5 `auth.saml.*` | `@awthaq/saml` `SamlEvents` | 65 |
+| 19 | `93f24696` | 5 `auth.webhooks.*` | `@awthaq/webhooks` `WebhookEvents` | 60 |
+| 20 | `f005a91c` | 9 `auth.admin.*` | `@awthaq/admin` `AdminEvents` (`events`, `accountsEvents`) | 51 |
+| 21 | `75cc6557` | 25 `auth.organization.*` + `auth.admin.organization{Suspended, Unsuspended}` (+ `RoleNames`) | `@awthaq/organization` `OrganizationEvents` | **24** |
+
+73 moved, 24 stay (§3.8): `AuthEvents.eventTags.length === 24`, asserted in `EventDefinition.test.ts`. No core event
+declares personal data any more; core's attempt set is the six tags `auth.user.signInFailed`, `auth.token.replay`,
+`auth.rateLimit.exceeded`, `auth.admin.{actionDenied, impersonationDenied}`, `auth.authz.denied`.
+`AuthEventSchemas.ts` is 689 lines (1,940 before); `test/support/eventSamples.ts` is 123 (§5.2's target: ≤ 180). Each
+block moved by cut and paste (scripted: JSDoc to `export type`, plus its `CoreRegistry` entry and sample), so
+`git diff --color-moved` shows the definitions as moved.
+
+**Deviations.**
+- **`AdminEvents` exports two lists.** `AdminAccounts` is its own plugin class, composable without `Admin` (it depends
+  on `Password` only), and publishes `auth.admin.{userDeleted, userEmailChangeRequested, userPasswordSet}`. Each class
+  declares what it emits: `Admin` declares `AdminEvents.events` (six), `AdminAccounts` declares
+  `AdminEvents.accountsEvents` (three).
+- **Helpers moved with their blocks:** `TwoFactorMethod`/`TwoFactorPurpose` (ticket 16) and `RoleNames` (ticket 21,
+  then deleted from core, which no longer uses it).
+- **`auth.admin.organization{Suspended, Unsuspended}` are published by `OrganizationDirectory`**, so they went to
+  `OrganizationEvents` as §4.4/21 says; `AdminTenants` reaches them through its `dependsOn: [Organization]`.
+- **Core tests.** `AuditLog.test.ts`'s plugin actor rows were deleted (the core rows still cover `Actor.field`, an
+  optional actor present and absent, `prefixed` and `none`); its admin row became `auth.admin.actionDenied` with a
+  target. The erasure cases that used the admin pii events now record test-local `Impersonated`/`Banned`
+  definitions with their own definition (`meta.pii`). `Retention.test.ts` and `EventRelay.test.ts` used
+  `auth.user.emailVerified` as "another core tag" and now use `auth.user.created`. ESA-005's "no email on
+  `invitationCreated`" type case moved to `packages/organization/test/OrganizationEvents.types.test.ts`.
+- **Silent-trap sites.** `PasswordWorld` and `OrganizationWorld` keep every event as `PublishedAny` (their readers use
+  `_tag` only). `AdminWorld` and the admin tests' collectors (`AdminAccounts`, `AdminUsers`, `AdminGate`) select core's
+  tags plus the admin definitions, so `_tag` narrowing still types the fields (`packages/admin/test/support/events.ts`).
+  `PasswordChangeEmail.test.ts`'s collector reads only `auth.session.revoked` (core) and was left as it is.
+- **Row readers.** A plugin row reads back as a `ForeignEvent`, so tests that read `row.payload.<field>` switched to
+  `AuditLog.payloadAs(def)(row)` (qadi, password, scim, saml, webhooks, organization, saml role mapping) or
+  `AuditLog.toPublished(row)` where a step reads fields by name (`ScimSteps`, `WebhooksOperationsSteps`,
+  `Organization.test`'s `payloadOf`).
+- **Compositions that emit a plugin's events must compose the plugin** (`TestAuth` dies on an undeclared tag). The
+  OAuth end-to-end test in `OrganizationConnections.test.ts` composes `Organization` (the connection store emits
+  `auth.organization.connection*`); the webhooks BDD world composes `Admin` and `Organization` beside `Webhooks`, so an
+  endpoint can register for and receive their tags, and the `includeClientContext` step reads `built.events.piiFieldsOf`.
+  `eventOfTag` there returns `AnyEvent`; `coreEventOfTag` narrows for `AuthEvents.publish`.
+- **Webhooks unit tests** do not depend on admin or organization: `WebhookPayload.test.ts` mirrors the three pii
+  definitions locally in a composed registry, and the relay test in `WebhookDelivery.test.ts` filters on core tags.
+- **`AuthorizationBoundary.test.ts`** now proves the tag is named only by `OrganizationEvents.ts` and that only
+  `internal/access.ts` emits `OrganizationPermissionDeniedEvent`.
+- **CLI `--events` test** reads `auth.roles.assigned` (owner `roles`), a plugin's row, instead of the moved admin event.
+- **`meta.pii` tests:** `AdminUsers.test.ts` (impersonation and ban rows carry `["reason"]`, an unban row none) and
+  `OrganizationDirectory.test.ts` (suspension `["reason"]`, reinstatement none), both on newly written rows.
+- **No spec file touched**: `spec:verify:strict` passes (32/32) after ticket 21; the roll-up stays ticket 24's.
+
+**Notes.**
+- Run the BDD from `features/` (`pnpm exec vitest run <file>`): from the root with `--config`, the testing-harness
+  scenarios that spawn `scripts/check-contract-tests.mjs` resolve the script against the wrong cwd and fail.
+- Phase 3 residue in core: `AuthEventSchemas.ts`'s header still describes the closed registry and names the
+  impersonation justification as core's pii exception; `AuditLog.PRE_ADR_049_PII` and its comment stay (frozen by
+  design). `EventDefinition.test.ts`'s T3 loops and `AuthEvents.payloadOf` now cover core's 24 only.
+
+**What only Postgres CI proves.** `pnpm test:pg` was not run (Postgres is down locally). CI's Postgres run covers each
+moved plugin's contract suite in SQL record mode (the events check is mode-independent; the stores are not), the
+`meta.pii` stamp and `rewriteReferencing` scrub on Postgres for the admin and organization rows, `RolesSql.test.ts`,
+the `UserClaims` sql concurrent-merge case and the organization suites' SQL paths.
+
+**`pnpm check` (end of Wave 2).** Every step through `pnpm coverage` passed (6,095 tests, 1 expected fail, 16
+skipped). `pnpm test:bdd` failed only the known local `useInvalidate` flake ("Omitting useInvalidate leaves a mounted
+gate showing its stale decision until it remounts", `23-react`), which also fails alone and is green in CI (1,555
+passed). `pnpm spec:verify:strict`, which `pnpm check` did not reach, passes on its own (32/32).
