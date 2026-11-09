@@ -17,11 +17,13 @@
 
 import type { Api } from "@awthaq/api";
 import { AuthEvents, Users } from "@awthaq/core";
+import { Tenant } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as OrganizationActor from "../OrganizationActor.ts";
 import * as OrganizationAuthority from "../OrganizationAuthority.ts";
+import { OrganizationConfig } from "../OrganizationConfig.ts";
 import * as OrganizationDirectory from "../OrganizationDirectory.ts";
 import * as OrganizationErrors from "../OrganizationErrors.ts";
 import * as OrganizationInvitations from "../OrganizationInvitations.ts";
@@ -84,8 +86,15 @@ export const make = Effect.gen(function* () {
   const authority = yield* OrganizationAuthority.OrganizationAuthority;
   const events = yield* AuthEvents.AuthEvents;
   const users = yield* Users.Users;
+  // EP-007: the configuration in force is decided per operation (the tenant middleware may override it).
+  const configNow = Tenant.configInForce(OrganizationConfig, yield* OrganizationConfig);
 
   const callerId = (caller: Api.UserPrincipal) => Users.UserId(caller.ref.id);
+  const actorOf = (caller: Api.UserPrincipal) =>
+    OrganizationActor.ActorSchema.cases.User.make({
+      userId: caller.ref.id,
+      sessionId: caller.sessionId,
+    });
 
   /** PERS-005: a denied statement-gated operation leaves a durable who/what/why (attempt lane, ADR-EA-037). */
   const denied = (
@@ -120,10 +129,7 @@ export const make = Effect.gen(function* () {
     return memberAccessOf({
       organizationId,
       organization,
-      actor: OrganizationActor.ActorSchema.cases.User.make({
-        userId: caller.ref.id,
-        sessionId: caller.sessionId,
-      }),
+      actor: actorOf(caller),
       membership: found.value,
     });
   });
@@ -173,6 +179,15 @@ export const make = Effect.gen(function* () {
       );
 
   // ---- entry points: the only places the order is written ---------------------------------
+
+  /** `create`: who may create an organization at all (`allowUserToCreateOrganization`); the rest is the Directory's. */
+  const creator = Effect.fnUntraced(function* (caller: Api.UserPrincipal) {
+    const userId = callerId(caller);
+    if (!(yield* (yield* configNow).allowUserToCreateOrganization(userId))) {
+      return yield* new OrganizationErrors.OrganizationCreationNotAllowed();
+    }
+    return { userId, actor: actorOf(caller) };
+  });
 
   /** Reads any member may use (get, getFull, listMembers, leave, listInvitationsForOrganization). */
   const member = (caller: Api.UserPrincipal, organizationId: string) =>
@@ -306,6 +321,7 @@ export const make = Effect.gen(function* () {
   });
 
   return {
+    creator,
     member,
     teamMember,
     require,
