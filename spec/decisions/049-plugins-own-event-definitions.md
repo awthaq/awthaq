@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-049 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-11-09 |
-> | Status | Proposed |
+> | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-11-09): Initial release, Proposed (architecture plan 29 ticket 03; plan 09 phase 5) |
+> | Change History | 1.0 (2026-11-09): Initial release, Proposed (architecture plan 29 ticket 03; plan 09 phase 5) <br> 1.1 (2026-11-09): Accepted — implemented; the implementation notes (architecture plan 29 tickets 04–25) |
 
 ---
 
@@ -85,6 +85,31 @@ untouched; the audit log needs no composition wiring.
 row in `AuditLog.list` is a `ForeignEvent` until the plugin decodes it; plugin events have no upcaster (`EVENT_VERSION`
 covers core's union), so a breaking change to a plugin event is a new tag; a host that serves webhooks or sets Retention
 rules for plugin tags must provide `auth.eventsLayer`.
+
+## Implementation
+
+`packages/core/src/EventDefinition.ts` (public: `define`, `make`, `problems`, `Actor`, `UserId`/`SessionId`,
+`ForeignEventTag`); `AuthPlugin.Service`'s `events` and `Auth.make`'s `composeEvents` (`Built.events`,
+`Built.eventsLayer`, `manifest.events`, `Auth/EventTagConflict`); `AuthEvents.emit`, `is`, `typed` and
+`UndeclaredEventPolicy` (`"warn"`, `"die"` under `TestAuth`); `AuditLog`'s `meta.pii`, `ForeignEvent`, `payloadAs`,
+`toPublished` and the frozen `PRE_ADR_049_PII`. Core defines 24 events; 73 moved, verbatim, to eleven
+`<Plugin>Events.ts` modules (device-authorization, roles, qadi's `UserClaims`, password, api-key, two-factor, scim, saml,
+webhooks, admin, organization). As built:
+
+- `AnyEvent` and `ForeignEventTag` are defined in `EventDefinition` (the leaf), so `problems` can refuse the reserved
+  tag without a cycle; `ForeignEvent` is `AuthEvents.ForeignEvent`.
+- `AuthEvents` reads `EventRegistry` and `UndeclaredEventPolicy` once, when its layer is built; `AuthHost.layer` provides
+  `eventsLayer` beneath it (ADR-EA-044), so `TestAuth` and every `AuthHost` composition get it without a host line.
+- `@awthaq/admin` declares two lists: `AdminEvents.events` on `Admin` and `AdminEvents.accountsEvents` on
+  `AdminAccounts`, which is composable without `Admin`. `auth.admin.organization{Suspended, Unsuspended}` are published
+  by `OrganizationDirectory`, so `OrganizationEvents` defines them.
+- `runPluginContractTests` checks every declared event (`problems`, plus a sampled blank-pii-still-decodes and
+  actor-is-carried case).
+
+Tests: `packages/core/test/EventDefinition.test.ts`, `EventDefinition.plugin.types.test.ts`, `EventComposition.test.ts`,
+`AuditLog.test.ts`, `AuthEvents.test.ts`, `AuthEventsUnitOfWork.test.ts`; `examples/plugin-template/test/Template.test.ts`;
+`features/features/04-cross-cutting/13-events.feature` (REQ-EA-1510..1512) and
+`00-foundations/02-plugin-composition-validate.feature` (REQ-EA-1513, BEH-EA-346).
 
 _Related: [ADR-EA-012](012-slots-exclusive-registries-aggregate.md), [ADR-EA-029](029-event-pii-posture.md),
 [ADR-EA-030](030-event-delivery-outbox-relay.md), [ADR-EA-034](034-versioning-and-deprecation-policy.md),

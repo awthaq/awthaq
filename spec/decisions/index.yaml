@@ -193,4 +193,4 @@ entries:
   - id: "ADR-EA-049"
     file: "049-plugins-own-event-definitions.md"
     title: "Plugins Own Their Event Definitions; a Composition's Event Set Is Core's Plus Every Composed Plugin's"
-    status: "Proposed"
+    status: "Accepted — implemented"

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-037 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-10-18 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-11-09 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-13): Initial release (plan 10 item 5) <br> 1.1 (2026-10-18): decision 7 names `AuditLogStoreSql.append` (plan 16) <br> 1.2 (2026-11-08): Related: ADR-EA-047, request facts are read from `AuthRequestContext` (architecture plan 26) |
+> | Change History | 1.0 (2026-10-13): Initial release (plan 10 item 5) <br> 1.1 (2026-10-18): decision 7 names `AuditLogStoreSql.append` (plan 16) <br> 1.2 (2026-11-08): Related: ADR-EA-047, request facts are read from `AuthRequestContext` (architecture plan 26) <br> 1.3 (2026-11-09): decision 2: the classification is `EventDefinition.define`'s `attempt: true` wherever the event is defined; four of the ten attempt events are defined by their plugins (ADR-EA-049, architecture plan 29) |
 
 ---
 
@@ -29,7 +29,7 @@ The same placement also erased the wrong thing. An event that records an *attemp
 - `onCommit(effect)`: runs `effect` once the enclosing unit has committed, and never if it rolls back.
 - `afterUnit(effect)`: runs `effect` once the *outermost* unit has ended, committed or not, outside any transaction (so a write made there lands on its own connection and commits by itself).
 
-**2. Events pick a lane by what they record.** A *state-change* event (the default) writes its audit row inline, inside the transaction, so the row is atomic with the change (the outbox property [ADR-EA-030](030-event-delivery-outbox-relay.md) depends on), and releases its bus copy `onCommit`. An *attempt* event records both its audit row and its bus copy `afterUnit`, so a rollback cannot erase the forensic record. The classification belongs to the event's own definition (`defineEvent`'s `attempt: true`, [ADR-EA-029](029-event-pii-posture.md)'s declaration site): the attempt events are `auth.user.signInFailed`, `auth.token.replay`, `auth.twoFactor.challengeFailed`, `auth.twoFactor.locked`, `auth.rateLimit.exceeded`, `auth.admin.actionDenied`, `auth.admin.impersonationDenied`, `auth.authz.denied`, `auth.organization.permissionDenied` and `auth.deviceAuthorization.denied`. Every other event is a state change.
+**2. Events pick a lane by what they record.** A *state-change* event (the default) writes its audit row inline, inside the transaction, so the row is atomic with the change (the outbox property [ADR-EA-030](030-event-delivery-outbox-relay.md) depends on), and releases its bus copy `onCommit`. An *attempt* event records both its audit row and its bus copy `afterUnit`, so a rollback cannot erase the forensic record. The classification belongs to the event's own definition (`EventDefinition.define`'s `attempt: true`, [ADR-EA-029](029-event-pii-posture.md)'s declaration site, in core or in the plugin that publishes the event, [ADR-EA-049](049-plugins-own-event-definitions.md)): the attempt events of a composition of every first-party plugin are `auth.user.signInFailed`, `auth.token.replay`, `auth.twoFactor.challengeFailed`, `auth.twoFactor.locked`, `auth.rateLimit.exceeded`, `auth.admin.actionDenied`, `auth.admin.impersonationDenied`, `auth.authz.denied`, `auth.organization.permissionDenied` and `auth.deviceAuthorization.denied` (the two-factor, organization and device-authorization ones defined by those plugins). Every other event is a state change.
 
 **3. Observe hooks run their taps `onCommit`.** `HookPoint.observe`'s `run` defers the tap chain to the commit lane (capturing the per-request tenant and request context the taps would have seen). Observe taps are already fail-isolated ([BEH-EA-092](../behaviors/12-hooks.md)) and return `void`, so no caller's types change. Veto and divert taps stay inline, because they decide the outcome.
 

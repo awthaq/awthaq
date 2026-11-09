@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-030 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-09-29 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-11-09 |
 > | Status | Accepted — relay and the first-party webhooks plugin implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-09-29): Initial release (CWM-004, MAPS-010, D2); 1.1 (2026-09-29): the first-party `@awthaq/webhooks` plugin is built (Decision 7 rewritten; [BEH-EA-275 through 265](../behaviors/34-webhooks.md)) <br> 1.2 (2026-10-18): decision 4: the position is a store port, `RelayCursorStore`, provided by both `Persistence` bundles, with a monotonic `advance` (architecture plan 23) |
+> | Change History | 1.0 (2026-09-29): Initial release (CWM-004, MAPS-010, D2); 1.1 (2026-09-29): the first-party `@awthaq/webhooks` plugin is built (Decision 7 rewritten; [BEH-EA-275 through 265](../behaviors/34-webhooks.md)) <br> 1.2 (2026-10-18): decision 4: the position is a store port, `RelayCursorStore`, provided by both `Persistence` bundles, with a monotonic `advance` (architecture plan 23) <br> 1.3 (2026-11-09): decision 5: a core row that no longer decodes stops the relay; a row whose tag core does not define is relayed as stored, a foreign event (ADR-EA-049, architecture plan 29) |
 
 ---
 
@@ -24,7 +24,7 @@
 2. **At-least-once, idempotent on `eventId`.** A failed delivery leaves the position and is retried with capped exponential backoff; a crash between delivery and the position write redelivers that batch. Consumers deduplicate on `eventId` (the audit row's id).
 3. **Ordering is by id, with a settle delay.** Ids are publish order within a process and millisecond-granular across processes, so a row committed late by a slower process could land behind the position. An event is relayed once it is `settleDelay` old (default 2 s). This trades latency for not skipping a row.
 4. **The position is a store port, one row per relay name.** `RelayCursorStore` (`@awthaq/ports`; `RelayCursorStoreSql` over `auth_relay_cursor`, core migration 27; a `Ref` adapter for tests) is provided by `Persistence.memory` and `Persistence.sql()` ([ADR-EA-041](041-domain-store-ports.md)). `advance` is monotonic (byte order): two processes running one name both deliver, safe but wasteful, and neither moves the other's position back; run one per name. Relays with different names (one per consumer) are independent. A cursor-store outage is `StoreUnavailable` ([ADR-EA-028](028-infrastructure-error-policy.md)).
-5. **A row that no longer decodes stops the relay at that row**, loudly (`auth.relay.failed`, `awthaq_relay_failures_total{relay}`), rather than skipping an event silently.
+5. **A core row that no longer decodes, or a row that is not a JSON object, stops the relay at that row**, loudly (`auth.relay.failed`, `awthaq_relay_failures_total{relay}`), rather than skipping an event silently. A row whose tag core does not define is relayed as stored (a foreign event, [ADR-EA-049](049-plugins-own-event-definitions.md)); its plugin judges its shape.
 6. **Posture.** What crosses the transport is identifiers and envelope only (ADR-EA-029), so an external consumer inherits it. Erasure pseudonymizes rows that a relay has not yet delivered; rows already delivered are the consumer's to erase on `auth.user.deleted`.
 7. **Webhooks are a consumer of this seam, not part of it.** The first-party, opt-in `@awthaq/webhooks` plugin is an `EventTransport` over the relay. Its design, and why:
    - **The transport only enqueues.** `deliver` inserts one `webhooks_delivery` row per (endpoint, event) — unique on that pair, so the relay's redelivered batch adds nothing — and returns; a separate worker sends. One relay cursor is one stream, so a transport that made the HTTP calls would let a single dead receiver stall every other endpoint and the cursor itself. Queue-then-send gives each endpoint its own retry clock and dead-letter state, and the cursor advances when the batch is durably queued.

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-GLOSSARY |
-> | Revision | 1.14 |
-> | Effective Date | 2026-11-08 |
+> | Revision | 1.15 |
+> | Effective Date | 2026-11-09 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) <br> 1.7 (2026-10-18): External identity, Email trust and Federated identity resolution (architecture plan 14) <br> 1.8 (2026-10-18): Credential carrier and Tier; CurrentPrincipal names `CurrentUser.current` as the user-tier read (architecture plan 11) <br> 1.9 (2026-10-18): Link purpose; VerificationToken names `VerificationLink.redeemer` (architecture plan 18) <br> 1.10 (2026-10-18): Sealed column (architecture plan 17) <br> 1.11 (2026-11-08): AuthHost; Port: what the composition owns is not a port; Auth.make is served with `AuthHost.layer`; TestAuth is `AuthHost.layer` over test ports (ADR-EA-044, architecture plan 15) <br> 1.12 (2026-11-08): Session lifecycle (ADR-EA-045, architecture plan 21) <br> 1.13 (2026-11-08): Added **Request context** and **No request** (ADR-EA-047, architecture plan 26) <br> 1.14 (2026-11-08): Added **Password credential** (ADR-EA-048, architecture plan 27) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) <br> 1.7 (2026-10-18): External identity, Email trust and Federated identity resolution (architecture plan 14) <br> 1.8 (2026-10-18): Credential carrier and Tier; CurrentPrincipal names `CurrentUser.current` as the user-tier read (architecture plan 11) <br> 1.9 (2026-10-18): Link purpose; VerificationToken names `VerificationLink.redeemer` (architecture plan 18) <br> 1.10 (2026-10-18): Sealed column (architecture plan 17) <br> 1.11 (2026-11-08): AuthHost; Port: what the composition owns is not a port; Auth.make is served with `AuthHost.layer`; TestAuth is `AuthHost.layer` over test ports (ADR-EA-044, architecture plan 15) <br> 1.12 (2026-11-08): Session lifecycle (ADR-EA-045, architecture plan 21) <br> 1.13 (2026-11-08): Added **Request context** and **No request** (ADR-EA-047, architecture plan 26) <br> 1.14 (2026-11-08): Added **Password credential** (ADR-EA-048, architecture plan 27) <br> 1.15 (2026-11-09): Added **Event definition** and **Foreign event**; **Registry** names the registries `Auth.make` composes statically (ADR-EA-049, architecture plan 29) |
 
 ---
 
@@ -170,7 +170,15 @@ Work a first-factor flow owes once its session exists, whichever request finally
 
 ### Registry
 
-An aggregating service that several plugins may contribute to concurrently, filled through `Layer.effectDiscard` writes — hook taps, event subscribers, rate-limit rules, and session claims are all registries. Unlike a slot, a registry has no exclusivity rule: contributions are ordered by dependency, then by a declared `order`, then by plugin id, and the registry freezes at first read. See: [BEH-EA-017](behaviors/03-ports-slots-hooks-registries.md#beh-ea-017-configuration-is-a-contextreference-with-a-default-value), [ADR-EA-012](decisions/012-slots-exclusive-registries-aggregate.md#adr-ea-012-slots-are-exclusive-registries-aggregate).
+An aggregating service that several plugins may contribute to concurrently, filled through `Layer.effectDiscard` writes — hook taps, event subscribers, rate-limit rules, and session claims are all registries. Unlike a slot, a registry has no exclusivity rule: contributions are ordered by dependency, then by a declared `order`, then by plugin id, and the registry freezes at first read. User fields and event definitions are composed statically by `Auth.make` instead, from the plugins' declarations ([ADR-EA-035](decisions/035-user-field-extension-point.md), [ADR-EA-049](decisions/049-plugins-own-event-definitions.md)). See: [BEH-EA-017](behaviors/03-ports-slots-hooks-registries.md#beh-ea-017-configuration-is-a-contextreference-with-a-default-value), [ADR-EA-012](decisions/012-slots-exclusive-registries-aggregate.md#adr-ea-012-slots-are-exclusive-registries-aggregate).
+
+### Event definition
+
+The schema an event is declared with (`EventDefinition.define`), carrying who acted, which fields are personal data and whether it records an attempt; defined in the package that publishes it and declared in that plugin's `events`. A composition's event set is core's definitions plus every composed plugin's (`Built.events`). See: [BEH-EA-101](behaviors/13-events.md#beh-ea-101-events-are-typed-tagged-values-forming-a-registry-contract), [BEH-EA-346](behaviors/02-plugin-composition-validate.md#beh-ea-346-authmake-composes-event-definitions-and-refuses-a-duplicate-tag), [ADR-EA-049](decisions/049-plugins-own-event-definitions.md).
+
+### Foreign event
+
+How core reads a stored event whose tag it does not define: its tag and stored fields (`AuthEvents.ForeignEvent`). The owning plugin decodes it with `AuditLog.payloadAs`; erasure still blanks the personal-data fields the row recorded when it was written. See: [ADR-EA-049](decisions/049-plugins-own-event-definitions.md).
 
 ### Validate<P>
 
