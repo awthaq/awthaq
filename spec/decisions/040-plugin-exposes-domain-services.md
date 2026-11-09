@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-040 |
-> | Revision | 1.1 |
-> | Effective Date | 2026-10-13 |
+> | Revision | 1.2 |
+> | Effective Date | 2026-11-09 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-13): Initial release (plan 04) <br> 1.1 (2026-11-08): revision note under Consequences: the second user, `@awthaq/password`'s `PasswordCredential` (ADR-EA-048, architecture plan 27) |
+> | Change History | 1.0 (2026-10-13): Initial release (plan 04) <br> 1.1 (2026-11-08): revision note under Consequences: the second user, `@awthaq/password`'s `PasswordCredential` (ADR-EA-048, architecture plan 27) <br> 1.2 (2026-11-09): decision 6, the authorized interface authorizes through one primitive; ceilings are minted only by `OrganizationAuthority` (plan 30 Part A) |
 
 ---
 
@@ -32,9 +32,20 @@ The fix is a layer of **system interfaces** beneath the authorized one (`Organiz
 
 **5. First user.** `Organization.layer` exposes its system modules. SCIM, SAML and AdminTenants require them through the Layer type and never the records.
 
+**6. The authorized interface authorizes through one primitive (revision 1.1).** Every organization-scoped method of `Organization` obtains an access proof from the package-private `OrganizationAccess` (`internal/access.ts`) before it calls a system interface. A proof is minted in one fixed order, written once per entry point:
+
+1. the organization is active (EP-003);
+2. the caller is a member (MTI-009; a statement-gated entry publishes `auth.organization.permissionDenied` `notMember`);
+3. the feature gate (PV-300: after membership, so a non-member's answer never depends on a feature);
+4. the statement, held in the caller's statements in scope (`OrganizationAuthority.scopedStatements`; `missingStatement` on a miss).
+
+The proof is branded and minted only by that module. It carries the organization id, the `User` actor and, for a statement, the ceiling the caller may confer. A `Bound.Ceiling` is minted only by `OrganizationAuthority`: a proof's ceiling, or `ceilingOf` for an identity provider. So a role-conferring call on behalf of a member cannot be made without the statement check that produced its ceiling. A 41-entry policy table (`internal/policy.ts`, complete against `OrganizationShape` by its type) is the oracle of a generated authorization-matrix suite, and a static guard keeps every authorization step out of `Organization.ts`. System interfaces still take an `Actor` and never authorize (decision 5 unchanged), because trusted callers have no principal to prove. The organization's own endpoints are still gated by its `PermissionEngine` ([ADR-EA-025](025-global-roles-vs-organization-roles.md)), not by qadi.
+
 ## Consequences
 
 **Positive**: a trusted caller gets an interface that owns its invariants, hooks, events and transactions; the dependency is checked by the compiler and visible in `plugin list --graph`; a module can be tested or substituted alone. A system module's invariant over several rows is enforced by a record-store primitive ([ADR-EA-041](041-domain-store-ports.md) decision 9); the module's own check only orders errors.
+
+Decision 6: the order MTI-009 depends on is written once, so a new endpoint chooses *what* it needs and cannot reorder *how* it is checked; a role-conferring call's ceiling is the one its check read.
 
 **Negative**: one option on `AuthPlugin.layer` and one `Validate` rule to maintain. An inline `Layer.succeed(Tag, ...)` as the sole `exposes.layer` does not infer (TypeScript fixes the contravariant `ROut` parameter to `never` while it is still contextually typed); bind the layer to a `const` or build it with `Layer.mergeAll`.
 
@@ -45,6 +56,8 @@ The fix is a layer of **system interfaces** beneath the authorized one (`Organiz
 - **(a) The application provides the system layer itself, as it does records.** Needs no core change, but it is a second thing to wire, the plugin and its dependents could be given different instances, and the plugin graph could not see the dependency (ADR-EA-002).
 - **(b) Hang the system interfaces off the plugin shape (`organization.system.teams`).** Needs no core change, but a dependent would depend on the whole authorized interface, a module could not be substituted alone, and the shape would become the wide interface again.
 - **(c) `exposes`**, chosen: type-checked, read off the Layer graph, one option plus one `Validate` rule.
+
+For decision 6 (plan 30 §3.A.9): **(a)** three hotfixes and stop (the next endpoint repeats the hazard); **(b)** a combinator that builds each method from its policy entry (custom flows need escape hatches, and typing it needs conditional return types); **(c)** system interfaces require the proof (trusted callers have no principal, and it reverses decision 5); **(d)** gating through qadi (plan 04 decided no). Chosen: one package-private module with typed entry points, a branded proof, a compiler-owned ceiling and a table-driven matrix. Its consequences: one more package-private module; `OrganizationActor.user` removed; `Bound.Ceiling` not constructible outside the package.
 
 ## Related
 

@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1335 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1502; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1337 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1504; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1353,3 +1353,5 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1500 | [BEH-EA-336](../spec/behaviors/25-testing-harness.md#beh-ea-336-every-shipped-plugin-runs-the-contract-suite-which-checks-its-records) | [08-tooling/25-testing-harness.feature](features/08-tooling/25-testing-harness.feature) | A Contract.test.ts that passes records but is missing from scripts/test-pg.sh fails pnpm check |
 | REQ-EA-1501 | [BEH-EA-336](../spec/behaviors/25-testing-harness.md#beh-ea-336-every-shipped-plugin-runs-the-contract-suite-which-checks-its-records) | [08-tooling/25-testing-harness.feature](features/08-tooling/25-testing-harness.feature) | The same package passes once its Contract.test.ts is listed in scripts/test-pg.sh |
 | REQ-EA-1502 | [BEH-EA-120](../spec/behaviors/15-password.md#beh-ea-120-password-policy-is-configuration-not-a-plugin-variant) | [05-authentication-methods/15-password.feature](features/05-authentication-methods/15-password.feature) | Password.config's policy also governs a password an administrator sets |
+| REQ-EA-1503 | [BEH-EA-284](../spec/behaviors/35-organization.md#beh-ea-284-organization-data-is-member-only-and-a-non-member-cannot-tell-an-organization-that-exists-from-one-that-does-not) | [10-organization/35-organization.feature](features/10-organization/35-organization.feature) | A non-member's attempt at <action> is recorded as a permission denial |
+| REQ-EA-1504 | [BEH-EA-284](../spec/behaviors/35-organization.md#beh-ea-284-organization-data-is-member-only-and-a-non-member-cannot-tell-an-organization-that-exists-from-one-that-does-not) | [10-organization/35-organization.feature](features/10-organization/35-organization.feature) | A team role held in another organization confers nothing under this organization's path |
