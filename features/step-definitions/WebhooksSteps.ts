@@ -798,7 +798,12 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
     "the payload of event {string} is built with includeClientContext",
     function* (name: string) {
       const world = yield* World;
-      const body = WebhookPayload.toBody(yield* eventNamed(name), { includeClientContext: true });
+      const event = yield* eventNamed(name);
+      const body = WebhookPayload.toBody(
+        event,
+        { includeClientContext: true },
+        AuthEvents.piiFieldsOf(event._tag),
+      );
       yield* world.out.set("payload", JSON.stringify(body));
     },
   );

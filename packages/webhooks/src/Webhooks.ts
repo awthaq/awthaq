@@ -505,6 +505,8 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
       const random = yield* SecureRandom.SecureRandom;
       const events = yield* AuthEvents.AuthEvents;
       const resolver = yield* HostResolver.HostResolver;
+      // ADR-EA-049: the composition's event registry (`auth.eventsLayer`; core's alone when it is not provided).
+      const registry = yield* AuthEvents.EventRegistry;
       // EP-007: the knobs are decided per operation, so a tenant's `Webhooks.config(...)` in the calling
       // fiber applies; with none, the build-time value does. (The background worker is deployment-wide
       // and reads the build-time value.)
@@ -588,13 +590,14 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
         const normalized = WebhookHeaders.normalize(headers);
         return { value: normalized, names: WebhookHeaders.namesOf(normalized) };
       };
+      /** BEH-EA-278, ADR-EA-049: every pattern matches a tag of this composition's registry. */
       const validateTags = (tags: ReadonlyArray<string>) => {
-        const unknown = WebhookPayload.unknownPattern(tags);
+        const unknown = WebhookPayload.unknownPattern(tags, registry.tags);
         return unknown === undefined
           ? Effect.void
           : Effect.fail(
               new WebhooksApi.InvalidWebhookEndpoint({
-                reason: `eventTags: "${unknown}" matches no event the library publishes`,
+                reason: `eventTags: "${unknown}" matches no event this composition publishes`,
               }),
             );
       };

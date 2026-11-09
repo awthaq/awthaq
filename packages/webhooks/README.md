@@ -12,14 +12,18 @@ Webhooks.Webhooks.layer.pipe(
   ),
   Layer.provideMerge(WebhookRecords.layerSql), // or layerMemory
   /* + Encryption, RateLimiter, HostResolver.layerNode, AuthEvents, Crypto, the admin-tier authentication */
+  Layer.provideMerge(auth.eventsLayer), // the composition's events: filters and payloads read them (AuthHost.layer does this)
 );
 
 // The delivery machinery: the relay that tails the audit log + the worker that sends. One per deployment.
 Webhooks.Webhooks.background().pipe(
   Layer.provide(WebhookTransport.layerNodePinned), // connects to the address the host was pinned to (below)
   /* + AuditLog and the RelayCursorStore (both from Persistence.sql(); the position is core migration 27), WebhookRecords, Encryption, RateLimiter, HostResolver, Crypto */
+  Layer.provideMerge(auth.eventsLayer),
 );
 ```
+
+Endpoint filters (`eventTags`: `*`, a family `auth.organization.*`, or an exact tag) are validated against the composition's event registry, `AuthEvents.EventRegistry`, which `auth.eventsLayer` provides (ADR-EA-049): core's events plus every composed plugin's. A plugin family is accepted only when that plugin is composed, and an event whose tag the registry does not hold (a removed plugin's history, or a host that forgot `auth.eventsLayer`) is never delivered, because its personal-data fields are unknown; each such skip logs `auth.webhooks.unknownEvent`.
 
 Run the plugin's migrations with the rest (`Auth.make(...).migrations`): `webhooks_endpoint` and `webhooks_delivery`. `WebhookTransport.layerHttpClient` wraps any `HttpClient` for runtimes without `node:https`; it cannot pin the connection, so DNS rebinding is then narrowed, not closed.
 

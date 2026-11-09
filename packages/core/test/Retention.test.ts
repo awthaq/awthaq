@@ -12,7 +12,9 @@ import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
@@ -21,6 +23,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Persistence from "../src/Persistence.ts";
 import * as AuditLog from "../src/AuditLog.ts";
 import * as AuthEvents from "../src/AuthEvents.ts";
+import * as EventDefinition from "../src/EventDefinition.ts";
 import { StoreUnavailable } from "../src/Errors.ts";
 import * as Hooks from "../src/Hooks.ts";
 import * as Retention from "../src/Retention.ts";
@@ -310,6 +313,64 @@ const suite = (
         ),
     );
   });
+
+// ADR-EA-049 (plan 29 ticket 09, R1): a rule tag must be an event of the composition, so a typo is refused.
+describe("Retention: rule tags are the composition's events", () => {
+  const LocalDef = EventDefinition.define(
+    "auth.local.happened",
+    { userId: EventDefinition.UserId },
+    { actor: EventDefinition.Actor.field("userId"), pii: [] },
+  );
+  const naming = (tag: string) =>
+    Retention.config({
+      auditLog: { default: Option.none(), rules: [{ tags: [tag], keepFor: days(30) }] },
+    });
+  const run = (config: Layer.Layer<never>, registry: Layer.Layer<never>) =>
+    Retention.sweep.pipe(
+      Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
+      Effect.provide(Layer.mergeAll(config, MemoryLayer, registry)),
+      Effect.exit,
+    );
+  const dieMessage = (exit: Exit.Exit<unknown, unknown>) =>
+    exit._tag === "Failure" ? Cause.pretty(exit.cause) : "";
+
+  it.effect(
+    "R1: a rule naming an undeclared tag dies with invalidConfiguration, naming the tag",
+    () =>
+      Effect.gen(function* () {
+        const exit = yield* run(naming("auth.user.signedInn"), Layer.empty);
+        assert.isTrue(Exit.isFailure(exit));
+        assert.include(dieMessage(exit), "InvalidConfiguration");
+        assert.include(dieMessage(exit), "auth.user.signedInn");
+      }),
+  );
+
+  it.effect(
+    "a plugin's tag is accepted once the composed registry declares it, refused with core's alone",
+    () =>
+      Effect.gen(function* () {
+        const composed = AuthEvents.eventRegistryLayer(
+          EventDefinition.make([...AuthEvents.coreDefinitions, LocalDef], "composition"),
+        );
+        assert.isTrue(Exit.isSuccess(yield* run(naming("auth.local.happened"), composed)));
+        assert.isTrue(Exit.isFailure(yield* run(naming("auth.local.happened"), Layer.empty)));
+      }),
+  );
+
+  it.effect(
+    "layerScheduled refuses the configuration at build, before any sweep is scheduled",
+    () =>
+      Effect.gen(function* () {
+        const exit = yield* Layer.build(Retention.layerScheduled).pipe(
+          Effect.scoped,
+          Effect.provide(Layer.mergeAll(naming("auth.nope.happened"), MemoryLayer)),
+          Effect.exit,
+        );
+        assert.isTrue(Exit.isFailure(exit));
+        assert.include(dieMessage(exit), "auth.nope.happened");
+      }),
+  );
+});
 
 suite("Retention over memory", MemoryLayer);
 suite("Retention over SQLite", SqlLayer);
