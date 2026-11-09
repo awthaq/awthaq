@@ -8,6 +8,33 @@ import * as Schema from "effect/Schema";
 import * as WebhookPayload from "../src/WebhookPayload.ts";
 import { published, signedIn } from "./support.ts";
 
+// ADR-EA-049: a plugin's event declares its own personal data, and a composition's registry holds it. These
+// mirror `@awthaq/admin`'s impersonation and ban events (webhooks does not depend on the admin plugin).
+const Impersonated = EventDefinition.define(
+  "auth.admin.impersonationStarted",
+  {
+    adminUserId: EventDefinition.UserId,
+    targetUserId: EventDefinition.UserId,
+    reason: Schema.String,
+    sessionId: EventDefinition.SessionId,
+  },
+  { actor: EventDefinition.Actor.field("adminUserId"), pii: ["reason"] },
+);
+const Banned = EventDefinition.define(
+  "auth.admin.userBanned",
+  {
+    adminUserId: EventDefinition.UserId,
+    userId: EventDefinition.UserId,
+    reason: Schema.NullOr(Schema.String),
+    until: Schema.NullOr(Schema.String),
+  },
+  { actor: EventDefinition.Actor.field("adminUserId"), pii: ["reason"] },
+);
+const composed = EventDefinition.make(
+  [...AuthEvents.coreDefinitions, Impersonated, Banned],
+  "composition",
+);
+
 const withContext = { includeClientContext: true } as const;
 const withoutContext = { includeClientContext: false } as const;
 
@@ -77,11 +104,7 @@ describe("WebhookPayload.toBody: identifiers only", () => {
           sessionId: Sessions.SessionId("s-1"),
         });
         const text = JSON.stringify(
-          WebhookPayload.toBody(
-            started,
-            withContext,
-            AuthEvents.CoreRegistry.piiFieldsOf(started._tag),
-          ),
+          WebhookPayload.toBody(started, withContext, composed.piiFieldsOf(started._tag)),
         );
         assert.notInclude(text, "jane.doe@example.com");
         assert.notInclude(text, "fraud");
@@ -99,11 +122,7 @@ describe("WebhookPayload.toBody: identifiers only", () => {
         until: null,
       });
       const bannedText = JSON.stringify(
-        WebhookPayload.toBody(
-          banned,
-          withContext,
-          AuthEvents.CoreRegistry.piiFieldsOf(banned._tag),
-        ),
+        WebhookPayload.toBody(banned, withContext, composed.piiFieldsOf(banned._tag)),
       );
       assert.notInclude(bannedText, "harassed");
       assert.include(bannedText, "user-2");

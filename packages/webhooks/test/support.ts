@@ -202,7 +202,7 @@ export const fakeTransport = (
 let counter = 0;
 
 /** A published event with its envelope, `occurredAt` at the ambient clock (or `at`). */
-export const published = <E extends AuthEvents.AuthEvent>(
+export const published = <E extends AuthEvents.AnyEvent>(
   event: E,
   extra: Partial<AuthEvents.EventMetadata> = {},
 ) =>

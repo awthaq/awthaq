@@ -17,6 +17,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Admin from "../src/Admin.ts";
+import * as AdminEvents from "../src/AdminEvents.ts";
 import * as ImpersonationRecords from "../src/ImpersonationRecords.ts";
 import { TestAuth } from "@awthaq/test";
 
@@ -286,7 +287,7 @@ describe("Admin", () => {
       }>
     >([]);
     yield* events.stream.pipe(
-      Stream.filter(AuthEvents.is("auth.admin.impersonationStopped")),
+      Stream.filter(AuthEvents.is(AdminEvents.AdminImpersonationStoppedEvent)),
       Stream.runForEach((event) =>
         Ref.update(seen, (all) => [
           ...all,

@@ -7,6 +7,7 @@
 // The app is built lazily on first use, inside the scenario's own fiber, so every clock read (the
 // backoff schedule, the rotation grace window, leases, retention) goes through the scenario's
 // `TestClock`. A second, HTTP-served composition is built only by the scenarios about the admin tier.
+import { Admin } from "@awthaq/admin";
 import { Api } from "@awthaq/api";
 import { Auth, AuditLog, AuthEvents, DataExport, Erasure, Users } from "@awthaq/core";
 import { Encryption, HostResolver, RateLimiter, RelayCursorStore, Tenant } from "@awthaq/ports";
@@ -182,9 +183,11 @@ const gateFor = (gate: Gate): Webhooks.WebhooksConfigShape["canManageWebhooks"] 
   }
 };
 
-const built = Auth.make([Webhooks.Webhooks]);
+// Admin is composed beside webhooks for its events (ADR-EA-049): an endpoint registers for and receives
+// `auth.admin.impersonationStarted` only when a composed plugin declares it.
+export const built = Auth.make([Webhooks.Webhooks, Admin.Admin]);
 
-/** `Auth.make([Webhooks])` through the harness; only the programmable receiver, resolver, limiter and configuration are this World's own. */
+/** `Auth.make([Webhooks, Admin])` through the harness; only the programmable receiver, resolver, limiter and configuration are this World's own. */
 const composition = (
   options: Options,
   receiver: ReturnType<typeof makeReceiver>,
@@ -296,7 +299,7 @@ export interface WorldShape {
   readonly httpApp: Ref.Ref<HttpApp | undefined>;
   readonly endpoints: ReturnType<typeof makeNamedRegistry<NamedEndpoint>>;
   readonly secrets: ReturnType<typeof makeNamedRegistry<string>>;
-  readonly events: ReturnType<typeof makeNamedRegistry<AuthEvents.Published>>;
+  readonly events: ReturnType<typeof makeNamedRegistry<AuthEvents.PublishedAny>>;
   readonly out: Effect.Success<typeof makeOutcomes>;
   readonly replies: Ref.Ref<Replies>;
   /** The delivery counter per outcome when the scenario began (the counter is process-wide). */
@@ -329,7 +332,7 @@ export const WorldLive = Layer.effect(
       httpApp: yield* Ref.make<HttpApp | undefined>(undefined),
       endpoints: makeNamedRegistry<NamedEndpoint>("endpoint"),
       secrets: makeNamedRegistry<string>("secret"),
-      events: makeNamedRegistry<AuthEvents.Published>("event"),
+      events: makeNamedRegistry<AuthEvents.PublishedAny>("event"),
       out: yield* makeOutcomes,
       replies: yield* Ref.make<Replies>({ base: () => ({ status: 200 }), byUrl: {} }),
       metricBase: yield* Effect.map(Effect.forEach(OUTCOMES, metricCount), (counts) =>
@@ -404,14 +407,14 @@ export const otherAdmin = new Api.UserPrincipal({
 let counter = 0;
 
 /** A published event with its envelope, `occurredAt` at the scenario's clock. */
-export const publishedEvent = (
-  event: AuthEvents.AuthEvent,
+export const publishedEvent = <E extends AuthEvents.AnyEvent>(
+  event: E,
   extra: Partial<AuthEvents.EventMetadata> = {},
 ) =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;
     counter += 1;
-    const published: AuthEvents.Published = {
+    const published: AuthEvents.Published<E> = {
       ...event,
       eventId: `018f0000-0000-7000-8000-${String(counter).padStart(12, "0")}`,
       occurredAt: now,

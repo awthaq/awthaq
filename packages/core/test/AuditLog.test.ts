@@ -50,6 +50,55 @@ const stamped = (event: AuthEvents.AuthEvent, n: number, ms = 1_700_000_000_000 
   return published;
 };
 
+/**
+ * Test-local plugin events that declare personal data (ADR-EA-049), shaped like `@awthaq/admin`'s
+ * impersonation and ban events: since those moved to the admin plugin, no core event declares any.
+ */
+const Impersonated = EventDefinition.define(
+  "auth.local.impersonationStarted",
+  {
+    adminUserId: EventDefinition.UserId,
+    targetUserId: EventDefinition.UserId,
+    reason: Schema.String,
+    sessionId: EventDefinition.SessionId,
+  },
+  { actor: EventDefinition.Actor.field("adminUserId"), pii: ["reason"] },
+);
+const Banned = EventDefinition.define(
+  "auth.local.userBanned",
+  {
+    adminUserId: EventDefinition.UserId,
+    userId: EventDefinition.UserId,
+    reason: Schema.NullOr(Schema.String),
+  },
+  { actor: EventDefinition.Actor.field("adminUserId"), pii: ["reason"] },
+);
+
+/** `stamped` for an event core does not define, recorded with its own definition. */
+const stampedPlugin = <E extends AuthEvents.AnyEvent>(event: E, n: number) => {
+  const published: AuthEvents.Published<E> = {
+    ...event,
+    eventId: `018f0000-0000-7000-8000-${String(n).padStart(12, "0")}`,
+    occurredAt: DateTime.makeUnsafe(1_700_000_000_000 + n * 1000),
+    correlationId: Option.none(),
+    traceId: Option.none(),
+    spanId: Option.none(),
+    ip: Option.none(),
+    userAgent: Option.none(),
+    tenantId: Option.none(),
+  };
+  return published;
+};
+
+/** The impersonation a test records: the administrator acted on `userId`, with a justification. */
+const impersonation = {
+  _tag: "auth.local.impersonationStarted",
+  adminUserId: otherUserId,
+  targetUserId: userId,
+  reason: "customer asked us to reproduce a billing bug",
+  sessionId,
+} satisfies EventDefinition.TypeOf<typeof Impersonated>;
+
 const suite = (
   name: string,
   layer: Layer.Layer<AuditLog.AuditLog | AuditLogStore.AuditLogStore, unknown, never>,
@@ -66,8 +115,8 @@ const suite = (
           [samples["auth.organization.permissionDenied"], Option.some(userId)],
           // Actor.field("adminUserId"): the administrator, not the target
           [
-            samples["auth.admin.userUpdated"],
-            Option.some(samples["auth.admin.userUpdated"].adminUserId),
+            { ...samples["auth.admin.actionDenied"], targetUserId: userId },
+            Option.some(otherUserId),
           ],
           // Actor.field("actorUserId") on an organization event (plan 04, F11): who acted, not who it was about;
           // absent when the actor names no user (a directory, the application)
@@ -223,7 +272,7 @@ const suite = (
         Effect.gen(function* () {
           const auditLog = yield* AuditLog.AuditLog;
           yield* auditLog.record(stamped(samples["auth.user.created"], 1));
-          yield* auditLog.record(stamped(samples["auth.admin.impersonationStarted"], 2));
+          yield* auditLog.record(stampedPlugin(impersonation, 2), Impersonated);
           yield* auditLog.record(stamped(samples["auth.authz.denied"], 3));
           yield* auditLog.record(
             stamped({ _tag: "auth.token.replay", identifier: `verify-email:${userId}` }, 4),
@@ -231,7 +280,16 @@ const suite = (
           yield* auditLog.record(stamped({ _tag: "auth.user.created", userId: otherUserId }, 5));
           // The ban note is operator free text about the banned person (plan 09 phase 4).
           yield* auditLog.record(
-            stamped({ ...samples["auth.admin.userBanned"], reason: "spamming the forum" }, 6),
+            stampedPlugin(
+              {
+                _tag: "auth.local.userBanned",
+                adminUserId: otherUserId,
+                userId,
+                reason: "spamming the forum",
+              } satisfies EventDefinition.TypeOf<typeof Banned>,
+              6,
+            ),
+            Banned,
           );
 
           const rewritten = yield* auditLog.pseudonymizeActor(userId);
@@ -252,14 +310,15 @@ const suite = (
           const alias = Option.getOrUndefined(created?.actorUserId ?? Option.none());
           assert.isDefined(alias);
           assert.notStrictEqual(alias, userId);
-          const impersonation = rows.find(
-            (row) => row.eventTag === "auth.admin.impersonationStarted",
+          const impersonated = rows.find(
+            (row) => row.eventTag === "auth.local.impersonationStarted",
           );
-          assert.strictEqual(
-            impersonation?.payload._tag === "auth.admin.impersonationStarted"
-              ? impersonation.payload.targetUserId
-              : "",
-            alias,
+          assert.deepStrictEqual(
+            Option.map(
+              Option.flatMap(Option.fromNullishOr(impersonated), AuditLog.payloadAs(Impersonated)),
+              (event) => event.targetUserId,
+            ),
+            Option.fromNullishOr(alias),
           );
           // ...another user's rows are untouched, and nothing lists the erased id any more.
           assert.strictEqual((yield* auditLog.list({ actorUserId: userId })).length, 0);
@@ -273,16 +332,16 @@ const suite = (
         const auditLog = yield* AuditLog.AuditLog;
         const unrelated = UserId("44444444-4444-4444-4444-444444444444");
         yield* auditLog.record(
-          stamped(
+          stampedPlugin(
             {
-              _tag: "auth.admin.impersonationStarted",
+              ...impersonation,
               adminUserId: userId,
               targetUserId: otherUserId,
               reason: "billing bug",
-              sessionId,
             },
             1,
           ),
+          Impersonated,
         );
         const rewritten = yield* auditLog.pseudonymizeActor(unrelated);
         assert.strictEqual(rewritten, 0);

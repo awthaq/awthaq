@@ -5,21 +5,33 @@
 // Domain-level like `Admin.test.ts`: real in-memory `Users`/`Sessions`/`AuthEvents`.
 import { Api } from "@awthaq/api";
 import { Auth, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { AuditLogStore } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Duration from "effect/Duration";
 import * as Admin from "../src/Admin.ts";
+import { type AdminTestEvent, adminTestEvents } from "./support/events.ts";
 import { TestAuth } from "@awthaq/test";
 
 const buildLayer = (config: Partial<Admin.AdminConfigShape>) =>
   TestAuth.layer(Auth.make([Admin.Admin]), { services: Admin.config(config) });
 
 const manageAll = { canManageUsers: () => Effect.succeed(true) };
+
+/** The stored row's envelope: the personal-data fields it recorded, if any. */
+const decodeStored = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      meta: Schema.optional(Schema.Struct({ pii: Schema.optional(Schema.Array(Schema.String)) })),
+    }),
+  ),
+);
 
 const asCaller = (id: string): Api.UserPrincipal =>
   new Api.UserPrincipal({
@@ -43,9 +55,9 @@ const seed = Effect.gen(function* () {
 /** Collects every event published from now on. */
 const collectEvents = Effect.gen(function* () {
   const events = yield* AuthEvents.AuthEvents;
-  const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
+  const seen = yield* Ref.make<ReadonlyArray<AdminTestEvent>>([]);
   yield* events.stream.pipe(
-    Stream.filter(AuthEvents.is(AuthEvents.eventTags)),
+    Stream.filter(AuthEvents.is(adminTestEvents)),
     Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
     Effect.forkScoped({ startImmediately: true }),
   );
@@ -176,6 +188,49 @@ describe("Admin user administration (BAM-005)", () => {
         TestAuth.withoutRequest,
         Effect.provide(buildLayer({ ...manageAll, canImpersonate: () => Effect.succeed(true) })),
       ),
+  );
+
+  // ADR-EA-049: the events declaring the operator's free text belong to the admin plugin now. A row written
+  // through the plugin's own definition records the declared fields (`meta.pii`), so erasure scrubs it
+  // without the frozen pre-ADR-EA-049 table; an event declaring none records no `meta.pii`.
+  it.effect("a row written by the plugin's definition records meta.pii: [reason]", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId } = yield* seed;
+      const admin = yield* Admin.Admin;
+      const store = yield* AuditLogStore.AuditLogStore;
+      yield* admin.impersonate({
+        caller: asCaller(adminId),
+        targetUserId: targetId,
+        reason: "reproducing a bug",
+      });
+      yield* admin.banUser(asCaller(adminId), targetId, { reason: "spam" });
+      yield* admin.unbanUser(asCaller(adminId), targetId);
+      const rows = yield* store.select(
+        {
+          eventTag: Option.none(),
+          actorUserId: Option.none(),
+          from: Option.none(),
+          to: Option.none(),
+        },
+        "authoritative",
+      );
+      const piiOf = (tag: string) =>
+        rows
+          .filter((row) => row.eventTag === tag)
+          .map((row) => decodeStored(row.payloadJson).meta?.pii);
+      assert.deepStrictEqual(piiOf("auth.admin.impersonationStarted"), [["reason"]]);
+      assert.deepStrictEqual(piiOf("auth.admin.userBanned"), [["reason"]]);
+      assert.deepStrictEqual(piiOf("auth.admin.userUnbanned"), [undefined]);
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(
+        buildLayer({
+          ...manageAll,
+          canBanUsers: () => Effect.succeed(true),
+          canImpersonate: () => Effect.succeed(true),
+        }),
+      ),
+    ),
   );
 });
 

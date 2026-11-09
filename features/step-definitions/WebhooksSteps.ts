@@ -50,6 +50,7 @@ import {
   World,
   type SentRequest,
   anyTenant,
+  built,
 } from "./WebhooksWorld.ts";
 import { isRecord, parseJson } from "./shared/WireJson.ts";
 import { isNumber, isString } from "./shared/Outcomes.ts";
@@ -262,7 +263,7 @@ const OPERATIONS = [
 
 const expectQueued = (
   rows: ReadonlyArray<{ readonly eventId: string }>,
-  event: AuthEvents.Published,
+  event: AuthEvents.PublishedAny,
 ) => rows.some((row) => row.eventId === event.eventId);
 
 const deliveredHeadersCount = (request: SentRequest) =>
@@ -802,7 +803,8 @@ export const webhooksSteps = defineSteps<World>(({ Given, When, Then }) => {
       const body = WebhookPayload.toBody(
         event,
         { includeClientContext: true },
-        AuthEvents.piiFieldsOf(event._tag),
+        // The composed registry: a plugin's event declares its own personal data (ADR-EA-049).
+        built.events.piiFieldsOf(event._tag),
       );
       yield* world.out.set("payload", JSON.stringify(body));
     },

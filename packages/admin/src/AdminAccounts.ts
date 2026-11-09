@@ -51,6 +51,7 @@ import type * as Redacted from "effect/Redacted";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as AdminAccountsApi from "./AdminAccountsApi.ts";
 import * as AdminApi from "./AdminApi.ts";
+import * as AdminEvents from "./AdminEvents.ts";
 import * as AdminGate from "./internal/AdminGate.ts";
 
 export interface AdminAccountsShape {
@@ -140,6 +141,8 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
   {
     apiVersion: 1,
     contract: AdminAccountsApi.AdminAccountsApi,
+    // ADR-EA-049: the events this plugin publishes, defined in `AdminEvents.ts` beside `Admin`'s.
+    events: AdminEvents.accountsEvents,
   },
 ) {
   static readonly layer = AuthPlugin.layer(AdminAccounts, {
@@ -178,8 +181,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
                 Effect.fail(new AdminApi.AdminTargetNotFound()),
               ),
             );
-          yield* events.publish({
-            _tag: "auth.admin.userDeleted",
+          yield* events.emit(AdminEvents.AdminUserDeletedEvent, {
             adminUserId: Users.UserId(caller.ref.id),
             userId,
           });
@@ -210,8 +212,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
               () => new AdminAccountsApi.AdminEmailDeliveryFailed(),
             ),
           );
-          yield* events.publish({
-            _tag: "auth.admin.userEmailChangeRequested",
+          yield* events.emit(AdminEvents.AdminUserEmailChangeRequestedEvent, {
             adminUserId: Users.UserId(caller.ref.id),
             userId,
           });
@@ -260,8 +261,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
           // The credential changed: subscribers of `auth.password.changed` (a notification mail, a
           // SIEM) learn of it as for any change; the admin event names who did it.
           yield* events.publish({ _tag: "auth.password.changed", userId });
-          yield* events.publish({
-            _tag: "auth.admin.userPasswordSet",
+          yield* events.emit(AdminEvents.AdminUserPasswordSetEvent, {
             adminUserId: Users.UserId(caller.ref.id),
             userId,
           });

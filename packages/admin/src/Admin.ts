@@ -33,6 +33,7 @@ import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as AdminApi from "./AdminApi.ts";
+import * as AdminEvents from "./AdminEvents.ts";
 import * as ImpersonationRecords from "./ImpersonationRecords.ts";
 import * as AdminGate from "./internal/AdminGate.ts";
 
@@ -656,6 +657,8 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
     ),
   },
   migrations: [...adminMigrations, addTenantIdMigration],
+  // ADR-EA-049: the events this plugin publishes, defined in `AdminEvents.ts`.
+  events: AdminEvents.events,
   // Plan 08 (BEH-EA-T4): the impersonation store, memory and SQL, matched.
   records: {
     memory: ImpersonationRecords.layerMemory,
@@ -744,8 +747,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
                 Effect.fail(new AdminApi.AdminTargetNotFound()),
               ),
             );
-          yield* events.publish({
-            _tag: "auth.admin.userUpdated",
+          yield* events.emit(AdminEvents.AdminUserUpdatedEvent, {
             adminUserId: Users.UserId(caller.ref.id),
             userId,
           });
@@ -768,8 +770,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         // (a session issued in that gap would be refused-then-revoked anyway; the reverse order
         // could leave a fresh session behind).
         yield* sessions.revokeAll(userId, "suspended");
-        yield* events.publish({
-          _tag: "auth.admin.userBanned",
+        yield* events.emit(AdminEvents.AdminUserBannedEvent, {
           adminUserId: Users.UserId(caller.ref.id),
           userId,
           reason: input.reason?.trim() ?? null,
@@ -785,8 +786,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
           .pipe(
             Effect.catchTag("UserNotFound", () => Effect.fail(new AdminApi.AdminTargetNotFound())),
           );
-        yield* events.publish({
-          _tag: "auth.admin.userUnbanned",
+        yield* events.emit(AdminEvents.AdminUserUnbannedEvent, {
           adminUserId: Users.UserId(caller.ref.id),
           userId,
         });
@@ -819,8 +819,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
             .revoke(Sessions.SessionId(sessionId), "admin")
             // Gone between the check and the revoke: the desired end state, not an error.
             .pipe(Effect.catchTag("Sessions/NotFound", () => Effect.void));
-          yield* events.publish({
-            _tag: "auth.admin.sessionRevoked",
+          yield* events.emit(AdminEvents.AdminSessionRevokedEvent, {
             adminUserId: Users.UserId(caller.ref.id),
             userId,
             sessionId: Sessions.SessionId(sessionId),
@@ -843,8 +842,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
                 .pipe(Effect.catchTag("Sessions/NotFound", () => Effect.void)),
             { discard: true },
           );
-          yield* events.publish({
-            _tag: "auth.admin.sessionRevoked",
+          yield* events.emit(AdminEvents.AdminSessionRevokedEvent, {
             adminUserId: Users.UserId(caller.ref.id),
             userId,
             sessionId: null,
@@ -883,8 +881,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
           reason: trimmedReason,
           expiresAt: issued.session.absoluteExpiresAt,
         });
-        yield* events.publish({
-          _tag: "auth.admin.impersonationStarted",
+        yield* events.emit(AdminEvents.AdminImpersonationStartedEvent, {
           adminUserId: Users.UserId(caller.ref.id),
           targetUserId,
           reason: trimmedReason,
@@ -906,8 +903,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
         yield* Effect.forEach(
           closed,
           (episode) =>
-            events.publish({
-              _tag: "auth.admin.impersonationStopped",
+            events.emit(AdminEvents.AdminImpersonationStoppedEvent, {
               sessionId: Sessions.SessionId(episode.sessionId),
               adminUserId: episode.adminUserId,
               targetUserId: episode.targetUserId,
@@ -939,8 +935,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
             );
             return;
           }
-          yield* events.publish({
-            _tag: "auth.admin.impersonationStopped",
+          yield* events.emit(AdminEvents.AdminImpersonationStoppedEvent, {
             sessionId: Sessions.SessionId(caller.sessionId),
             adminUserId: closed.value.adminUserId,
             targetUserId: closed.value.targetUserId,
@@ -973,8 +968,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
               Effect.fail(new AdminApi.AdminImpersonationNotFound()),
             ),
           );
-        yield* events.publish({
-          _tag: "auth.admin.impersonationStopped",
+        yield* events.emit(AdminEvents.AdminImpersonationStoppedEvent, {
           sessionId: Sessions.SessionId(sessionId),
           adminUserId: ended.adminUserId,
           targetUserId: ended.targetUserId,

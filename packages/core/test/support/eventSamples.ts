@@ -57,20 +57,6 @@ export const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.Ev
     userId,
     credentialId: "cred-1",
   },
-  "auth.admin.impersonationStarted": {
-    _tag: "auth.admin.impersonationStarted",
-    adminUserId: otherUserId,
-    targetUserId: userId,
-    reason: "customer asked us to reproduce a billing bug",
-    sessionId,
-  },
-  "auth.admin.impersonationStopped": {
-    _tag: "auth.admin.impersonationStopped",
-    sessionId,
-    adminUserId: otherUserId,
-    targetUserId: userId,
-    endedBy: "self",
-  },
   "auth.admin.impersonationDenied": {
     _tag: "auth.admin.impersonationDenied",
     adminUserId: otherUserId,
@@ -81,17 +67,6 @@ export const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.Ev
     _tag: "auth.admin.actionDenied",
     adminUserId: otherUserId,
     action: "listUsers",
-  },
-  "auth.admin.userUpdated": {
-    _tag: "auth.admin.userUpdated",
-    adminUserId: otherUserId,
-    userId,
-  },
-  "auth.admin.sessionRevoked": {
-    _tag: "auth.admin.sessionRevoked",
-    adminUserId: otherUserId,
-    userId,
-    sessionId,
   },
   "auth.organization.created": {
     _tag: "auth.organization.created",
@@ -260,25 +235,6 @@ export const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.Ev
     retryAfterMillis: 1000,
   },
   "auth.mail.failed": { _tag: "auth.mail.failed", template: "verify-email", userId },
-  "auth.admin.userBanned": {
-    _tag: "auth.admin.userBanned",
-    adminUserId: otherUserId,
-    userId,
-    reason: "abuse",
-    until: null,
-  },
-  "auth.admin.userUnbanned": { _tag: "auth.admin.userUnbanned", adminUserId: otherUserId, userId },
-  "auth.admin.userDeleted": { _tag: "auth.admin.userDeleted", adminUserId: otherUserId, userId },
-  "auth.admin.userEmailChangeRequested": {
-    _tag: "auth.admin.userEmailChangeRequested",
-    adminUserId: otherUserId,
-    userId,
-  },
-  "auth.admin.userPasswordSet": {
-    _tag: "auth.admin.userPasswordSet",
-    adminUserId: otherUserId,
-    userId,
-  },
   "auth.admin.organizationSuspended": {
     _tag: "auth.admin.organizationSuspended",
     adminUserId: otherUserId,

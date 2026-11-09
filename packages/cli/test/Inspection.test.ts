@@ -267,13 +267,14 @@ describe("plugin list --events", () => {
         rows.find((row) => row.tag === "auth.user.signInFailed"),
         { tag: "auth.user.signInFailed", owner: "core", actor: "-", pii: [], attempt: true },
       );
+      // A plugin's own event is listed under the plugin that declares it.
       assert.deepStrictEqual(
-        rows.find((row) => row.tag === "auth.admin.impersonationStarted"),
+        rows.find((row) => row.tag === "auth.roles.assigned"),
         {
-          tag: "auth.admin.impersonationStarted",
-          owner: "core",
-          actor: "adminUserId",
-          pii: ["reason"],
+          tag: "auth.roles.assigned",
+          owner: "roles",
+          actor: "actorUserId",
+          pii: [],
           attempt: false,
         },
       );
@@ -286,9 +287,7 @@ describe("plugin list --events", () => {
       );
       assert.match(text[0] ?? "", /^TAG\s+OWNER\s+ACTOR\s+PII\s+ATTEMPT/);
       assert.isTrue(
-        text.some((line) =>
-          /^auth\.admin\.impersonationStarted\s+core\s+adminUserId\s+reason\s+no$/.test(line),
-        ),
+        text.some((line) => /^auth\.roles\.assigned\s+roles\s+actorUserId\s+-\s+no$/.test(line)),
       );
     }),
   );

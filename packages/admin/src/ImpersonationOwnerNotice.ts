@@ -26,6 +26,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as AdminEvents from "./AdminEvents.ts";
 
 /** The template the mail is sent under; a `Mailer` adapter renders it. */
 export const TEMPLATE = "impersonation-started";
@@ -36,7 +37,7 @@ export const layer = Layer.unwrap(
     const mailer = yield* Mailer.Mailer;
     const dispatcher = yield* MailDispatch.make;
 
-    return AuthEvents.on("auth.admin.impersonationStarted", (event) =>
+    return AuthEvents.on(AdminEvents.AdminImpersonationStartedEvent, (event) =>
       Effect.gen(function* () {
         const target = yield* users.findById(event.targetUserId);
         const to = Users.emailOf(target);

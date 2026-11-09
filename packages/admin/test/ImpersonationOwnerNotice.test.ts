@@ -9,6 +9,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
+import * as AdminEvents from "../src/AdminEvents.ts";
 import * as ImpersonationOwnerNotice from "../src/ImpersonationOwnerNotice.ts";
 
 const CoreLive = Users.layer
@@ -30,7 +31,6 @@ const settle = Effect.gen(function* () {
 });
 
 const startedBy = (adminUserId: Users.UserId, targetUserId: Users.UserId) => ({
-  _tag: "auth.admin.impersonationStarted" as const,
   adminUserId,
   targetUserId,
   reason: "customer asked us to reproduce a billing bug",
@@ -54,7 +54,10 @@ describe("ImpersonationOwnerNotice.layer (ARF-005)", () => {
           name: "Owner",
         });
         yield* settle;
-        yield* events.publish(startedBy(admin.id, target.id));
+        yield* events.emit(
+          AdminEvents.AdminImpersonationStartedEvent,
+          startedBy(admin.id, target.id),
+        );
         yield* settle;
 
         const sent = yield* mailer.sent;
@@ -87,7 +90,10 @@ describe("ImpersonationOwnerNotice.layer (ARF-005)", () => {
         });
         const anonymous = yield* users.create({ identity: { _tag: "Anonymous" }, name: "Anon" });
         yield* settle;
-        yield* events.publish(startedBy(admin.id, anonymous.id));
+        yield* events.emit(
+          AdminEvents.AdminImpersonationStartedEvent,
+          startedBy(admin.id, anonymous.id),
+        );
         yield* settle;
         assert.strictEqual((yield* mailer.sent).length, 0);
       }).pipe(Effect.provide(TestLayer)),
@@ -103,8 +109,7 @@ describe("ImpersonationOwnerNotice.layer (ARF-005)", () => {
         name: "Quiet",
       });
       yield* settle;
-      yield* events.publish({
-        _tag: "auth.admin.userUpdated",
+      yield* events.emit(AdminEvents.AdminUserUpdatedEvent, {
         adminUserId: target.id,
         userId: target.id,
       });
