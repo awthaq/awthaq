@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-040 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-11-09 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-13): Initial release (plan 04) <br> 1.1 (2026-11-09): decision 6, the authorized interface authorizes through one primitive; ceilings are minted only by `OrganizationAuthority` (plan 30 Part A) |
+> | Change History | 1.0 (2026-10-13): Initial release (plan 04) <br> 1.1 (2026-11-08): revision note under Consequences: the second user, `@awthaq/password`'s `PasswordCredential` (ADR-EA-048, architecture plan 27) <br> 1.2 (2026-11-09): decision 6, the authorized interface authorizes through one primitive; ceilings are minted only by `OrganizationAuthority` (plan 30 Part A) |
 
 ---
 
@@ -48,6 +48,8 @@ The proof is branded and minted only by that module. It carries the organization
 Decision 6: the order MTI-009 depends on is written once, so a new endpoint chooses *what* it needs and cannot reorder *how* it is checked; a role-conferring call's ceiling is the one its check read.
 
 **Negative**: one option on `AuthPlugin.layer` and one `Validate` rule to maintain. An inline `Layer.succeed(Tag, ...)` as the sole `exposes.layer` does not infer (TypeScript fixes the contravariant `ROut` parameter to `never` while it is still contextually typed); bind the layer to a `const` or build it with `Layer.mergeAll`.
+
+**Revision note (1.1).** Second user: `@awthaq/password` exposes `PasswordCredential` ([ADR-EA-048](048-password-credential-module.md)); `AdminAccounts` lists `Password` in `dependsOn`, as `AdminTenants` lists `Organization`, and `awthaq seed admin` reads it from the application context. No decision text changes.
 
 ## Alternatives considered
 

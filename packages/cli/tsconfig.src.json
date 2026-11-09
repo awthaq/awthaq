@@ -18,7 +18,8 @@
       "@awthaq/roles": ["../roles/src/index.ts"],
       "@awthaq/server": ["../server/src/index.ts"],
       "@awthaq/sql": ["../sql/src/index.ts"],
-      "@awthaq/device-authorization": ["../device-authorization/src/index.ts"]
+      "@awthaq/device-authorization": ["../device-authorization/src/index.ts"],
+      "@awthaq/password": ["../password/src/index.ts"]
     }
   },
   "references": [
@@ -51,6 +52,9 @@
     },
     {
       "path": "../device-authorization/tsconfig.src.json"
+    },
+    {
+      "path": "../password/tsconfig.src.json"
     }
   ]
 }

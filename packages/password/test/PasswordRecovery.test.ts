@@ -6,6 +6,7 @@ import { Mailer, PasswordHasher } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Password from "../src/Password.ts";
@@ -85,6 +86,32 @@ describe("ARF-002: policy before consume", () => {
       ),
     ),
   );
+});
+
+describe("BEH-EA-117: the new password is hashed only once the token is consumed", () => {
+  it.effect("a well-formed reset token for no live row costs no password hash", () => {
+    let hashes = 0;
+    const CountingHasher = Layer.succeed(
+      PasswordHasher.PasswordHasher,
+      PasswordHasher.PasswordHasher.of({
+        hash: () => Effect.sync(() => (hashes++, PasswordHasher.PhcHash("counted"))),
+        verify: () => Effect.succeed(false),
+        needsRehash: () => false,
+      }),
+    );
+    return Effect.gen(function* () {
+      const password = yield* Password.Password;
+      const before = hashes;
+      const failure = yield* password
+        .confirmReset({
+          token: Redacted.make("reset-password:u-nobody.not-a-live-secret"),
+          password: Redacted.make("a brand new strong password"),
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "TokenConsumed");
+      assert.strictEqual(hashes, before, "a dead token must not pay for a KDF");
+    }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer({ hasher: CountingHasher })));
+  });
 });
 
 describe("ARF-004: credential-less accounts", () => {

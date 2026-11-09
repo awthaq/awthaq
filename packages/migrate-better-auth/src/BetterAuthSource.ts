@@ -32,7 +32,7 @@
 //   verification    `LegacySessionBridgeLive` (BAM-003), and a verification token is short-lived; `counts`
 //                   reports both so the plan says so.
 
-import { UserImport, type Accounts } from "@awthaq/core";
+import { Accounts, UserImport } from "@awthaq/core";
 import { PasswordHasher } from "@awthaq/ports";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -193,7 +193,10 @@ export const mapUser = (
           });
         }
         // `subject` omitted: a password account is keyed by the new user's own id (`Password.signUp`).
-        credentials.push({ providerId: "password", credentialHash: Redacted.make(hash) });
+        credentials.push({
+          providerId: Accounts.PASSWORD_PROVIDER_ID,
+          credentialHash: Redacted.make(hash),
+        });
         continue;
       }
 

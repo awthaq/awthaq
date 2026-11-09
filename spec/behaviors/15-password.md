@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-15 |
-> | Revision | 1.8 |
+> | Revision | 1.9 |
 > | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-113's research citation to the precise Q48 finding it refers to (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): `POST /password/reauthenticate` answers 401 when the session ended mid-request (BEH-EA-319, plan 10 item 3) <br> 1.4 (2026-10-13): `POST /change-email` requires a fresh session (`PasswordReauthRequired`, `PasswordConfig.reauthMaxAge`, BEH-EA-320; plan 10 item 4) <br> 1.5 (2026-10-13): `confirmReset`, `verifyEmail` and `confirmEmailChange` redeem through `Verification.redeem`; BEH-EA-259 no longer says "(on SQL)" (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): the three link endpoints redeem through `VerificationLink.redeemer` (ADR-EA-039 decision 9, plan 18): `confirmReset` is rate limited per source before the token is decoded (BEH-EA-117), a token whose row names no user is spent (BEH-EA-118) <br> 1.7 (2026-11-08): MNA-001 paragraph: the endpoints' `SessionLifecycle` declarations; a bearer `changePassword` carries `set-auth-token` (ADR-EA-045, architecture plan 21) <br> 1.8 (2026-11-08): CSD-003 paragraph: the request facts come from `Api.AuthRequestContext`; no member takes `ip` or `userAgent` (ADR-EA-047, architecture plan 26 ticket 13) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Corrected BEH-EA-113's research citation to the precise Q48 finding it refers to (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): `POST /password/reauthenticate` answers 401 when the session ended mid-request (BEH-EA-319, plan 10 item 3) <br> 1.4 (2026-10-13): `POST /change-email` requires a fresh session (`PasswordReauthRequired`, `PasswordConfig.reauthMaxAge`, BEH-EA-320; plan 10 item 4) <br> 1.5 (2026-10-13): `confirmReset`, `verifyEmail` and `confirmEmailChange` redeem through `Verification.redeem`; BEH-EA-259 no longer says "(on SQL)" (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): the three link endpoints redeem through `VerificationLink.redeemer` (ADR-EA-039 decision 9, plan 18): `confirmReset` is rate limited per source before the token is decoded (BEH-EA-117), a token whose row names no user is spent (BEH-EA-118) <br> 1.7 (2026-11-08): MNA-001 paragraph: the endpoints' `SessionLifecycle` declarations; a bearer `changePassword` carries `set-auth-token` (ADR-EA-045, architecture plan 21) <br> 1.8 (2026-11-08): CSD-003 paragraph: the request facts come from `Api.AuthRequestContext`; no member takes `ip` or `userAgent` (ADR-EA-047, architecture plan 26 ticket 13) <br> 1.9 (2026-11-08): BEH-EA-345, one module verifies, sets and rehashes every password; one policy for every path that sets one (an administrator's set and `seed admin` included); `changePassword` is one unit; BEH-EA-114/116/117/119/120 name `PasswordCredential` (ADR-EA-048, architecture plan 27) |
 ---
 
 > Implemented in `@awthaq/password` (`packages/password/src`; tests `packages/password/test`, wired scenarios in `features/`); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
@@ -53,7 +53,7 @@ REQUIREMENT: `password.signIn` MUST fail with the same `InvalidCredentials`
 
 PRD §10 states this directly: "`InvalidCredentials` is uniform to prevent enumeration." An attacker probing `signIn` cannot use a different error, status, or timing to learn which emails have accounts — the constant-time hash comparison and the single error shape together remove the oracle. `usage-examples-v4.md` §1.2 shows the wire shape: `401 {"_tag":"InvalidCredentials"}`, regardless of which of the three underlying reasons applied.
 
-**Timing floor (TSS-006).** A verify runs at the *stored* hash's cost, so a row still on a cheaper legacy hash (bcrypt awaiting rehash) would answer faster than the dummy-hash path an unknown email takes. `PasswordConfig.signInTimingFloor` closes that: by default (`"calibrated"`) the layer times a verify of its boot-time dummy hash and holds `signIn`'s credential check (lookup plus verify, success and failure alike) to at least 1.25 times that; a `Duration` fixes the floor and `"off"` disables it. `changePassword` and `reauthenticate` hold their verify to the same floor. The residual: a hash *costlier* than the floor (a high-cost legacy bcrypt) still takes longer than the floor and stays distinguishable until it has been rehashed.
+**Timing floor (TSS-006).** A verify runs at the *stored* hash's cost, so a row still on a cheaper legacy hash (bcrypt awaiting rehash) would answer faster than the dummy-hash path an unknown email takes. `PasswordConfig.signInTimingFloor` closes that: by default (`"calibrated"`) `PasswordCredential` (BEH-EA-345) times a verify of its boot-time dummy hash and `PasswordCredential.verify` holds the credential check (lookup plus verify, success and failure alike) to at least 1.25 times that; a `Duration` fixes the floor and `"off"` disables it. `signIn`, `changePassword` and `reauthenticate` all verify through it, so `changePassword` and `reauthenticate` hold their lookup and verify to the same floor. Every refusal runs one real verify: against the stored hash, or against the dummy hash when the user is unknown or has no password credential. The residual: a hash *costlier* than the floor (a high-cost legacy bcrypt) still takes longer than the floor and stays distinguishable until it has been rehashed.
 
 **Verified-email gate (FAMS-003).** After the credentials are confirmed, `signIn` refuses an unverified account (`403 EmailNotVerified`), so the gate can never be used to probe a password. `PasswordConfig.requireVerifiedEmail` (default `true`) turns it off for a deployment whose imported users were never verified in the source system; such a deployment either calls `Users.verifyEmail` for the users the source had verified, or keeps the gate off and restricts unverified users downstream.
 
@@ -97,6 +97,8 @@ ERS-001: KDF work is bounded, and can be moved off the event loop. The calling-t
 PHS-002: the default `AUTH_PASSWORD_REHASH_POLICY=floor` rewrites only a hash weaker than the target (argon2: `m` or `t` below it; scrypt: `N` or `r` below it; `p` alone never triggers), so lowering the configured cost can never silently downgrade existing hashes. `AUTH_PASSWORD_REHASH_POLICY=exact` restores the earlier "any difference" behavior for an operator who deliberately lowers cost. Both layers also refuse, without running the KDF, any stored hash claiming a cost above a configurable ceiling (ACS-006), and `layerArgon2id` compares digests itself in constant time rather than through hash-wasm's `argon2Verify` (PHS-001).
 
 
+The rehash is `PasswordCredential.rehashIfStale` on the proof a successful `verify` returned (BEH-EA-345), so it can only target a credential the request just proved, and it bypasses the policy: a stale hash of a password the policy would now refuse is still upgraded. An account unlinked since the proof is left alone.
+
 Argon2id parameters (memory cost, iterations, parallelism) are expected to be raised over the life of an application as hardware improves; without rehash-on-login, every account hashed under the old parameters stays weaker than a newly created one indefinitely, since a stored hash is never touched again after creation. Rehashing opportunistically at the one moment the plaintext password is available — sign-in — closes that gap without a bulk migration, mirroring the "hashed at rest" security posture PRD §18 requires generally.
 
 _Previous: [BEH-EA-115](15-password.md#beh-ea-115-passwordhasher-is-a-port-the-plugin-never-provides) | Next: [BEH-EA-117](15-password.md#beh-ea-117-reset-revokes-other-sessions-in-the-same-transaction)_
@@ -126,6 +128,8 @@ REQUIREMENT: `password.requestReset` MUST respond identically for a known and
              credential MUST mail `reset-password-unavailable` (no token)
              instead of a reset link.
 ```
+
+The new password is hashed only once the token is consumed, inside the transaction (`PasswordCredential.replace`, BEH-EA-345), so a well-formed but unknown token costs no KDF.
 
 `usage-examples-v4.md` §6.1 states both halves: the request endpoint answers `202` unconditionally, so an attacker cannot use it to test which emails are registered, and confirmation both consumes the token and revokes other sessions "in the same transaction that sets the new password" — so a session an attacker obtained before the legitimate reset does not survive it. This is the reset-token half of the purpose-scoped, single-use Verification design that file 08 specifies for tokens generally.
 
@@ -162,9 +166,11 @@ password({ breachCheck: false })                                      // opt out
 
 ```text
 REQUIREMENT: When `breachCheck` is enabled and the breach-database provider is
-             unreachable, sign-up MUST proceed (fail-open) unless the
-             application has explicitly configured `onUnavailable: "reject"`;
-             the default posture MUST be documented, not silently chosen.
+             unreachable, setting a password (sign-up, reset, change, an
+             administrator's set, `seed admin`) MUST proceed (fail-open)
+             unless the application has explicitly configured
+             `onUnavailable: "reject"`; the default posture MUST be
+             documented, not silently chosen.
 ```
 
 PHS-006/PHS-004: screening is **on by default** (NIST SP 800-63B §3.1.1.2 makes checking against compromised-password lists a SHALL; the k-anonymity range API discloses only a 5-character SHA-1 prefix), fail-open, and turning it off is the one line `breachCheck: false`. "Unavailable" means everything short of a well-formed range listing: a transport error, a non-2xx status, a 200 whose body is not a listing (an HTML error page, an empty or truncated body), and a lookup that exceeds `breachCheckTimeout` (3 s by default) — so a black-holed egress can neither hang sign-up nor read as "not breached".
@@ -185,14 +191,53 @@ Password.config({ minLength: 16 })
 REQUIREMENT: `minLength`, `breachCheck` and related policy knobs MUST be
              `Password`'s `Context.Reference` configuration, overridable by a
              Layer; changing them MUST NOT change the plugin's contract, table
-             set, or migrations.
+             set, or migrations. This policy MUST govern every path that sets
+             a password, including `AdminAccounts.setUserPassword` and
+             `awthaq seed admin`; no other policy exists.
 ```
 
 This is ADR-EA-011 ("Configuration Is a Service With a Default") applied to the password plugin specifically: `WeakPassword` is a typed error the contract already declares, and tightening `minLength` from 8 to 16 changes only which inputs trigger it, not the shape of the endpoint. A contract test in the testing harness (file 25, `runPluginContractTests`'s "options do not change the contract hash" check) holds this invariant for every option the plugin exposes, password policy included.
 
-ESS-006/EHA-007: the static half of the policy lives in the contract: every email payload field is `EmailContract.Email` from `@awthaq/api` (a shape check, non-normalizing: one `@`, no whitespace, local part at most 64, domain with a dot, at most 254 in all) and every password field is capped at 1024 characters, so malformed input answers `400` before any rate limit, hasher or database is touched. `minLength` and the breach check stay in `checkPolicy` because they read the runtime configuration a static schema cannot. The endpoints that need a live session (`change-password`, `reauthenticate`) form the `password.account` group with group-level `Authentication`, the same convention `passkey` and `jwt` follow; their wire paths are unchanged.
+ESS-006/EHA-007: the static half of the policy lives in the contract: every email payload field is `EmailContract.Email` from `@awthaq/api` (a shape check, non-normalizing: one `@`, no whitespace, local part at most 64, domain with a dot, at most 254 in all) and every password field is capped at 1024 characters, so malformed input answers `400` before any rate limit, hasher or database is touched. `minLength` and the breach check stay in `PasswordCredential.accept` (BEH-EA-345) because they read the runtime configuration, per tenant, that a static schema cannot. The endpoints that need a live session (`change-password`, `reauthenticate`) form the `password.account` group with group-level `Authentication`, the same convention `passkey` and `jwt` follow; their wire paths are unchanged.
 
-_Previous: [BEH-EA-119](15-password.md#beh-ea-119-breach-check-is-fail-open-by-default-fail-closed-by-config) | Next: [BEH-EA-121](16-oauth.md#beh-ea-121-pkce-s256-is-structural-not-optional)_
+_Previous: [BEH-EA-119](15-password.md#beh-ea-119-breach-check-is-fail-open-by-default-fail-closed-by-config) | Next: [BEH-EA-345](15-password.md#beh-ea-345-every-path-that-verifies-sets-or-rehashes-a-password-goes-through-one-module)_
+
+## BEH-EA-345: Every path that verifies, sets or rehashes a password goes through one module
+
+> **See:** [ADR-EA-048](../decisions/048-password-credential-module.md), [ADR-EA-040](../decisions/040-plugin-exposes-domain-services.md)
+
+```ts
+const credential = yield* PasswordCredential.PasswordCredential   // exposed by Password.layer
+const verdict = yield* credential.verify(users.findByEmail(email), password)   // Refused | Verified { claimant, proof }
+const accepted = yield* credential.accept(password)               // WeakPassword; never inside a unit
+yield* sqlTransaction.withTransaction(credential.set(userId, accepted))
+```
+
+```text
+REQUIREMENT: `PasswordCredential` MUST be the only code that reads or writes
+             a password credential or runs the `PasswordHasher` on it. Every
+             path that sets a password (sign-up in either enumeration mode,
+             reset, change, `AdminAccounts.setUserPassword`, `awthaq seed
+             admin`) MUST pass `PasswordConfig`'s policy in force (`accept`)
+             before anything is written, and MUST NOT run the breach check
+             inside a transaction. A write MUST run inside the caller's unit
+             of work. `changePassword`'s hash write, the revocation of the
+             caller's other sessions and the rotation of its own MUST commit
+             as one unit. A store outage on any of these paths MUST be
+             `StoreUnavailable`, never a defect.
+```
+
+`PasswordCredential` (key `awthaq/plugin/password/Credential`) is exposed by `Password.layer` (ADR-EA-040). `AdminAccounts` lists `Password` in `dependsOn` and `awthaq seed admin` reads it from the application context; an application without the Password plugin can seed an account but not a password (`ApplicationUnavailable`). Its members: `verify` (BEH-EA-114's uniform cost), `rehashIfStale` (BEH-EA-116), `accept` (BEH-EA-119/120), `linkFor` (the sign-up unit's credential), `set` (replace, or link when there is none: the administrator's set and `seed admin`), `replace` (never links: a reset for a credential-less account is `TokenConsumed`, BEH-EA-117) and `has` (which reset mail to send).
+
+**Order is typed.** `set`, `replace` and `linkFor` take only an `Accepted`, which only `accept` mints; `rehashIfStale` takes only a `Proof`, which only a successful `verify` mints. Neither can be built from an object literal.
+
+**Where the KDF runs.** `linkFor` hashes before the sign-up unit, after the veto, so both enumeration-concealing branches do the same work (ADR-EA-026). `set` and `replace` hash inside the caller's unit, at most once and only once a write is certain: a reset hashes only after its token is consumed, so an unknown token costs no KDF. A link that loses a race inside the unit is read again; three lost races are `StoreUnavailable`.
+
+**Exemption.** An operator import (`UserImport`, `@awthaq/migrate-*`) stores a foreign hash and sets no password; it is exempt, as ADR-EA-038 §3 exempts it from `SignUp`, and names `Accounts.PASSWORD_PROVIDER_ID` rather than a literal. `PasswordCredentialSeams.test.ts` pins the sites that name the account key, the stored hash or the hasher.
+
+*Tests:* `packages/password/test/PasswordCredential.test.ts` (the interface: verify, floor, rehash, policy, writes), `PasswordCredential.types.test.ts` (brands, exposure), `PasswordCredentialSql.test.ts` (concurrent `set`, rollback, `changePassword` as one unit), `PasswordCredentialSeams.test.ts`; callers in `packages/admin/test/AdminAccounts.test.ts` and `packages/cli/test/Seed.test.ts`.
+
+_Previous: [BEH-EA-120](15-password.md#beh-ea-120-password-policy-is-configuration-not-a-plugin-variant) | Next: [BEH-EA-121](16-oauth.md#beh-ea-121-pkce-s256-is-structural-not-optional)_
 
 ## BEH-EA-259: A credential reset consults BeforeCredentialReset before anything is rewritten
 

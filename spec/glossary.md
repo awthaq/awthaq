@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-GLOSSARY |
-> | Revision | 1.13 |
+> | Revision | 1.14 |
 > | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) <br> 1.7 (2026-10-18): External identity, Email trust and Federated identity resolution (architecture plan 14) <br> 1.8 (2026-10-18): Credential carrier and Tier; CurrentPrincipal names `CurrentUser.current` as the user-tier read (architecture plan 11) <br> 1.9 (2026-10-18): Link purpose; VerificationToken names `VerificationLink.redeemer` (architecture plan 18) <br> 1.10 (2026-10-18): Sealed column (architecture plan 17) <br> 1.11 (2026-11-08): AuthHost; Port: what the composition owns is not a port; Auth.make is served with `AuthHost.layer`; TestAuth is `AuthHost.layer` over test ports (ADR-EA-044, architecture plan 15) <br> 1.12 (2026-11-08): Session lifecycle (ADR-EA-045, architecture plan 21) <br> 1.13 (2026-11-08): Added **Request context** and **No request** (ADR-EA-047, architecture plan 26) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added missing entries: CsrfProtection, CurrentPrincipal, CurrentSubject, Redacted, TestAuth (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the "design that has not been implemented" banner: the terms describe the shipped design (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Added Erasure initiator and Erasure clearance (architecture plan 03) <br> 1.4 (2026-10-13): Added Clearance, Handoff and Sign-in continuation (architecture plan 01) <br> 1.5 (2026-10-13): VerificationToken / INV-EA-009 name `Verification.redeem` (ADR-EA-039, plan 07) <br> 1.6 (2026-10-18): added Passkey ceremony (architecture plan 12) <br> 1.7 (2026-10-18): External identity, Email trust and Federated identity resolution (architecture plan 14) <br> 1.8 (2026-10-18): Credential carrier and Tier; CurrentPrincipal names `CurrentUser.current` as the user-tier read (architecture plan 11) <br> 1.9 (2026-10-18): Link purpose; VerificationToken names `VerificationLink.redeemer` (architecture plan 18) <br> 1.10 (2026-10-18): Sealed column (architecture plan 17) <br> 1.11 (2026-11-08): AuthHost; Port: what the composition owns is not a port; Auth.make is served with `AuthHost.layer`; TestAuth is `AuthHost.layer` over test ports (ADR-EA-044, architecture plan 15) <br> 1.12 (2026-11-08): Session lifecycle (ADR-EA-045, architecture plan 21) <br> 1.13 (2026-11-08): Added **Request context** and **No request** (ADR-EA-047, architecture plan 26) <br> 1.14 (2026-11-08): Added **Password credential** (ADR-EA-048, architecture plan 27) |
 
 ---
 
@@ -33,6 +33,10 @@ A `Model.Class` entity representing a registered person or account holder, indep
 ### Account
 
 A `Model.Class` entity linking a User to one sign-in method, keyed on `(provider, subject, issuer)` (for example, a password credential or one linked OAuth provider identity). A User cannot unlink their last remaining Account, since that would leave them with no way to authenticate. See: [BEH-EA-041](behaviors/06-domain-users-accounts.md#beh-ea-041-a-user-is-identified-by-a-case-insensitively-unique-email).
+
+### Password credential
+
+The Account with `providerId = "password"` and `subject` equal to the user's own id, no issuer, and the hash stored on it. `PasswordCredential`, exposed by the password plugin, is the only code that reads or writes it or runs the `PasswordHasher` on it, and every password set passes `Password.config`'s one policy first. See: [ADR-EA-048](decisions/048-password-credential-module.md).
 
 ### External identity
 

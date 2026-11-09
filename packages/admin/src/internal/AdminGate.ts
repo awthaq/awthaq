@@ -2,7 +2,7 @@
 //
 // ADR-EA-018 Decision 8 / BEH-EA-221 / BEH-EA-236 (plan 13): the one admin gate. Every gated admin
 // operation asks it, and it alone reads `AdminConfig` per operation, through `Tenant.configInForce`.
-// What an operation needs from the configuration (`maxDuration`, `passwordPolicy`, `links`) comes
+// What an operation needs from the configuration (`maxDuration`, `links`) comes
 // from the clearance the gate returns, i.e. from the very value that authorized it.
 //
 // `AdminConfig.canImpersonate` takes a `@qadi/core` `AuthSubject`, but this plugin never depends on
@@ -23,7 +23,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as AdminApi from "../AdminApi.ts";
 import type * as ImpersonationRecords from "../ImpersonationRecords.ts";
 
@@ -98,16 +97,6 @@ export interface AdminConfigShape {
    */
   readonly canManageCredentials: (input: UserAdminGateInput) => Effect.Effect<boolean>;
   /**
-   * BAM-005: the strength policy for an administrator-set password: the hints it violates
-   * (empty = acceptable), the same contract `@awthaq/password`'s own policy has. `Admin` cannot
-   * depend on the password plugin, so this is its own knob; the default is the password
-   * plugin's default floor (12 to 1024 characters), and a host that screens against a breach
-   * corpus, or wants the same policy as its `Password.config`, supplies it here.
-   */
-  readonly passwordPolicy: (
-    password: Redacted.Redacted<string>,
-  ) => Effect.Effect<ReadonlyArray<string>>;
-  /**
    * BAM-009: builds the link mailed to the *new* address of an administrator-requested email
    * change (the same `data.url` `@awthaq/password`'s `links.changeEmail` builds for a user's
    * own request). Point both at the page that posts the token to `POST /change-email/confirm`.
@@ -142,14 +131,6 @@ const episodeGateFrom =
       tenantId: episode.tenantId,
     });
 
-/** The password plugin's default floor and ceiling (`Password.config`'s `minLength` 12, `MAX_PASSWORD_LENGTH` 1024). */
-const defaultPasswordHints = (password: string): ReadonlyArray<string> =>
-  password.length < 12
-    ? ["must be at least 12 characters"]
-    : password.length > 1024
-      ? ["must be at most 1024 characters"]
-      : [];
-
 const defaultAdminConfig: AdminConfigShape = {
   maxDuration: Duration.hours(1),
   canImpersonate: () => Effect.succeed(false),
@@ -158,7 +139,6 @@ const defaultAdminConfig: AdminConfigShape = {
   canBanUsers: () => Effect.succeed(false),
   canDeleteUsers: () => Effect.succeed(false),
   canManageCredentials: () => Effect.succeed(false),
-  passwordPolicy: (password) => Effect.succeed(defaultPasswordHints(Redacted.value(password))),
   links: {},
   canAdministerTenants: () => Effect.succeed(false),
 };

@@ -22,7 +22,8 @@ TestAuth.runPluginContractTests(framework, () => Admin.Admin, {
 });
 TestAuth.runPluginContractTests(framework, () => AdminAccounts.AdminAccounts, {
   options: [{}],
-  build: { services: Layer.empty },
+  // Its dependency `Password` screens passwords over the breach check's transport.
+  build: { services: TestAuth.httpClient.noBreach },
 });
 TestAuth.runPluginContractTests(framework, () => AdminTenants.AdminTenants, {
   options: [{}],

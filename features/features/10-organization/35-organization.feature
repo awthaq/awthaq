@@ -198,7 +198,7 @@ Feature: Organization
       Then the response is 404
       And the response is byte-identical to the one for an organization that does not exist
 
-    @REQ-EA-1502
+    @REQ-EA-1503
     Scenario Outline: A non-member's attempt at <action> is recorded as a permission denial
       Given teams are enabled
       And a signed-in user "alice"
@@ -215,7 +215,7 @@ Feature: Organization
         | changing a role   | PATCH  | /organization/[org:acme]/members/[user:alice] | {"role":["member"]} |
         | creating a team   | POST   | /organization/[org:acme]/teams                | {"name":"pwn"}      |
 
-    @REQ-EA-1503
+    @REQ-EA-1504
     Scenario: A team role held in another organization confers nothing under this organization's path
       Given teams are enabled
       And a signed-in user "alice"

@@ -126,7 +126,7 @@ export const runOnMemory = (): void => {
   });
   StoreContract.run(framework, {
     adapter: "AccountStore (Ref)",
-    layer: AccountStore.layerMemory,
+    layer: Layer.mergeAll(AccountStore.layerMemory, SqlTransaction.layerNoop),
     cases: StoreContract.accounts,
   });
   StoreContract.run(framework, {
