@@ -209,9 +209,11 @@ const auditRecords = Effect.fn("features.scim.auditRecords")(function* (tag: str
   return yield* list;
 });
 
-const payloadOf = (payload: unknown) => {
-  if (!isRecord(payload)) throw new Error("expected the event payload to be an object");
-  return payload;
+/** The event a row holds, as published: a SCIM row is the plugin's own event, which core stores as a foreign one (ADR-EA-049). */
+const payloadOf = (record: AuditLog.AuditLogRecord) => {
+  const event = AuditLog.toPublished(record);
+  if (!isRecord(event)) throw new Error("expected the event payload to be an object");
+  return event;
 };
 
 const teamOf = Effect.fn("features.scim.teamOf")(function* (name: string) {
@@ -1265,7 +1267,7 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
       const connection = yield* world.connections.get(connectionName);
       const latest = (yield* auditRecords(tag))[0];
       assert.ok(latest !== undefined, `no ${tag} event was recorded`);
-      const payload = payloadOf(latest.payload);
+      const payload = payloadOf(latest);
       assert.equal(payload["connectionId"], connection.identity.id);
       assert.equal(payload["organizationId"], connection.organizationId);
       assert.equal(payload["userId"], yield* userId(name));
@@ -1278,7 +1280,7 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
       const world = yield* World;
       const connection = yield* world.connections.get(connectionName);
       const matching = (yield* auditRecords(tag)).filter((record) => {
-        const payload = payloadOf(record.payload);
+        const payload = payloadOf(record);
         return (
           payload["deletedBy"] === "directory" &&
           payload["connectionId"] === connection.identity.id &&
@@ -1293,7 +1295,7 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     const latest = (yield* auditRecords(tag))[0];
     assert.ok(latest !== undefined, `no ${tag} event was recorded`);
     assert.deepEqual(latest.actorUserId, Option.none());
-    const payload = payloadOf(latest.payload);
+    const payload = payloadOf(latest);
     for (const key of ["actorUserId", "actorId", "actor", "performedBy"]) {
       assert.equal(key in payload, false, `the payload must not name an actor (${key})`);
     }
@@ -1303,7 +1305,7 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     // `list` is newest-first; a scenario states the changes in the order they happened.
     const recorded = [...(yield* auditRecords(tag))].reverse();
     assert.deepEqual(
-      recorded.map((record) => payloadOf(record.payload)["change"]),
+      recorded.map((record) => payloadOf(record)["change"]),
       splitList(changes),
     );
   });

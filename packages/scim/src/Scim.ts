@@ -61,6 +61,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ScimApi from "./ScimApi.ts";
 import * as ScimConnections from "./ScimConnections.ts";
+import * as ScimEvents from "./ScimEvents.ts";
 import * as ScimRecords from "./ScimRecords.ts";
 
 /** ADR-EA-047: the request-context middleware the group declares; named so the inferred layer types can be emitted (TS2883). */
@@ -507,6 +508,8 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
     scim_resource: AuthPlugin.Table.derived("scim_connection", "scimConnectionId"),
   },
   migrations: scimMigrations,
+  // ADR-EA-049: the events this plugin publishes, defined in `ScimEvents.ts`.
+  events: ScimEvents.events,
   // Plan 08 (BEH-EA-T4): the connection and resource-link store, memory and SQL, matched.
   records: ScimRecords.records,
 }) {
@@ -719,8 +722,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
             .setStatus(user.id, "suspended", { reason: marker })
             .pipe(Effect.catchTag("UserNotFound", userVanished));
           yield* sessions.revokeAll(user.id, "suspended");
-          yield* events.publish({
-            _tag: "auth.scim.userDeactivated",
+          yield* events.emit(ScimEvents.ScimUserDeactivatedEvent, {
             connectionId: connection.id,
             organizationId: connection.organizationId,
             userId: user.id,
@@ -735,8 +737,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
           const reactivated = yield* users
             .setStatus(user.id, "active")
             .pipe(Effect.catchTag("UserNotFound", userVanished));
-          yield* events.publish({
-            _tag: "auth.scim.userReactivated",
+          yield* events.emit(ScimEvents.ScimUserReactivatedEvent, {
             connectionId: connection.id,
             organizationId: connection.organizationId,
             userId: user.id,
@@ -894,8 +895,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
             ),
           );
         const settled = wantActive ? created : yield* applyActive(connection, created, false);
-        yield* events.publish({
-          _tag: "auth.scim.userProvisioned",
+        yield* events.emit(ScimEvents.ScimUserProvisionedEvent, {
           connectionId: connection.id,
           organizationId: connection.organizationId,
           userId: created.id,
@@ -1009,8 +1009,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
                 HookAborted: (aborted) => Effect.fail(ScimApi.forbidden(aborted.message)),
               }),
             );
-          yield* events.publish({
-            _tag: "auth.scim.userDeleted",
+          yield* events.emit(ScimEvents.ScimUserDeletedEvent, {
             connectionId: connection.id,
             organizationId: connection.organizationId,
             userId: owned.user.id,
@@ -1249,8 +1248,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
               "awthaq: a SCIM group was created without its mapping",
             );
           }
-          yield* events.publish({
-            _tag: "auth.scim.groupChanged",
+          yield* events.emit(ScimEvents.ScimGroupChangedEvent, {
             connectionId: connection.id,
             organizationId: connection.organizationId,
             teamId: team.id,
@@ -1274,8 +1272,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         teamId: string,
         change: "updated" | "deleted",
       ) =>
-        events.publish({
-          _tag: "auth.scim.groupChanged",
+        events.emit(ScimEvents.ScimGroupChangedEvent, {
           connectionId: connection.id,
           organizationId: connection.organizationId,
           teamId,

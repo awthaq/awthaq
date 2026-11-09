@@ -290,37 +290,6 @@ export const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.Ev
     adminUserId: otherUserId,
     organizationId: "org-1",
   },
-  "auth.scim.userProvisioned": {
-    _tag: "auth.scim.userProvisioned",
-    connectionId: "conn-1",
-    organizationId: "org-1",
-    userId,
-  },
-  "auth.scim.userDeactivated": {
-    _tag: "auth.scim.userDeactivated",
-    connectionId: "conn-1",
-    organizationId: "org-1",
-    userId,
-  },
-  "auth.scim.userReactivated": {
-    _tag: "auth.scim.userReactivated",
-    connectionId: "conn-1",
-    organizationId: "org-1",
-    userId,
-  },
-  "auth.scim.userDeleted": {
-    _tag: "auth.scim.userDeleted",
-    connectionId: "conn-1",
-    organizationId: "org-1",
-    userId,
-  },
-  "auth.scim.groupChanged": {
-    _tag: "auth.scim.groupChanged",
-    connectionId: "conn-1",
-    organizationId: "org-1",
-    teamId: "team-1",
-    change: "created",
-  },
   "auth.webhooks.endpointCreated": {
     _tag: "auth.webhooks.endpointCreated",
     adminUserId: userId,

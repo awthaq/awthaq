@@ -96,7 +96,6 @@ const suite = (
           [{ ...samples["auth.authz.denied"], subjectId: "apikey:k-1" }, Option.none()],
           // Actor.none: a directory, the CLI, an anonymous attempt
           [samples["auth.token.replay"], Option.none()],
-          [samples["auth.scim.userProvisioned"], Option.none()],
           [samples["auth.admin.seeded"], Option.none()],
           [samples["auth.admin.seedRefused"], Option.none()],
           [samples["auth.import.completed"], Option.none()],

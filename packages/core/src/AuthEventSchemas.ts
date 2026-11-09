@@ -601,91 +601,6 @@ export const AdminOrganizationUnsuspendedEvent = EventDefinition.define(
 export type AdminOrganizationUnsuspendedEvent = typeof AdminOrganizationUnsuspendedEvent.Type;
 
 /**
- * CWM-002 (ADR-EA-023): published by `@awthaq/scim` when a directory connection provisions a
- * user (a repeat `POST` that converges on an existing one publishes nothing). `connectionId`
- * names the SCIM connection, `organizationId` its organization.
- */
-export const ScimUserProvisionedEvent = EventDefinition.define(
-  "auth.scim.userProvisioned",
-  {
-    connectionId: Schema.String,
-    organizationId: Schema.String,
-    userId: EventDefinition.UserId,
-  },
-  {
-    // CWM-002: a directory acts, not a user — the connection id rides in the payload.
-    actor: EventDefinition.Actor.none,
-    pii: [],
-  },
-);
-export type ScimUserProvisionedEvent = typeof ScimUserProvisionedEvent.Type;
-
-/** CWM-002: published after a SCIM `active: false` (or `DELETE`, by default) suspended the user and revoked every session. */
-export const ScimUserDeactivatedEvent = EventDefinition.define(
-  "auth.scim.userDeactivated",
-  {
-    connectionId: Schema.String,
-    organizationId: Schema.String,
-    userId: EventDefinition.UserId,
-  },
-  {
-    // CWM-002: a directory acts, not a user — the connection id rides in the payload.
-    actor: EventDefinition.Actor.none,
-    pii: [],
-  },
-);
-export type ScimUserDeactivatedEvent = typeof ScimUserDeactivatedEvent.Type;
-
-/** CWM-002: published after a SCIM `active: true` lifted a suspension that same connection made. */
-export const ScimUserReactivatedEvent = EventDefinition.define(
-  "auth.scim.userReactivated",
-  {
-    connectionId: Schema.String,
-    organizationId: Schema.String,
-    userId: EventDefinition.UserId,
-  },
-  {
-    // CWM-002: a directory acts, not a user — the connection id rides in the payload.
-    actor: EventDefinition.Actor.none,
-    pii: [],
-  },
-);
-export type ScimUserReactivatedEvent = typeof ScimUserReactivatedEvent.Type;
-
-/** CWM-002: published after a SCIM `DELETE` configured to erase removed the user. */
-export const ScimUserDeletedEvent = EventDefinition.define(
-  "auth.scim.userDeleted",
-  {
-    connectionId: Schema.String,
-    organizationId: Schema.String,
-    userId: EventDefinition.UserId,
-  },
-  {
-    // CWM-002: a directory acts, not a user — the connection id rides in the payload.
-    actor: EventDefinition.Actor.none,
-    pii: [],
-  },
-);
-export type ScimUserDeletedEvent = typeof ScimUserDeletedEvent.Type;
-
-/** CWM-002: published when a SCIM connection creates, updates or deletes a group (an organization team). */
-export const ScimGroupChangedEvent = EventDefinition.define(
-  "auth.scim.groupChanged",
-  {
-    connectionId: Schema.String,
-    organizationId: Schema.String,
-    teamId: Schema.String,
-    change: Schema.Literals(["created", "updated", "deleted"]),
-  },
-  {
-    // CWM-002: a directory acts, not a user — the connection id rides in the payload.
-    actor: EventDefinition.Actor.none,
-    pii: [],
-  },
-);
-export type ScimGroupChangedEvent = typeof ScimGroupChangedEvent.Type;
-
-/**
  * Published by `@awthaq/webhooks`' administrative operations after each SUCCESSFUL mutation
  * (identifiers only: the administrator, the endpoint, and for an update the names of the fields
  * changed, never their values, so a URL or a description never enters the audit trail).
@@ -1415,11 +1330,6 @@ export const CoreRegistry = EventDefinition.make(
     AdminSessionRevokedEvent,
     AdminOrganizationSuspendedEvent,
     AdminOrganizationUnsuspendedEvent,
-    ScimUserProvisionedEvent,
-    ScimUserDeactivatedEvent,
-    ScimUserReactivatedEvent,
-    ScimUserDeletedEvent,
-    ScimGroupChangedEvent,
     WebhookEndpointCreatedEvent,
     WebhookEndpointUpdatedEvent,
     WebhookSecretRotatedEvent,
