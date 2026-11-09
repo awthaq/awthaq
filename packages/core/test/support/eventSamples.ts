@@ -254,19 +254,12 @@ export const samples: { readonly [Tag in AuthEvents.AuthEventTag]: AuthEvents.Ev
     action: "read",
     reason: "no matching permit",
   },
-  "auth.roles.assigned": {
-    _tag: "auth.roles.assigned",
-    userId,
-    roleName: "admin",
-    actorUserId: otherUserId,
-  },
   "auth.user.claimsUpdated": {
     _tag: "auth.user.claimsUpdated",
     userId,
     keys: ["plan"],
     actorUserId: otherUserId,
   },
-  "auth.roles.revoked": { _tag: "auth.roles.revoked", userId, roleName: "admin" },
   "auth.rateLimit.exceeded": {
     _tag: "auth.rateLimit.exceeded",
     group: "password",

@@ -1401,28 +1401,6 @@ export const AuthorizationDeniedEvent = EventDefinition.define(
 export type AuthorizationDeniedEvent = typeof AuthorizationDeniedEvent.Type;
 
 /**
- * Published by `@awthaq/roles`' `assign`/`revoke` on a *real* change of a
- * user's global role assignments (RRM-005): a re-assign or a revoke of a role
- * the user never held publishes nothing. `userId` is the user whose roles
- * changed; `actorUserId` the operator who changed them, when the caller said —
- * `Roles` is a trusted primitive, so an application-driven change has none.
- */
-export const RolesAssignedEvent = EventDefinition.define(
-  "auth.roles.assigned",
-  {
-    userId: EventDefinition.UserId,
-    roleName: Schema.String,
-    actorUserId: Schema.optional(EventDefinition.UserId),
-  },
-  {
-    // The actor is who *changed* the roles, not whose roles changed.
-    actor: EventDefinition.Actor.field("actorUserId"),
-    pii: [],
-  },
-);
-export type RolesAssignedEvent = typeof RolesAssignedEvent.Type;
-
-/**
  * FAMS-004: published by `@awthaq/qadi`'s `UserClaims` on a real change. `keys` names the
  * claim keys that changed — never their values, which may be sensitive and must not enter the
  * audit trail; `actorUserId` is who made the change, when known.
@@ -1441,22 +1419,6 @@ export const UserClaimsUpdatedEvent = EventDefinition.define(
   },
 );
 export type UserClaimsUpdatedEvent = typeof UserClaimsUpdatedEvent.Type;
-
-/** Published by `@awthaq/roles`' `revoke` (see `RolesAssignedEvent`). */
-export const RolesRevokedEvent = EventDefinition.define(
-  "auth.roles.revoked",
-  {
-    userId: EventDefinition.UserId,
-    roleName: Schema.String,
-    actorUserId: Schema.optional(EventDefinition.UserId),
-  },
-  {
-    // The actor is who *changed* the roles, not whose roles changed.
-    actor: EventDefinition.Actor.field("actorUserId"),
-    pii: [],
-  },
-);
-export type RolesRevokedEvent = typeof RolesRevokedEvent.Type;
 
 /**
  * EOTS-007: published by a rate-limit budget (`RateLimits.budget`: `spend` or `guard`) on every rate-limit breach.
@@ -1782,9 +1744,7 @@ export const CoreRegistry = EventDefinition.make(
     OrganizationTeamMemberRemovedEvent,
     OrganizationPermissionDeniedEvent,
     AuthorizationDeniedEvent,
-    RolesAssignedEvent,
     UserClaimsUpdatedEvent,
-    RolesRevokedEvent,
     RateLimitExceededEvent,
     MailFailedEvent,
     ApiKeyCreatedEvent,

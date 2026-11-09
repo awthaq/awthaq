@@ -91,11 +91,6 @@ const suite = (
             Option.some(otherUserId),
           ],
           [{ _tag: "auth.mail.failed", template: "verify" }, Option.none()],
-          [
-            { _tag: "auth.roles.assigned", userId, roleName: "admin", actorUserId: otherUserId },
-            Option.some(otherUserId),
-          ],
-          [{ _tag: "auth.roles.assigned", userId, roleName: "admin" }, Option.none()],
           // Actor.prefixed("subjectId", "user:"): only a user subject names an awthaq user
           [{ ...samples["auth.authz.denied"], subjectId: `user:${userId}` }, Option.some(userId)],
           [{ ...samples["auth.authz.denied"], subjectId: "apikey:k-1" }, Option.none()],
