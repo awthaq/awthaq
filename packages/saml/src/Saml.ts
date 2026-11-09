@@ -84,6 +84,7 @@ import {
 } from "./SamlAssertion.ts";
 import * as SamlConfig from "./SamlConfig.ts";
 import * as SamlConnections from "./SamlConnections.ts";
+import * as SamlEvents from "./SamlEvents.ts";
 import { trustSetOf } from "./SamlConnections.ts";
 import { authnRequestXml, redirectUrl, spMetadataXml } from "./SamlProtocol.ts";
 import * as SamlRecords from "./SamlRecords.ts";
@@ -790,6 +791,8 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
   // Plan 17: the sealed SP private key, declared beside the records that seal it.
   sealedColumns: [SamlRecords.privateKeyColumn],
   migrations: samlMigrations,
+  // ADR-EA-049: the events this plugin publishes (`SamlAdmin`, `SamlSlo`), defined in `SamlEvents.ts`.
+  events: SamlEvents.events,
   // Plan 08 (BEH-EA-T4): the connection/key/session store, memory and SQL, matched.
   records: SamlRecords.records,
 }) {

@@ -22,6 +22,7 @@ import * as Redacted from "effect/Redacted";
 import * as SamlApi from "./SamlApi.ts";
 import * as SamlConfig from "./SamlConfig.ts";
 import * as SamlConnections from "./SamlConnections.ts";
+import * as SamlEvents from "./SamlEvents.ts";
 import * as SamlMetadataFetcher from "./SamlMetadataFetcher.ts";
 import * as SamlRecords from "./SamlRecords.ts";
 import * as SamlSpKeys from "./SamlSpKeys.ts";
@@ -276,8 +277,7 @@ export const makeAdmin = (
             Effect.catchTags({ InvalidSamlConnection: fromInvalid, SamlDomainTaken: fromTaken }),
           );
         yield* Effect.logInfo("awthaq/saml: connection created", { connectionId: created.id });
-        yield* events.publish({
-          _tag: "auth.saml.connectionCreated",
+        yield* events.emit(SamlEvents.SamlConnectionCreatedEvent, {
           adminUserId: adminId(caller),
           connectionId: created.id,
           organizationId: created.organizationId,
@@ -328,8 +328,7 @@ export const makeAdmin = (
               "SamlConnections/NotFound": fromMissing,
             }),
           );
-        yield* events.publish({
-          _tag: "auth.saml.connectionUpdated",
+        yield* events.emit(SamlEvents.SamlConnectionUpdatedEvent, {
           adminUserId: adminId(caller),
           connectionId,
           organizationId: updated.organizationId,
@@ -348,8 +347,7 @@ export const makeAdmin = (
           .remove(connectionId)
           .pipe(Effect.catchTag("SamlConnections/NotFound", fromMissing));
         yield* Effect.logInfo("awthaq/saml: connection deleted", { connectionId });
-        yield* events.publish({
-          _tag: "auth.saml.connectionDeleted",
+        yield* events.emit(SamlEvents.SamlConnectionDeletedEvent, {
           adminUserId: adminId(caller),
           connectionId,
           organizationId: found.organizationId,
@@ -370,8 +368,7 @@ export const makeAdmin = (
             "SamlConnections/NotFound": fromMissing,
           }),
         );
-        yield* events.publish({
-          _tag: "auth.saml.connectionUpdated",
+        yield* events.emit(SamlEvents.SamlConnectionUpdatedEvent, {
           adminUserId: adminId(caller),
           connectionId,
           organizationId: refreshed.organizationId,
@@ -408,8 +405,7 @@ export const makeAdmin = (
                 certificatePem: input.certificatePem,
               })
         ).pipe(Effect.catchTag("InvalidSigningKey", (error) => Effect.fail(invalid(error.reason))));
-        yield* events.publish({
-          _tag: "auth.saml.signingKeyRotated",
+        yield* events.emit(SamlEvents.SamlSigningKeyRotatedEvent, {
           adminUserId: adminId(caller),
           connectionId,
           organizationId: found.organizationId,

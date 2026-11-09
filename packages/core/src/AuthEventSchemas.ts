@@ -673,85 +673,6 @@ export const WebhookTestQueuedEvent = EventDefinition.define(
 export type WebhookTestQueuedEvent = typeof WebhookTestQueuedEvent.Type;
 
 /**
- * `@awthaq/saml`'s administrative operations, after each SUCCESSFUL mutation (identifiers only: the administrator, the
- * connection and its organization, and for an update the NAMES of the fields changed, never their values).
- */
-export const SamlConnectionCreatedEvent = EventDefinition.define(
-  "auth.saml.connectionCreated",
-  {
-    adminUserId: EventDefinition.UserId,
-    connectionId: Schema.String,
-    organizationId: Schema.String,
-  },
-  {
-    actor: EventDefinition.Actor.field("adminUserId"),
-    pii: [],
-  },
-);
-export type SamlConnectionCreatedEvent = typeof SamlConnectionCreatedEvent.Type;
-
-export const SamlConnectionUpdatedEvent = EventDefinition.define(
-  "auth.saml.connectionUpdated",
-  {
-    adminUserId: EventDefinition.UserId,
-    connectionId: Schema.String,
-    organizationId: Schema.String,
-    fields: Schema.Array(Schema.String),
-  },
-  {
-    actor: EventDefinition.Actor.field("adminUserId"),
-    pii: [],
-  },
-);
-export type SamlConnectionUpdatedEvent = typeof SamlConnectionUpdatedEvent.Type;
-
-export const SamlConnectionDeletedEvent = EventDefinition.define(
-  "auth.saml.connectionDeleted",
-  {
-    adminUserId: EventDefinition.UserId,
-    connectionId: Schema.String,
-    organizationId: Schema.String,
-  },
-  {
-    actor: EventDefinition.Actor.field("adminUserId"),
-    pii: [],
-  },
-);
-export type SamlConnectionDeletedEvent = typeof SamlConnectionDeletedEvent.Type;
-
-/** A new SP signing key was generated or imported for a connection (its private half is sealed at rest and never published). */
-export const SamlSigningKeyRotatedEvent = EventDefinition.define(
-  "auth.saml.signingKeyRotated",
-  {
-    adminUserId: EventDefinition.UserId,
-    connectionId: Schema.String,
-    organizationId: Schema.String,
-  },
-  {
-    actor: EventDefinition.Actor.field("adminUserId"),
-    pii: [],
-  },
-);
-export type SamlSigningKeyRotatedEvent = typeof SamlSigningKeyRotatedEvent.Type;
-
-/**
- * `@awthaq/saml`: a Single Logout message was refused (`strategy` is `saml:<organizationId>:<connectionId>` once the
- * connection is known, `saml` before). The reason is logged, never published or answered (no validation oracle).
- */
-export const SamlLogoutRejectedEvent = EventDefinition.define(
-  "auth.saml.logoutRejected",
-  {
-    strategy: Schema.String,
-  },
-  {
-    // `@awthaq/saml`: a logout message that named no verified user.
-    actor: EventDefinition.Actor.none,
-    pii: [],
-  },
-);
-export type SamlLogoutRejectedEvent = typeof SamlLogoutRejectedEvent.Type;
-
-/**
  * ECS-006: published by `awthaq seed admin` after it grants the administrative role
  * (BEH-EA-206). `outcome` says whether the account was created or an existing one
  * promoted; `forced` that the grant went past an existing administrator. Carries the
@@ -1335,14 +1256,9 @@ export const CoreRegistry = EventDefinition.make(
     WebhookSecretRotatedEvent,
     WebhookEndpointDeletedEvent,
     WebhookTestQueuedEvent,
-    SamlConnectionCreatedEvent,
     OrganizationConnectionCreatedEvent,
     OrganizationConnectionUpdatedEvent,
     OrganizationConnectionDeletedEvent,
-    SamlConnectionUpdatedEvent,
-    SamlConnectionDeletedEvent,
-    SamlSigningKeyRotatedEvent,
-    SamlLogoutRejectedEvent,
     AdminSeededEvent,
     AdminSeedRefusedEvent,
     ImportCompletedEvent,

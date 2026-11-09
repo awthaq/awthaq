@@ -35,6 +35,7 @@ import * as Schema from "effect/Schema";
 import { inflateRawSync } from "node:zlib";
 import * as SamlApi from "./SamlApi.ts";
 import * as SamlConfig from "./SamlConfig.ts";
+import * as SamlEvents from "./SamlEvents.ts";
 import { trustSetOf } from "./SamlConnections.ts";
 import * as SamlKeys from "./SamlKeys.ts";
 import * as SamlLogout from "./SamlLogout.ts";
@@ -387,7 +388,7 @@ export const makeSlo = (deps: SloDeps) => {
       Effect.all(
         [
           Effect.logWarning("awthaq/saml: logout message rejected", { reason }),
-          events.publish({ _tag: "auth.saml.logoutRejected", strategy }),
+          events.emit(SamlEvents.SamlLogoutRejectedEvent, { strategy }),
         ],
         { discard: true },
       ).pipe(Effect.andThen(Effect.fail(new SamlApi.SamlLogoutRejected())));

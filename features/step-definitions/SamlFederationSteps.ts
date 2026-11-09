@@ -12,6 +12,7 @@ import { SealedColumn, TenantScoped } from "@awthaq/sql";
 import {
   Saml,
   SamlConnections,
+  SamlEvents,
   SamlKeys,
   SamlProtocol,
   SamlRecords,
@@ -1349,9 +1350,16 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
     );
     assert.equal(rows.length, 1);
     assert.deepEqual(rows[0]?.actorUserId, Option.some(adminPrincipal.ref.id));
-    assert.equal(
-      rows[0]?.payload._tag === "auth.saml.connectionCreated" ? rows[0].payload.connectionId : "",
-      dto.id,
+    // Core stores the plugin's event as a foreign one; the plugin's definition decodes it (ADR-EA-049).
+    assert.deepEqual(
+      Option.map(
+        Option.flatMap(
+          Option.fromNullishOr(rows[0]),
+          AuditLog.payloadAs(SamlEvents.SamlConnectionCreatedEvent),
+        ),
+        (payload) => payload.connectionId,
+      ),
+      Option.some(dto.id),
     );
   });
   Given("the connection {string} was imported from IdP metadata", function* (name: string) {
@@ -1489,10 +1497,12 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
         ).pipe(Effect.orDie),
       );
       assert.equal(rows.length, 1);
-      const payload = rows[0]?.payload;
-      assert.ok(payload?._tag === "auth.saml.connectionUpdated");
-      assert.deepEqual([...payload.fields].toSorted(), [first, second].toSorted());
-      assert.ok(!JSON.stringify(payload).includes("private"));
+      const row = rows[0];
+      assert.ok(row !== undefined);
+      const payload = AuditLog.payloadAs(SamlEvents.SamlConnectionUpdatedEvent)(row);
+      assert.ok(Option.isSome(payload));
+      assert.deepEqual([...payload.value.fields].toSorted(), [first, second].toSorted());
+      assert.ok(!JSON.stringify(row.payload).includes("private"));
     },
   );
 });
