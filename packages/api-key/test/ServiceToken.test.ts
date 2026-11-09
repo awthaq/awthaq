@@ -1,11 +1,12 @@
 // spec/models/07-api-keys.md, BEH-EA-141, ADR-EA-022 (MAPS-003, OCM-001, OCM-005):
 // `client_credentials` clients minting short-lived service JWTs through `@awthaq/jwt`.
-import { SecretHash, Users } from "@awthaq/core";
+import { AuditLog, SecretHash, Users } from "@awthaq/core";
 import { Jwt } from "@awthaq/jwt";
 import { assert, describe, it } from "@effect/vitest";
 import * as Digest from "effect/crypto/Digest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
@@ -215,6 +216,34 @@ const suite = (store: HarnessOptions["store"]) => {
         assert.deepStrictEqual(yield* apiKey.listClients(someoneElse), []);
         assert.strictEqual((yield* apiKey.listClients(owner)).length, 1);
       }).pipe(provide()),
+    );
+
+    it.effect(
+      "a repeat or concurrent revokeClient publishes one auth.apiKey.clientRevoked; an unknown client none",
+      () =>
+        Effect.gen(function* () {
+          const apiKey = yield* ApiKey.ApiKey;
+          const audit = yield* AuditLog.AuditLog;
+          const created = yield* apiKey.registerClient(owner, { name: "c", scopes: [] });
+          const revokedRows = Effect.map(
+            audit.list(),
+            (rows) => rows.filter((row) => row.eventTag === "auth.apiKey.clientRevoked").length,
+          );
+          const outcomes = yield* Effect.all(
+            Array.from({ length: 8 }, () =>
+              Effect.exit(apiKey.revokeClient(owner, created.view.clientId)),
+            ),
+            { concurrency: "unbounded" },
+          );
+          // Every caller is answered as the sequential path answers (revoking is idempotent); one announces it.
+          assert.isTrue(outcomes.every(Exit.isSuccess));
+          assert.strictEqual(yield* revokedRows, 1);
+          yield* apiKey.revokeClient(owner, created.view.clientId);
+          assert.strictEqual(yield* revokedRows, 1);
+          const missing = yield* Effect.flip(apiKey.revokeClient(owner, "svc_no-such-client"));
+          assert.strictEqual(missing._tag, "ApiKeyClientNotFound");
+          assert.strictEqual(yield* revokedRows, 1);
+        }).pipe(provide()),
     );
 
     it.effect("grantableScopes also bound what a client may be registered with", () =>

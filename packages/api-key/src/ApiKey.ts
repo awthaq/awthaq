@@ -1046,11 +1046,14 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
         const revokeClient: ApiKeyShape["revokeClient"] = Effect.fnUntraced(
           function* (ownerId, clientId) {
             const record = yield* ownedClient(ownerId, clientId);
-            yield* clients.revoke(record.clientId, yield* DateTime.now);
-            yield* events.emit(ApiKeyEvents.ApiKeyClientRevokedEvent, {
-              userId: ownerId,
-              clientId: record.clientId,
-            });
+            const revoked = yield* clients.revoke(record.clientId, yield* DateTime.now);
+            // Only the call that revoked the client announces it; a repeat (or a lost race) is a no-op.
+            if (revoked) {
+              yield* events.emit(ApiKeyEvents.ApiKeyClientRevokedEvent, {
+                userId: ownerId,
+                clientId: record.clientId,
+              });
+            }
           },
         );
 

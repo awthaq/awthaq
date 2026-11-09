@@ -45,10 +45,14 @@ export interface ApiKeyClientRecordsShape {
   readonly listByOwner: (
     ownerId: Users.UserId,
   ) => Effect.Effect<ReadonlyArray<ApiKeyClientRecord>, StoreFailure.StoreUnavailable>;
+  /**
+   * Sets `revokedAt` once; a client already revoked keeps its first revocation time. `true` only for
+   * the call that revoked it, so of any number of concurrent revocations exactly one answers `true`.
+   */
   readonly revoke: (
     clientId: string,
     at: DateTime.Utc,
-  ) => Effect.Effect<void, StoreFailure.StoreUnavailable>;
+  ) => Effect.Effect<boolean, StoreFailure.StoreUnavailable>;
   /** The current hash becomes the previous one (valid until `previousExpiresAt`); `secretHash` becomes current. */
   readonly rotateSecret: (input: {
     readonly clientId: string;
@@ -114,9 +118,15 @@ export const layerMemory = Layer.effect(
           ),
         ),
       revoke: (clientId, at) =>
-        update(clientId, (record) =>
-          Option.isSome(record.revokedAt) ? record : { ...record, revokedAt: Option.some(at) },
-        ),
+        Ref.modify(state, (records): [boolean, Clients] => {
+          const found = HashMap.get(records, clientId);
+          return Option.isNone(found) || Option.isSome(found.value.revokedAt)
+            ? [false, records]
+            : [
+                true,
+                HashMap.set(records, clientId, { ...found.value, revokedAt: Option.some(at) }),
+              ];
+        }),
       rotateSecret: ({ clientId, secretHash, previousExpiresAt }) =>
         update(clientId, (record) => ({
           ...record,
@@ -193,11 +203,14 @@ export const layerSql = Layer.effect(
       `,
     });
 
-    const revokeQuery = SqlSchema.void({
+    // `revokedAt IS NULL` keeps the first revocation time; the returned row says this call revoked it.
+    const revokeQuery = SqlSchema.findAll({
       Request: Schema.Struct({ clientId: Schema.String, at: wire.dateTime }),
+      Result: Schema.Struct({ clientId: Schema.String }),
       execute: (r) => sql`
         UPDATE apikey_client SET "revokedAt" = ${r.at}
         WHERE "clientId" = ${r.clientId} AND "revokedAt" IS NULL
+        RETURNING "clientId"
       `,
     });
 
@@ -247,7 +260,11 @@ export const layerSql = Layer.effect(
           Effect.map((rows) => rows.map(toRecord)),
           unavailable("listByOwner"),
         ),
-      revoke: (clientId, at) => revokeQuery({ clientId, at }).pipe(unavailable("revoke")),
+      revoke: (clientId, at) =>
+        revokeQuery({ clientId, at }).pipe(
+          Effect.map((rows) => rows.length > 0),
+          unavailable("revoke"),
+        ),
       rotateSecret: (input) => rotateQuery(input).pipe(unavailable("rotateSecret")),
       deleteByOwner: (ownerId) => deleteByOwnerQuery(ownerId).pipe(unavailable("deleteByOwner")),
     });
