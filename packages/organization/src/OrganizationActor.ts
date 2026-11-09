@@ -11,6 +11,7 @@
 
 import type { Api } from "@awthaq/api";
 import { Users } from "@awthaq/core";
+import type * as Brand from "effect/Brand";
 import * as Data from "effect/Data";
 import * as Schema from "effect/Schema";
 import type * as PermissionEngine from "./PermissionEngine.ts";
@@ -47,6 +48,10 @@ export const userIdOf = (actor: Actor) =>
     : actor._tag === "PlatformAdmin"
       ? Users.UserId(actor.adminUserId)
       : undefined;
+
+/** Statements a ceiling was minted over; only `OrganizationAuthority` brands them (plan 30). */
+export type CeilingStatements = PermissionEngine.Statements &
+  Brand.Brand<"awthaq/organization/CeilingStatements">;
 
 export type Bound = Data.TaggedEnum<{
   Unbounded: {};
