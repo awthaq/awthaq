@@ -116,8 +116,8 @@ describe("make (registry readers)", () => {
 
   it("core's registry holds core's own events, not the moved plugin events", () => {
     assert.strictEqual(AuthEvents.CoreRegistry.origin, "core");
-    assert.strictEqual(AuthEvents.eventTags.length, 82);
-    assert.strictEqual(AuthEvents.coreDefinitions.length, 82);
+    assert.strictEqual(AuthEvents.eventTags.length, 75);
+    assert.strictEqual(AuthEvents.coreDefinitions.length, 75);
   });
 });
 
@@ -264,8 +264,6 @@ describe("attempt events (ADR-EA-037)", () => {
   const attemptTags = [
     "auth.user.signInFailed",
     "auth.token.replay",
-    "auth.twoFactor.challengeFailed",
-    "auth.twoFactor.locked",
     "auth.rateLimit.exceeded",
     "auth.admin.actionDenied",
     "auth.admin.impersonationDenied",

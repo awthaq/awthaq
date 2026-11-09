@@ -18,6 +18,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SecondFactor from "../src/SecondFactor.ts";
 import * as TwoFactor from "../src/TwoFactor.ts";
+import * as TwoFactorEvents from "../src/TwoFactorEvents.ts";
 import * as TwoFactorStore from "../src/TwoFactorStore.ts";
 import {
   buildDurableAuditLayer,
@@ -710,7 +711,7 @@ describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-259)", () => {
           const rows = yield* audit.list({ eventTag: "auth.twoFactor.challengeFailed" });
           assert.strictEqual(rows.length, 1);
           const seen = yield* stream.pipe(
-            Stream.filter(AuthEvents.is("auth.twoFactor.challengeFailed")),
+            Stream.filter(AuthEvents.is(TwoFactorEvents.TwoFactorChallengeFailedEvent)),
             Stream.take(1),
             Stream.runCollect,
           );

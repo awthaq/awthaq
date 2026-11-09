@@ -53,6 +53,7 @@ import {
 } from "./Challenge.ts";
 import * as RecoveryCodes from "./RecoveryCodes.ts";
 import * as Totp from "./Totp.ts";
+import * as TwoFactorEvents from "./TwoFactorEvents.ts";
 import { TwoFactorConfig } from "./TwoFactorConfig.ts";
 import {
   InvalidTwoFactorCode,
@@ -224,14 +225,18 @@ export const layer = Layer.effect(
       yield* limiter
         .consume({ key: budget.key(userId), limit: budget.limit, window: budget.window })
         .pipe(Effect.ignore);
-      yield* events.publish({ _tag: "auth.twoFactor.challengeFailed", userId, method, purpose });
+      yield* events.emit(TwoFactorEvents.TwoFactorChallengeFailedEvent, {
+        userId,
+        method,
+        purpose,
+      });
       const nowLocked = yield* limiter
         .check({ key: budget.key(userId), limit: budget.limit, window: budget.window })
         .pipe(
           Effect.as(false),
           Effect.catchTag("RateLimitExceeded", () => Effect.succeed(true)),
         );
-      if (nowLocked) yield* events.publish({ _tag: "auth.twoFactor.locked", userId });
+      if (nowLocked) yield* events.emit(TwoFactorEvents.TwoFactorLockedEvent, { userId });
     });
 
     const refuse = Effect.fnUntraced(function* (
@@ -347,7 +352,7 @@ export const layer = Layer.effect(
         if (!(yield* secrets.confirm(userId, step.value)))
           return yield* refuse(userId, "totp", "enroll");
         const display = yield* mintRecoveryCodes(userId);
-        yield* events.publish({ _tag: "auth.twoFactor.enabled", userId });
+        yield* events.emit(TwoFactorEvents.TwoFactorEnabledEvent, { userId });
         return display;
       },
     );
@@ -368,7 +373,11 @@ export const layer = Layer.effect(
         if (!(yield* secrets.advanceLastUsedStep(userId, step.value))) {
           return yield* refuse(userId, "totp", purpose);
         }
-        yield* events.publish({ _tag: "auth.twoFactor.verified", userId, method: "totp", purpose });
+        yield* events.emit(TwoFactorEvents.TwoFactorVerifiedEvent, {
+          userId,
+          method: "totp",
+          purpose,
+        });
         return proofOf({ userId, method: "totp" });
       },
     );
@@ -393,13 +402,11 @@ export const layer = Layer.effect(
         // Single-use: the compare-and-set is the spend. Losing it (a concurrent presentation) is a refusal.
         if (!(yield* codes.markUsed(userId, matched)))
           return yield* refuse(userId, "recovery", purpose);
-        yield* events.publish({
-          _tag: "auth.twoFactor.recoveryCodeUsed",
+        yield* events.emit(TwoFactorEvents.TwoFactorRecoveryCodeUsedEvent, {
           userId,
           remaining: yield* codes.countUnused(userId),
         });
-        yield* events.publish({
-          _tag: "auth.twoFactor.verified",
+        yield* events.emit(TwoFactorEvents.TwoFactorVerifiedEvent, {
           userId,
           method: "recovery",
           purpose,
@@ -418,7 +425,7 @@ export const layer = Layer.effect(
     const regenerateRecoveryCodes: SecondFactorShape["regenerateRecoveryCodes"] = Effect.fnUntraced(
       function* (userId) {
         const display = yield* mintRecoveryCodes(userId);
-        yield* events.publish({ _tag: "auth.twoFactor.recoveryCodesRegenerated", userId });
+        yield* events.emit(TwoFactorEvents.TwoFactorRecoveryCodesRegeneratedEvent, { userId });
         return display;
       },
     );
@@ -426,7 +433,7 @@ export const layer = Layer.effect(
     const disable: SecondFactorShape["disable"] = Effect.fnUntraced(function* (userId) {
       yield* secrets.delete(userId);
       yield* codes.deleteAllByUser(userId);
-      yield* events.publish({ _tag: "auth.twoFactor.disabled", userId });
+      yield* events.emit(TwoFactorEvents.TwoFactorDisabledEvent, { userId });
     });
 
     // ---- the challenge (THS-007) ------------------------------------------------------------------

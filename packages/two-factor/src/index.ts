@@ -18,4 +18,5 @@ export * as Totp from "./Totp.ts";
 export * as TwoFactor from "./TwoFactor.ts";
 export * as TwoFactorApi from "./TwoFactorApi.ts";
 export * as TwoFactorConfig from "./TwoFactorConfig.ts";
+export * as TwoFactorEvents from "./TwoFactorEvents.ts";
 export * as TwoFactorStore from "./TwoFactorStore.ts";
