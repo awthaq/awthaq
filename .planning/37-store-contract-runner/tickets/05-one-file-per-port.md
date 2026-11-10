@@ -31,7 +31,7 @@ must_haves:
       via: "export { auditLog } from … (one re-export per port)"
       pattern: "from \"./internal/storeContract/"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 04
 
 <objective>
@@ -81,3 +81,5 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular
 </success_criteria>
 
 ## Comments
+
+Done (uncommitted). Seven files under `internal/storeContract/` (fixtures, auditLog, verification, accounts, users, sessions, relayCursor) plus `suite.ts`. Shared helpers in fixtures.ts: `at`, `opened`, `makeUserId`. Sorted passing-name lists on memory, SQL and sealed runs identical before and after. `StoreContract.ts` 2324 -> ~130 lines (the old `run` and `RunConfig` remain until ticket 09).

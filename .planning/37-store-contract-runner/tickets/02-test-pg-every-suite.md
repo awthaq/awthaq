@@ -31,7 +31,7 @@ must_haves:
       via: "reads the script; any trimmed line ending .test.ts is a problem"
       pattern: "test-pg.sh"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: none (PLAN.md §10 Q1 default A; if the human answers B or C, see Q1 before starting)
 
 <objective>
@@ -111,3 +111,5 @@ If a Postgres is reachable: AWTHAQ_POSTGRES_URL=… pnpm test:pg packages/organi
 </success_criteria>
 
 ## Comments
+
+Result (uncommitted): `scripts/test-pg.sh` list deleted (63 -> 0 `.test.ts` lines), args pass through else vitest then `pnpm test:bdd`; rule 3 of `check-contract-tests.mjs` rewritten (hand-checked: an appended list line exits 1 naming the file and the script; reverted); BDD scenarios tagged @REQ-EA-1565/1566 (2 passed via the features vitest project; allocator regenerated `features/traceability.md`, 1500/1501 retired). Deviation: the plan reserved REQ-EA-1580/1581, but the catalog is contiguous at 1564, so the next free ids 1565/1566 were used. Not run: `pnpm test:pg` itself (no Postgres/docker).

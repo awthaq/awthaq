@@ -30,7 +30,7 @@ must_haves:
       via: "§6 crosswalk row for 08-tooling/25-testing-harness.feature"
       pattern: "REQ-EA-158[01]"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 02
 
 <objective>
@@ -83,3 +83,5 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular && pnpm s
 </success_criteria>
 
 ## Comments
+
+Result (uncommitted): BEH-EA-336 revised; `25-testing-harness.md` Document Control 1.13 -> 1.14 (the plan assumed 1.10 -> 1.11; the file had moved on). `spec/traceability.md` 1.82 -> 1.83 (plan said 1.77 -> 1.78): ADR-EA-041 decision-9 row reworded, file-25 crosswalk cell gains 1565-1566. docs/plugin-authoring.md (2 spots) and packages/test/README.md no longer mention the script; empty changeset `.changeset/test-pg-every-suite.md` added. `pnpm spec:verify:strict` 32/0 and `pnpm check:readmes` pass. Id deviation: plan REQ-EA-1580/1581/1586 map to 1565/1566/1571 (the contiguous catalog ended at 1564; 1571 is plan-internal and appears nowhere). No new BEH was needed by tickets 02/03; the plan's BEH-EA-365 (ticket 11) would be BEH-EA-357 (highest is 356).

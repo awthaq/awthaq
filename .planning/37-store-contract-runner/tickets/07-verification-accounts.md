@@ -30,7 +30,7 @@ must_haves:
       via: "runSuite for VerificationStore and AccountStore on Ref and SQL"
       pattern: "suite: StoreContract\\.(verification|accounts)"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 06
 
 <objective>
@@ -94,3 +94,5 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular
 </success_criteria>
 
 ## Comments
+
+Done (uncommitted). verification (7 ops, 20 cases) and accounts (10 ops) are suites; accounts passes `SqlTransaction` as explicit `R` (inference failed). Verification names identical after stripping. Accounts splits (old -> new): `getByKey and listByUser are global across tenants` -> `getByKey is global...` + `listByUser is global...`; `get, getByKey and listByUser read the identity...` -> `listByUser is the user's own...` + `get reads the identity by id...` + `getByKey reads the identity by (providerId, subject, issuer)...`; `writeCredentialHash and writeProviderTokens replace...` -> one case per operation. Mutant test now goes through `runSuite` and still fails naming the give-back case.

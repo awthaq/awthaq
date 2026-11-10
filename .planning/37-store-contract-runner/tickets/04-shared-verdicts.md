@@ -36,7 +36,7 @@ must_haves:
       via: "suite() calls classify; Case/race/CONCURRENCY re-exported"
       pattern: "internal/contract"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 01
 
 <objective>
@@ -105,3 +105,5 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular
 </success_criteria>
 
 ## Comments
+
+Done (uncommitted). `internal/contract.ts` holds Case, CONCURRENCY, race, NonEmpty, Verdict, Operations, Entry, classify; `RecordsContract.ts` re-exports the same public names and `suite` calls `classify`; RecordsContract tests untouched and green. `StoreContract.suite/Suite/runSuite` added, `StoreContract.types.test.ts` has 2 load-bearing `@ts-expect-error` (the second needs an `@effect-diagnostics-next-line missingEffectContext:off`, as `RecordsContract.types.test.ts:72` does). 3 runSuite self-tests added (fresh layer + names, failing case + exemption, TestClock). Deviation: the tests were written together with the code, not observed RED first. Deviation (ticket 05 follow-on): `suite`/`Suite` live in `internal/storeContract/suite.ts` and `StoreContract.ts` re-exports them, because per-port files cannot import `StoreContract.ts` (it re-exports them: ESM cycle).

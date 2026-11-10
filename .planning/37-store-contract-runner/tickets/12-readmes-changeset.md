@@ -27,7 +27,7 @@ must_haves:
       via: "the StoreContract entry names run, runSuite and the seven suites"
       pattern: "StoreContract"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 10, 03
 
 <objective>
@@ -78,3 +78,4 @@ pnpm test:pg packages/test/test/StoreContract.sql.test.ts packages/test/test/Sto
 </success_criteria>
 
 ## Comments
+Done (uncommitted). packages/test/README.md StoreContract entry; packages/sql/README.md line 229; .changeset/store-contract-runner.md (name differs from the ticket) with Migration:. pnpm check:readmes passes. Not run: pnpm check, test:pg (no Postgres).

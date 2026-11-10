@@ -29,7 +29,7 @@ must_haves:
       via: "StoreContract.runSuite(framework, { adapter, suite: StoreContract.relayCursor, layer })"
       pattern: "runSuite\\("
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 05
 
 <objective>
@@ -106,3 +106,5 @@ If a Postgres is reachable: pnpm test:pg packages/test/test/StoreContract.sql.te
 </success_criteria>
 
 ## Comments
+
+Done (uncommitted). relayCursor (2 ops) and auditLog (5 ops) are `suite`s run through `runSuite` on Ref, SQLite; WAL and libSQL files also green. Stripped name lists identical. 6 `RelayCursorStore (Ref) > get|advance [verdict]` rows. `TestClock` on every case broke nothing (Q5 default kept). Regrouping done with a scratchpad script, no case bodies edited. Postgres not run.

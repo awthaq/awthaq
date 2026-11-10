@@ -42,7 +42,7 @@ must_haves:
       via: "the SQL base provides TestEncryption.layer (replacing the support file's copy)"
       pattern: "TestEncryption\\.layer"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 08
 
 <objective>
@@ -123,3 +123,5 @@ If a Postgres is reachable: pnpm test:pg packages/test/test/StoreContract.sql.te
 </success_criteria>
 
 ## Comments
+
+Done (uncommitted). `StoreContract.run(framework, mode)` (memory | sql | sealed) lives in `src/StoreContract.ts` with `Suites`, `suites`, `Mode`; `runSuite` and `run` share one private `registerSuite`/`registerCase`. Old `run(adapter, layer, cases)` and `RunConfig` removed. Support file 201 -> 45 lines (`framework`, `walFileClient`, `libsqlFileClient`); the five runner files are one `run` call each; files naming `runOnMemory|runOnSql|runSealedOnSql`: 6 -> 0. Describe titles: memory unchanged ("X (Ref)"); SQL unchanged; sealed "UserStore (SQL, encryptPii)" -> "UserStore (SQL)". Memory mode uses `Persistence.memory` (bundle, not per-port layers) plus a coverage `it`. Deviations: (a) coverage excludes `Layer.CurrentMemoMap` as well as `SqlTransaction`; (b) cases run on `Layer.provideMerge(layer, TestClock.layer())` so the bundle builds under TestClock (needed in ticket 10 so the SQL sweeper sees it); (c) a Registrable shape is used for the runners since `Suite` is invariant. Q5/Q7/Q8 defaults taken. Typecheck, tsconfig.test and the six StoreContract test files green. Postgres (test:pg) not run.

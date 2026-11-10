@@ -337,10 +337,10 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
     },
   );
 
-  // Plan 25 (BEH-EA-336): a Contract.test.ts passing `records` must also run on Postgres.
+  // Plan 37 (BEH-EA-336, superseding plan 25): scripts/test-pg.sh runs every suite, so it names no test file.
   Given(
-    "a plugin package whose {string} passes {string} to {string}",
-    function* (file: string, _option: string, _call: string) {
+    "a plugin package whose {string} runs the contract suite and whose {string} names {string}",
+    function* (file: string, script: string, named: string) {
       const { outcomes } = yield* World;
       const root = mkdtempSync(path.join(tmpdir(), "awthaq-contract-tests-"));
       mkdirSync(path.join(root, "packages", "demo", "src"), { recursive: true });
@@ -353,9 +353,9 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
       );
       writeFileSync(
         path.join(root, "packages", "demo", file),
-        'TestAuth.runPluginContractTests(framework, () => Demo.Demo, {\n  options: [{}],\n  records: { suite: "demo", suites },\n});\n',
+        "TestAuth.runPluginContractTests(framework, () => Demo.Demo, { options: [{}] });\n",
       );
-      writeFileSync(path.join(root, "scripts", "test-pg.sh"), "suites=(\n)\n");
+      writeFileSync(path.join(root, script), `suites=(\n  ${named}\n)\n`);
       yield* outcomes.set("root", root);
     },
   );
@@ -369,10 +369,10 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
     assert.ok(report.includes(file) && report.includes(script), report);
   });
 
-  When("{string} is listed in {string}", function* (file: string, script: string) {
+  When("{string} names no test file", function* (script: string) {
     const { outcomes } = yield* World;
     const root = yield* outcomes.getAs("root", isString);
-    writeFileSync(path.join(root, script), `suites=(\n  ${file}\n)\n`);
+    writeFileSync(path.join(root, script), "pnpm exec vitest run\n");
     const result = runCheck(root);
     rmSync(root, { recursive: true, force: true });
     yield* outcomes.set("status", result.status ?? -1);

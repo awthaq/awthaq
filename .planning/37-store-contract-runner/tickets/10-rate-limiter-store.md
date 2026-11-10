@@ -34,7 +34,7 @@ must_haves:
       via: "memory bundle merges RateLimiter.layerStoreMemory"
       pattern: "RateLimiter\\.layerStoreMemory"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 09, 02
 
 <objective>
@@ -124,3 +124,5 @@ pnpm test:pg packages/test/test/StoreContract.sql.test.ts when a Postgres is rea
 </success_criteria>
 
 ## Comments
+
+Done (uncommitted). `rateLimiterStore` suite (increment: 3 atomic + 1 race; peek: 1 read; sql: sweeper, missing table) in `internal/storeContract/rateLimiterStore.ts`, added to `Suites`/`suites`/`run`. Memory bundle = `Persistence.memory` + `RateLimiter.layerStoreMemory` (coverage excludes `RateLimiterMemoryStats`); SQL base also runs `RateLimiterStoreSql.migrate`, bundle merges `layerStoreSql`; sealed unchanged. Read-then-write mutant test fails `increment [race]` as required. Deleted `packages/sql/test/RateLimiterStoreSql.test.ts` and `.postgres.test.ts` (Q3: the two limiter-over-SQL cases dropped). Rate-limiter cases: memory 0 -> 5 entries, SQLite/WAL/libSQL 7 each, Postgres 1 -> 7 (by construction, not run). Remaining references to the deleted file: `spec/behaviors/14-rate-limiting.md:15` (ticket 11). vitest packages/test+ports+sql: 949 passed. Postgres (test:pg) not run.

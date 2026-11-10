@@ -32,7 +32,7 @@ must_haves:
       via: "§1 file-25 row lists BEH-EA-365"
       pattern: "365"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 10, 03
 
 <objective>
@@ -83,3 +83,4 @@ pnpm spec:verify:strict && pnpm check:readmes
 </success_criteria>
 
 ## Comments
+Done (uncommitted). ADR-EA-041 rev 1.6 (decision 6 replaced); BEH-EA-357 (not 365; catalog ended at 356) appended after BEH-EA-354 in 25-testing-harness.md (rev 1.15), 354 Next -> 357; no BDD scenario (Q6). 14-rate-limiting.md rev 1.6: pointer fixed, BEH-EA-109 As shipped note. spec/traceability.md 1.84 (not 1.79): file-25 row, ADR-EA-041 row, two new §5 rows. spec/README.md 1.21 range 001-357 (spec:verify:strict required it). pnpm spec:verify:strict 32/0.

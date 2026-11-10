@@ -359,14 +359,14 @@ Feature: Testing Harness
       When the package's "test/Contract.test.ts" calls "runPluginContractTests" for the class
       Then it exits zero
 
-    @REQ-EA-1500
-    Scenario: A Contract.test.ts that passes records but is missing from scripts/test-pg.sh fails pnpm check
-      Given a plugin package whose "test/Contract.test.ts" passes "records" to "runPluginContractTests"
+    @REQ-EA-1565
+    Scenario: A scripts/test-pg.sh that names a test file fails pnpm check
+      Given a plugin package whose "test/Contract.test.ts" runs the contract suite and whose "scripts/test-pg.sh" names "packages/demo/test/Contract.test.ts"
       When the script "scripts/check-contract-tests.mjs" runs
       Then it exits non-zero, naming "packages/demo/test/Contract.test.ts" and "scripts/test-pg.sh"
 
-    @REQ-EA-1501
-    Scenario: The same package passes once its Contract.test.ts is listed in scripts/test-pg.sh
-      Given a plugin package whose "test/Contract.test.ts" passes "records" to "runPluginContractTests"
-      When "packages/demo/test/Contract.test.ts" is listed in "scripts/test-pg.sh"
+    @REQ-EA-1566
+    Scenario: The same repository passes once scripts/test-pg.sh names no test file
+      Given a plugin package whose "test/Contract.test.ts" runs the contract suite and whose "scripts/test-pg.sh" names "packages/demo/test/Contract.test.ts"
+      When "scripts/test-pg.sh" names no test file
       Then it exits zero

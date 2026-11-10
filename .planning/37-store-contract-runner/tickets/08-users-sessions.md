@@ -29,7 +29,7 @@ must_haves:
       via: "runSuite for users and sessions on Ref, SQL and the encryptPii bundle"
       pattern: "suite: StoreContract\\.(users|sessions)"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 07
 
 <objective>
@@ -93,3 +93,5 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular
 </success_criteria>
 
 ## Comments
+
+Done (uncommitted). users (11 ops, `SqlTransaction` as explicit R) and sessions (9 ops) are suites; the old `StoreContract.run(` calls in the support file: 14 -> 0 (the export itself stays until ticket 09 and is still used by `StoreContract.test.ts`). Splits/new cases (old -> new): `getByEmail and getByPhone find...` -> one case each; `delete under concurrency ... and writeFields racing it...` -> `delete under concurrency removes the row exactly once` + `writeFields racing delete never orphans a field`; NEW `readFields reads the requested declared columns...`; NEW sessions `get reads a stored row back by id and is None for an absent id`. Counts: memory run 97 cases (86 at HEAD); 42 `(UserStore|SessionStore) (Ref)` verdict rows. Gates run: vitest packages/test/test (598 pass, 1 expected fail), `tsc -b`, `tsc -p tsconfig.test.json`, scripts/circular.mjs. Not run: pnpm test:pg (no Postgres), full pnpm test, lint, knip.

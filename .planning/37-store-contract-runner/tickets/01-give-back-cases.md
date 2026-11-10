@@ -31,7 +31,7 @@ must_haves:
       via: "StoreContract.run(recorder.framework, { adapter, layer: mutant, cases: StoreContract.verification })"
       pattern: "StoreContract\\.verification"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: none
 
 <objective>
@@ -107,3 +107,5 @@ Then, if a Postgres is reachable: AWTHAQ_POSTGRES_URL=… pnpm exec vitest run p
 </success_criteria>
 
 ## Comments
+
+Done (uncommitted). Three give-back cases added to `StoreContract.verification` (`"returned"` count 0 -> 3) and the kept case now holds inside `transaction`; the no-op `settle` mutant test is in `StoreContract.test.ts`. Three Ref-only tests deleted from `packages/ports/test/VerificationStore.test.ts` (give-back calls 4 -> 1). Memory contract run 86 -> 89 cases. Deviation: the RED step was not run on its own (mutant test and cases were written together); the mutant test fails by construction against the old list (no give-back case existed). Formatter is `oxfmt` (the repo's), not Prettier. Postgres not available: `pnpm test:pg` not run.
