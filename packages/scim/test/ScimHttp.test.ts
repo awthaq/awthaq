@@ -6,6 +6,7 @@ import { Errors, Sessions, Users } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
 import { OrganizationRecords } from "@awthaq/organization/records";
 import { assert, describe, it } from "@effect/vitest";
+import { createHash } from "node:crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -151,6 +152,26 @@ describe("SCIM over HTTP: what the token is checked against (BEH-EA-246)", () =>
       assert.isTrue(seeded.token.startsWith("scim_"));
       assert.notInclude(row?.tokenHash ?? "", seeded.token);
       assert.match(row?.tokenHash ?? "", /^[0-9a-f]{64}$/);
+    }),
+  );
+
+  it.effect("a connection stores only the SHA-256 hex of its token (at-rest form pinned)", () =>
+    Effect.gen(function* () {
+      const { inside } = yield* buildApp();
+      const seeded = yield* Effect.promise(() => inside(seedConnection()));
+      const stored = yield* Effect.promise(() =>
+        inside(
+          Effect.flatMap(ScimRecords.ScimRecords, (records) =>
+            records.listConnections(seeded.organizationId),
+          ),
+        ),
+      );
+      assert.strictEqual(stored.length, 1);
+      assert.match(seeded.token, /^scim_[0-9a-f]{64}$/);
+      assert.strictEqual(
+        stored[0]?.tokenHash,
+        createHash("sha256").update(seeded.token, "utf8").digest("hex"),
+      );
     }),
   );
 

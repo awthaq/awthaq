@@ -73,22 +73,19 @@ const buildLayer = (
     readonly password?: Partial<Password.PasswordConfigShape>;
   } = {},
 ) =>
-  TestAuth.layer(
-    Auth.make([Admin.Admin, Password.Password, AdminAccounts.AdminAccounts]),
-    {
-      services: Layer.mergeAll(
-        Admin.config(config),
-        Password.config(options.password ?? {}),
-        options.httpClient ?? TestAuth.httpClient.noBreach,
-        options.mailer ?? Layer.empty,
-        options.transaction ?? Layer.empty,
-      ),
-      taps: Layer.mergeAll(
-        options.veto ? legalHold : Layer.empty,
-        options.resetVeto ? secondFactorGate : Layer.empty,
-      ),
-    },
-  );
+  TestAuth.layer(Auth.make([Admin.Admin, Password.Password, AdminAccounts.AdminAccounts]), {
+    services: Layer.mergeAll(
+      Admin.config(config),
+      Password.config(options.password ?? {}),
+      options.httpClient ?? TestAuth.httpClient.noBreach,
+      options.mailer ?? Layer.empty,
+      options.transaction ?? Layer.empty,
+    ),
+    taps: Layer.mergeAll(
+      options.veto ? legalHold : Layer.empty,
+      options.resetVeto ? secondFactorGate : Layer.empty,
+    ),
+  });
 
 const manageAll = {
   canDeleteUsers: () => Effect.succeed(true),
@@ -158,10 +155,7 @@ describe("AdminAccounts: deleteUser (BAM-005)", () => {
         assert.strictEqual(lookup._tag, "UserNotFound");
         assert.isTrue(
           Option.isNone(
-            yield* accounts.findByProviderSubject(
-              Accounts.PASSWORD_PROVIDER_ID,
-              targetId,
-            ),
+            yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, targetId),
           ),
         );
         const verify = yield* sessions.verify(session.token).pipe(Effect.flip);
@@ -185,125 +179,99 @@ describe("AdminAccounts: deleteUser (BAM-005)", () => {
               e.userId === targetId,
           ),
         );
-      }).pipe(
-        Effect.scoped,
-        TestAuth.withoutRequest,
-        Effect.provide(buildLayer(manageAll)),
-      ),
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect("an administrator cannot delete their own account", () =>
     Effect.gen(function* () {
       const { adminId, users } = yield* seed;
       const admin = yield* AdminAccounts.AdminAccounts;
-      const failure = yield* admin
-        .deleteUser(asCaller(adminId), adminId)
-        .pipe(Effect.flip);
+      const failure = yield* admin.deleteUser(asCaller(adminId), adminId).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "AdminSelfActionRefused");
       assert.strictEqual((yield* users.findById(adminId)).id, adminId);
     }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
-  it.effect(
-    "a BeforeUserDelete veto surfaces as HookAborted and nothing is deleted",
-    () =>
-      Effect.gen(function* () {
-        const { adminId, users } = yield* seed;
-        const held = yield* users.create({
-          identity: { _tag: "Email", email: "hold@example.com" },
-          name: "Held",
-        });
-        const admin = yield* AdminAccounts.AdminAccounts;
-        const failure = yield* admin
-          .deleteUser(asCaller(adminId), held.id)
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "HookAborted");
-        assert.strictEqual((yield* users.findById(held.id)).id, held.id);
-      }).pipe(
-        TestAuth.withoutRequest,
-        Effect.provide(buildLayer(manageAll, { veto: true })),
-      ),
+  it.effect("a BeforeUserDelete veto surfaces as HookAborted and nothing is deleted", () =>
+    Effect.gen(function* () {
+      const { adminId, users } = yield* seed;
+      const held = yield* users.create({
+        identity: { _tag: "Email", email: "hold@example.com" },
+        name: "Held",
+      });
+      const admin = yield* AdminAccounts.AdminAccounts;
+      const failure = yield* admin.deleteUser(asCaller(adminId), held.id).pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "HookAborted");
+      assert.strictEqual((yield* users.findById(held.id)).id, held.id);
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll, { veto: true }))),
   );
 });
 
 describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
-  it.effect(
-    "mails a change-email token to the new address only; the address is not changed",
-    () =>
-      Effect.gen(function* () {
-        const { adminId, targetId, users } = yield* seed;
-        const admin = yield* AdminAccounts.AdminAccounts;
-        const box = yield* TestMailbox.Mailbox;
-        const verification = yield* Verification.Verification;
-        const seen = yield* collectEvents;
+  it.effect("mails a change-email token to the new address only; the address is not changed", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId, users } = yield* seed;
+      const admin = yield* AdminAccounts.AdminAccounts;
+      const box = yield* TestMailbox.Mailbox;
+      const verification = yield* Verification.Verification;
+      const seen = yield* collectEvents;
 
-        yield* admin.setUserEmail(asCaller(adminId), targetId, {
-          email: "new@example.com",
-        });
+      yield* admin.setUserEmail(asCaller(adminId), targetId, {
+        email: "new@example.com",
+      });
 
-        const mail = yield* box.mail.waitFor({
-          to: "new@example.com",
-          template: EmailChange.TEMPLATE,
-        });
-        yield* box.mail.refute(
-          { template: EmailChange.TEMPLATE },
-          { beyond: 1 },
-        );
-        assert.strictEqual(
-          Option.getOrThrow(Users.emailOf(yield* users.findById(targetId))),
-          "target@example.com",
-        );
-        // The token is the shared purpose: consuming it yields the account and the new address.
-        assert.isTrue(Redacted.isRedacted(mail.data?.["token"]));
-        const token = TestMailbox.secret(mail);
-        assert.include(token, `${EmailChange.PURPOSE}:`);
-        const separator = token.lastIndexOf(".");
-        const consumed = yield* verification.consume(
-          token.slice(0, separator),
-          Redacted.make(token.slice(separator + 1)),
-        );
-        assert.strictEqual(Option.getOrNull(consumed.userId), targetId);
-        assert.deepStrictEqual(
-          Option.map(
-            Schema.decodeUnknownOption(EmailChange.Payload)(consumed.payload),
-            (p) => p.newEmail,
-          ),
-          Option.some("new@example.com"),
-        );
-        yield* TestClock.adjust(Duration.millis(10));
-        assert.isTrue(
-          (yield* Ref.get(seen)).some(
-            (e) =>
-              e._tag === "auth.admin.userEmailChangeRequested" &&
-              e.userId === targetId,
-          ),
-        );
-      }).pipe(
-        Effect.scoped,
-        TestAuth.withoutRequest,
-        Effect.provide(buildLayer(manageAll)),
-      ),
+      const mail = yield* box.mail.waitFor({
+        to: "new@example.com",
+        template: EmailChange.TEMPLATE,
+      });
+      yield* box.mail.refute({ template: EmailChange.TEMPLATE }, { beyond: 1 });
+      assert.strictEqual(
+        Option.getOrThrow(Users.emailOf(yield* users.findById(targetId))),
+        "target@example.com",
+      );
+      // The token is the shared purpose: consuming it yields the account and the new address.
+      assert.isTrue(Redacted.isRedacted(mail.data?.["token"]));
+      const token = TestMailbox.secret(mail);
+      assert.include(token, `${EmailChange.PURPOSE}:`);
+      const separator = token.lastIndexOf(".");
+      const consumed = yield* verification.consume(
+        token.slice(0, separator),
+        Redacted.make(token.slice(separator + 1)),
+      );
+      assert.strictEqual(Option.getOrNull(consumed.userId), targetId);
+      assert.deepStrictEqual(
+        Option.map(
+          Schema.decodeUnknownOption(EmailChange.Payload)(consumed.payload),
+          (p) => p.newEmail,
+        ),
+        Option.some("new@example.com"),
+      );
+      yield* TestClock.adjust(Duration.millis(10));
+      assert.isTrue(
+        (yield* Ref.get(seen)).some(
+          (e) => e._tag === "auth.admin.userEmailChangeRequested" && e.userId === targetId,
+        ),
+      );
+    }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
-  it.effect(
-    "the same address is a no-op; a taken address is refused to the administrator",
-    () =>
-      Effect.gen(function* () {
-        const { adminId, targetId } = yield* seed;
-        const admin = yield* AdminAccounts.AdminAccounts;
-        const box = yield* TestMailbox.Mailbox;
-        yield* admin.setUserEmail(asCaller(adminId), targetId, {
-          email: "TARGET@example.com",
-        });
-        yield* box.mail.refute({});
-        const taken = yield* admin
-          .setUserEmail(asCaller(adminId), targetId, {
-            email: "admin@example.com",
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(taken._tag, "AdminEmailAlreadyExists");
-        yield* box.mail.refute({});
-      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
+  it.effect("the same address is a no-op; a taken address is refused to the administrator", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId } = yield* seed;
+      const admin = yield* AdminAccounts.AdminAccounts;
+      const box = yield* TestMailbox.Mailbox;
+      yield* admin.setUserEmail(asCaller(adminId), targetId, {
+        email: "TARGET@example.com",
+      });
+      yield* box.mail.refute({});
+      const taken = yield* admin
+        .setUserEmail(asCaller(adminId), targetId, {
+          email: "admin@example.com",
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(taken._tag, "AdminEmailAlreadyExists");
+      yield* box.mail.refute({});
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect("a link builder puts the confirmation URL in the mail", () =>
@@ -325,8 +293,7 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
         buildLayer({
           ...manageAll,
           links: {
-            changeEmail: (token) =>
-              `https://app.example/confirm-email#${token}`,
+            changeEmail: (token) => `https://app.example/confirm-email#${token}`,
           },
         }),
       ),
@@ -348,9 +315,7 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
         assert.strictEqual(failure._tag, "AdminEmailDeliveryFailed");
         yield* TestClock.adjust(Duration.millis(10));
         assert.isFalse(
-          (yield* Ref.get(seen)).some(
-            (e) => e._tag === "auth.admin.userEmailChangeRequested",
-          ),
+          (yield* Ref.get(seen)).some((e) => e._tag === "auth.admin.userEmailChangeRequested"),
         );
       }).pipe(
         Effect.scoped,
@@ -382,22 +347,16 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
   const storedHash = (accounts: Accounts.AccountsShape, userId: Users.UserId) =>
     Effect.gen(function* () {
       const account = Option.getOrThrow(
-        yield* accounts.findByProviderSubject(
-          Accounts.PASSWORD_PROVIDER_ID,
-          userId,
-        ),
+        yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, userId),
       );
-      return Redacted.value(
-        Option.getOrThrow(yield* accounts.findCredentialHash(account.id)),
-      );
+      return Redacted.value(Option.getOrThrow(yield* accounts.findCredentialHash(account.id)));
     });
 
   it.effect(
     "hashes through the port, replaces the credential, revokes every session and audits both events",
     () =>
       Effect.gen(function* () {
-        const { adminId, targetId, accounts, hasher, oldPassword } =
-          yield* seed;
+        const { adminId, targetId, accounts, hasher, oldPassword } = yield* seed;
         const admin = yield* AdminAccounts.AdminAccounts;
         const sessions = yield* Sessions.Sessions;
         const seen = yield* collectEvents;
@@ -412,17 +371,13 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
         assert.isTrue(yield* hasher.verify(newPassword, stored));
         assert.isFalse(yield* hasher.verify(oldPassword, stored));
         for (const issued of [first, second]) {
-          const failure = yield* sessions
-            .verify(issued.token)
-            .pipe(Effect.flip);
+          const failure = yield* sessions.verify(issued.token).pipe(Effect.flip);
           assert.strictEqual(failure._tag, "Sessions/NotFound");
         }
         yield* TestClock.adjust(Duration.millis(10));
         const events = yield* Ref.get(seen);
         assert.isTrue(
-          events.some(
-            (e) => e._tag === "auth.password.changed" && e.userId === targetId,
-          ),
+          events.some((e) => e._tag === "auth.password.changed" && e.userId === targetId),
         );
         assert.isTrue(
           events.some(
@@ -434,11 +389,7 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
         );
         // No event carries the password.
         assert.notInclude(JSON.stringify(events), Redacted.value(newPassword));
-      }).pipe(
-        Effect.scoped,
-        TestAuth.withoutRequest,
-        Effect.provide(buildLayer(manageAll)),
-      ),
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect("creates the password credential of a user who had none", () =>
@@ -452,37 +403,23 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
       yield* admin.setUserPassword(asCaller(adminId), oauthOnly.id, {
         password: newPassword,
       });
-      assert.isTrue(
-        yield* hasher.verify(
-          newPassword,
-          yield* storedHash(accounts, oauthOnly.id),
-        ),
-      );
+      assert.isTrue(yield* hasher.verify(newPassword, yield* storedHash(accounts, oauthOnly.id)));
     }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
-  it.effect(
-    "a password violating the policy is refused with its hints, and nothing changes",
-    () =>
-      Effect.gen(function* () {
-        const { adminId, targetId, accounts, hasher, oldPassword } =
-          yield* seed;
-        const admin = yield* AdminAccounts.AdminAccounts;
-        const failure = yield* admin
-          .setUserPassword(asCaller(adminId), targetId, {
-            password: Redacted.make("short"),
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "AdminWeakPassword");
-        if (failure._tag === "AdminWeakPassword")
-          assert.isAbove(failure.hints.length, 0);
-        assert.isTrue(
-          yield* hasher.verify(
-            oldPassword,
-            yield* storedHash(accounts, targetId),
-          ),
-        );
-      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
+  it.effect("a password violating the policy is refused with its hints, and nothing changes", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId, accounts, hasher, oldPassword } = yield* seed;
+      const admin = yield* AdminAccounts.AdminAccounts;
+      const failure = yield* admin
+        .setUserPassword(asCaller(adminId), targetId, {
+          password: Redacted.make("short"),
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "AdminWeakPassword");
+      if (failure._tag === "AdminWeakPassword") assert.isAbove(failure.hints.length, 0);
+      assert.isTrue(yield* hasher.verify(oldPassword, yield* storedHash(accounts, targetId)));
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   // BEH-EA-120 (ADR-EA-048): the one policy is `Password.config`'s, breach screening included.
@@ -492,31 +429,22 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
     .digest("hex")
     .toUpperCase();
   const breachCorpus = TestAuth.httpClient.returning((url) =>
-    url.endsWith(breachedHex.slice(0, 5))
-      ? `${breachedHex.slice(5)}:5`
-      : `${"F".repeat(35)}:1`,
+    url.endsWith(breachedHex.slice(0, 5)) ? `${breachedHex.slice(5)}:5` : `${"F".repeat(35)}:1`,
   );
 
   it.effect(
     "BEH-EA-120: a breached password is refused with Password's hint, and nothing changes",
     () =>
       Effect.gen(function* () {
-        const { adminId, targetId, accounts, hasher, oldPassword } =
-          yield* seed;
+        const { adminId, targetId, accounts, hasher, oldPassword } = yield* seed;
         const admin = yield* AdminAccounts.AdminAccounts;
         const failure = yield* admin
           .setUserPassword(asCaller(adminId), targetId, { password: breached })
           .pipe(Effect.flip);
-        assert.deepStrictEqual(
-          failure._tag === "AdminWeakPassword" ? failure.hints : [],
-          ["appears in known breaches"],
-        );
-        assert.isTrue(
-          yield* hasher.verify(
-            oldPassword,
-            yield* storedHash(accounts, targetId),
-          ),
-        );
+        assert.deepStrictEqual(failure._tag === "AdminWeakPassword" ? failure.hints : [], [
+          "appears in known breaches",
+        ]);
+        assert.isTrue(yield* hasher.verify(oldPassword, yield* storedHash(accounts, targetId)));
       }).pipe(
         TestAuth.withoutRequest,
         Effect.provide(
@@ -528,25 +456,23 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
       ),
   );
 
-  it.effect(
-    "BEH-EA-120: Password.config's minLength governs an administrator-set password",
-    () =>
-      Effect.gen(function* () {
-        const { adminId, targetId } = yield* seed;
-        const admin = yield* AdminAccounts.AdminAccounts;
-        const failure = yield* admin
-          .setUserPassword(asCaller(adminId), targetId, {
-            password: Redacted.make("twelve chars"),
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "AdminWeakPassword");
-        if (failure._tag === "AdminWeakPassword") {
-          assert.isTrue(failure.hints.some((hint) => hint.includes("16")));
-        }
-      }).pipe(
-        TestAuth.withoutRequest,
-        Effect.provide(buildLayer(manageAll, { password: { minLength: 16 } })),
-      ),
+  it.effect("BEH-EA-120: Password.config's minLength governs an administrator-set password", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId } = yield* seed;
+      const admin = yield* AdminAccounts.AdminAccounts;
+      const failure = yield* admin
+        .setUserPassword(asCaller(adminId), targetId, {
+          password: Redacted.make("twelve chars"),
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "AdminWeakPassword");
+      if (failure._tag === "AdminWeakPassword") {
+        assert.isTrue(failure.hints.some((hint) => hint.includes("16")));
+      }
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(buildLayer(manageAll, { password: { minLength: 16 } })),
+    ),
   );
 
   /** EP-007: tenant id -> that tenant's `Password.config(...)`. */
@@ -562,47 +488,38 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
     },
   ) {}
 
-  it.effect(
-    "EP-007: a tenant's Password.config applies to an administrator-set password",
-    () =>
-      Effect.gen(function* () {
-        const { adminId, targetId } = yield* seed;
-        const admin = yield* AdminAccounts.AdminAccounts;
-        const strict = yield* admin
-          .setUserPassword(asCaller(adminId), targetId, {
-            password: newPassword,
-          })
-          .pipe(
-            Effect.provide(TenantPasswordConfig.get("strict")),
-            Effect.flip,
-          );
-        assert.strictEqual(strict._tag, "AdminWeakPassword");
-        yield* admin
-          .setUserPassword(asCaller(adminId), targetId, {
-            password: newPassword,
-          })
-          .pipe(Effect.provide(TenantPasswordConfig.get("lax")));
-      }).pipe(
-        TestAuth.withoutRequest,
-        Effect.provide(
-          Layer.merge(buildLayer(manageAll), TenantPasswordConfig.layer),
-        ),
-      ),
+  it.effect("EP-007: a tenant's Password.config applies to an administrator-set password", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId } = yield* seed;
+      const admin = yield* AdminAccounts.AdminAccounts;
+      const strict = yield* admin
+        .setUserPassword(asCaller(adminId), targetId, {
+          password: newPassword,
+        })
+        .pipe(Effect.provide(TenantPasswordConfig.get("strict")), Effect.flip);
+      assert.strictEqual(strict._tag, "AdminWeakPassword");
+      yield* admin
+        .setUserPassword(asCaller(adminId), targetId, {
+          password: newPassword,
+        })
+        .pipe(Effect.provide(TenantPasswordConfig.get("lax")));
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(Layer.merge(buildLayer(manageAll), TenantPasswordConfig.layer)),
+    ),
   );
 
-  it.effect(
-    "an administrator cannot set their own password through the admin surface",
-    () =>
-      Effect.gen(function* () {
-        const { adminId } = yield* seed;
-        const admin = yield* AdminAccounts.AdminAccounts;
-        const failure = yield* admin
-          .setUserPassword(asCaller(adminId), adminId, {
-            password: newPassword,
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "AdminSelfActionRefused");
-      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
+  it.effect("an administrator cannot set their own password through the admin surface", () =>
+    Effect.gen(function* () {
+      const { adminId } = yield* seed;
+      const admin = yield* AdminAccounts.AdminAccounts;
+      const failure = yield* admin
+        .setUserPassword(asCaller(adminId), adminId, {
+          password: newPassword,
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "AdminSelfActionRefused");
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect(
@@ -618,10 +535,7 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "StoreUnavailable");
         if (failure._tag === "StoreUnavailable") {
-          assert.strictEqual(
-            failure.operation,
-            "AdminAccounts.setUserPassword",
-          );
+          assert.strictEqual(failure.operation, "AdminAccounts.setUserPassword");
         }
       }).pipe(
         TestAuth.withoutRequest,
@@ -652,8 +566,7 @@ describe("AdminAccounts: setUserPassword consults BeforeCredentialReset (ARF-005
     "an admin cannot replace the password of an account a second factor protects: HookAborted, nothing written, sessions kept",
     () =>
       Effect.gen(function* () {
-        const { adminId, targetId, accounts, hasher, oldPassword } =
-          yield* seed;
+        const { adminId, targetId, accounts, hasher, oldPassword } = yield* seed;
         const admin = yield* AdminAccounts.AdminAccounts;
         const sessions = yield* Sessions.Sessions;
         const live = yield* sessions.issue({ userId: targetId });
@@ -669,19 +582,13 @@ describe("AdminAccounts: setUserPassword consults BeforeCredentialReset (ARF-005
           assert.strictEqual(failure.code, "TWO_FACTOR_REQUIRED");
         }
         const account = Option.getOrThrow(
-          yield* accounts.findByProviderSubject(
-            Accounts.PASSWORD_PROVIDER_ID,
-            targetId,
-          ),
+          yield* accounts.findByProviderSubject(Accounts.PASSWORD_PROVIDER_ID, targetId),
         );
         const stored = Redacted.value(
           Option.getOrThrow(yield* accounts.findCredentialHash(account.id)),
         );
         assert.isTrue(yield* hasher.verify(oldPassword, stored));
         yield* sessions.verify(live.token);
-      }).pipe(
-        TestAuth.withoutRequest,
-        Effect.provide(buildLayer(manageAll, { resetVeto: true })),
-      ),
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll, { resetVeto: true }))),
   );
 });

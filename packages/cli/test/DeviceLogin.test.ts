@@ -34,8 +34,7 @@ const recordingBrowser = Effect.gen(function* () {
   const layer = Layer.succeed(
     Browser.Browser,
     Browser.Browser.of({
-      open: (url) =>
-        Ref.update(opened, (all) => [...all, url]).pipe(Effect.as(true)),
+      open: (url) => Ref.update(opened, (all) => [...all, url]).pipe(Effect.as(true)),
     }),
   );
   return { opened, layer };
@@ -52,27 +51,23 @@ describe("login (the device authorization flow)", () => {
           const browser = yield* recordingBrowser;
           const stderr: Array<string> = [];
           const sleeps: Array<number> = [];
-          const result = yield* runCli(
-            ["login", "--base-url", server.baseUrl],
-            undefined,
-            {
-              credentials: creds.layer,
-              browser: browser.layer,
-              stderr,
-              pacing: {
-                sleep: (duration) =>
-                  Effect.gen(function* () {
-                    sleeps.push(Duration.toSeconds(duration));
-                    // The person approves during the third wait; the first two polls are pending.
-                    const code = printedCode(stderr);
-                    if (sleeps.length === 3 && code !== undefined) {
-                      yield* server.decide(code, "ada@example.com");
-                    }
-                    yield* TestClock.adjust(duration);
-                  }),
-              },
+          const result = yield* runCli(["login", "--base-url", server.baseUrl], undefined, {
+            credentials: creds.layer,
+            browser: browser.layer,
+            stderr,
+            pacing: {
+              sleep: (duration) =>
+                Effect.gen(function* () {
+                  sleeps.push(Duration.toSeconds(duration));
+                  // The person approves during the third wait; the first two polls are pending.
+                  const code = printedCode(stderr);
+                  if (sleeps.length === 3 && code !== undefined) {
+                    yield* server.decide(code, "ada@example.com");
+                  }
+                  yield* TestClock.adjust(duration);
+                }),
             },
-          );
+          });
           assert.strictEqual(result.code, 0, everything(result));
           // The request: the interval the server advised, kept while the grant stayed pending.
           assert.deepStrictEqual(sleeps, [5, 5, 5]);
@@ -86,10 +81,7 @@ describe("login (the device authorization flow)", () => {
           assert.isTrue(Option.isSome(stored));
           if (Option.isNone(stored)) return;
           assert.strictEqual(stored.value.baseUrl, server.baseUrl);
-          assert.notInclude(
-            everything(result),
-            Redacted.value(stored.value.token),
-          );
+          assert.notInclude(everything(result), Redacted.value(stored.value.token));
           assert.include(result.stdout.join("\n"), "logged in to");
           // ...and it is a normal session: `whoami` accepts the stored token.
           const whoami = yield* runCli(["whoami"], undefined, {
@@ -120,8 +112,7 @@ describe("login (the device authorization flow)", () => {
                 sleep: (duration) =>
                   Effect.gen(function* () {
                     const code = printedCode(stderr);
-                    if (code !== undefined)
-                      yield* server.decide(code, "grace@example.com");
+                    if (code !== undefined) yield* server.decide(code, "grace@example.com");
                     yield* TestClock.adjust(duration);
                   }),
               },
@@ -148,29 +139,25 @@ describe("login (the device authorization flow)", () => {
           const creds = yield* memoryCredentials();
           const stderr: Array<string> = [];
           const sleeps: Array<number> = [];
-          const result = yield* runCli(
-            ["login", "--base-url", server.baseUrl],
-            undefined,
-            {
-              credentials: creds.layer,
-              stderr,
-              pacing: {
-                sleep: (duration) =>
-                  Effect.gen(function* () {
-                    sleeps.push(Duration.toSeconds(duration));
-                    // A client whose clock is too fast: time does not pass between the first waits, so the server
-                    // answers slow_down. Once it has been told to slow down twice, real time catches up and the person approves.
-                    if (sleeps.length >= 4) {
-                      const code = printedCode(stderr);
-                      if (code !== undefined && sleeps.length === 4) {
-                        yield* server.decide(code, "slow@example.com");
-                      }
-                      yield* TestClock.adjust(Duration.minutes(1));
+          const result = yield* runCli(["login", "--base-url", server.baseUrl], undefined, {
+            credentials: creds.layer,
+            stderr,
+            pacing: {
+              sleep: (duration) =>
+                Effect.gen(function* () {
+                  sleeps.push(Duration.toSeconds(duration));
+                  // A client whose clock is too fast: time does not pass between the first waits, so the server
+                  // answers slow_down. Once it has been told to slow down twice, real time catches up and the person approves.
+                  if (sleeps.length >= 4) {
+                    const code = printedCode(stderr);
+                    if (code !== undefined && sleeps.length === 4) {
+                      yield* server.decide(code, "slow@example.com");
                     }
-                  }),
-              },
+                    yield* TestClock.adjust(Duration.minutes(1));
+                  }
+                }),
             },
-          );
+          });
           assert.strictEqual(result.code, 0, everything(result));
           // The first wait is the advised 5 and its poll is pending. The second wait is 5 again, but no time passed,
           // so its poll is slow_down: +5 -> 10. The third (still too soon) is slow_down again: +5 -> 15. Each wait
@@ -186,23 +173,18 @@ describe("login (the device authorization flow)", () => {
         const server = yield* serveAuth();
         const creds = yield* memoryCredentials();
         const stderr: Array<string> = [];
-        const result = yield* runCli(
-          ["login", "--base-url", server.baseUrl],
-          undefined,
-          {
-            credentials: creds.layer,
-            stderr,
-            pacing: {
-              sleep: (duration) =>
-                Effect.gen(function* () {
-                  const code = printedCode(stderr);
-                  if (code !== undefined)
-                    yield* server.decide(code, "no@example.com", "deny");
-                  yield* TestClock.adjust(duration);
-                }),
-            },
+        const result = yield* runCli(["login", "--base-url", server.baseUrl], undefined, {
+          credentials: creds.layer,
+          stderr,
+          pacing: {
+            sleep: (duration) =>
+              Effect.gen(function* () {
+                const code = printedCode(stderr);
+                if (code !== undefined) yield* server.decide(code, "no@example.com", "deny");
+                yield* TestClock.adjust(duration);
+              }),
           },
-        );
+        });
         assert.strictEqual(result.code, 8);
         assert.include(everything(result), "denied");
         assert.strictEqual(yield* Ref.get(creds.writes), 0);
@@ -215,14 +197,10 @@ describe("login (the device authorization flow)", () => {
       Effect.gen(function* () {
         const server = yield* serveAuth();
         const creds = yield* memoryCredentials();
-        const result = yield* runCli(
-          ["login", "--base-url", server.baseUrl],
-          undefined,
-          {
-            credentials: creds.layer,
-            pacing: { sleep: () => TestClock.adjust(Duration.minutes(16)) },
-          },
-        );
+        const result = yield* runCli(["login", "--base-url", server.baseUrl], undefined, {
+          credentials: creds.layer,
+          pacing: { sleep: () => TestClock.adjust(Duration.minutes(16)) },
+        });
         assert.strictEqual(result.code, 8);
         assert.include(everything(result), "expired");
         assert.strictEqual(yield* Ref.get(creds.writes), 0);
@@ -235,14 +213,10 @@ describe("login (the device authorization flow)", () => {
       Effect.gen(function* () {
         const server = yield* serveAuth({ device: false });
         const creds = yield* memoryCredentials();
-        const result = yield* runCli(
-          ["login", "--base-url", server.baseUrl],
-          undefined,
-          {
-            credentials: creds.layer,
-            pacing: { sleep: () => Effect.void },
-          },
-        );
+        const result = yield* runCli(["login", "--base-url", server.baseUrl], undefined, {
+          credentials: creds.layer,
+          pacing: { sleep: () => Effect.void },
+        });
         assert.strictEqual(result.code, 9);
         assert.include(everything(result), "DeviceAuthorization");
         assert.include(everything(result), "--token");
@@ -253,13 +227,9 @@ describe("login (the device authorization flow)", () => {
 
   it.effect("an unreachable server is exit 9, not a crash", () =>
     Effect.gen(function* () {
-      const result = yield* runCli(
-        ["login", "--base-url", "http://127.0.0.1:1"],
-        undefined,
-        {
-          pacing: { sleep: () => Effect.void },
-        },
-      );
+      const result = yield* runCli(["login", "--base-url", "http://127.0.0.1:1"], undefined, {
+        pacing: { sleep: () => Effect.void },
+      });
       assert.strictEqual(result.code, 9);
     }),
   );
@@ -271,13 +241,7 @@ describe("login (the device authorization flow)", () => {
         Effect.gen(function* () {
           const server = yield* serveAuth();
           const result = yield* runCli(
-            [
-              "login",
-              "--base-url",
-              server.baseUrl,
-              "--client-id",
-              "not-registered",
-            ],
+            ["login", "--base-url", server.baseUrl, "--client-id", "not-registered"],
             undefined,
             { pacing: { sleep: () => Effect.void } },
           );
@@ -287,32 +251,28 @@ describe("login (the device authorization flow)", () => {
       ).pipe(TestAuth.withoutRequest),
   );
 
-  it.effect(
-    "--token still wins: no device code is requested when a token is given",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const server = yield* serveAuth();
-          const { token } = yield* server.issue("token@example.com");
-          const creds = yield* memoryCredentials();
-          const stderr: Array<string> = [];
-          const result = yield* runCli(
-            ["login", "--token", token, "--base-url", server.baseUrl],
-            undefined,
-            { credentials: creds.layer, stderr },
-          );
-          assert.strictEqual(result.code, 0, everything(result));
-          assert.notInclude(stderr.join("\n"), "confirm the code");
-        }),
-      ).pipe(TestAuth.withoutRequest),
+  it.effect("--token still wins: no device code is requested when a token is given", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* serveAuth();
+        const { token } = yield* server.issue("token@example.com");
+        const creds = yield* memoryCredentials();
+        const stderr: Array<string> = [];
+        const result = yield* runCli(
+          ["login", "--token", token, "--base-url", server.baseUrl],
+          undefined,
+          { credentials: creds.layer, stderr },
+        );
+        assert.strictEqual(result.code, 0, everything(result));
+        assert.notInclude(stderr.join("\n"), "confirm the code");
+      }),
+    ).pipe(TestAuth.withoutRequest),
   );
 });
 
 describe("Browser (BEH-EA-307)", () => {
   it("opens only web URLs, one argv element per URL, with the platform's own opener", () => {
-    assert.isTrue(
-      Browser.isWebUrl("https://app.example.com/device?user_code=BCDF-GHJK"),
-    );
+    assert.isTrue(Browser.isWebUrl("https://app.example.com/device?user_code=BCDF-GHJK"));
     assert.isTrue(Browser.isWebUrl("http://127.0.0.1:3000/device"));
     for (const refused of [
       "file:///etc/passwd",
@@ -339,29 +299,25 @@ describe("Browser (BEH-EA-307)", () => {
     assert.isUndefined(Browser.openerFor("freebsd", url));
   });
 
-  it.effect(
-    "answers false, never a failure, when there is no opener or the opener fails",
-    () =>
-      Effect.gen(function* () {
-        const calls: Array<ReadonlyArray<string>> = [];
-        const browser = (platform: string, exitCode: number | undefined) =>
-          Browser.make(platform, {
-            run: (command, args) => {
-              calls.push([command, ...args]);
-              return Effect.succeed(
-                exitCode === undefined ? undefined : { exitCode, stdout: "" },
-              );
-            },
-          });
-        const url = "https://app.example.com/device";
-        assert.isTrue(yield* browser("linux", 0).open(url));
-        assert.isFalse(yield* browser("linux", 1).open(url));
-        assert.isFalse(yield* browser("linux", undefined).open(url));
-        assert.isFalse(yield* browser("freebsd", 0).open(url));
-        // A refused scheme is never handed to an opener.
-        const before = calls.length;
-        assert.isFalse(yield* browser("linux", 0).open("file:///etc/passwd"));
-        assert.strictEqual(calls.length, before);
-      }),
+  it.effect("answers false, never a failure, when there is no opener or the opener fails", () =>
+    Effect.gen(function* () {
+      const calls: Array<ReadonlyArray<string>> = [];
+      const browser = (platform: string, exitCode: number | undefined) =>
+        Browser.make(platform, {
+          run: (command, args) => {
+            calls.push([command, ...args]);
+            return Effect.succeed(exitCode === undefined ? undefined : { exitCode, stdout: "" });
+          },
+        });
+      const url = "https://app.example.com/device";
+      assert.isTrue(yield* browser("linux", 0).open(url));
+      assert.isFalse(yield* browser("linux", 1).open(url));
+      assert.isFalse(yield* browser("linux", undefined).open(url));
+      assert.isFalse(yield* browser("freebsd", 0).open(url));
+      // A refused scheme is never handed to an opener.
+      const before = calls.length;
+      assert.isFalse(yield* browser("linux", 0).open("file:///etc/passwd"));
+      assert.strictEqual(calls.length, before);
+    }),
   );
 });

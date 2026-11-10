@@ -16,10 +16,7 @@ const CANARY = "audit-chain-key-canary-7c1f";
 /** What an application composes: the plugin, its configuration, and the catalog of its composition. */
 const built = Auth.make([Admin.Admin]);
 
-const buildLayer = (
-  config: Partial<Admin.AdminConfigShape>,
-  catalog: boolean,
-) =>
+const buildLayer = (config: Partial<Admin.AdminConfigShape>, catalog: boolean) =>
   TestAuth.layer(built, {
     services: Layer.mergeAll(
       Admin.config(config),
@@ -42,31 +39,21 @@ describe("Admin.effectiveConfig", () => {
       Effect.gen(function* () {
         const admin = yield* Admin.Admin;
         const items = yield* admin.effectiveConfig(asCaller("admin-1"));
-        const chain = items.find(
-          (item) => item.key === "awthaq/core/AuditChainConfig",
-        );
+        const chain = items.find((item) => item.key === "awthaq/core/AuditChainConfig");
         assert.strictEqual(chain?.owner, "admin");
         assert.strictEqual(chain?.source, "override");
         assert.deepStrictEqual(
-          chain?.entries.map((entry) => [
-            entry.path,
-            entry.value,
-            entry.sensitive,
-          ]),
+          chain?.entries.map((entry) => [entry.path, entry.value, entry.sensitive]),
           [["key", "<redacted>", true]],
         );
         // Core's own descriptors are listed too, as defaults.
-        const session = items.find(
-          (item) => item.key === "awthaq/core/SessionConfig",
-        );
+        const session = items.find((item) => item.key === "awthaq/core/SessionConfig");
         assert.strictEqual(session?.owner, "core");
         assert.strictEqual(session?.source, "default");
         assert.notInclude(JSON.stringify(items), CANARY);
       }).pipe(
         Effect.scoped,
-        Effect.provide(
-          buildLayer({ canManageUsers: () => Effect.succeed(true) }, true),
-        ),
+        Effect.provide(buildLayer({ canManageUsers: () => Effect.succeed(true) }, true)),
       ),
   );
 
@@ -78,9 +65,7 @@ describe("Admin.effectiveConfig", () => {
       assert.notInclude(JSON.stringify(items), CANARY);
     }).pipe(
       Effect.scoped,
-      Effect.provide(
-        buildLayer({ canManageUsers: () => Effect.succeed(true) }, false),
-      ),
+      Effect.provide(buildLayer({ canManageUsers: () => Effect.succeed(true) }, false)),
     ),
   );
 });

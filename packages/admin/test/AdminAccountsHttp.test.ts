@@ -11,17 +11,11 @@ import * as Option from "effect/Option";
 import * as Admin from "../src/Admin.ts";
 import * as AdminAccounts from "../src/AdminAccounts.ts";
 
-const built = Auth.make([
-  Admin.Admin,
-  Password.Password,
-  AdminAccounts.AdminAccounts,
-]);
+const built = Auth.make([Admin.Admin, Password.Password, AdminAccounts.AdminAccounts]);
 
 const allow = () => Effect.succeed(true);
 
-const buildHandler = Effect.fn(function* (
-  config: Partial<Admin.AdminConfigShape>,
-) {
+const buildHandler = Effect.fn(function* (config: Partial<Admin.AdminConfigShape>) {
   const app = yield* TestAuth.serve(
     TestAuth.layer(built, {
       services: Layer.merge(Admin.config(config), TestAuth.httpClient.noBreach),
@@ -78,27 +72,25 @@ const buildHandler = Effect.fn(function* (
 });
 
 describe("AdminAccounts (real HTTP)", () => {
-  it.effect(
-    "is fail-closed: every endpoint answers 403 until its predicate says yes",
-    () =>
-      Effect.gen(function* () {
-        const app = yield* buildHandler({});
-        const adminId = yield* Effect.promise(() => app.seedUser("admin"));
-        const targetId = yield* Effect.promise(() => app.seedUser("target"));
-        const admin = yield* Effect.promise(() => app.signInAs(adminId));
-        const statuses = yield* Effect.promise(() =>
-          Promise.all([
-            app.call("DELETE", `/admin/users/${targetId}`, admin),
-            app.call("POST", `/admin/users/${targetId}/email`, admin, {
-              email: "new@example.com",
-            }),
-            app.call("POST", `/admin/users/${targetId}/password`, admin, {
-              password: "a brand new strong password",
-            }),
-          ]).then((responses) => responses.map((response) => response.status)),
-        );
-        assert.deepStrictEqual(statuses, [403, 403, 403]);
-      }),
+  it.effect("is fail-closed: every endpoint answers 403 until its predicate says yes", () =>
+    Effect.gen(function* () {
+      const app = yield* buildHandler({});
+      const adminId = yield* Effect.promise(() => app.seedUser("admin"));
+      const targetId = yield* Effect.promise(() => app.seedUser("target"));
+      const admin = yield* Effect.promise(() => app.signInAs(adminId));
+      const statuses = yield* Effect.promise(() =>
+        Promise.all([
+          app.call("DELETE", `/admin/users/${targetId}`, admin),
+          app.call("POST", `/admin/users/${targetId}/email`, admin, {
+            email: "new@example.com",
+          }),
+          app.call("POST", `/admin/users/${targetId}/password`, admin, {
+            password: "a brand new strong password",
+          }),
+        ]).then((responses) => responses.map((response) => response.status)),
+      );
+      assert.deepStrictEqual(statuses, [403, 403, 403]);
+    }),
   );
 
   it.effect("DELETE erases the user through the cascade and answers 204", () =>
@@ -120,9 +112,7 @@ describe("AdminAccounts (real HTTP)", () => {
         app.inApp(
           Effect.gen(function* () {
             const users = yield* Users.Users;
-            return yield* users
-              .findById(Users.UserId(targetId))
-              .pipe(Effect.option);
+            return yield* users.findById(Users.UserId(targetId)).pipe(Effect.option);
           }),
         ),
       );

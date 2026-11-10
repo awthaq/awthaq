@@ -3,7 +3,14 @@
 // handler with a real session cookie, and aborts an operation with a veto tap, in BOTH record modes: the template's
 // `records` bundle is what makes the same suite run over memory and over a migrated database.
 import { Api } from "@awthaq/api";
-import { AuditLog, Auth, AuthEvents, ConfigDescriptor, EffectiveConfig, HookPoint } from "@awthaq/core";
+import {
+  AuditLog,
+  Auth,
+  AuthEvents,
+  ConfigDescriptor,
+  EffectiveConfig,
+  HookPoint,
+} from "@awthaq/core";
 import { Rendezvous, TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -94,7 +101,10 @@ describe("plugin-template: the descriptor's view agrees with the operation", () 
       ]).pipe(Effect.provide(Template.config({ maxLength: 30 })));
       assert.strictEqual(item?.scope, "tenant");
       assert.strictEqual(item?.source, "tenant");
-      assert.strictEqual(new Map(item?.entries.map((e) => [e.path, e.value])).get("maxLength"), "30");
+      assert.strictEqual(
+        new Map(item?.entries.map((e) => [e.path, e.value])).get("maxLength"),
+        "30",
+      );
     }).pipe(Effect.provide(Template.config({ maxLength: 20 }))),
   );
 });

@@ -441,3 +441,5 @@ Not applicable. No store, statement or transaction changes.
 None of these blocks a wave; each default lets the tickets run as written.
 
 ## Decisions taken
+
+- Q1 NO-GO on `SecretHash.match`; Q2 Verification uses `SecretHash.digest`; Q3 SCIM compare kept; Q4 patch changeset for five packages. ADR-EA-058 unused.

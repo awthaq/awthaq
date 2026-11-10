@@ -75,7 +75,9 @@ export const awaitMail = Effect.fn("features.domain.awaitMail")(function* (
   const found = (yield* mailbox.mail.messages).filter(
     (message) => message.to === email && message.template === template,
   );
-  return found[found.length - 1] ?? (yield* Effect.die(new Error("unreachable: a waited mail vanished")));
+  return (
+    found[found.length - 1] ?? (yield* Effect.die(new Error("unreachable: a waited mail vanished")))
+  );
 });
 
 /** Splits a mailed `<purpose>:<publicId>.<secret>` token into what `Verification` is keyed by. */

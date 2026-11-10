@@ -45,7 +45,14 @@ import {
   Verification,
   VerificationLink,
 } from "@awthaq/core";
-import { Defects, type Encryption, RateLimiter, SqlTransaction, XmlSignature } from "@awthaq/ports";
+import {
+  Defects,
+  type Encryption,
+  Hmac,
+  RateLimiter,
+  SqlTransaction,
+  XmlSignature,
+} from "@awthaq/ports";
 import {
   DomainClaims,
   Organization,
@@ -357,9 +364,6 @@ const samlMigrations: Migrations.Migrations = [
 ];
 
 // ---- pieces ------------------------------------------------------------------------------------------
-
-const hexOf = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /** A `callbackURL` is a relative path or an origin the deployment trusts; anything else is the default (BEH-EA-128's rule, as OAuth applies it). */
 const resolveCallbackURL = (
@@ -1016,7 +1020,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
           }
         }
         // One-time assertion id: kept until the assertion could no longer pass the time window anyway.
-        const digest = hexOf(
+        const digest = Hmac.toHex(
           yield* hasher.digest(
             Digest.sha256,
             new TextEncoder().encode(`${connection.idpEntityId}|${assertion.id}`),

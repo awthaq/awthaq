@@ -1163,8 +1163,12 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
 
   const passwordMinLength = (inTenant: string | null) =>
     adminAccounts(
-      Effect.flatMap(Admin.Admin, (admin) => admin.effectiveConfig(callerOf("an-administrator"))).pipe(
-        inTenant === null ? (self) => self : Effect.provide(AdminAccountsTenantConfig.get(inTenant)),
+      Effect.flatMap(Admin.Admin, (admin) =>
+        admin.effectiveConfig(callerOf("an-administrator")),
+      ).pipe(
+        inTenant === null
+          ? (self) => self
+          : Effect.provide(AdminAccountsTenantConfig.get(inTenant)),
       ),
     ).pipe(
       Effect.map((items) => {

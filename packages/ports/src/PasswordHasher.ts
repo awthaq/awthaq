@@ -255,9 +255,6 @@ const wasmBackend = (slots: Semaphore.Semaphore): KdfBackend => ({
 /** hash-wasm's own encoded form uses unpadded base64 for the salt and digest. */
 const encodeUnpaddedBase64 = (bytes: Uint8Array): string => Base64.encode(bytes).replace(/=+$/, "");
 
-const toHex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-
 // $argon2id$v=19$m=<memorySize>,t=<iterations>,p=<parallelism>$<salt>$<hash>
 // (salt and hash are unpadded base64).
 const ARGON2ID_PHC =
@@ -552,7 +549,7 @@ export const makeScrypt = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
           hashLength: HASH_LENGTH,
         });
         return PhcHash(
-          `$scrypt$ln=${costLog2},r=${blockSize},p=${parallelism}$${Base64.encode(salt)}$${toHex(digest)}`,
+          `$scrypt$ln=${costLog2},r=${blockSize},p=${parallelism}$${Base64.encode(salt)}$${Hmac.toHex(digest)}`,
         );
       }).pipe(Effect.orDie);
 
@@ -571,7 +568,7 @@ export const makeScrypt = (backend: KdfBackend, slots: Semaphore.Semaphore) =>
           parallelism: parsed.parallelism,
           hashLength: HASH_LENGTH,
         });
-        return Hmac.constantTimeEqualString(toHex(digest), parsed.hash);
+        return Hmac.constantTimeEqualString(Hmac.toHex(digest), parsed.hash);
       }).pipe(Effect.orElseSucceed(() => false));
     };
 

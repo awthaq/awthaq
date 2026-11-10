@@ -8,7 +8,7 @@
 // `CurrentScimConnection` every endpoint is scoped by).
 //
 // The token is `scim_` plus 256 random bits, returned exactly once, at creation;
-// only its SHA-256 is stored, so a database read discloses nothing an IdP could
+// only its SHA-256 (`SecretHash`) is stored, so a database read discloses nothing an IdP could
 // present. Lookup is by that hash (an indexed equality), followed by a
 // constant-time comparison. A revoked connection, a connection whose organization
 // no longer exists, and a connection whose organization is suspended
@@ -18,6 +18,7 @@
 import type { Api } from "@awthaq/api";
 import { TenantScoped } from "@awthaq/sql";
 import { OrganizationDirectory } from "@awthaq/organization";
+import { SecretHash } from "@awthaq/core";
 import { Hmac } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
@@ -36,9 +37,6 @@ const TOKEN_PREFIX = "scim_";
 
 /** The bearer token's hash is the capability: the connection is found before any tenant is known. */
 const tokenGrant = TenantScoped.crossTenant("scim: the bearer token hash is the capability");
-
-const hexOf = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /** What a caller sees of a connection: never the token, never its hash. */
 export interface ScimConnectionView {
@@ -84,10 +82,6 @@ export class ScimConnectionStore extends Context.Service<
   ScimConnectionStoreShape
 >()("awthaq/scim/ScimConnectionStore") {}
 
-/** Hex SHA-256 of a token — the only form of it ever stored or compared. */
-const hashToken = (hasher: Digest.Digest["Service"], token: string) =>
-  hasher.digest(Digest.sha256, new TextEncoder().encode(token)).pipe(Effect.map(hexOf));
-
 /** Requires `ScimRecords`, `SecureRandom` and `Digest`. */
 export const layerStore = Layer.effect(
   ScimConnectionStore,
@@ -98,12 +92,12 @@ export const layerStore = Layer.effect(
 
     const create: ScimConnectionStoreShape["create"] = Effect.fnUntraced(function* (input) {
       const id = yield* random.uuidV7();
-      const token = `${TOKEN_PREFIX}${hexOf(yield* random.randomBytes(32))}`;
+      const token = `${TOKEN_PREFIX}${Hmac.toHex(yield* random.randomBytes(32))}`;
       const record = yield* records.createConnection({
         id,
         organizationId: input.organizationId,
         name: input.name.trim(),
-        tokenHash: yield* hashToken(hasher, token),
+        tokenHash: yield* SecretHash.digest(hasher, token),
       });
       return { connection: toView(record), token: Redacted.make(token) };
     });
@@ -138,7 +132,7 @@ export const ScimAuthenticationLive = Layer.effect(
       Effect.gen(function* () {
         const presented = Redacted.value(credential);
         if (!presented.startsWith(TOKEN_PREFIX)) return yield* ScimApi.unauthorized();
-        const hash = yield* hashToken(hasher, presented);
+        const hash = yield* SecretHash.digest(hasher, presented);
         const found = yield* records.findConnectionByTokenHash(tokenGrant, hash);
         if (Option.isNone(found)) return yield* ScimApi.unauthorized();
         const connection = found.value;

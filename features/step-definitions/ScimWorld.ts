@@ -138,10 +138,10 @@ export interface AppHandle {
 }
 
 const buildApp = (options: AppOptions) =>
-  Effect.map(
-    TestAuth.serve(buildLive(options), { baseUrl: ORIGIN }),
-    (app): AppHandle => ({ handler: app.handler, withContext: (effect) => app.run(effect) }),
-  );
+  Effect.map(TestAuth.serve(buildLive(options), { baseUrl: ORIGIN }), (app): AppHandle => ({
+    handler: app.handler,
+    withContext: (effect) => app.run(effect),
+  }));
 
 // ---- the World ---------------------------------------------------------------------------
 

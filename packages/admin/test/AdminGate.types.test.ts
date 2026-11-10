@@ -13,9 +13,7 @@ declare const caller: Api.UserPrincipal;
 declare const built: Admin.AdminConfigShape;
 
 type Equal<A, B> =
-  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
-    ? true
-    : false;
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 /** Compiles only when `T` is `true`. */
 type AssertTrue<T extends true> = T;
 
@@ -28,10 +26,7 @@ type Check1 = AssertTrue<
 >;
 type Check2 = AssertTrue<Equal<AdminGate.TenantGate, "canAdministerTenants">>;
 type Check3 = AssertTrue<
-  Equal<
-    AdminGate.CollectionAction,
-    "effectiveConfig" | "listUsers" | "listOrganizations"
-  >
+  Equal<AdminGate.CollectionAction, "effectiveConfig" | "listUsers" | "listOrganizations">
 >;
 
 // Never called: the `declare`d values have no runtime existence, only types.

@@ -624,9 +624,9 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
             const mailer = yield* Mailer.Mailer;
             const mailbox = yield* TestMailbox.Mailbox;
             yield* Effect.forkChild(
-              Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis))).pipe(
-                Effect.andThen(mailer.send({ to: "late@example.com", template })),
-              ),
+              Effect.promise(
+                () => new Promise<void>((resolve) => setTimeout(resolve, millis)),
+              ).pipe(Effect.andThen(mailer.send({ to: "late@example.com", template }))),
             );
             return yield* Effect.exit(mailbox.mail.refute({ template: refuted }));
           }).pipe(Effect.provide(context));

@@ -43,9 +43,7 @@ const HOST_LEVEL = [
 describe("configuration scope guard (BEH-EA-355)", () => {
   it("no source file names the old Tenant.configInForce helper", () => {
     assert.deepStrictEqual(
-      sources
-        .filter(({ text }) => text.includes("configInForce"))
-        .map(({ path }) => path),
+      sources.filter(({ text }) => text.includes("configInForce")).map(({ path }) => path),
       [],
     );
   });
@@ -71,9 +69,7 @@ describe("configuration scope guard (BEH-EA-355)", () => {
         ({ path, text }) =>
           !PENDING_TICKET_18.some((prefix) => path.startsWith(prefix)) &&
           [...text.matchAll(/ConfigDescriptor\.make\(\s*([\w.]+)/g)].some(
-            ([, arg]) =>
-              !(arg ?? "").endsWith("Scoped") &&
-              !(arg ?? "").includes("Tenant.per"),
+            ([, arg]) => !(arg ?? "").endsWith("Scoped") && !(arg ?? "").includes("Tenant.per"),
           ),
       )
       .map(({ path }) => path);

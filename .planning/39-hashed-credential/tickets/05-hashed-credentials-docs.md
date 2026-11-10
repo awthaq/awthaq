@@ -22,7 +22,7 @@ must_haves:
   key_links:
     - "docs/plugin-authoring.md '## Hashed credentials' cites @awthaq/api-key (id lookup, grace slot), @awthaq/scim (lookup by hash) and core Sessions (RRS-005) as worked examples"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 02, 03, 04
 
 <objective>
@@ -82,3 +82,5 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular && pnpm c
 </success_criteria>
 
 ## Comments
+
+Done (uncommitted). docs/plugin-authoring.md: '## Hashed credentials' after 'Contributing a credential type', checklist item 11. .changeset/hashed-credential-residue.md: patch for core, scim, organization, saml, ports, Migration: none. Gates run: tsc -b, tsc -p tsconfig.test.json (only pre-existing features/ warnings), circular, spec:verify:strict, check:readmes, check:error-tags, scoped vitest (73 files, 1623 passed, 1 skipped). Not run: whole pnpm test, lint, knip, format:check, pnpm check.

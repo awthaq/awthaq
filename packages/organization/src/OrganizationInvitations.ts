@@ -17,7 +17,7 @@
 //
 // Events and observe points run after the module's own transaction ends.
 
-import { AuthEvents, Errors, HookPoint, Users } from "@awthaq/core";
+import { AuthEvents, Errors, HookPoint, SecretHash, Users } from "@awthaq/core";
 import { Defects, Hmac, Mailer, SqlTransaction, Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
@@ -41,7 +41,6 @@ import * as TeamRecords from "./TeamRecords.ts";
 import { requireWithin } from "./internal/bound.ts";
 import { ownsEmail } from "./internal/invitee.ts";
 import { limitsOf } from "./internal/limits.ts";
-import { hexOf, NO_INVITATION_TOKEN_HASH } from "./internal/tokens.ts";
 
 export type Invitation = InvitationRecords.InvitationRecord;
 
@@ -206,11 +205,10 @@ export class OrganizationInvitations extends Context.Service<
       const afterAddTeamMember = yield* OrganizationHooks.AfterAddTeamMember;
 
       /** Hex SHA-256 of an invitation token: the only form of it ever stored. */
-      const hashToken = (token: string) =>
-        hasher.digest(Digest.sha256, new TextEncoder().encode(token)).pipe(Effect.map(hexOf));
+      const hashToken = (token: string) => SecretHash.digest(hasher, token);
 
       const mintToken = Effect.gen(function* () {
-        const token = hexOf(yield* random.randomBytes(32));
+        const token = Hmac.toHex(yield* random.randomBytes(32));
         return { token, tokenHash: yield* hashToken(token) };
       });
 
@@ -224,9 +222,9 @@ export class OrganizationInvitations extends Context.Service<
           const found = yield* invitations.findById(invitationIdGrant, invitationId);
           const presented = yield* hashToken(token);
           const stored = Option.flatMap(found, (record) => record.tokenHash);
-          const matches = Hmac.constantTimeEqualString(
+          const matches = SecretHash.equals(
             presented,
-            Option.getOrElse(stored, () => NO_INVITATION_TOKEN_HASH),
+            Option.getOrElse(stored, () => SecretHash.NEVER_MATCHES),
           );
           if (Option.isNone(found) || Option.isNone(stored) || !matches) {
             return yield* new OrganizationErrors.InvitationNotFound();
@@ -316,9 +314,7 @@ export class OrganizationInvitations extends Context.Service<
       const holdsToken: OrganizationInvitationsShape["holdsToken"] = (invitation, token) =>
         hashToken(token).pipe(
           Effect.map((presented) =>
-            Option.exists(invitation.tokenHash, (stored) =>
-              Hmac.constantTimeEqualString(presented, stored),
-            ),
+            Option.exists(invitation.tokenHash, (stored) => SecretHash.equals(presented, stored)),
           ),
         );
 

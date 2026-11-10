@@ -23,7 +23,7 @@ must_haves:
     - "ScimConnections.layerStore.create and ScimAuthenticationLive.bearer -> SecretHash.digest (from @awthaq/core)"
     - "ScimConnections.layerStore.create token minting -> Hmac.toHex (from @awthaq/ports)"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 01
 
 <objective>
@@ -92,3 +92,5 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular
 </success_criteria>
 
 ## Comments
+
+Done (uncommitted). ScimHttp.test.ts: new at-rest pin test (passed at HEAD before the swap). ScimConnections.ts: local hexOf and hashToken deleted; SecretHash.digest x2, Hmac.toHex; compare kept (Q3). packages/scim tests all pass.

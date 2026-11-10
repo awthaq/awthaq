@@ -28,7 +28,7 @@ must_haves:
     - "packages/core/src/Verification.ts imports ./SecretHash.ts (no cycle: SecretHash imports only @awthaq/ports and effect)"
     - "spec/traceability.md row cites packages/core/test/SecretHash.test.ts, checked by pnpm spec:verify"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: none
 
 <objective>
@@ -122,3 +122,5 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular
 </success_criteria>
 
 ## Comments
+
+Done (uncommitted). SecretHash.test.ts: 5 passing tests (FIPS abc vector, Node createHash oracle over 5 inputs, 64 lower-hex, NEVER_MATCHES, equals). SecretHash header rewritten (exports untouched). Verification.ts hashOf and layer hash now SecretHash.digest (hash helper deleted; 0 Digest.sha256 left). Verification, VerificationLink and SecretHash tests: 74 passed. spec/traceability.md row added, revision 1.86; spec:verify:strict PASS 32/0.

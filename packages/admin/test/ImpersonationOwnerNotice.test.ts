@@ -1,14 +1,7 @@
 // ARF-005 (wayfinder ticket 05 §2), BEH-EA-209: the one mitigation shipped for a zero-factor recovery —
 // support-assisted impersonation stops being silent to the account owner. Opt-in; the notice carries
 // the reason and the time, never a session id or token.
-import {
-  AuditLog,
-  AuthEvents,
-  Hooks,
-  Persistence,
-  Sessions,
-  Users,
-} from "@awthaq/core";
+import { AuditLog, AuthEvents, Hooks, Persistence, Sessions, Users } from "@awthaq/core";
 import { TestMailbox } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -28,9 +21,7 @@ const CoreLive = Users.layer
   );
 
 /** The notice subscribed to the bus, over the same events/users/mailer the test publishes to. */
-const TestLayer = ImpersonationOwnerNotice.layer.pipe(
-  Layer.provideMerge(CoreLive),
-);
+const TestLayer = ImpersonationOwnerNotice.layer.pipe(Layer.provideMerge(CoreLive));
 
 const startedBy = (adminUserId: Users.UserId, targetUserId: Users.UserId) => ({
   adminUserId,
@@ -65,19 +56,11 @@ describe("ImpersonationOwnerNotice.layer (ARF-005)", () => {
           template: "impersonation-started",
         });
         yield* box.mail.refute({}, { beyond: 1 });
-        assert.strictEqual(
-          mail.data?.["reason"],
-          "customer asked us to reproduce a billing bug",
-        );
+        assert.strictEqual(mail.data?.["reason"], "customer asked us to reproduce a billing bug");
         assert.isString(mail.data?.["startedAt"]);
         // Never the session id, the admin's identity or a token.
         const text = JSON.stringify(mail);
-        for (const forbidden of [
-          "session-secret-id",
-          admin.id,
-          "admin@example.com",
-          "token",
-        ]) {
+        for (const forbidden of ["session-secret-id", admin.id, "admin@example.com", "token"]) {
           assert.notInclude(text, forbidden);
         }
       }).pipe(Effect.provide(TestLayer)),

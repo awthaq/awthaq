@@ -10,9 +10,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 
-type Run = <X>(
-  effect: Effect.Effect<X, never, Users.Users | Sessions.Sessions>,
-) => Promise<X>;
+type Run = <X>(effect: Effect.Effect<X, never, Users.Users | Sessions.Sessions>) => Promise<X>;
 
 /** A fresh user with one live session; `token` is what `AWTHAQ_TOKEN` / `login --token` carries. */
 const scenario = (run: Run) => ({
@@ -23,9 +21,7 @@ const scenario = (run: Run) => ({
           const user = yield* Users.Users.use((users) =>
             users.create({ identity: { _tag: "Email", email }, name: "Test" }),
           );
-          const issued = yield* Sessions.Sessions.use((s) =>
-            s.issue({ userId: user.id }),
-          );
+          const issued = yield* Sessions.Sessions.use((s) => s.issue({ userId: user.id }));
           return {
             userId: user.id,
             sessionId: issued.session.id,
@@ -37,11 +33,7 @@ const scenario = (run: Run) => ({
   /** Revokes every session of the user server-side, as an admin or another device would. */
   revokeAll: (userId: Users.UserId) =>
     Effect.promise(() =>
-      run(
-        Sessions.Sessions.use((s) => s.revokeAll(userId, "userRevoked")).pipe(
-          Effect.orDie,
-        ),
-      ),
+      run(Sessions.Sessions.use((s) => s.revokeAll(userId, "userRevoked")).pipe(Effect.orDie)),
     ),
 });
 
@@ -52,20 +44,11 @@ export const serveAuth = (options?: { readonly device?: boolean }) =>
     if (options?.device === false) {
       const app = yield* TestAuth.listen(
         TestAuth.layer(Auth.make([Password.Password]), {
-          services: Layer.mergeAll(
-            Password.config({}),
-            TestAuth.httpClient.noBreach,
-          ),
+          services: Layer.mergeAll(Password.config({}), TestAuth.httpClient.noBreach),
         }),
       );
-      const decide = (
-        _code: string,
-        _email: string,
-        _decision?: "approve" | "deny",
-      ) =>
-        Effect.die(
-          "serveAuth({ device: false }) has no device authorization plugin",
-        );
+      const decide = (_code: string, _email: string, _decision?: "approve" | "deny") =>
+        Effect.die("serveAuth({ device: false }) has no device authorization plugin");
       return { baseUrl: app.url, ...scenario(app.run), decide };
     }
     const app = yield* TestAuth.listen(
@@ -77,11 +60,7 @@ export const serveAuth = (options?: { readonly device?: boolean }) =>
     );
     const { issue, revokeAll } = scenario(app.run);
     /** The person on the second device: opens the verification page for `userCode` (claiming it) and decides. */
-    const decide = (
-      userCode: string,
-      email: string,
-      decision: "approve" | "deny" = "approve",
-    ) =>
+    const decide = (userCode: string, email: string, decision: "approve" | "deny" = "approve") =>
       Effect.flatMap(issue(email), ({ userId, sessionId }) =>
         Effect.promise(() =>
           app.run(
@@ -102,10 +81,7 @@ export const serveAuth = (options?: { readonly device?: boolean }) =>
                       : plugin.deny(source, caller),
                   ),
                 );
-            }).pipe(
-              Effect.orDie,
-              TestAuth.withRequest({ ip: "198.51.100.20" }),
-            ),
+            }).pipe(Effect.orDie, TestAuth.withRequest({ ip: "198.51.100.20" })),
           ),
         ),
       );

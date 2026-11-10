@@ -28,9 +28,7 @@ const manageAll = { canManageUsers: () => Effect.succeed(true) };
 const decodeStored = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
-      meta: Schema.optional(
-        Schema.Struct({ pii: Schema.optional(Schema.Array(Schema.String)) }),
-      ),
+      meta: Schema.optional(Schema.Struct({ pii: Schema.optional(Schema.Array(Schema.String)) })),
     }),
   ),
 );
@@ -83,9 +81,7 @@ describe("Admin user administration (BAM-005)", () => {
       assert.isTrue(Option.isSome(first.nextCursor));
       const second = yield* admin.listUsers(caller, {
         limit: 3,
-        ...(Option.isSome(first.nextCursor)
-          ? { cursor: first.nextCursor.value }
-          : {}),
+        ...(Option.isSome(first.nextCursor) ? { cursor: first.nextCursor.value } : {}),
       });
       assert.strictEqual(second.items.length, 2); // 5 users in all
       assert.isTrue(Option.isNone(second.nextCursor));
@@ -119,15 +115,9 @@ describe("Admin user administration (BAM-005)", () => {
         assert.strictEqual(failure._tag, "AdminTargetNotFound");
 
         yield* TestClock.adjust(Duration.millis(10));
-        const events = (yield* Ref.get(seen)).filter(
-          (e) => e._tag === "auth.admin.userUpdated",
-        );
+        const events = (yield* Ref.get(seen)).filter((e) => e._tag === "auth.admin.userUpdated");
         assert.strictEqual(events.length, 2);
-      }).pipe(
-        Effect.scoped,
-        TestAuth.withoutRequest,
-        Effect.provide(buildLayer(manageAll)),
-      ),
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
   it.effect(
@@ -169,20 +159,14 @@ describe("Admin user administration (BAM-005)", () => {
           .revokeUserSession(caller, targetId, episode.session.id)
           .pipe(Effect.flip);
         assert.strictEqual(impersonation._tag, "AdminSessionNotFound");
-        assert.strictEqual(
-          (yield* sessions.verify(episode.token)).session.id,
-          episode.session.id,
-        );
+        assert.strictEqual((yield* sessions.verify(episode.token)).session.id, episode.session.id);
 
         yield* admin.revokeUserSession(caller, targetId, first.session.id);
         assert.strictEqual(
           (yield* sessions.verify(first.token).pipe(Effect.flip))._tag,
           "Sessions/NotFound",
         );
-        assert.strictEqual(
-          (yield* sessions.verify(second.token)).session.id,
-          second.session.id,
-        );
+        assert.strictEqual((yield* sessions.verify(second.token)).session.id, second.session.id);
 
         yield* admin.revokeUserSessions(caller, targetId);
         assert.strictEqual(
@@ -190,23 +174,15 @@ describe("Admin user administration (BAM-005)", () => {
           "Sessions/NotFound",
         );
         // Other users' sessions and the support episode are untouched.
-        assert.strictEqual(
-          (yield* sessions.verify(foreign.token)).session.id,
-          foreign.session.id,
-        );
-        assert.strictEqual(
-          (yield* sessions.verify(episode.token)).session.id,
-          episode.session.id,
-        );
+        assert.strictEqual((yield* sessions.verify(foreign.token)).session.id, foreign.session.id);
+        assert.strictEqual((yield* sessions.verify(episode.token)).session.id, episode.session.id);
 
         yield* TestClock.adjust(Duration.millis(10));
         const revoked = (yield* Ref.get(seen)).filter(
           (e) => e._tag === "auth.admin.sessionRevoked",
         );
         assert.deepStrictEqual(
-          revoked.map((e) =>
-            e._tag === "auth.admin.sessionRevoked" ? e.sessionId : "?",
-          ),
+          revoked.map((e) => (e._tag === "auth.admin.sessionRevoked" ? e.sessionId : "?")),
           [first.session.id, null],
         );
       }).pipe(
@@ -224,48 +200,44 @@ describe("Admin user administration (BAM-005)", () => {
   // ADR-EA-049: the events declaring the operator's free text belong to the admin plugin now. A row written
   // through the plugin's own definition records the declared fields (`meta.pii`), so erasure scrubs it
   // without the frozen pre-ADR-EA-049 table; an event declaring none records no `meta.pii`.
-  it.effect(
-    "a row written by the plugin's definition records meta.pii: [reason]",
-    () =>
-      Effect.gen(function* () {
-        const { adminId, targetId } = yield* seed;
-        const admin = yield* Admin.Admin;
-        const store = yield* AuditLogStore.AuditLogStore;
-        yield* admin.impersonate({
-          caller: asCaller(adminId),
-          targetUserId: targetId,
-          reason: "reproducing a bug",
-        });
-        yield* admin.banUser(asCaller(adminId), targetId, { reason: "spam" });
-        yield* admin.unbanUser(asCaller(adminId), targetId);
-        const rows = yield* store.select(
-          {
-            eventTag: Option.none(),
-            actorUserId: Option.none(),
-            from: Option.none(),
-            to: Option.none(),
-          },
-          "authoritative",
-        );
-        const piiOf = (tag: string) =>
-          rows
-            .filter((row) => row.eventTag === tag)
-            .map((row) => decodeStored(row.payloadJson).meta?.pii);
-        assert.deepStrictEqual(piiOf("auth.admin.impersonationStarted"), [
-          ["reason"],
-        ]);
-        assert.deepStrictEqual(piiOf("auth.admin.userBanned"), [["reason"]]);
-        assert.deepStrictEqual(piiOf("auth.admin.userUnbanned"), [undefined]);
-      }).pipe(
-        TestAuth.withoutRequest,
-        Effect.provide(
-          buildLayer({
-            ...manageAll,
-            canBanUsers: () => Effect.succeed(true),
-            canImpersonate: () => Effect.succeed(true),
-          }),
-        ),
+  it.effect("a row written by the plugin's definition records meta.pii: [reason]", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId } = yield* seed;
+      const admin = yield* Admin.Admin;
+      const store = yield* AuditLogStore.AuditLogStore;
+      yield* admin.impersonate({
+        caller: asCaller(adminId),
+        targetUserId: targetId,
+        reason: "reproducing a bug",
+      });
+      yield* admin.banUser(asCaller(adminId), targetId, { reason: "spam" });
+      yield* admin.unbanUser(asCaller(adminId), targetId);
+      const rows = yield* store.select(
+        {
+          eventTag: Option.none(),
+          actorUserId: Option.none(),
+          from: Option.none(),
+          to: Option.none(),
+        },
+        "authoritative",
+      );
+      const piiOf = (tag: string) =>
+        rows
+          .filter((row) => row.eventTag === tag)
+          .map((row) => decodeStored(row.payloadJson).meta?.pii);
+      assert.deepStrictEqual(piiOf("auth.admin.impersonationStarted"), [["reason"]]);
+      assert.deepStrictEqual(piiOf("auth.admin.userBanned"), [["reason"]]);
+      assert.deepStrictEqual(piiOf("auth.admin.userUnbanned"), [undefined]);
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(
+        buildLayer({
+          ...manageAll,
+          canBanUsers: () => Effect.succeed(true),
+          canImpersonate: () => Effect.succeed(true),
+        }),
       ),
+    ),
   );
 });
 
@@ -301,22 +273,17 @@ describe("Admin ban / unban (BAM-005 remainder, SCP-001)", () => {
         );
 
         // The shared gate refuses — while an administrator still resolves the user.
-        const refused = yield* Users.assertCanSignIn(
-          yield* users.findById(targetId),
-        ).pipe(Effect.flip);
-        assert.strictEqual(refused._tag, "UserSuspended");
-        assert.strictEqual(
-          (yield* admin.getUser(caller, targetId)).id,
-          targetId,
+        const refused = yield* Users.assertCanSignIn(yield* users.findById(targetId)).pipe(
+          Effect.flip,
         );
+        assert.strictEqual(refused._tag, "UserSuspended");
+        assert.strictEqual((yield* admin.getUser(caller, targetId)).id, targetId);
 
         const unbanned = yield* admin.unbanUser(caller, targetId);
         assert.strictEqual(unbanned.status, "active");
         yield* Users.assertCanSignIn(unbanned);
         // Accounts/identity survived: ban is not deletion.
-        assert.isTrue(
-          Option.isSome(yield* users.findByEmail("target@example.com")),
-        );
+        assert.isTrue(Option.isSome(yield* users.findByEmail("target@example.com")));
 
         yield* TestClock.adjust(Duration.millis(10));
         const events = yield* Ref.get(seen);
@@ -340,46 +307,36 @@ describe("Admin ban / unban (BAM-005 remainder, SCP-001)", () => {
       }).pipe(
         Effect.scoped,
         TestAuth.withoutRequest,
-        Effect.provide(
-          buildLayer({ ...manageAll, canBanUsers: () => Effect.succeed(true) }),
-        ),
+        Effect.provide(buildLayer({ ...manageAll, canBanUsers: () => Effect.succeed(true) })),
       ),
   );
 
-  it.effect(
-    "a ban with `until` lapses by itself; an administrator cannot ban themselves",
-    () =>
-      Effect.gen(function* () {
-        const { adminId, targetId, users } = yield* seed;
-        const admin = yield* Admin.Admin;
-        const caller = asCaller(adminId);
-        const at = yield* DateTime.now;
-        const banned = yield* admin.banUser(caller, targetId, {
-          until: DateTime.add(at, { hours: 1 }),
-        });
-        assert.isTrue(Users.isSuspendedAt(banned, at));
-        yield* TestClock.adjust(Duration.hours(2));
-        // Still flagged `suspended` in storage, but no longer in force.
-        const later = yield* users.findById(targetId);
-        assert.strictEqual(later.status, "suspended");
-        yield* Users.assertCanSignIn(later);
+  it.effect("a ban with `until` lapses by itself; an administrator cannot ban themselves", () =>
+    Effect.gen(function* () {
+      const { adminId, targetId, users } = yield* seed;
+      const admin = yield* Admin.Admin;
+      const caller = asCaller(adminId);
+      const at = yield* DateTime.now;
+      const banned = yield* admin.banUser(caller, targetId, {
+        until: DateTime.add(at, { hours: 1 }),
+      });
+      assert.isTrue(Users.isSuspendedAt(banned, at));
+      yield* TestClock.adjust(Duration.hours(2));
+      // Still flagged `suspended` in storage, but no longer in force.
+      const later = yield* users.findById(targetId);
+      assert.strictEqual(later.status, "suspended");
+      yield* Users.assertCanSignIn(later);
 
-        const self = yield* admin
-          .banUser(caller, adminId, {})
-          .pipe(Effect.flip);
-        assert.strictEqual(self._tag, "AdminSelfBanRefused");
-        const unknown = yield* admin
-          .banUser(
-            caller,
-            Users.UserId("00000000-0000-0000-0000-000000000000"),
-            {},
-          )
-          .pipe(Effect.flip);
-        assert.strictEqual(unknown._tag, "AdminTargetNotFound");
-      }).pipe(
-        Effect.scoped,
-        TestAuth.withoutRequest,
-        Effect.provide(buildLayer({ canBanUsers: () => Effect.succeed(true) })),
-      ),
+      const self = yield* admin.banUser(caller, adminId, {}).pipe(Effect.flip);
+      assert.strictEqual(self._tag, "AdminSelfBanRefused");
+      const unknown = yield* admin
+        .banUser(caller, Users.UserId("00000000-0000-0000-0000-000000000000"), {})
+        .pipe(Effect.flip);
+      assert.strictEqual(unknown._tag, "AdminTargetNotFound");
+    }).pipe(
+      Effect.scoped,
+      TestAuth.withoutRequest,
+      Effect.provide(buildLayer({ canBanUsers: () => Effect.succeed(true) })),
+    ),
   );
 });

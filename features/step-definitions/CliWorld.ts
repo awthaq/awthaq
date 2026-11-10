@@ -91,17 +91,14 @@ export interface WidgetConfigShape {
   readonly databaseUrl: string;
 }
 
-export const WidgetConfig = Context.Reference<WidgetConfigShape>(
-  "features/cli/WidgetConfig",
-  {
-    defaultValue: () => ({
-      minLength: 12,
-      clientSecret: "sk-default-secret",
-      signingKey: Redacted.make("default-signing-key"),
-      databaseUrl: "postgres://app:default-password@db.internal/app",
-    }),
-  },
-);
+export const WidgetConfig = Context.Reference<WidgetConfigShape>("features/cli/WidgetConfig", {
+  defaultValue: () => ({
+    minLength: 12,
+    clientSecret: "sk-default-secret",
+    signingKey: Redacted.make("default-signing-key"),
+    databaseUrl: "postgres://app:default-password@db.internal/app",
+  }),
+});
 
 const WidgetApi = HttpApi.make("auth").add(
   HttpApiGroup.make("widget")
@@ -111,28 +108,19 @@ const WidgetApi = HttpApi.make("auth").add(
 );
 
 /** A toy plugin declaring a configuration descriptor with a plain-string secret next to a `Redacted` one, so redaction is proved against a shape that could leak. */
-class Widget extends AuthPlugin.Service<Widget, { readonly ok: true }>()(
-  "widget",
-  {
-    apiVersion: 1,
-    contract: WidgetApi,
-    config: [
-      ConfigDescriptor.make(WidgetConfig, {
-        sensitive: ["clientSecret"],
-        audit: (value) =>
-          value.minLength < 8
-            ? [
-                ConfigDescriptor.finding(
-                  "warning",
-                  "widget-short",
-                  "minLength is below 8",
-                ),
-              ]
-            : [],
-      }),
-    ],
-  },
-) {
+class Widget extends AuthPlugin.Service<Widget, { readonly ok: true }>()("widget", {
+  apiVersion: 1,
+  contract: WidgetApi,
+  config: [
+    ConfigDescriptor.make(WidgetConfig, {
+      sensitive: ["clientSecret"],
+      audit: (value) =>
+        value.minLength < 8
+          ? [ConfigDescriptor.finding("warning", "widget-short", "minLength is below 8")]
+          : [],
+    }),
+  ],
+}) {
   static readonly layer = AuthPlugin.layer(Widget, {
     make: Effect.succeed<{ readonly ok: true }>({ ok: true }),
     handlers: HttpApiBuilder.group(WidgetApi, "widget", (handlers) =>
@@ -159,10 +147,7 @@ const CoreLive = Layer.mergeAll(
   Layer.provideMerge(
     AuthEvents.layer.pipe(
       Layer.provideMerge(
-        AuditLog.layer.pipe(
-          Layer.provide(SqlStores),
-          Layer.provide(NodeCrypto.layer),
-        ),
+        AuditLog.layer.pipe(Layer.provide(SqlStores), Layer.provide(NodeCrypto.layer)),
       ),
     ),
   ),
@@ -178,9 +163,7 @@ export const sqlApp = (sql: SqlClient.SqlClient) =>
     Layer.provideMerge(CoreLive),
     Layer.provideMerge(Layer.succeed(SqlClient.SqlClient, sql)),
     Layer.provide(Slots.layer),
-    Layer.provide(
-      Layer.mergeAll(Erasure.registryLayer, DataExport.registryLayer),
-    ),
+    Layer.provide(Layer.mergeAll(Erasure.registryLayer, DataExport.registryLayer)),
   );
 
 /** The same without Roles: there is no administrative role concept to grant. */
@@ -257,26 +240,23 @@ export interface SessionServer {
   readonly requests: Effect.Effect<ReadonlyArray<string>>;
 }
 
-type Run = <X>(
-  effect: Effect.Effect<X, never, Users.Users | Sessions.Sessions>,
-) => Promise<X>;
+type Run = <X>(effect: Effect.Effect<X, never, Users.Users | Sessions.Sessions>) => Promise<X>;
 
 /** A fresh user with one live session, through `run`; `amr` is the sign-in methods the session records. */
-const mint =
-  (run: Run, name: string, amr: ReadonlyArray<"pwd">) => (email: string) =>
-    Effect.promise(() =>
-      run(
-        Effect.gen(function* () {
-          const user = yield* Users.Users.use((users) =>
-            users.create({ identity: { _tag: "Email", email }, name }),
-          );
-          const issued = yield* Sessions.Sessions.use((sessions) =>
-            sessions.issue({ userId: user.id, amr: [...amr] }),
-          );
-          return { user, issued };
-        }).pipe(Effect.orDie, TestAuth.withoutRequest),
-      ),
-    );
+const mint = (run: Run, name: string, amr: ReadonlyArray<"pwd">) => (email: string) =>
+  Effect.promise(() =>
+    run(
+      Effect.gen(function* () {
+        const user = yield* Users.Users.use((users) =>
+          users.create({ identity: { _tag: "Email", email }, name }),
+        );
+        const issued = yield* Sessions.Sessions.use((sessions) =>
+          sessions.issue({ userId: user.id, amr: [...amr] }),
+        );
+        return { user, issued };
+      }).pipe(Effect.orDie, TestAuth.withoutRequest),
+    ),
+  );
 
 /** `device: false` is a server without the plugin: the device routes answer 404. */
 const startSessionServer = (options: { readonly device: boolean }) =>
@@ -284,10 +264,7 @@ const startSessionServer = (options: { readonly device: boolean }) =>
     if (!options.device) {
       const app = yield* TestAuth.listen(
         TestAuth.layer(Auth.make([Password.Password]), {
-          services: Layer.mergeAll(
-            Password.config({}),
-            TestAuth.httpClient.noBreach,
-          ),
+          services: Layer.mergeAll(Password.config({}), TestAuth.httpClient.noBreach),
         }),
       );
       const issue = mint(app.run, "Scenario", []);
@@ -298,8 +275,7 @@ const startSessionServer = (options: { readonly device: boolean }) =>
             userId: user.id,
             token: Redacted.value(issued.token),
           })),
-        decide: () =>
-          Effect.die("a server without the device plugin has nobody to decide"),
+        decide: () => Effect.die("a server without the device plugin has nobody to decide"),
         requests: Effect.sync(() => app.requests()),
       };
       return started;
@@ -341,11 +317,7 @@ const startSessionServer = (options: { readonly device: boolean }) =>
                         : plugin.deny(source, caller),
                     ),
                   );
-              }).pipe(
-                TestAuth.withRequest({ ip: "198.51.100.20" }),
-                Effect.orDie,
-                Effect.asVoid,
-              ),
+              }).pipe(TestAuth.withRequest({ ip: "198.51.100.20" }), Effect.orDie, Effect.asVoid),
             ),
           ),
         ),
@@ -374,15 +346,10 @@ export interface WorldShape {
   /** The waits the interactive login made between polls, newest run last. */
   readonly sleeps: Ref.Ref<ReadonlyArray<number>>;
   /** The cell that builds that server on first use, in the scenario's scope (BEH-EA-352). */
-  readonly serverApp: TestAuth.LazyApp<
-    { readonly device: boolean },
-    SessionServer
-  >;
+  readonly serverApp: TestAuth.LazyApp<{ readonly device: boolean }, SessionServer>;
 }
 
-export class World extends Context.Service<World, WorldShape>()(
-  "features/CliWorld",
-) {}
+export class World extends Context.Service<World, WorldShape>()("features/CliWorld") {}
 
 export const WorldLive = Layer.effect(
   World,
@@ -483,16 +450,10 @@ export const runCommand = (argv: ReadonlyArray<string>) =>
     const pacing: DeviceLogin.PacingShape = {
       sleep: (duration) =>
         Effect.gen(function* () {
-          const waits = [
-            ...(yield* Ref.get(world.sleeps)),
-            Duration.toSeconds(duration),
-          ];
+          const waits = [...(yield* Ref.get(world.sleeps)), Duration.toSeconds(duration)];
           yield* Ref.set(world.sleeps, waits);
-          const printed = /confirm the code ([A-Z]{4}-[A-Z]{4})/.exec(
-            stderr.join("\n"),
-          )?.[1];
-          if (person === "expire")
-            return yield* TestClock.adjust(Duration.minutes(16));
+          const printed = /confirm the code ([A-Z]{4}-[A-Z]{4})/.exec(stderr.join("\n"))?.[1];
+          if (person === "expire") return yield* TestClock.adjust(Duration.minutes(16));
           if (person === "hurry" && waits.length < 4) return;
           if (Option.isSome(server) && printed !== undefined) {
             yield* server.value.decide(
@@ -501,25 +462,19 @@ export const runCommand = (argv: ReadonlyArray<string>) =>
               person === "deny" ? "deny" : "approve",
             );
           }
-          yield* TestClock.adjust(
-            duration.pipe(Duration.max(Duration.minutes(1))),
-          );
+          yield* TestClock.adjust(duration.pipe(Duration.max(Duration.minutes(1))));
         }),
     };
     const overlay =
       Object.keys(env).length === 0
         ? Layer.empty
-        : ConfigProvider.layer(
-            ConfigProvider.fromEnv({ env: { ...definedEnv(), ...env } }),
-          );
+        : ConfigProvider.layer(ConfigProvider.fromEnv({ env: { ...definedEnv(), ...env } }));
     // As the binary wires it: `AWTHAQ_TOKEN` (with `AWTHAQ_BASE_URL`) wins over the store and is never written to it.
     const credentials = Layer.effect(
       CredentialStore.CredentialStore,
       Effect.gen(function* () {
         const store = yield* CredentialStore.CredentialStore;
-        return CredentialStore.CredentialStore.of(
-          yield* CredentialStore.withEnvOverride(store),
-        );
+        return CredentialStore.CredentialStore.of(yield* CredentialStore.withEnvOverride(store));
       }),
     ).pipe(Layer.provide(stored.layer), Layer.provide(overlay));
     const exit = yield* Effect.exit(
@@ -544,9 +499,7 @@ export const runCommand = (argv: ReadonlyArray<string>) =>
       ? 0
       : (() => {
           const error = Exit.findErrorOption(exit);
-          return error._tag === "Some"
-            ? Runtime.getErrorExitCode(error.value)
-            : 1;
+          return error._tag === "Some" ? Runtime.getErrorExitCode(error.value) : 1;
         })();
     const result: RunResult = { argv, code, stdout, stderr };
     yield* Ref.set(world.last, result);
@@ -563,13 +516,10 @@ export const argvOf = (command: string): ReadonlyArray<string> =>
 export const lastRun = Effect.gen(function* () {
   const { last } = yield* World;
   const found = yield* Ref.get(last);
-  return found === undefined
-    ? yield* Effect.die(new Error("no command has run yet"))
-    : found;
+  return found === undefined ? yield* Effect.die(new Error("no command has run yet")) : found;
 });
 
-export const combined = (result: RunResult) =>
-  [...result.stdout, ...result.stderr].join("\n");
+export const combined = (result: RunResult) => [...result.stdout, ...result.stderr].join("\n");
 
 /** Exit codes a Then names by the typed failure that maps to them (BEH-EA-225). */
 export const EXIT = CliErrors.ExitCode;

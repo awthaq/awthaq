@@ -41,7 +41,9 @@ let classCount = 0;
 
 const testPg = path.join(rootDir, "scripts", "test-pg.sh");
 if (existsSync(testPg)) {
-  for (const line of read(testPg).split("\n").map((l) => l.trim())) {
+  for (const line of read(testPg)
+    .split("\n")
+    .map((l) => l.trim())) {
     if (line.endsWith(".test.ts")) {
       problems.push(
         `scripts/test-pg.sh names ${line}: it runs every suite, as CI does; delete the list`,

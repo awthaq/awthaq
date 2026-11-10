@@ -83,7 +83,10 @@ describe("MagicLink.requestLink (BEH-EA-268)", () => {
         yield* magicLink
           .requestLink({ email: "stranger@example.com" })
           .pipe(Effect.provide(MagicLink.config({ allowSignUp: false })));
-        const mail = yield* box.mail.waitFor({ to: "stranger@example.com", template: "magic-link" });
+        const mail = yield* box.mail.waitFor({
+          to: "stranger@example.com",
+          template: "magic-link",
+        });
         assert.strictEqual(mail.to, "stranger@example.com");
       }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );

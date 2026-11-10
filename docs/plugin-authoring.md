@@ -106,6 +106,15 @@ Credentials.contribute("apiKey", {                       // or "bearer" for an `
 ```
 
 The first contribution whose `claims` matches resolves the credential (and a claimed credential that fails is `Unauthenticated`; later contributions are not tried), so make `claims` narrow: a key prefix, or a JOSE `typ` read with `JwtCodec.peekTyp`. Build the resolving `Layer` inside the plugin's own layer (it needs the registry, so the composition provides `Credentials.CredentialResolversLive` below it). Resolve to the principal kind that fits (`ApiKeyPrincipal`, `ServicePrincipal`, or a `User` for a stateless session), carrying its own `scopes`; qadi's default subject resolver maps them to permissions. Declare `Api.MachineAuthentication` on groups meant for such callers: `Api.Authentication` is the user tier and only admits a `User`. `@awthaq/api-key` is the worked example.
+## Hashed credentials
+
+A credential the server mints and only needs to *recognise* when presented back (a key, a client secret, a directory token, an invitation token, a device code) is stored as `SecretHash.digest(hasher, secret)` only, shown once, and never logged. A secret a person chooses goes to `PasswordHasher`. A value the server must read again is sealed instead (see "Sealed columns"). Never both: a sealed bearer credential is a working credential for whoever holds the table and the key; a hashed one is not.
+
+- Mint 32 bytes with `SecureRandom` and encode them with `Hmac.toHex`. An optional prefix makes `claims` cheap.
+- Pick one of two lookup shapes. *By the hash*, when the credential has no public id: look up the row by `SecretHash.digest`, and a found row has matched (`@awthaq/scim`). *By a public id*, when the token carries one (`id.secret`) or the id arrives separately: hash the presented secret, read the row, then compare with `SecretHash.equals` against the stored hash, or `SecretHash.NEVER_MATCHES` when there is no row, *before* any branch on the row's state, and answer every refusal the same way (PIL-007; `@awthaq/api-key`'s `resolve`).
+- Rotation with overlap keeps a second, previous hash with its own expiry, and compares both slots on every presentation, found or not (ADR-EA-022 decision 2, RRS-005; `issueServiceToken` and core `Sessions` are the examples). The alternative is a successor row (ADR-EA-022 decision 1).
+- Prove the at-rest form with a test against Node's `createHash("sha256")`, and the uniform answer with one test that presents an unknown id, a wrong secret and a revoked credential.
+
 ## Personal data: erasure and export
 
 A plugin that stores anything about a person must take part in account erasure and in the data-subject export; both are aggregating registries in core that the plugin's own layer contributes to, so leaving the registry out of a composition does not compile (ADR-EA-031, BEH-EA-095, BEH-EA-254).
@@ -292,3 +301,4 @@ it.effect("notes", () =>
 8. A flow that signs a person in or creates a user goes through `SignIn`/`SignUp`, never `Sessions.issue`/`Users.create` (ADR-EA-038); a flow whose credential is an external party's assertion resolves its user through `FederatedIdentity` (ADR-EA-043).
 9. Every event defined in the plugin with `EventDefinition.define`, its actor chosen, its free-text fields in `pii`, listed in the class's `events`, and published with `emit`.
 10. Every table's tenancy declared, its records filtered through `TenantScoped`, and its tenant-isolation cases run over both adapters (the `tenancy` of the store's `RecordsContract` suite, or `TestAuth.runTenantIsolationTests` directly), with `runSealedColumnTests` for each sealed column. A sealed column is declared on the plugin as well as in its records (`sealedColumns: [Records.secretColumn]` on `AuthPlugin.Service`): `Auth.make` checks each names one of the plugin's own tables, and `auth.sealedColumns` is what the rotation sweep takes.
+11. A credential the plugin mints is stored only as `SecretHash.digest` and verified as in "Hashed credentials" (one lookup shape; compare before any state branch; uniform refusals).

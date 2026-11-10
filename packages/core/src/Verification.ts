@@ -36,6 +36,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as AuthEvents from "./AuthEvents.ts";
 import { relabel, type StoreUnavailable } from "./Errors.ts";
+import * as SecretHash from "./SecretHash.ts";
 import { UserId } from "./Users.ts";
 
 // MA-008: the brand is declared once, in `@awthaq/ports` (`Ids`); this keeps only a nominal constructor.
@@ -320,9 +321,7 @@ const makeTokenFlows = (
   events: AuthEvents.AuthEventsShape,
 ) => {
   const hashOf = (value: Redacted.Redacted<string>) =>
-    hasher
-      .digest(Digest.sha256, new TextEncoder().encode(Redacted.value(value)))
-      .pipe(Effect.map(toHex));
+    SecretHash.digest(hasher, Redacted.value(value));
 
   const missed = (identifier: string) =>
     new TokenConsumed({ message: "awthaq: token replay or unknown token", identifier });
@@ -404,14 +403,11 @@ export const layer = Layer.effect(
     const hasher = yield* Digest.Digest;
     const events = yield* AuthEvents.AuthEvents;
 
-    const hash = (value: string) =>
-      hasher.digest(Digest.sha256, new TextEncoder().encode(value)).pipe(Effect.map(toHex));
-
     const issue: VerificationShape["issue"] = Effect.fnUntraced(function* (input) {
       const id = VerificationTokenId(yield* random.uuidV7());
       const maxAttempts = yield* validBudget(input.maxAttempts);
       const value = yield* mintValue(random, input.format);
-      const valueHash = yield* hash(value);
+      const valueHash = yield* SecretHash.digest(hasher, value);
       const now = yield* DateTime.now;
       const payloadJson = yield* encodePayload(input.payload);
       // BEH-EA-057/ADR-EA-016: one atomic upsert replaces the identifier's one live token, so two

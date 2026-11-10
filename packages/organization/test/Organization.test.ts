@@ -21,9 +21,8 @@ import { grant, addMember } from "./support.ts";
 
 const built = Auth.make([Organization.Organization]);
 
-const buildLayer = (
-  configOverrides: Partial<Organization.OrganizationConfigShape> = {},
-) => TestAuth.layer(built, { services: Organization.config(configOverrides) });
+const buildLayer = (configOverrides: Partial<Organization.OrganizationConfigShape> = {}) =>
+  TestAuth.layer(built, { services: Organization.config(configOverrides) });
 
 const asCaller = (id: string): Api.UserPrincipal =>
   new Api.UserPrincipal({
@@ -32,12 +31,8 @@ const asCaller = (id: string): Api.UserPrincipal =>
   });
 
 /** An audit record's event as published (core stores the plugin's event as a foreign one, ADR-EA-049), as a plain record. */
-const payloadOf = (
-  record: AuditLog.AuditLogRecord | undefined,
-): Record<string, unknown> =>
-  record === undefined
-    ? {}
-    : Object.fromEntries(Object.entries(AuditLog.toPublished(record)));
+const payloadOf = (record: AuditLog.AuditLogRecord | undefined): Record<string, unknown> =>
+  record === undefined ? {} : Object.fromEntries(Object.entries(AuditLog.toPublished(record)));
 
 /**
  * MTI-010: the invitation capability only ever travels by email — read it back
@@ -47,12 +42,9 @@ const mailedToken = (invitationId: string) =>
   Effect.gen(function* () {
     const box = yield* TestMailbox.Mailbox;
     for (const message of (yield* box.mail.messages).toReversed()) {
-      if (message.data?.["invitationId"] === invitationId)
-        return TestMailbox.secret(message);
+      if (message.data?.["invitationId"] === invitationId) return TestMailbox.secret(message);
     }
-    return yield* Effect.die(
-      new Error(`no invitation mail was sent for ${invitationId}`),
-    );
+    return yield* Effect.die(new Error(`no invitation mail was sent for ${invitationId}`));
   });
 
 /**
@@ -60,10 +52,7 @@ const mailedToken = (invitationId: string) =>
  * is going to accept must own a verified address (the pre-EP-010 default let an
  * unverified account through).
  */
-const verifiedUser = (input: {
-  readonly email: string;
-  readonly name: string;
-}) =>
+const verifiedUser = (input: { readonly email: string; readonly name: string }) =>
   Effect.gen(function* () {
     const users = yield* Users.Users;
     const created = yield* users.create({
@@ -113,15 +102,11 @@ describe("Organization", () => {
 
       const fetched = yield* organization.get(owner, record.id);
       assert.strictEqual(fetched.slug, "acme");
-      const notFound = yield* organization
-        .get(owner, "does-not-exist")
-        .pipe(Effect.flip);
+      const notFound = yield* organization.get(owner, "does-not-exist").pipe(Effect.flip);
       assert.strictEqual(notFound._tag, "OrganizationNotFound");
       // MTI-008: organization metadata is member-only; a non-member gets the
       // same 404 an unknown id gets.
-      const outsiderGet = yield* organization
-        .get(outsider, record.id)
-        .pipe(Effect.flip);
+      const outsiderGet = yield* organization.get(outsider, record.id).pipe(Effect.flip);
       assert.strictEqual(outsiderGet._tag, "OrganizationNotFound");
 
       const full = yield* organization.getFull(owner, record.id);
@@ -151,9 +136,7 @@ describe("Organization", () => {
         slug: "globex",
       });
 
-      const denied = yield* organization
-        .update(member, record.id, { name: "x" })
-        .pipe(Effect.flip);
+      const denied = yield* organization.update(member, record.id, { name: "x" }).pipe(Effect.flip);
       assert.strictEqual(denied._tag, "OrganizationPermissionDenied");
 
       const updated = yield* organization.update(owner, record.id, {
@@ -168,39 +151,31 @@ describe("Organization", () => {
     }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect(
-    "delete requires permission, can be disabled, and cascades memberships",
-    () =>
-      Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const owner = asCaller("owner-1");
-        const member = asCaller("member-1");
-        const record = yield* organization.create({
-          caller: owner,
-          name: "Acme",
-          slug: "acme",
-        });
-        yield* addMember({
-          organizationId: record.id,
-          userId: Users.UserId("member-1"),
-          role: ["member"],
-        });
+  it.effect("delete requires permission, can be disabled, and cascades memberships", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const member = asCaller("member-1");
+      const record = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
+      yield* addMember({
+        organizationId: record.id,
+        userId: Users.UserId("member-1"),
+        role: ["member"],
+      });
 
-        const denied = yield* organization
-          .delete(member, record.id)
-          .pipe(Effect.flip);
-        assert.strictEqual(denied._tag, "OrganizationPermissionDenied");
+      const denied = yield* organization.delete(member, record.id).pipe(Effect.flip);
+      assert.strictEqual(denied._tag, "OrganizationPermissionDenied");
 
-        yield* organization.delete(owner, record.id);
-        const gone = yield* organization
-          .get(owner, record.id)
-          .pipe(Effect.flip);
-        assert.strictEqual(gone._tag, "OrganizationNotFound");
-        const noMembers = yield* organization
-          .listMembers(owner, record.id)
-          .pipe(Effect.flip);
-        assert.strictEqual(noMembers._tag, "OrganizationNotFound");
-      }).pipe(Effect.provide(buildLayer())),
+      yield* organization.delete(owner, record.id);
+      const gone = yield* organization.get(owner, record.id).pipe(Effect.flip);
+      assert.strictEqual(gone._tag, "OrganizationNotFound");
+      const noMembers = yield* organization.listMembers(owner, record.id).pipe(Effect.flip);
+      assert.strictEqual(noMembers._tag, "OrganizationNotFound");
+    }).pipe(Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -229,9 +204,7 @@ describe("Organization", () => {
           .updateMemberRole(member, record.id, ownerId, ["member"])
           .pipe(Effect.flip);
         assert.strictEqual(roleDenied._tag, "OrganizationPermissionDenied");
-        const invariant = yield* organization
-          .leave(owner, record.id)
-          .pipe(Effect.flip);
+        const invariant = yield* organization.leave(owner, record.id).pipe(Effect.flip);
         assert.strictEqual(invariant._tag, "OwnerInvariantViolation");
       }).pipe(Effect.provide(buildLayer())),
   );
@@ -260,9 +233,7 @@ describe("Organization", () => {
         });
 
         const denied = yield* organization
-          .updateMemberRole(member, record.id, Users.UserId("owner-2"), [
-            "member",
-          ])
+          .updateMemberRole(member, record.id, Users.UserId("owner-2"), ["member"])
           .pipe(Effect.flip);
         assert.strictEqual(denied._tag, "OrganizationPermissionDenied");
 
@@ -274,84 +245,74 @@ describe("Organization", () => {
         );
         assert.deepStrictEqual(updated.role, ["member"]);
 
-        yield* organization.removeMember(
-          owner,
-          record.id,
-          Users.UserId("member-1"),
-        );
+        yield* organization.removeMember(owner, record.id, Users.UserId("member-1"));
         const members = yield* organization.listMembers(owner, record.id);
         assert.strictEqual(members.length, 2);
       }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect(
-    "removeMember/updateMemberRole fail MembershipNotFound for a non-member",
-    () =>
-      Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const owner = asCaller("owner-1");
-        const record = yield* organization.create({
-          caller: owner,
-          name: "Acme",
-          slug: "acme",
-        });
-        const notFound = yield* organization
-          .removeMember(owner, record.id, Users.UserId("nobody"))
-          .pipe(Effect.flip);
-        assert.strictEqual(notFound._tag, "MembershipNotFound");
-      }).pipe(Effect.provide(buildLayer())),
+  it.effect("removeMember/updateMemberRole fail MembershipNotFound for a non-member", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const record = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
+      const notFound = yield* organization
+        .removeMember(owner, record.id, Users.UserId("nobody"))
+        .pipe(Effect.flip);
+      assert.strictEqual(notFound._tag, "MembershipNotFound");
+    }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect(
-    "leave succeeds for a non-owner without touching the owner invariant",
-    () =>
-      Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const owner = asCaller("owner-1");
-        const member = asCaller("member-1");
-        const record = yield* organization.create({
-          caller: owner,
-          name: "Acme",
-          slug: "acme",
-        });
-        yield* addMember({
-          organizationId: record.id,
-          userId: Users.UserId("member-1"),
-          role: ["member"],
-        });
-        yield* organization.leave(member, record.id);
-        const members = yield* organization.listMembers(owner, record.id);
-        assert.strictEqual(members.length, 1);
-      }).pipe(Effect.provide(buildLayer())),
+  it.effect("leave succeeds for a non-owner without touching the owner invariant", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const member = asCaller("member-1");
+      const record = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
+      yield* addMember({
+        organizationId: record.id,
+        userId: Users.UserId("member-1"),
+        role: ["member"],
+      });
+      yield* organization.leave(member, record.id);
+      const members = yield* organization.listMembers(owner, record.id);
+      assert.strictEqual(members.length, 1);
+    }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect(
-    "cancel requires invitation:cancel permission and marks it canceled",
-    () =>
-      Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const owner = asCaller("owner-1");
-        const outsider = asCaller("outsider-1");
-        const org = yield* organization.create({
-          caller: owner,
-          name: "Acme",
-          slug: "acme",
-        });
-        const invitation = yield* organization.invite(owner, org.id, {
-          email: "invitee@example.com",
-          role: ["member"],
-        });
+  it.effect("cancel requires invitation:cancel permission and marks it canceled", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const outsider = asCaller("outsider-1");
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
+      const invitation = yield* organization.invite(owner, org.id, {
+        email: "invitee@example.com",
+        role: ["member"],
+      });
 
-        // MTI-009: a non-member sees the same answer as for an unknown invitation.
-        const denied = yield* organization
-          .cancelInvitation(outsider, invitation.id)
-          .pipe(Effect.flip);
-        assert.strictEqual(denied._tag, "InvitationNotFound");
+      // MTI-009: a non-member sees the same answer as for an unknown invitation.
+      const denied = yield* organization
+        .cancelInvitation(outsider, invitation.id)
+        .pipe(Effect.flip);
+      assert.strictEqual(denied._tag, "InvitationNotFound");
 
-        yield* organization.cancelInvitation(owner, invitation.id);
-        const stored = yield* organization.getInvitation(owner, invitation.id);
-        assert.strictEqual(stored.status, "canceled");
-      }).pipe(Effect.provide(buildLayer())),
+      yield* organization.cancelInvitation(owner, invitation.id);
+      const stored = yield* organization.getInvitation(owner, invitation.id);
+      assert.strictEqual(stored.status, "canceled");
+    }).pipe(Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -433,67 +394,54 @@ describe("Organization", () => {
       return { organization, owner, hr: asCaller("hr-1"), org };
     });
 
-    it.effect(
-      "a custom role holding member:update cannot promote itself to owner",
-      () =>
-        Effect.gen(function* () {
-          const { organization, hr, org } = yield* setup;
-          const failure = yield* organization
-            .updateMemberRole(hr, org.id, Users.UserId("hr-1"), ["owner"])
-            .pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "RolePermissionEscalation");
-        }).pipe(Effect.provide(buildLayer(hrConfig))),
+    it.effect("a custom role holding member:update cannot promote itself to owner", () =>
+      Effect.gen(function* () {
+        const { organization, hr, org } = yield* setup;
+        const failure = yield* organization
+          .updateMemberRole(hr, org.id, Users.UserId("hr-1"), ["owner"])
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "RolePermissionEscalation");
+      }).pipe(Effect.provide(buildLayer(hrConfig))),
     );
 
-    it.effect(
-      "updateMemberRole with an undefined role name fails UnknownOrgRole",
-      () =>
-        Effect.gen(function* () {
-          const { organization, owner, org } = yield* setup;
-          const failure = yield* organization
-            .updateMemberRole(owner, org.id, Users.UserId("hr-1"), [
-              "no-such-role",
-            ])
-            .pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "UnknownOrgRole");
-        }).pipe(Effect.provide(buildLayer(hrConfig))),
+    it.effect("updateMemberRole with an undefined role name fails UnknownOrgRole", () =>
+      Effect.gen(function* () {
+        const { organization, owner, org } = yield* setup;
+        const failure = yield* organization
+          .updateMemberRole(owner, org.id, Users.UserId("hr-1"), ["no-such-role"])
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "UnknownOrgRole");
+      }).pipe(Effect.provide(buildLayer(hrConfig))),
     );
 
-    it.effect(
-      "a lower tier cannot change the role of a member who out-privileges it",
-      () =>
-        Effect.gen(function* () {
-          const { organization, hr, org } = yield* setup;
-          yield* addMember({
-            organizationId: org.id,
-            userId: Users.UserId("owner-2"),
-            role: ["owner"],
-          });
-          const failure = yield* organization
-            .updateMemberRole(hr, org.id, Users.UserId("owner-2"), ["member"])
-            .pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "RolePermissionEscalation");
-        }).pipe(Effect.provide(buildLayer(hrConfig))),
+    it.effect("a lower tier cannot change the role of a member who out-privileges it", () =>
+      Effect.gen(function* () {
+        const { organization, hr, org } = yield* setup;
+        yield* addMember({
+          organizationId: org.id,
+          userId: Users.UserId("owner-2"),
+          role: ["owner"],
+        });
+        const failure = yield* organization
+          .updateMemberRole(hr, org.id, Users.UserId("owner-2"), ["member"])
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "RolePermissionEscalation");
+      }).pipe(Effect.provide(buildLayer(hrConfig))),
     );
 
-    it.effect(
-      "a caller can still assign a role it fully covers (no over-blocking)",
-      () =>
-        Effect.gen(function* () {
-          const { organization, hr, org } = yield* setup;
-          yield* addMember({
-            organizationId: org.id,
-            userId: Users.UserId("plain-1"),
-            role: ["member"],
-          });
-          const updated = yield* organization.updateMemberRole(
-            hr,
-            org.id,
-            Users.UserId("plain-1"),
-            ["hr"],
-          );
-          assert.deepStrictEqual(updated.role, ["hr"]);
-        }).pipe(Effect.provide(buildLayer(hrConfig))),
+    it.effect("a caller can still assign a role it fully covers (no over-blocking)", () =>
+      Effect.gen(function* () {
+        const { organization, hr, org } = yield* setup;
+        yield* addMember({
+          organizationId: org.id,
+          userId: Users.UserId("plain-1"),
+          role: ["member"],
+        });
+        const updated = yield* organization.updateMemberRole(hr, org.id, Users.UserId("plain-1"), [
+          "hr",
+        ]);
+        assert.deepStrictEqual(updated.role, ["hr"]);
+      }).pipe(Effect.provide(buildLayer(hrConfig))),
     );
 
     it.effect(
@@ -556,9 +504,7 @@ describe("Organization", () => {
     it.effect("an admin cannot delete the organization", () =>
       Effect.gen(function* () {
         const { organization, admin, org } = yield* setup;
-        const failure = yield* organization
-          .delete(admin, org.id)
-          .pipe(Effect.flip);
+        const failure = yield* organization.delete(admin, org.id).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "OrganizationPermissionDenied");
       }).pipe(Effect.provide(buildLayer())),
     );
@@ -612,87 +558,72 @@ describe("Organization", () => {
       },
     };
 
-    it.effect(
-      "a stored dynamic role named owner cannot change the owner's statements",
-      () =>
-        Effect.gen(function* () {
-          const organization = yield* Organization.Organization;
-          const orgRoles = yield* OrgRoleRecords.OrgRoleRecords;
-          const owner = asCaller("owner-1");
-          const org = yield* organization.create({
-            caller: owner,
-            name: "Acme",
-            slug: "acme",
-          });
-          // A row that predates the reservation (or was written around the plugin).
-          yield* orgRoles.create({
-            organizationId: org.id,
-            role: "owner",
-            permission: { member: [] },
-          });
-          const attrs =
-            yield* (yield* OrganizationAuthority.OrganizationAuthority).attributesFor(
-              org.id,
-              Users.UserId("owner-1"),
-            );
-          assert.isTrue(Option.isSome(attrs));
-          if (Option.isSome(attrs)) {
-            assert.isTrue(
-              (attrs.value.permissions["organization"] ?? []).includes(
-                "delete",
-              ),
-            );
-          }
-        }).pipe(Effect.provide(buildLayer(dac))),
-    );
-
-    it.effect(
-      "Organization.config refuses permissionStatements that redefine a built-in",
-      () =>
-        Effect.gen(function* () {
-          const exit = yield* Effect.exit(
-            Effect.gen(function* () {
-              return yield* Organization.OrganizationConfig;
-            }).pipe(
-              Effect.provide(
-                Organization.config({ permissionStatements: { owner: {} } }),
-              ),
-            ),
-          );
-          assert.isTrue(exit._tag === "Failure");
-        }),
-    );
-  });
-
-  it.effect(
-    "createRole rejects granting a permission the caller doesn't hold",
-    () =>
+    it.effect("a stored dynamic role named owner cannot change the owner's statements", () =>
       Effect.gen(function* () {
         const organization = yield* Organization.Organization;
+        const orgRoles = yield* OrgRoleRecords.OrgRoleRecords;
         const owner = asCaller("owner-1");
         const org = yield* organization.create({
           caller: owner,
           name: "Acme",
           slug: "acme",
         });
+        // A row that predates the reservation (or was written around the plugin).
+        yield* orgRoles.create({
+          organizationId: org.id,
+          role: "owner",
+          permission: { member: [] },
+        });
+        const attrs = yield* (yield* OrganizationAuthority.OrganizationAuthority).attributesFor(
+          org.id,
+          Users.UserId("owner-1"),
+        );
+        assert.isTrue(Option.isSome(attrs));
+        if (Option.isSome(attrs)) {
+          assert.isTrue((attrs.value.permissions["organization"] ?? []).includes("delete"));
+        }
+      }).pipe(Effect.provide(buildLayer(dac))),
+    );
 
-        const failure = yield* organization
-          .createRole(owner, org.id, {
-            role: "super-role",
-            permission: { somethingNoOneHas: ["do-anything"] },
-          })
-          .pipe(Effect.flip);
-        assert.strictEqual(failure._tag, "RolePermissionEscalation");
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            dynamicAccessControl: {
-              enabled: true,
-              maximumRolesPerOrganization: Number.POSITIVE_INFINITY,
-            },
-          }),
-        ),
+    it.effect("Organization.config refuses permissionStatements that redefine a built-in", () =>
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(
+          Effect.gen(function* () {
+            return yield* Organization.OrganizationConfig;
+          }).pipe(Effect.provide(Organization.config({ permissionStatements: { owner: {} } }))),
+        );
+        assert.isTrue(exit._tag === "Failure");
+      }),
+    );
+  });
+
+  it.effect("createRole rejects granting a permission the caller doesn't hold", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
+
+      const failure = yield* organization
+        .createRole(owner, org.id, {
+          role: "super-role",
+          permission: { somethingNoOneHas: ["do-anything"] },
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(failure._tag, "RolePermissionEscalation");
+    }).pipe(
+      Effect.provide(
+        buildLayer({
+          dynamicAccessControl: {
+            enabled: true,
+            maximumRolesPerOrganization: Number.POSITIVE_INFINITY,
+          },
+        }),
       ),
+    ),
   );
 
   it.effect("a member holding a custom role has that role's permissions", () =>
@@ -778,45 +709,33 @@ describe("Organization", () => {
         slug: "acme",
       });
       const eng = yield* organization.createTeam(owner, org.id, "Engineering");
-      const platform = yield* organization.createTeam(
-        owner,
-        org.id,
-        "Platform",
-        eng.id,
-      );
-      const infra = yield* organization.createTeam(
-        owner,
-        org.id,
-        "Infra",
-        platform.id,
-      );
+      const platform = yield* organization.createTeam(owner, org.id, "Platform", eng.id);
+      const infra = yield* organization.createTeam(owner, org.id, "Infra", platform.id);
       const sales = yield* organization.createTeam(owner, org.id, "Sales");
       return { organization, owner, org, eng, platform, infra, sales };
     });
 
-    it.effect(
-      "moving needs team:update; reading relatives is member-only",
-      () =>
-        Effect.gen(function* () {
-          const { organization, org, eng, platform } = yield* tree;
-          const member = asCaller("member-1");
-          const outsider = asCaller("outsider-1");
-          yield* addMember({
-            organizationId: org.id,
-            userId: Users.UserId("member-1"),
-            role: ["member"],
-          });
-          const denied = yield* organization
-            .moveTeam(member, org.id, platform.id, Option.none())
-            .pipe(Effect.flip);
-          assert.strictEqual(denied._tag, "OrganizationPermissionDenied");
+    it.effect("moving needs team:update; reading relatives is member-only", () =>
+      Effect.gen(function* () {
+        const { organization, org, eng, platform } = yield* tree;
+        const member = asCaller("member-1");
+        const outsider = asCaller("outsider-1");
+        yield* addMember({
+          organizationId: org.id,
+          userId: Users.UserId("member-1"),
+          role: ["member"],
+        });
+        const denied = yield* organization
+          .moveTeam(member, org.id, platform.id, Option.none())
+          .pipe(Effect.flip);
+        assert.strictEqual(denied._tag, "OrganizationPermissionDenied");
 
-          yield* organization.listTeamDescendants(member, org.id, eng.id);
-          const hidden = yield* organization
-            .listTeamAncestors(outsider, org.id, platform.id)
-            .pipe(Effect.flip);
-          assert.strictEqual(hidden._tag, "OrganizationNotFound");
-        }).pipe(Effect.provide(withTeams())),
+        yield* organization.listTeamDescendants(member, org.id, eng.id);
+        const hidden = yield* organization
+          .listTeamAncestors(outsider, org.id, platform.id)
+          .pipe(Effect.flip);
+        assert.strictEqual(hidden._tag, "OrganizationNotFound");
+      }).pipe(Effect.provide(withTeams())),
     );
   });
 
@@ -830,9 +749,7 @@ describe("Organization", () => {
       maximumMembersPerTeam: Number.POSITIVE_INFINITY,
       allowRemovingAllTeams: true,
     };
-    const layerWith = (
-      teamStatements?: Organization.OrganizationConfigShape["teamStatements"],
-    ) =>
+    const layerWith = (teamStatements?: Organization.OrganizationConfigShape["teamStatements"]) =>
       buildLayer({
         teams: teamsOn,
         ...(teamStatements === undefined ? {} : { teamStatements }),
@@ -854,20 +771,9 @@ describe("Organization", () => {
         });
       }
       const eng = yield* organization.createTeam(owner, org.id, "Engineering");
-      const platform = yield* organization.createTeam(
-        owner,
-        org.id,
-        "Platform",
-        eng.id,
-      );
+      const platform = yield* organization.createTeam(owner, org.id, "Platform", eng.id);
       const sales = yield* organization.createTeam(owner, org.id, "Sales");
-      yield* organization.addTeamMember(
-        owner,
-        org.id,
-        eng.id,
-        Users.UserId("lead-1"),
-        ["lead"],
-      );
+      yield* organization.addTeamMember(owner, org.id, eng.id, Users.UserId("lead-1"), ["lead"]);
       return {
         organization,
         owner,
@@ -879,78 +785,53 @@ describe("Organization", () => {
       };
     });
 
-    it.effect(
-      "a team lead can manage their own team's roster but not another team's",
-      () =>
-        Effect.gen(function* () {
-          const { organization, org, eng, sales, lead } = yield* setup;
-          const added = yield* organization.addTeamMember(
-            lead,
-            org.id,
-            eng.id,
-            Users.UserId("worker-1"),
-          );
-          assert.deepStrictEqual(added.role, ["member"]);
-          yield* organization.removeTeamMember(
-            lead,
-            org.id,
-            eng.id,
-            Users.UserId("worker-1"),
-          );
+    it.effect("a team lead can manage their own team's roster but not another team's", () =>
+      Effect.gen(function* () {
+        const { organization, org, eng, sales, lead } = yield* setup;
+        const added = yield* organization.addTeamMember(
+          lead,
+          org.id,
+          eng.id,
+          Users.UserId("worker-1"),
+        );
+        assert.deepStrictEqual(added.role, ["member"]);
+        yield* organization.removeTeamMember(lead, org.id, eng.id, Users.UserId("worker-1"));
 
-          const denied = yield* organization
-            .addTeamMember(lead, org.id, sales.id, Users.UserId("worker-1"))
-            .pipe(Effect.flip);
-          assert.strictEqual(denied._tag, "OrganizationPermissionDenied");
-          // A plain org member with no team role has no authority anywhere.
-          const plain = yield* organization
-            .addTeamMember(
-              asCaller("worker-2"),
-              org.id,
-              eng.id,
-              Users.UserId("worker-1"),
-            )
-            .pipe(Effect.flip);
-          assert.strictEqual(plain._tag, "OrganizationPermissionDenied");
-        }).pipe(Effect.provide(layerWith())),
+        const denied = yield* organization
+          .addTeamMember(lead, org.id, sales.id, Users.UserId("worker-1"))
+          .pipe(Effect.flip);
+        assert.strictEqual(denied._tag, "OrganizationPermissionDenied");
+        // A plain org member with no team role has no authority anywhere.
+        const plain = yield* organization
+          .addTeamMember(asCaller("worker-2"), org.id, eng.id, Users.UserId("worker-1"))
+          .pipe(Effect.flip);
+        assert.strictEqual(plain._tag, "OrganizationPermissionDenied");
+      }).pipe(Effect.provide(layerWith())),
     );
 
-    it.effect(
-      "a lead's authority flows down the subtree, never up or sideways",
-      () =>
-        Effect.gen(function* () {
-          const { organization, org, eng, platform, sales, lead } =
-            yield* setup;
-          // Down: the lead of Engineering renames and staffs its child team.
-          yield* organization.updateTeam(
-            lead,
-            org.id,
-            platform.id,
-            "Platform Eng",
-          );
-          yield* organization.addTeamMember(
-            lead,
-            org.id,
-            platform.id,
-            Users.UserId("worker-1"),
-          );
-          // Up/sideways: a lead of the child cannot touch the parent.
-          yield* organization.addTeamMember(
-            asCaller("owner-1"),
-            org.id,
-            platform.id,
-            Users.UserId("worker-2"),
-            ["lead"],
-          );
-          const up = yield* organization
-            .updateTeam(asCaller("worker-2"), org.id, eng.id, "Nope")
-            .pipe(Effect.flip);
-          assert.strictEqual(up._tag, "OrganizationPermissionDenied");
-          const sideways = yield* organization
-            .updateTeam(lead, org.id, sales.id, "Nope")
-            .pipe(Effect.flip);
-          assert.strictEqual(sideways._tag, "OrganizationPermissionDenied");
-        }).pipe(Effect.provide(layerWith())),
+    it.effect("a lead's authority flows down the subtree, never up or sideways", () =>
+      Effect.gen(function* () {
+        const { organization, org, eng, platform, sales, lead } = yield* setup;
+        // Down: the lead of Engineering renames and staffs its child team.
+        yield* organization.updateTeam(lead, org.id, platform.id, "Platform Eng");
+        yield* organization.addTeamMember(lead, org.id, platform.id, Users.UserId("worker-1"));
+        // Up/sideways: a lead of the child cannot touch the parent.
+        yield* organization.addTeamMember(
+          asCaller("owner-1"),
+          org.id,
+          platform.id,
+          Users.UserId("worker-2"),
+          ["lead"],
+        );
+        const up = yield* organization
+          .updateTeam(asCaller("worker-2"), org.id, eng.id, "Nope")
+          .pipe(Effect.flip);
+        assert.strictEqual(up._tag, "OrganizationPermissionDenied");
+        const sideways = yield* organization
+          .updateTeam(lead, org.id, sales.id, "Nope")
+          .pipe(Effect.flip);
+        assert.strictEqual(sideways._tag, "OrganizationPermissionDenied");
+      }).pipe(Effect.provide(layerWith())),
     );
 
     it.effect("org admin retains authority over every team", () =>
@@ -962,19 +843,10 @@ describe("Organization", () => {
           role: ["admin"],
         });
         const admin = asCaller("admin-1");
-        yield* organization.addTeamMember(
-          admin,
-          org.id,
-          eng.id,
-          Users.UserId("worker-1"),
-        );
-        yield* organization.addTeamMember(
-          admin,
-          org.id,
-          sales.id,
-          Users.UserId("worker-1"),
-          ["lead"],
-        );
+        yield* organization.addTeamMember(admin, org.id, eng.id, Users.UserId("worker-1"));
+        yield* organization.addTeamMember(admin, org.id, sales.id, Users.UserId("worker-1"), [
+          "lead",
+        ]);
       }).pipe(Effect.provide(layerWith())),
     );
 
@@ -982,17 +854,9 @@ describe("Organization", () => {
       Effect.gen(function* () {
         const { organization, org, eng, lead } = yield* setup;
         // Peer grant: the lead holds everything `lead` confers.
-        yield* organization.addTeamMember(
-          lead,
-          org.id,
-          eng.id,
-          Users.UserId("worker-1"),
-          ["lead"],
-        );
+        yield* organization.addTeamMember(lead, org.id, eng.id, Users.UserId("worker-1"), ["lead"]);
         const escalation = yield* organization
-          .addTeamMember(lead, org.id, eng.id, Users.UserId("worker-2"), [
-            "chief",
-          ])
+          .addTeamMember(lead, org.id, eng.id, Users.UserId("worker-2"), ["chief"])
           .pipe(Effect.flip);
         assert.strictEqual(escalation._tag, "RolePermissionEscalation");
         // The org owner may confer the stronger role.
@@ -1013,82 +877,55 @@ describe("Organization", () => {
       ),
     );
 
-    it.effect(
-      "updateTeamMemberRole changes the role under the same guards",
-      () =>
-        Effect.gen(function* () {
-          const { organization, owner, org, eng, lead } = yield* setup;
-          yield* organization.addTeamMember(
-            owner,
-            org.id,
-            eng.id,
-            Users.UserId("worker-1"),
-            ["chief"],
-          );
-          // The lead cannot demote a member who out-privileges them.
-          const outranked = yield* organization
-            .updateTeamMemberRole(
-              lead,
-              org.id,
-              eng.id,
-              Users.UserId("worker-1"),
-              ["member"],
-            )
-            .pipe(Effect.flip);
-          assert.strictEqual(outranked._tag, "RolePermissionEscalation");
+    it.effect("updateTeamMemberRole changes the role under the same guards", () =>
+      Effect.gen(function* () {
+        const { organization, owner, org, eng, lead } = yield* setup;
+        yield* organization.addTeamMember(owner, org.id, eng.id, Users.UserId("worker-1"), [
+          "chief",
+        ]);
+        // The lead cannot demote a member who out-privileges them.
+        const outranked = yield* organization
+          .updateTeamMemberRole(lead, org.id, eng.id, Users.UserId("worker-1"), ["member"])
+          .pipe(Effect.flip);
+        assert.strictEqual(outranked._tag, "RolePermissionEscalation");
 
-          yield* organization.addTeamMember(
-            owner,
-            org.id,
-            eng.id,
-            Users.UserId("worker-2"),
-          );
-          const promoted = yield* organization.updateTeamMemberRole(
-            lead,
-            org.id,
-            eng.id,
-            Users.UserId("worker-2"),
-            ["lead"],
-          );
-          assert.deepStrictEqual(promoted.role, ["lead"]);
-          const missing = yield* organization
-            .updateTeamMemberRole(
-              owner,
-              org.id,
-              eng.id,
-              Users.UserId("nobody"),
-              ["lead"],
-            )
-            .pipe(Effect.flip);
-          assert.strictEqual(missing._tag, "TeamMembershipNotFound");
-        }).pipe(
-          Effect.provide(
-            layerWith({
-              lead: { team: ["update"] },
-              chief: { team: ["update", "delete"] },
-            }),
-          ),
+        yield* organization.addTeamMember(owner, org.id, eng.id, Users.UserId("worker-2"));
+        const promoted = yield* organization.updateTeamMemberRole(
+          lead,
+          org.id,
+          eng.id,
+          Users.UserId("worker-2"),
+          ["lead"],
+        );
+        assert.deepStrictEqual(promoted.role, ["lead"]);
+        const missing = yield* organization
+          .updateTeamMemberRole(owner, org.id, eng.id, Users.UserId("nobody"), ["lead"])
+          .pipe(Effect.flip);
+        assert.strictEqual(missing._tag, "TeamMembershipNotFound");
+      }).pipe(
+        Effect.provide(
+          layerWith({
+            lead: { team: ["update"] },
+            chief: { team: ["update", "delete"] },
+          }),
         ),
+      ),
     );
 
-    it.effect(
-      "a lead cannot delete a team, or move one outside their own subtree",
-      () =>
-        Effect.gen(function* () {
-          const { organization, org, platform, sales, lead } = yield* setup;
-          const remove = yield* organization
-            .removeTeam(lead, org.id, platform.id)
-            .pipe(Effect.flip);
-          assert.strictEqual(remove._tag, "OrganizationPermissionDenied");
-          const toSales = yield* organization
-            .moveTeam(lead, org.id, platform.id, Option.some(sales.id))
-            .pipe(Effect.flip);
-          assert.strictEqual(toSales._tag, "OrganizationPermissionDenied");
-          const toRoot = yield* organization
-            .moveTeam(lead, org.id, platform.id, Option.none())
-            .pipe(Effect.flip);
-          assert.strictEqual(toRoot._tag, "OrganizationPermissionDenied");
-        }).pipe(Effect.provide(layerWith())),
+    it.effect("a lead cannot delete a team, or move one outside their own subtree", () =>
+      Effect.gen(function* () {
+        const { organization, org, platform, sales, lead } = yield* setup;
+        const remove = yield* organization.removeTeam(lead, org.id, platform.id).pipe(Effect.flip);
+        assert.strictEqual(remove._tag, "OrganizationPermissionDenied");
+        const toSales = yield* organization
+          .moveTeam(lead, org.id, platform.id, Option.some(sales.id))
+          .pipe(Effect.flip);
+        assert.strictEqual(toSales._tag, "OrganizationPermissionDenied");
+        const toRoot = yield* organization
+          .moveTeam(lead, org.id, platform.id, Option.none())
+          .pipe(Effect.flip);
+        assert.strictEqual(toRoot._tag, "OrganizationPermissionDenied");
+      }).pipe(Effect.provide(layerWith())),
     );
   });
 
@@ -1103,16 +940,9 @@ describe("Organization", () => {
         slug: "acme",
       });
       const team = yield* organization.createTeam(owner, org.id, "Engineering");
-      yield* organization.addTeamMember(
-        owner,
-        org.id,
-        team.id,
-        Users.UserId("owner-1"),
-      );
+      yield* organization.addTeamMember(owner, org.id, team.id, Users.UserId("owner-1"));
 
-      const failure = yield* organization
-        .setActiveTeam(outsider, team.id)
-        .pipe(Effect.flip);
+      const failure = yield* organization.setActiveTeam(outsider, team.id).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "TeamMembershipNotFound");
 
       yield* organization.setActiveTeam(owner, team.id);
@@ -1126,27 +956,25 @@ describe("Organization", () => {
   );
 
   describe("membership uniqueness (MTI-003, OHS-006, OHS-003)", () => {
-    it.effect(
-      "addMember for an existing member fails AlreadyMember and keeps the roles",
-      () =>
-        Effect.gen(function* () {
-          const organization = yield* Organization.Organization;
-          const owner = asCaller("owner-1");
-          const org = yield* organization.create({
-            caller: owner,
-            name: "Acme",
-            slug: "acme",
-          });
-          const failure = yield* addMember({
-            organizationId: org.id,
-            userId: Users.UserId("owner-1"),
-            role: ["member"],
-          }).pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "AlreadyMember");
-          const members = yield* organization.listMembers(owner, org.id);
-          assert.strictEqual(members.length, 1);
-          assert.deepStrictEqual(members[0]?.role, ["owner"]);
-        }).pipe(Effect.provide(buildLayer())),
+    it.effect("addMember for an existing member fails AlreadyMember and keeps the roles", () =>
+      Effect.gen(function* () {
+        const organization = yield* Organization.Organization;
+        const owner = asCaller("owner-1");
+        const org = yield* organization.create({
+          caller: owner,
+          name: "Acme",
+          slug: "acme",
+        });
+        const failure = yield* addMember({
+          organizationId: org.id,
+          userId: Users.UserId("owner-1"),
+          role: ["member"],
+        }).pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "AlreadyMember");
+        const members = yield* organization.listMembers(owner, org.id);
+        assert.strictEqual(members.length, 1);
+        assert.deepStrictEqual(members[0]?.role, ["owner"]);
+      }).pipe(Effect.provide(buildLayer())),
     );
 
     it.effect(
@@ -1182,14 +1010,12 @@ describe("Organization", () => {
             )
             .pipe(Effect.flip);
           assert.strictEqual(failure._tag, "AlreadyMember");
-          const attrs =
-            yield* (yield* OrganizationAuthority.OrganizationAuthority).attributesFor(
-              org.id,
-              invitee.id,
-            );
+          const attrs = yield* (yield* OrganizationAuthority.OrganizationAuthority).attributesFor(
+            org.id,
+            invitee.id,
+          );
           assert.isTrue(Option.isSome(attrs));
-          if (Option.isSome(attrs))
-            assert.deepStrictEqual(attrs.value.role, ["member"]);
+          if (Option.isSome(attrs)) assert.deepStrictEqual(attrs.value.role, ["member"]);
           const stale = yield* organization.getInvitation(owner, invitation.id);
           assert.strictEqual(stale.status, "canceled");
         }).pipe(Effect.provide(buildLayer())),
@@ -1215,12 +1041,7 @@ describe("Organization", () => {
       });
       const team = yield* organization.createTeam(owner, org.id, "Engineering");
       yield* organization.createTeam(owner, org.id, "Design");
-      yield* organization.addTeamMember(
-        owner,
-        org.id,
-        team.id,
-        Users.UserId("member-1"),
-      );
+      yield* organization.addTeamMember(owner, org.id, team.id, Users.UserId("member-1"));
       yield* organization.setActive(member, org.id);
       yield* organization.setActiveTeam(member, team.id);
       return { organization, owner, member, org, team };
@@ -1231,45 +1052,28 @@ describe("Organization", () => {
       () =>
         Effect.gen(function* () {
           const { organization, owner, member, org, team } = yield* setup;
-          yield* organization.removeMember(
-            owner,
-            org.id,
-            Users.UserId("member-1"),
-          );
+          yield* organization.removeMember(owner, org.id, Users.UserId("member-1"));
 
           const active = yield* organization.getActive(member);
           assert.isTrue(Option.isNone(active.activeOrganizationId));
           assert.isTrue(Option.isNone(active.activeTeamId));
-          const roster = yield* organization.listTeamMembers(
-            owner,
-            org.id,
-            team.id,
-          );
+          const roster = yield* organization.listTeamMembers(owner, org.id, team.id);
           assert.strictEqual(roster.length, 0);
           const teams = yield* organization.listTeams(owner, org.id);
-          assert.strictEqual(
-            teams.find((t) => t.id === team.id)?.memberCount,
-            0,
-          );
+          assert.strictEqual(teams.find((t) => t.id === team.id)?.memberCount, 0);
         }).pipe(Effect.provide(withTeams())),
     );
 
-    it.effect(
-      "leave clears the caller's active organization, team and team memberships",
-      () =>
-        Effect.gen(function* () {
-          const { organization, owner, member, org, team } = yield* setup;
-          yield* organization.leave(member, org.id);
+    it.effect("leave clears the caller's active organization, team and team memberships", () =>
+      Effect.gen(function* () {
+        const { organization, owner, member, org, team } = yield* setup;
+        yield* organization.leave(member, org.id);
 
-          const active = yield* organization.getActive(member);
-          assert.isTrue(Option.isNone(active.activeOrganizationId));
-          assert.isTrue(Option.isNone(active.activeTeamId));
-          assert.strictEqual(
-            (yield* organization.listTeamMembers(owner, org.id, team.id))
-              .length,
-            0,
-          );
-        }).pipe(Effect.provide(withTeams())),
+        const active = yield* organization.getActive(member);
+        assert.isTrue(Option.isNone(active.activeOrganizationId));
+        assert.isTrue(Option.isNone(active.activeTeamId));
+        assert.strictEqual((yield* organization.listTeamMembers(owner, org.id, team.id)).length, 0);
+      }).pipe(Effect.provide(withTeams())),
     );
 
     it.effect("delete clears every session's active organization", () =>
@@ -1292,8 +1096,7 @@ describe("Organization", () => {
         Effect.gen(function* () {
           const { organization, member, org } = yield* setup;
           const members = yield* MembershipRecords.MembershipRecords;
-          const activeContext =
-            yield* ActiveContextRecords.ActiveContextRecords;
+          const activeContext = yield* ActiveContextRecords.ActiveContextRecords;
           // Membership removed around the plugin (a stale pointer, or a row that
           // predates the userId column): the read itself must not name the org.
           yield* members.remove(Users.UserId("member-1"), org.id);
@@ -1302,9 +1105,7 @@ describe("Organization", () => {
           assert.isTrue(Option.isNone(active.activeOrganizationId));
           assert.isTrue(Option.isNone(active.activeTeamId));
           const row = yield* activeContext.findBySessionId(member.sessionId);
-          assert.isTrue(
-            Option.isSome(row) && Option.isNone(row.value.activeOrganizationId),
-          );
+          assert.isTrue(Option.isSome(row) && Option.isNone(row.value.activeOrganizationId));
         }).pipe(Effect.provide(withTeams())),
     );
   });
@@ -1356,14 +1157,8 @@ describe("Organization", () => {
       "a stranger cannot read an invitation by id (404); the invitee and an inviter can",
       () =>
         Effect.gen(function* () {
-          const {
-            organization,
-            owner,
-            invitation,
-            inviteeCaller,
-            strangerCaller,
-            plain,
-          } = yield* setup;
+          const { organization, owner, invitation, inviteeCaller, strangerCaller, plain } =
+            yield* setup;
           const strangerFailure = yield* organization
             .getInvitation(strangerCaller, invitation.id)
             .pipe(Effect.flip);
@@ -1378,8 +1173,7 @@ describe("Organization", () => {
           assert.strictEqual(unknown._tag, "InvitationNotFound");
 
           assert.strictEqual(
-            (yield* organization.getInvitation(inviteeCaller, invitation.id))
-              .id,
+            (yield* organization.getInvitation(inviteeCaller, invitation.id)).id,
             invitation.id,
           );
           assert.strictEqual(
@@ -1389,56 +1183,42 @@ describe("Organization", () => {
         }).pipe(Effect.provide(buildLayer())),
     );
 
-    it.effect(
-      "accepting without the emailed token fails even with a matching email",
-      () =>
-        Effect.gen(function* () {
-          const { organization, org, invitation, inviteeCaller, owner } =
-            yield* setup;
-          const failure = yield* organization
-            .acceptInvitation(inviteeCaller, invitation.id, "not-the-token")
-            .pipe(Effect.flip);
-          assert.strictEqual(failure._tag, "InvitationNotFound");
-          // The invitation's own id is not the secret either.
-          const withId = yield* organization
-            .acceptInvitation(inviteeCaller, invitation.id, invitation.id)
-            .pipe(Effect.flip);
-          assert.strictEqual(withId._tag, "InvitationNotFound");
-          const members = yield* organization.listMembers(owner, org.id);
-          assert.strictEqual(members.length, 2);
-        }).pipe(Effect.provide(buildLayer())),
+    it.effect("accepting without the emailed token fails even with a matching email", () =>
+      Effect.gen(function* () {
+        const { organization, org, invitation, inviteeCaller, owner } = yield* setup;
+        const failure = yield* organization
+          .acceptInvitation(inviteeCaller, invitation.id, "not-the-token")
+          .pipe(Effect.flip);
+        assert.strictEqual(failure._tag, "InvitationNotFound");
+        // The invitation's own id is not the secret either.
+        const withId = yield* organization
+          .acceptInvitation(inviteeCaller, invitation.id, invitation.id)
+          .pipe(Effect.flip);
+        assert.strictEqual(withId._tag, "InvitationNotFound");
+        const members = yield* organization.listMembers(owner, org.id);
+        assert.strictEqual(members.length, 2);
+      }).pipe(Effect.provide(buildLayer())),
     );
 
-    it.effect(
-      "the invitee can read by token and accept with it; a stranger cannot",
-      () =>
-        Effect.gen(function* () {
-          const {
-            organization,
-            org,
-            invitation,
-            inviteeCaller,
-            strangerCaller,
-          } = yield* setup;
-          const token = yield* mailedToken(invitation.id);
-          assert.notStrictEqual(token, invitation.id);
-          const strangerFailure = yield* organization
-            .getInvitationByToken(strangerCaller, token)
-            .pipe(Effect.flip);
-          assert.strictEqual(strangerFailure._tag, "InvitationNotFound");
-          const landing = yield* organization.getInvitationByToken(
-            inviteeCaller,
-            token,
-          );
-          assert.strictEqual(landing.id, invitation.id);
+    it.effect("the invitee can read by token and accept with it; a stranger cannot", () =>
+      Effect.gen(function* () {
+        const { organization, org, invitation, inviteeCaller, strangerCaller } = yield* setup;
+        const token = yield* mailedToken(invitation.id);
+        assert.notStrictEqual(token, invitation.id);
+        const strangerFailure = yield* organization
+          .getInvitationByToken(strangerCaller, token)
+          .pipe(Effect.flip);
+        assert.strictEqual(strangerFailure._tag, "InvitationNotFound");
+        const landing = yield* organization.getInvitationByToken(inviteeCaller, token);
+        assert.strictEqual(landing.id, invitation.id);
 
-          const membership = yield* organization.acceptInvitation(
-            inviteeCaller,
-            invitation.id,
-            token,
-          );
-          assert.strictEqual(membership.organizationId, org.id);
-        }).pipe(Effect.provide(buildLayer())),
+        const membership = yield* organization.acceptInvitation(
+          inviteeCaller,
+          invitation.id,
+          token,
+        );
+        assert.strictEqual(membership.organizationId, org.id);
+      }).pipe(Effect.provide(buildLayer())),
     );
 
     it.effect("reject also requires the token", () =>
@@ -1458,8 +1238,7 @@ describe("Organization", () => {
 
     it.effect("the mail names the organization; resend rotates the token", () =>
       Effect.gen(function* () {
-        const { organization, box, owner, org, invitation, inviteeCaller } =
-          yield* setup;
+        const { organization, box, owner, org, invitation, inviteeCaller } = yield* setup;
         const first = yield* mailedToken(invitation.id);
         const mail = yield* box.mail.waitFor({
           to: "invitee@example.com",
@@ -1479,11 +1258,7 @@ describe("Organization", () => {
           .acceptInvitation(inviteeCaller, invitation.id, first)
           .pipe(Effect.flip);
         assert.strictEqual(stale._tag, "InvitationNotFound");
-        yield* organization.acceptInvitation(
-          inviteeCaller,
-          invitation.id,
-          second,
-        );
+        yield* organization.acceptInvitation(inviteeCaller, invitation.id, second);
       }).pipe(Effect.provide(buildLayer())),
     );
   });
@@ -1514,12 +1289,7 @@ describe("Organization", () => {
             role: ["member"],
           });
           const failure = yield* organization
-            .updateMemberRole(
-              asCaller("member-1"),
-              org.id,
-              Users.UserId("member-2"),
-              ["member"],
-            )
+            .updateMemberRole(asCaller("member-1"), org.id, Users.UserId("member-2"), ["member"])
             .pipe(Effect.flip);
           assert.strictEqual(failure._tag, "OrganizationPermissionDenied");
 
@@ -1527,14 +1297,8 @@ describe("Organization", () => {
             eventTag: "auth.organization.permissionDenied",
           });
           assert.strictEqual(recorded.length, 1);
-          assert.deepStrictEqual(
-            recorded[0]?.actorUserId,
-            Option.some("member-1"),
-          );
-          assert.strictEqual(
-            payloadOf(recorded[0])["reason"],
-            "missingStatement",
-          );
+          assert.deepStrictEqual(recorded[0]?.actorUserId, Option.some("member-1"));
+          assert.strictEqual(payloadOf(recorded[0])["reason"], "missingStatement");
           assert.strictEqual(payloadOf(recorded[0])["resource"], "member");
           assert.strictEqual(payloadOf(recorded[0])["action"], "update");
         }).pipe(Effect.provide(buildLayer())),
@@ -1560,9 +1324,7 @@ describe("Organization", () => {
           eventTag: "auth.organization.invitationCreated",
         });
         assert.strictEqual(recorded.length, 1);
-        assert.isFalse(
-          JSON.stringify(recorded).includes("private@example.com"),
-        );
+        assert.isFalse(JSON.stringify(recorded).includes("private@example.com"));
         assert.isFalse("email" in payloadOf(recorded[0]));
       }).pipe(Effect.provide(buildLayer())),
     );
@@ -1572,147 +1334,125 @@ describe("Organization", () => {
 // ---- ADR-EA-018 organization-side tenancy fields ---------------------------------------
 
 describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)", () => {
-  it.effect(
-    "EP-010: by default an unverified user cannot accept an invitation",
-    () =>
-      Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const users = yield* Users.Users;
-        const owner = asCaller("owner-1");
-        const org = yield* organization.create({
-          caller: owner,
-          name: "Acme",
-          slug: "acme",
-        });
-        const invitee = yield* users.create({
-          identity: { _tag: "Email", email: "unverified@example.com" },
-          name: "Unverified",
-        });
-        const invitation = yield* organization.invite(owner, org.id, {
-          email: "unverified@example.com",
-          role: ["member"],
-        });
-        const refused = yield* organization
-          .acceptInvitation(
-            asCaller(invitee.id),
-            invitation.id,
-            yield* mailedToken(invitation.id),
-          )
-          .pipe(Effect.flip);
-        assert.strictEqual(refused._tag, "EmailVerificationRequired");
-        // Verifying the address is what unlocks it.
-        yield* users.verifyEmail(invitee.id);
-        const membership = yield* organization.acceptInvitation(
-          asCaller(invitee.id),
-          invitation.id,
-          yield* mailedToken(invitation.id),
-        );
-        assert.strictEqual(membership.userId, invitee.id);
-      }).pipe(Effect.provide(buildLayer())),
-  );
-
-  it.effect(
-    "EP-010: requireEmailVerificationOnInvitation: false restores the old behaviour",
-    () =>
-      Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const users = yield* Users.Users;
-        const owner = asCaller("owner-1");
-        const org = yield* organization.create({
-          caller: owner,
-          name: "Acme",
-          slug: "acme",
-        });
-        const invitee = yield* users.create({
-          identity: { _tag: "Email", email: "unverified@example.com" },
-          name: "Unverified",
-        });
-        const invitation = yield* organization.invite(owner, org.id, {
-          email: "unverified@example.com",
-          role: ["member"],
-        });
-        const membership = yield* organization.acceptInvitation(
-          asCaller(invitee.id),
-          invitation.id,
-          yield* mailedToken(invitation.id),
-        );
-        assert.strictEqual(membership.userId, invitee.id);
-      }).pipe(
-        Effect.provide(
-          buildLayer({ requireEmailVerificationOnInvitation: false }),
-        ),
-      ),
-  );
-
-  it.effect(
-    "EP-006: limitsFor overrides a quota for one organization only",
-    () => {
-      let bigId = "";
-      return Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const owner = asCaller("owner-1");
-        const small = yield* organization.create({
-          caller: owner,
-          name: "Small",
-          slug: "small",
-        });
-        const big = yield* organization.create({
-          caller: owner,
-          name: "Big",
-          slug: "big",
-        });
-        bigId = big.id;
-        const attempt = (organizationId: string, userId: string) =>
-          addMember({
-            organizationId,
-            userId: Users.UserId(userId),
-            role: ["member"],
-          });
-        // Both start with one member (the owner) against a static limit of 1.
-        const refused = yield* attempt(small.id, "member-1").pipe(Effect.flip);
-        assert.strictEqual(refused._tag, "MembershipLimitReached");
-        yield* attempt(big.id, "member-1");
-        yield* attempt(big.id, "member-2");
-        const full = yield* attempt(big.id, "member-3").pipe(Effect.flip);
-        assert.strictEqual(full._tag, "MembershipLimitReached");
-      }).pipe(
-        Effect.provide(
-          buildLayer({
-            membershipLimit: 1,
-            limitsFor: (organizationId) =>
-              Effect.succeed(
-                organizationId === bigId ? { membershipLimit: 3 } : {},
-              ),
-          }),
-        ),
+  it.effect("EP-010: by default an unverified user cannot accept an invitation", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const users = yield* Users.Users;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
+      const invitee = yield* users.create({
+        identity: { _tag: "Email", email: "unverified@example.com" },
+        name: "Unverified",
+      });
+      const invitation = yield* organization.invite(owner, org.id, {
+        email: "unverified@example.com",
+        role: ["member"],
+      });
+      const refused = yield* organization
+        .acceptInvitation(asCaller(invitee.id), invitation.id, yield* mailedToken(invitation.id))
+        .pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "EmailVerificationRequired");
+      // Verifying the address is what unlocks it.
+      yield* users.verifyEmail(invitee.id);
+      const membership = yield* organization.acceptInvitation(
+        asCaller(invitee.id),
+        invitation.id,
+        yield* mailedToken(invitation.id),
       );
-    },
+      assert.strictEqual(membership.userId, invitee.id);
+    }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect(
-    "EP-005: the invitation mail carries the organization's name and logo",
-    () =>
-      Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const box = yield* TestMailbox.Mailbox;
-        const owner = asCaller("owner-1");
-        const org = yield* organization.create({
-          caller: owner,
-          name: "Acme",
-          slug: "acme",
-          logo: "https://acme.example/logo.png",
-        });
-        yield* organization.invite(owner, org.id, {
-          email: "invitee@example.com",
+  it.effect("EP-010: requireEmailVerificationOnInvitation: false restores the old behaviour", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const users = yield* Users.Users;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
+      const invitee = yield* users.create({
+        identity: { _tag: "Email", email: "unverified@example.com" },
+        name: "Unverified",
+      });
+      const invitation = yield* organization.invite(owner, org.id, {
+        email: "unverified@example.com",
+        role: ["member"],
+      });
+      const membership = yield* organization.acceptInvitation(
+        asCaller(invitee.id),
+        invitation.id,
+        yield* mailedToken(invitation.id),
+      );
+      assert.strictEqual(membership.userId, invitee.id);
+    }).pipe(Effect.provide(buildLayer({ requireEmailVerificationOnInvitation: false }))),
+  );
+
+  it.effect("EP-006: limitsFor overrides a quota for one organization only", () => {
+    let bigId = "";
+    return Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const owner = asCaller("owner-1");
+      const small = yield* organization.create({
+        caller: owner,
+        name: "Small",
+        slug: "small",
+      });
+      const big = yield* organization.create({
+        caller: owner,
+        name: "Big",
+        slug: "big",
+      });
+      bigId = big.id;
+      const attempt = (organizationId: string, userId: string) =>
+        addMember({
+          organizationId,
+          userId: Users.UserId(userId),
           role: ["member"],
         });
-        const mail = yield* box.mail.waitFor({ to: "invitee@example.com" });
-        assert.strictEqual(mail.data?.["organizationName"], "Acme");
-        assert.strictEqual(
-          mail.data?.["organizationLogo"],
-          "https://acme.example/logo.png",
-        );
-      }).pipe(Effect.provide(buildLayer())),
+      // Both start with one member (the owner) against a static limit of 1.
+      const refused = yield* attempt(small.id, "member-1").pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "MembershipLimitReached");
+      yield* attempt(big.id, "member-1");
+      yield* attempt(big.id, "member-2");
+      const full = yield* attempt(big.id, "member-3").pipe(Effect.flip);
+      assert.strictEqual(full._tag, "MembershipLimitReached");
+    }).pipe(
+      Effect.provide(
+        buildLayer({
+          membershipLimit: 1,
+          limitsFor: (organizationId) =>
+            Effect.succeed(organizationId === bigId ? { membershipLimit: 3 } : {}),
+        }),
+      ),
+    );
+  });
+
+  it.effect("EP-005: the invitation mail carries the organization's name and logo", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const box = yield* TestMailbox.Mailbox;
+      const owner = asCaller("owner-1");
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+        logo: "https://acme.example/logo.png",
+      });
+      yield* organization.invite(owner, org.id, {
+        email: "invitee@example.com",
+        role: ["member"],
+      });
+      const mail = yield* box.mail.waitFor({ to: "invitee@example.com" });
+      assert.strictEqual(mail.data?.["organizationName"], "Acme");
+      assert.strictEqual(mail.data?.["organizationLogo"], "https://acme.example/logo.png");
+    }).pipe(Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -1775,11 +1515,7 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
           role: ["member"],
         });
         const token = yield* mailedToken(invitation.id);
-        yield* records.setSuspended(
-          grant,
-          org.id,
-          Option.some(yield* DateTime.now),
-        );
+        yield* records.setSuspended(grant, org.id, Option.some(yield* DateTime.now));
 
         const byToken = yield* organization
           .getInvitationByToken(inviteeCaller, token)
@@ -1797,17 +1533,12 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
           .rejectInvitation(inviteeCaller, invitation.id, token)
           .pipe(Effect.flip);
         assert.strictEqual(rejected._tag, "InvitationNotFound");
-        assert.isTrue(
-          Option.isNone(
-            yield* memberships.findByUserAndOrg(invitee.id, org.id),
-          ),
-        );
+        assert.isTrue(Option.isNone(yield* memberships.findByUserAndOrg(invitee.id, org.id)));
 
         // Reinstated, the same capability works again.
         yield* records.setSuspended(grant, org.id, Option.none());
         assert.strictEqual(
-          (yield* organization.getInvitationByToken(inviteeCaller, token))
-            .status,
+          (yield* organization.getInvitationByToken(inviteeCaller, token)).status,
           "pending",
         );
         const membership = yield* organization.acceptInvitation(
@@ -1824,23 +1555,19 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
 
 describe("Per-tenant configuration (EP-007)", () => {
   /** The application's own map: tenant id -> that tenant's `Organization.config(...)`. */
-  class TenantConfig extends LayerMap.Service<TenantConfig>()(
-    "test/TenantConfig",
-    {
-      lookup: (tenantId: string) =>
-        Layer.merge(
-          Organization.config({
-            membershipLimit: tenantId === "small" ? 1 : 3,
-            requireEmailVerificationOnInvitation: tenantId !== "lax",
-          }),
-          Tenant.configApplied(tenantId),
-        ),
-      idleTimeToLive: "1 minute",
-    },
-  ) {}
+  class TenantConfig extends LayerMap.Service<TenantConfig>()("test/TenantConfig", {
+    lookup: (tenantId: string) =>
+      Layer.merge(
+        Organization.config({
+          membershipLimit: tenantId === "small" ? 1 : 3,
+          requireEmailVerificationOnInvitation: tenantId !== "lax",
+        }),
+        Tenant.configApplied(tenantId),
+      ),
+    idleTimeToLive: "1 minute",
+  }) {}
 
-  const inTenant = (tenantId: string) =>
-    Effect.provide(TenantConfig.get(tenantId));
+  const inTenant = (tenantId: string) => Effect.provide(TenantConfig.get(tenantId));
 
   it.effect(
     "two tenants with different Organization.config in one composition, same layer instance",
@@ -1865,48 +1592,37 @@ describe("Per-tenant configuration (EP-007)", () => {
             role: ["member"],
           });
         // Each organization is already at one member (its owner). The `small` tenant's limit is 1.
-        const refused = yield* add(small.id, "m-1").pipe(
-          inTenant("small"),
-          Effect.flip,
-        );
+        const refused = yield* add(small.id, "m-1").pipe(inTenant("small"), Effect.flip);
         assert.strictEqual(refused._tag, "MembershipLimitReached");
         yield* add(big.id, "m-1").pipe(inTenant("big"));
         yield* add(big.id, "m-2").pipe(inTenant("big"));
-        const full = yield* add(big.id, "m-3").pipe(
-          inTenant("big"),
-          Effect.flip,
-        );
+        const full = yield* add(big.id, "m-3").pipe(inTenant("big"), Effect.flip);
         assert.strictEqual(full._tag, "MembershipLimitReached");
       }).pipe(
         Effect.provide(
-          Layer.provideMerge(
-            TenantConfig.layer,
-            buildLayer({ membershipLimit: 100 }),
-          ),
+          Layer.provideMerge(TenantConfig.layer, buildLayer({ membershipLimit: 100 })),
         ),
       ),
   );
 
-  it.effect(
-    "with no tenant override the build-time configuration applies, exactly as before",
-    () =>
-      Effect.gen(function* () {
-        const organization = yield* Organization.Organization;
-        const org = yield* organization.create({
-          caller: asCaller("owner-1"),
-          name: "Acme",
-          slug: "acme",
+  it.effect("with no tenant override the build-time configuration applies, exactly as before", () =>
+    Effect.gen(function* () {
+      const organization = yield* Organization.Organization;
+      const org = yield* organization.create({
+        caller: asCaller("owner-1"),
+        name: "Acme",
+        slug: "acme",
+      });
+      const add = (userId: string) =>
+        addMember({
+          organizationId: org.id,
+          userId: Users.UserId(userId),
+          role: ["member"],
         });
-        const add = (userId: string) =>
-          addMember({
-            organizationId: org.id,
-            userId: Users.UserId(userId),
-            role: ["member"],
-          });
-        yield* add("m-1");
-        const refused = yield* add("m-2").pipe(Effect.flip);
-        assert.strictEqual(refused._tag, "MembershipLimitReached");
-      }).pipe(Effect.provide(buildLayer({ membershipLimit: 2 }))),
+      yield* add("m-1");
+      const refused = yield* add("m-2").pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "MembershipLimitReached");
+    }).pipe(Effect.provide(buildLayer({ membershipLimit: 2 }))),
   );
 
   it.effect("a tenant's own invitation policy applies to its acceptances", () =>
@@ -1938,8 +1654,6 @@ describe("Per-tenant configuration (EP-007)", () => {
         .acceptInvitation(asCaller(invitee.id), invitation.id, token)
         .pipe(inTenant("lax"));
       assert.strictEqual(membership.userId, invitee.id);
-    }).pipe(
-      Effect.provide(Layer.provideMerge(TenantConfig.layer, buildLayer())),
-    ),
+    }).pipe(Effect.provide(Layer.provideMerge(TenantConfig.layer, buildLayer()))),
   );
 });

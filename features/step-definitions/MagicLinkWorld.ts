@@ -142,7 +142,13 @@ const startApp = (options: AppOptions) =>
     const app = yield* TestAuth.serve(appLayer);
     // The context is built on the real clock (see `TestAuth.App.context`), then used directly on a step's fiber.
     const ctx = yield* Effect.promise(() => app.context());
-    return { handler: app.handler, ctx, mailbox: Context.get(ctx, TestMailbox.Mailbox), vetoed, sessionOutage };
+    return {
+      handler: app.handler,
+      ctx,
+      mailbox: Context.get(ctx, TestMailbox.Mailbox),
+      vetoed,
+      sessionOutage,
+    };
   });
 
 /** A person a scenario names: what the app has told the recipient (the mailed secrets) is read from the mail, never from the store. */

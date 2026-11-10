@@ -124,13 +124,7 @@ interface Env {
   readonly seedEpisode: Effect.Effect<string, unknown>;
 }
 
-type Kind =
-  | "users"
-  | "user"
-  | "organizations"
-  | "organization"
-  | "impersonate"
-  | "episode";
+type Kind = "users" | "user" | "organizations" | "organization" | "impersonate" | "episode";
 type Denial = "AdminActionDenied" | "AdminImpersonationDenied" | "empty";
 
 interface Row {
@@ -143,9 +137,7 @@ interface Row {
   readonly run: (env: Env) => Effect.Effect<string, unknown>;
 }
 
-const outcome = <A, E extends { readonly _tag: string }>(
-  effect: Effect.Effect<A, E>,
-) =>
+const outcome = <A, E extends { readonly _tag: string }>(effect: Effect.Effect<A, E>) =>
   Effect.match(effect, {
     onSuccess: () => "ok",
     onFailure: (error) => error._tag,
@@ -213,15 +205,12 @@ const rows: ReadonlyArray<Row> = [
       }),
     ),
   ),
-  userRow(
-    "setUserPassword",
-    "canManageCredentials",
-    ({ accounts, ghostUser }) =>
-      outcome(
-        accounts.setUserPassword(adminCaller, ghostUser, {
-          password: Redacted.make("a brand new strong password"),
-        }),
-      ),
+  userRow("setUserPassword", "canManageCredentials", ({ accounts, ghostUser }) =>
+    outcome(
+      accounts.setUserPassword(adminCaller, ghostUser, {
+        password: Redacted.make("a brand new strong password"),
+      }),
+    ),
   ),
   {
     name: "listOrganizations",
@@ -237,8 +226,7 @@ const rows: ReadonlyArray<Row> = [
     kind: "organization",
     denial: "AdminActionDenied",
     passed: "AdminOrganizationNotFound",
-    run: ({ tenants, ghostOrg }) =>
-      outcome(tenants.getOrganization(adminCaller, ghostOrg)),
+    run: ({ tenants, ghostOrg }) => outcome(tenants.getOrganization(adminCaller, ghostOrg)),
   },
   {
     name: "suspendOrganization",
@@ -246,8 +234,7 @@ const rows: ReadonlyArray<Row> = [
     kind: "organization",
     denial: "AdminActionDenied",
     passed: "AdminOrganizationNotFound",
-    run: ({ tenants, ghostOrg }) =>
-      outcome(tenants.suspendOrganization(adminCaller, ghostOrg, {})),
+    run: ({ tenants, ghostOrg }) => outcome(tenants.suspendOrganization(adminCaller, ghostOrg, {})),
   },
   {
     name: "unsuspendOrganization",
@@ -255,8 +242,7 @@ const rows: ReadonlyArray<Row> = [
     kind: "organization",
     denial: "AdminActionDenied",
     passed: "AdminOrganizationNotFound",
-    run: ({ tenants, ghostOrg }) =>
-      outcome(tenants.unsuspendOrganization(adminCaller, ghostOrg)),
+    run: ({ tenants, ghostOrg }) => outcome(tenants.unsuspendOrganization(adminCaller, ghostOrg)),
   },
   {
     name: "impersonate",
@@ -282,9 +268,7 @@ const rows: ReadonlyArray<Row> = [
     denial: "AdminImpersonationDenied",
     passed: "ok",
     run: ({ admin, seedEpisode }) =>
-      Effect.flatMap(seedEpisode, (sessionId) =>
-        outcome(admin.forceStop(adminCaller, sessionId)),
-      ),
+      Effect.flatMap(seedEpisode, (sessionId) => outcome(admin.forceStop(adminCaller, sessionId))),
   },
   {
     name: "list",
@@ -293,9 +277,7 @@ const rows: ReadonlyArray<Row> = [
     denial: "empty",
     passed: "ok",
     run: ({ admin }) =>
-      Effect.map(admin.list(adminCaller), (page) =>
-        page.items.length > 0 ? "ok" : "empty",
-      ),
+      Effect.map(admin.list(adminCaller), (page) => (page.items.length > 0 ? "ok" : "empty")),
   },
 ];
 
@@ -327,18 +309,11 @@ const scenario = (options: {
     const events = yield* AuthEvents.AuthEvents;
     const seen = yield* Ref.make<ReadonlyArray<string>>([]);
     yield* events.stream.pipe(
-      Stream.filter(
-        AuthEvents.is([
-          "auth.admin.actionDenied",
-          "auth.admin.impersonationDenied",
-        ]),
-      ),
+      Stream.filter(AuthEvents.is(["auth.admin.actionDenied", "auth.admin.impersonationDenied"])),
       Stream.runForEach((event) =>
         Ref.update(seen, (all) => [
           ...all,
-          event._tag === "auth.admin.actionDenied"
-            ? event.action
-            : event.operation,
+          event._tag === "auth.admin.actionDenied" ? event.action : event.operation,
         ]),
       ),
       Effect.forkScoped({ startImmediately: true }),
@@ -375,15 +350,10 @@ const scenario = (options: {
       : Tenant.withTenant(options.tenant)(seedEpisode);
     const withScope = <A, E, R>(effect: Effect.Effect<A, E, R>) => {
       const scoped =
-        options.tenant === undefined
-          ? effect
-          : Tenant.withTenant(options.tenant)(effect);
+        options.tenant === undefined ? effect : Tenant.withTenant(options.tenant)(effect);
       return options.request === undefined
         ? scoped
-        : scoped.pipe(
-            TestAuth.withoutRequest,
-            Effect.provide(Admin.config(options.request)),
-          );
+        : scoped.pipe(TestAuth.withoutRequest, Effect.provide(Admin.config(options.request)));
     };
     const outcomes: Record<string, string> = {};
     for (const row of rows) {
@@ -392,14 +362,9 @@ const scenario = (options: {
     }
     yield* TestClock.adjust(Duration.millis(10));
     return { outcomes, denials: yield* Ref.get(seen) } satisfies Scenario;
-  }).pipe(
-    Effect.scoped,
-    TestAuth.withoutRequest,
-    Effect.provide(buildLayer(options.build)),
-  );
+  }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer(options.build)));
 
-const expectedFor = (row: Row, opens: boolean) =>
-  opens ? row.passed : row.denial;
+const expectedFor = (row: Row, opens: boolean) => (opens ? row.passed : row.denial);
 
 // ---- tests ---------------------------------------------------------------------------------------
 
@@ -420,64 +385,52 @@ describe("the admin gate (plan 13)", () => {
       }),
   );
 
-  it.effect(
-    "BEH-EA-224: a denial names the target or organization the call named",
-    () =>
-      Effect.gen(function* () {
-        const events = yield* AuthEvents.AuthEvents;
-        const seen = yield* Ref.make<ReadonlyArray<AdminTestEvent>>([]);
-        yield* events.stream.pipe(
-          Stream.filter(AuthEvents.is(adminTestEvents)),
-          Stream.runForEach((event) =>
-            Ref.update(seen, (all) => [...all, event]),
-          ),
-          Effect.forkScoped({ startImmediately: true }),
-        );
-        const env: Env = {
-          admin: yield* Admin.Admin,
-          accounts: yield* AdminAccounts.AdminAccounts,
-          tenants: yield* AdminTenants.AdminTenants,
-          ghostUser: Users.UserId("ghost-user"),
-          ghostOrg: "ghost-org",
-          seedEpisode: Effect.succeed("unused"),
-        };
-        const names = [
-          "listUsers",
-          "getUser",
-          "banUser",
-          "deleteUser",
-          "listOrganizations",
-          "getOrganization",
-        ];
-        for (const name of names) {
-          const row = rows.find((candidate) => candidate.name === name);
-          assert.isDefined(row, name);
-          yield* row?.run(env) ?? Effect.void;
-        }
-        yield* TestClock.adjust(Duration.millis(10));
-        const denied = (yield* Ref.get(seen)).flatMap((event) =>
-          event._tag === "auth.admin.actionDenied" ? [event] : [],
-        );
-        assert.deepStrictEqual(
-          denied.map((event) => [
-            event.action,
-            event.targetUserId,
-            event.organizationId,
-          ]),
-          [
-            ["listUsers", undefined, undefined],
-            ["getUser", "ghost-user", undefined],
-            ["banUser", "ghost-user", undefined],
-            ["deleteUser", "ghost-user", undefined],
-            ["listOrganizations", undefined, undefined],
-            ["getOrganization", undefined, "ghost-org"],
-          ],
-        );
-      }).pipe(
-        Effect.scoped,
-        TestAuth.withoutRequest,
-        Effect.provide(buildLayer({})),
-      ),
+  it.effect("BEH-EA-224: a denial names the target or organization the call named", () =>
+    Effect.gen(function* () {
+      const events = yield* AuthEvents.AuthEvents;
+      const seen = yield* Ref.make<ReadonlyArray<AdminTestEvent>>([]);
+      yield* events.stream.pipe(
+        Stream.filter(AuthEvents.is(adminTestEvents)),
+        Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      const env: Env = {
+        admin: yield* Admin.Admin,
+        accounts: yield* AdminAccounts.AdminAccounts,
+        tenants: yield* AdminTenants.AdminTenants,
+        ghostUser: Users.UserId("ghost-user"),
+        ghostOrg: "ghost-org",
+        seedEpisode: Effect.succeed("unused"),
+      };
+      const names = [
+        "listUsers",
+        "getUser",
+        "banUser",
+        "deleteUser",
+        "listOrganizations",
+        "getOrganization",
+      ];
+      for (const name of names) {
+        const row = rows.find((candidate) => candidate.name === name);
+        assert.isDefined(row, name);
+        yield* row?.run(env) ?? Effect.void;
+      }
+      yield* TestClock.adjust(Duration.millis(10));
+      const denied = (yield* Ref.get(seen)).flatMap((event) =>
+        event._tag === "auth.admin.actionDenied" ? [event] : [],
+      );
+      assert.deepStrictEqual(
+        denied.map((event) => [event.action, event.targetUserId, event.organizationId]),
+        [
+          ["listUsers", undefined, undefined],
+          ["getUser", "ghost-user", undefined],
+          ["banUser", "ghost-user", undefined],
+          ["deleteUser", "ghost-user", undefined],
+          ["listOrganizations", undefined, undefined],
+          ["getOrganization", undefined, "ghost-org"],
+        ],
+      );
+    }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer({}))),
   );
 
   it.effect(
@@ -491,9 +444,7 @@ describe("the admin gate (plan 13)", () => {
         const seen = yield* Ref.make<ReadonlyArray<AdminTestEvent>>([]);
         yield* events.stream.pipe(
           Stream.filter(AuthEvents.is(adminTestEvents)),
-          Stream.runForEach((event) =>
-            Ref.update(seen, (all) => [...all, event]),
-          ),
+          Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
           Effect.forkScoped({ startImmediately: true }),
         );
         const target = yield* users.create({
@@ -516,11 +467,7 @@ describe("the admin gate (plan 13)", () => {
         assert.strictEqual(denied.length, 1);
         assert.strictEqual(denied[0]?.operation, "impersonate");
         assert.strictEqual(denied[0]?.targetUserId, target.id);
-      }).pipe(
-        Effect.scoped,
-        TestAuth.withoutRequest,
-        Effect.provide(buildLayer({})),
-      ),
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer({}))),
   );
 
   it.effect(
@@ -535,9 +482,7 @@ describe("the admin gate (plan 13)", () => {
         const seen = yield* Ref.make<ReadonlyArray<AdminTestEvent>>([]);
         yield* events.stream.pipe(
           Stream.filter(AuthEvents.is(adminTestEvents)),
-          Stream.runForEach((event) =>
-            Ref.update(seen, (all) => [...all, event]),
-          ),
+          Stream.runForEach((event) => Ref.update(seen, (all) => [...all, event])),
           Effect.forkScoped({ startImmediately: true }),
         );
         const target = yield* users.create({
@@ -550,19 +495,11 @@ describe("the admin gate (plan 13)", () => {
           targetUserId: target.id,
           sessionId: issued.session.id,
           reason: "seed",
-          expiresAt: DateTime.addDuration(
-            yield* DateTime.now,
-            Duration.days(1),
-          ),
+          expiresAt: DateTime.addDuration(yield* DateTime.now, Duration.days(1)),
         });
-        const failure = yield* admin
-          .forceStop(adminCaller, issued.session.id)
-          .pipe(Effect.flip);
+        const failure = yield* admin.forceStop(adminCaller, issued.session.id).pipe(Effect.flip);
         assert.strictEqual(failure._tag, "AdminImpersonationDenied");
-        assert.strictEqual(
-          (yield* sessions.verify(issued.token)).session.id,
-          issued.session.id,
-        );
+        assert.strictEqual((yield* sessions.verify(issued.token)).session.id, issued.session.id);
         yield* TestClock.adjust(Duration.millis(10));
         const denied = (yield* Ref.get(seen)).flatMap((event) =>
           event._tag === "auth.admin.impersonationDenied" ? [event] : [],
@@ -570,28 +507,22 @@ describe("the admin gate (plan 13)", () => {
         assert.strictEqual(denied[0]?.operation, "forceStop");
         assert.strictEqual(denied[0]?.sessionId, issued.session.id);
         assert.strictEqual(denied[0]?.targetUserId, target.id);
-      }).pipe(
-        Effect.scoped,
-        TestAuth.withoutRequest,
-        Effect.provide(buildLayer({})),
-      ),
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer({}))),
   );
 
-  it.effect(
-    "BEH-EA-221: each operation opens on its own predicate and on no other",
-    () =>
-      Effect.gen(function* () {
-        for (const predicate of predicates) {
-          const result = yield* scenario({ build: only(predicate) });
-          for (const row of rows) {
-            assert.strictEqual(
-              result.outcomes[row.name],
-              expectedFor(row, row.predicate === predicate),
-              `${row.name} under only ${predicate}`,
-            );
-          }
+  it.effect("BEH-EA-221: each operation opens on its own predicate and on no other", () =>
+    Effect.gen(function* () {
+      for (const predicate of predicates) {
+        const result = yield* scenario({ build: only(predicate) });
+        for (const row of rows) {
+          assert.strictEqual(
+            result.outcomes[row.name],
+            expectedFor(row, row.predicate === predicate),
+            `${row.name} under only ${predicate}`,
+          );
         }
-      }),
+      }
+    }),
   );
 
   it.effect("BEH-EA-221, IDS-003: the gate runs before existence", () =>
@@ -634,11 +565,7 @@ describe("the admin gate (plan 13)", () => {
               expectedFor(row, row.predicate === predicate),
               `${row.name} opened by ${predicate}`,
             );
-            assert.strictEqual(
-              other.outcomes[row.name],
-              row.denial,
-              `${row.name} in tenant other`,
-            );
+            assert.strictEqual(other.outcomes[row.name], row.denial, `${row.name} in tenant other`);
           }
         }
       }),
@@ -673,29 +600,20 @@ describe("the admin gate (plan 13)", () => {
       }),
   );
 
-  it.effect(
-    "ADR-EA-018 D8: a tightening tenant leaves the account in place (deleteUser)",
-    () =>
-      Effect.gen(function* () {
-        const users = yield* Users.Users;
-        const accounts = yield* AdminAccounts.AdminAccounts;
-        const target = yield* users.create({
-          identity: { _tag: "Email", email: "target@example.com" },
-          name: "Target",
-        });
-        const refused = yield* accounts
-          .deleteUser(adminCaller, target.id)
-          .pipe(
-            TestAuth.withoutRequest,
-            Effect.provide(Admin.config({})),
-            Effect.flip,
-          );
-        assert.strictEqual(refused._tag, "AdminActionDenied");
-        assert.strictEqual((yield* users.findById(target.id)).id, target.id);
-      }).pipe(
-        TestAuth.withoutRequest,
-        Effect.provide(buildLayer({ canDeleteUsers: allow })),
-      ),
+  it.effect("ADR-EA-018 D8: a tightening tenant leaves the account in place (deleteUser)", () =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const accounts = yield* AdminAccounts.AdminAccounts;
+      const target = yield* users.create({
+        identity: { _tag: "Email", email: "target@example.com" },
+        name: "Target",
+      });
+      const refused = yield* accounts
+        .deleteUser(adminCaller, target.id)
+        .pipe(TestAuth.withoutRequest, Effect.provide(Admin.config({})), Effect.flip);
+      assert.strictEqual(refused._tag, "AdminActionDenied");
+      assert.strictEqual((yield* users.findById(target.id)).id, target.id);
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer({ canDeleteUsers: allow }))),
   );
 
   it.effect(
@@ -719,10 +637,7 @@ describe("the admin gate (plan 13)", () => {
           yield* run(name);
           const kind = row(name)?.kind;
           const gateCalls = calls.filter(
-            (call) =>
-              !(
-                call.predicate === "canAdministerTenants" && kind === "episode"
-              ),
+            (call) => !(call.predicate === "canAdministerTenants" && kind === "episode"),
           );
           switch (kind) {
             case "users":
@@ -748,11 +663,7 @@ describe("the admin gate (plan 13)", () => {
                   kind === "users" ? Option.none() : Option.some("ghost-user"),
                   name,
                 );
-                assert.deepStrictEqual(
-                  call.input.tenantId,
-                  Option.some("org-a"),
-                  name,
-                );
+                assert.deepStrictEqual(call.input.tenantId, Option.some("org-a"), name);
               }
               break;
             }
@@ -765,9 +676,7 @@ describe("the admin gate (plan 13)", () => {
                 assert.strictEqual(call.input.admin.id, "admin-1", name);
                 assert.deepStrictEqual(
                   call.input.organizationId,
-                  kind === "organizations"
-                    ? Option.none()
-                    : Option.some("ghost-org"),
+                  kind === "organizations" ? Option.none() : Option.some("ghost-org"),
                   name,
                 );
               }
@@ -780,10 +689,7 @@ describe("the admin gate (plan 13)", () => {
               if (call?.predicate === "canImpersonate") {
                 assert.strictEqual(call.input.admin.id, "admin-1");
                 assert.strictEqual(call.input.target.id, "ghost-user");
-                assert.deepStrictEqual(
-                  call.input.tenantId,
-                  Option.some("org-a"),
-                );
+                assert.deepStrictEqual(call.input.tenantId, Option.some("org-a"));
               }
               break;
             }
@@ -804,10 +710,7 @@ describe("the admin gate (plan 13)", () => {
               for (const call of episodeCalls) {
                 if (call.predicate === "canManageEpisode") {
                   assert.strictEqual(call.input.admin.id, "admin-1");
-                  assert.strictEqual(
-                    call.input.episode.targetUserId,
-                    "ghost-user",
-                  );
+                  assert.strictEqual(call.input.episode.targetUserId, "ghost-user");
                 }
               }
               break;
@@ -855,8 +758,7 @@ describe("the admin gate (plan 13)", () => {
           canManageCredentials: allow,
           maxDuration: Duration.minutes(5),
           links: {
-            changeEmail: (token) =>
-              `https://ops.example/confirm?token=${token}`,
+            changeEmail: (token) => `https://ops.example/confirm?token=${token}`,
           },
         });
         // maxDuration: the impersonation session expires at the tenant's ceiling.
@@ -869,8 +771,7 @@ describe("the admin gate (plan 13)", () => {
           .pipe(TestAuth.withoutRequest, Effect.provide(ops));
         const now = yield* DateTime.now;
         assert.strictEqual(
-          DateTime.toEpochMillis(issued.session.absoluteExpiresAt) -
-            DateTime.toEpochMillis(now),
+          DateTime.toEpochMillis(issued.session.absoluteExpiresAt) - DateTime.toEpochMillis(now),
           Duration.toMillis(Duration.minutes(5)),
         );
         // links.changeEmail: the mailed URL.
@@ -880,15 +781,8 @@ describe("the admin gate (plan 13)", () => {
         const mail = yield* box.mail.waitFor({
           template: EmailChange.TEMPLATE,
         });
-        assert.match(
-          String(mail.data?.["url"]),
-          /^https:\/\/ops\.example\/confirm\?token=/,
-        );
-      }).pipe(
-        Effect.scoped,
-        TestAuth.withoutRequest,
-        Effect.provide(buildLayer({})),
-      ),
+        assert.match(String(mail.data?.["url"]), /^https:\/\/ops\.example\/confirm\?token=/);
+      }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer({}))),
   );
 
   it.effect(
@@ -903,10 +797,7 @@ describe("the admin gate (plan 13)", () => {
           identity: { _tag: "Email", email: "t@example.com" },
           name: "t",
         });
-        const expiresAt = DateTime.addDuration(
-          yield* DateTime.now,
-          Duration.days(1),
-        );
+        const expiresAt = DateTime.addDuration(yield* DateTime.now, Duration.days(1));
         const make = (tenant: string, sessionId: string) =>
           records
             .create({
@@ -925,23 +816,18 @@ describe("the admin gate (plan 13)", () => {
               .list(superadmin)
               .pipe(
                 Tenant.withTenant("org-a"),
-                request === undefined
-                  ? (effect) => effect
-                  : Effect.provide(Admin.config(request)),
+                request === undefined ? (effect) => effect : Effect.provide(Admin.config(request)),
               ),
             (page) => page.items.map((row) => row.sessionId).sort(),
           );
         assert.deepStrictEqual(yield* listed(), ["s-a", "s-b"]);
         // The tenant's own configuration withdraws the lift.
-        assert.deepStrictEqual(yield* listed({ canManageEpisode: allow }), [
-          "s-a",
-        ]);
+        assert.deepStrictEqual(yield* listed({ canManageEpisode: allow }), ["s-a"]);
       }).pipe(
         Effect.scoped,
         Effect.provide(
           buildLayer({
-            canAdministerTenants: ({ admin }) =>
-              Effect.succeed(admin.id === "superadmin-1"),
+            canAdministerTenants: ({ admin }) => Effect.succeed(admin.id === "superadmin-1"),
             canManageEpisode: allow,
           }),
         ),
@@ -952,76 +838,61 @@ describe("the admin gate (plan 13)", () => {
 // ---- the production path: a tenant's `Admin.config(...)` served by a LayerMap -----------------------
 
 /** The application's own map: tenant "ops" keeps deletion and credentials; every other tenant keeps nothing. */
-class TenantConfig extends LayerMap.Service<TenantConfig>()(
-  "test/AdminGateTenantConfig",
-  {
-    lookup: (tenantId: string) =>
-      Layer.merge(
-        tenantId === "ops"
-          ? Admin.config({
-              canDeleteUsers: allow,
-              canManageCredentials: allow,
-              canManageUsers: allow,
-            })
-          : Admin.config({}),
-        Tenant.configApplied(tenantId),
-      ),
-    idleTimeToLive: "1 minute",
-  },
-) {}
+class TenantConfig extends LayerMap.Service<TenantConfig>()("test/AdminGateTenantConfig", {
+  lookup: (tenantId: string) =>
+    Layer.merge(
+      tenantId === "ops"
+        ? Admin.config({
+            canDeleteUsers: allow,
+            canManageCredentials: allow,
+            canManageUsers: allow,
+          })
+        : Admin.config({}),
+      Tenant.configApplied(tenantId),
+    ),
+  idleTimeToLive: "1 minute",
+}) {}
 
-const inTenant = (tenantId: string) =>
-  Effect.provide(TenantConfig.get(tenantId));
+const inTenant = (tenantId: string) => Effect.provide(TenantConfig.get(tenantId));
 
 describe("ADR-EA-018 D8: a LayerMap of per-tenant Admin.config governs all three plugins", () => {
-  it.effect(
-    "a tenant tightens, another opens, the build-time value is the fallback",
-    () =>
-      Effect.gen(function* () {
-        const users = yield* Users.Users;
-        const accounts = yield* AdminAccounts.AdminAccounts;
-        const admin = yield* Admin.Admin;
-        const target = yield* users.create({
-          identity: { _tag: "Email", email: "target@example.com" },
-          name: "Target",
-        });
-        const hasher = yield* PasswordHasher.PasswordHasher;
-        yield* (yield* Accounts.Accounts).link({
-          userId: target.id,
-          providerId: Accounts.PASSWORD_PROVIDER_ID,
-          subject: target.id,
-          credentialHash: Redacted.make(
-            yield* hasher.hash(Redacted.make("the old password of the target")),
-          ),
-        });
-        const refused = yield* accounts
-          .deleteUser(adminCaller, target.id)
-          .pipe(inTenant("other"), Effect.flip);
-        assert.strictEqual(refused._tag, "AdminActionDenied");
-        assert.strictEqual((yield* users.findById(target.id)).id, target.id);
-        const ghost = yield* accounts
-          .setUserPassword(adminCaller, Users.UserId("ghost"), {
-            password: Redacted.make("whatever 1 password"),
-          })
-          .pipe(inTenant("ops"), Effect.flip);
-        assert.strictEqual(ghost._tag, "AdminTargetNotFound");
-        const items = yield* admin
-          .effectiveConfig(adminCaller)
-          .pipe(inTenant("ops"));
-        assert.isAbove(items.length, 0);
-        const noTenant = yield* admin
-          .effectiveConfig(adminCaller)
-          .pipe(Effect.flip);
-        assert.strictEqual(noTenant._tag, "AdminActionDenied");
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          Layer.merge(
-            buildLayer({ canDeleteUsers: allow }),
-            TenantConfig.layer,
-          ),
+  it.effect("a tenant tightens, another opens, the build-time value is the fallback", () =>
+    Effect.gen(function* () {
+      const users = yield* Users.Users;
+      const accounts = yield* AdminAccounts.AdminAccounts;
+      const admin = yield* Admin.Admin;
+      const target = yield* users.create({
+        identity: { _tag: "Email", email: "target@example.com" },
+        name: "Target",
+      });
+      const hasher = yield* PasswordHasher.PasswordHasher;
+      yield* (yield* Accounts.Accounts).link({
+        userId: target.id,
+        providerId: Accounts.PASSWORD_PROVIDER_ID,
+        subject: target.id,
+        credentialHash: Redacted.make(
+          yield* hasher.hash(Redacted.make("the old password of the target")),
         ),
-      ),
+      });
+      const refused = yield* accounts
+        .deleteUser(adminCaller, target.id)
+        .pipe(inTenant("other"), Effect.flip);
+      assert.strictEqual(refused._tag, "AdminActionDenied");
+      assert.strictEqual((yield* users.findById(target.id)).id, target.id);
+      const ghost = yield* accounts
+        .setUserPassword(adminCaller, Users.UserId("ghost"), {
+          password: Redacted.make("whatever 1 password"),
+        })
+        .pipe(inTenant("ops"), Effect.flip);
+      assert.strictEqual(ghost._tag, "AdminTargetNotFound");
+      const items = yield* admin.effectiveConfig(adminCaller).pipe(inTenant("ops"));
+      assert.isAbove(items.length, 0);
+      const noTenant = yield* admin.effectiveConfig(adminCaller).pipe(Effect.flip);
+      assert.strictEqual(noTenant._tag, "AdminActionDenied");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(buildLayer({ canDeleteUsers: allow }), TenantConfig.layer)),
+    ),
   );
 });
 

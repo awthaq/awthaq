@@ -25,7 +25,7 @@ must_haves:
     - "OrganizationInvitations requireInvitationToken -> SecretHash.equals against the stored hash or SecretHash.NEVER_MATCHES"
     - "OrganizationInvitations mintToken / findByToken / holdsToken -> SecretHash.digest"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 01
 
 <objective>
@@ -96,3 +96,5 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular
 </success_criteria>
 
 ## Comments
+
+Done (uncommitted). OrganizationInvitations.test.ts: oracle assertion added (passed at HEAD first). OrganizationInvitations.ts uses SecretHash.digest/equals/NEVER_MATCHES and Hmac.toHex; internal/tokens.ts deleted (plain rm). Deviation: oxfmt reformatted the whole test file (it was not oxfmt-clean at HEAD), so its diff is large; assertions unchanged. packages/organization tests pass.

@@ -25,7 +25,7 @@ must_haves:
     - "SamlSlo.ts request replay digest -> Hmac.toHex (from @awthaq/ports)"
     - "PasswordHasher.ts scrypt encode/verify -> Hmac.toHex (./Hmac.ts, already imported at line 117)"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: none
 
 <objective>
@@ -89,3 +89,5 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular
 </success_criteria>
 
 ## Comments
+
+Done (uncommitted). PasswordHasher.ts, Saml.ts, SamlSlo.ts local hex encoders deleted; Hmac.toHex used (SAML imports Hmac from @awthaq/ports). Only Hmac.ts has padStart(2) hex now (SamlKeys.ts padStart is a date helper). PasswordHasher and packages/saml tests pass.
