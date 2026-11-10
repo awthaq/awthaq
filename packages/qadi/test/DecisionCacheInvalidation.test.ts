@@ -15,7 +15,7 @@
 // below shares it (each test uses its own organization/user ids, so shared
 // state cannot leak between them).
 import { Api } from "@awthaq/api";
-import { Auth, Users } from "@awthaq/core";
+import { Auth, CurrentUser, Users } from "@awthaq/core";
 import {
   Organization,
   OrganizationActor,
@@ -82,11 +82,13 @@ const addMember = (organizationId: string, user: string, role: ReadonlyArray<str
     }),
   );
 
-const asCaller = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: `session-${id}`,
-  });
+const asCaller = (id: string) =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: `session-${id}`,
+    }),
+  );
 
 const decide = (relation: string, resourceId: string, userId: string) =>
   evaluate(hasRelationship(relation), { resource: { id: resourceId } }).pipe(

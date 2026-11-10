@@ -36,7 +36,7 @@ must_haves:
       via: "gate.* receive the Caller; gate reads caller.userId"
       pattern: "caller: CurrentUser\\.Caller"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 01
 
 <objective>
@@ -105,3 +105,5 @@ Split rule waived (PLAN §4.3): one parameter type every caller and test helper 
 <success_criteria>A2 gate for admin = 0 (baseline 28); A3 gate for admin = 0 (baseline 30); admin suite green, zero assertion lines changed.</success_criteria>
 
 ## Comments
+
+Result: Admin, AdminAccounts, AdminTenants and internal/AdminGate.ts take `CurrentUser.Caller` (gate logic untouched; only the parameter type and id reads). `caller.userId` replaces every re-brand; `Option.isSome/isNone(caller.actingAs)`; impersonation session `actingAs: { type: "user", id: caller.userId }`; handlers use `const caller = yield* CurrentUser.current`. 6 test helpers (Admin, AdminAccounts, AdminConfig, AdminGate, AdminTenants, AdminUsers) return `CurrentUser.of(new Api.UserPrincipal(...))`; AdminGate.types declares `CurrentUser.Caller`; AdminTier's operator principal is the wire principal of a custom scheme, unchanged. No assertion changed; admin suite 220 green. Deviation: AdminAccounts.ts and AdminTenants.ts keep an `Api` type import, used by a new exported `EdgeServices` type (same device as `GateServices`), because declaration emit (TS2883) needs `Api` named once the caller param no longer does. Changeset: .changeset/current-user-caller-admin.md. features AdminWorld/AdminSteps needed no change.

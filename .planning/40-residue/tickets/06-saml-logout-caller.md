@@ -26,7 +26,7 @@ must_haves:
       via: "the saml.account logout handler passes `yield* CurrentUser.current`"
       pattern: "saml\\.logout\\(yield\\* CurrentUser\\.current"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 05
 
 <objective>
@@ -66,3 +66,5 @@ Output: `logout(caller: CurrentUser.Caller, input)`.
 <success_criteria>No `Api.UserPrincipal` in saml src; SLO tests green unchanged.</success_criteria>
 
 ## Comments
+
+Result: SamlAdminShape (10 ops) and Saml.logout/SamlSlo.logout take CurrentUser.Caller; adminId and the sessionId re-brand deleted; handlers pass `yield* CurrentUser.current`. Saml tests 353 green, no assertion changed. Test helper shapes: SamlAdmin.test.ts `admin`/`other` = CurrentUser.of(new Api.UserPrincipal(...)); SamlSlo.test.ts `principalOf(userId, sessionId)` returns a Caller; support.ts `ownerPrincipal` and SamlConnections.test.ts `owner` remain raw UserPrincipal (for organization.create, ticket 08). Changeset: .changeset/current-user-caller-saml.md (05), current-user-caller-saml-logout.md (06). Open: features/step-definitions/SamlFederationSteps.ts (outside my scope) passes UserPrincipal to admin/logout at ~16 sites and fails tsc.

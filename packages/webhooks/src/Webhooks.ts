@@ -35,7 +35,6 @@ import {
   RateLimits,
   Retention,
   Tenant,
-  Users,
 } from "@awthaq/core";
 import { Defects, type Encryption, HostResolver, OutboundUrl, RateLimiter } from "@awthaq/ports";
 import { SealedColumn, TenantScoped } from "@awthaq/sql";
@@ -67,7 +66,7 @@ type Gate = WebhooksApi.WebhooksActionDenied | Api.RateLimited;
 export interface WebhooksShape {
   /** Registers a receiver. The returned secret is the only time it is ever shown. */
   readonly createEndpoint: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     input: WebhooksApi.CreateEndpointPayload,
   ) => Effect.Effect<
     WebhooksApi.EndpointWithSecretDto,
@@ -77,17 +76,17 @@ export interface WebhooksShape {
     | WebhooksApi.WebhookEndpointLimitReached
   >;
   readonly listEndpoints: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
   ) => Effect.Effect<ReadonlyArray<WebhooksApi.EndpointDto>, Gate | Api.StoreUnavailable>;
   readonly getEndpoint: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     endpointId: string,
   ) => Effect.Effect<
     WebhooksApi.EndpointDto,
     Gate | Api.StoreUnavailable | WebhooksApi.WebhookEndpointNotFound
   >;
   readonly updateEndpoint: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     endpointId: string,
     input: WebhooksApi.UpdateEndpointPayload,
   ) => Effect.Effect<
@@ -99,19 +98,19 @@ export interface WebhooksShape {
   >;
   /** Removes the endpoint and its delivery log. */
   readonly deleteEndpoint: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     endpointId: string,
   ) => Effect.Effect<void, Gate | Api.StoreUnavailable | WebhooksApi.WebhookEndpointNotFound>;
   /** New secret now; the old one keeps signing alongside it for `secretGrace`. */
   readonly rotateSecret: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     endpointId: string,
   ) => Effect.Effect<
     WebhooksApi.EndpointWithSecretDto,
     Gate | Api.StoreUnavailable | WebhooksApi.WebhookEndpointNotFound
   >;
   readonly listDeliveries: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     endpointId: string,
     query: WebhooksApi.ListDeliveriesQuery,
   ) => Effect.Effect<
@@ -120,7 +119,7 @@ export interface WebhooksShape {
   >;
   /** Sends a dead-lettered delivery again (attempts reset). */
   readonly retryDelivery: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     deliveryId: string,
   ) => Effect.Effect<
     WebhooksApi.DeliveryDto,
@@ -134,7 +133,7 @@ export interface WebhooksShape {
    * row; the worker sends it like any other delivery, once, and the outcome is read from the delivery log.
    */
   readonly testEndpoint: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     endpointId: string,
   ) => Effect.Effect<
     WebhooksApi.DeliveryDto,
@@ -418,20 +417,17 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           }: {
             payload: WebhooksApi.CreateEndpointPayload;
           }) {
-            return yield* webhooks.createEndpoint((yield* CurrentUser.current).principal, payload);
+            return yield* webhooks.createEndpoint(yield* CurrentUser.current, payload);
           }),
           listEndpoints: Effect.fnUntraced(function* () {
-            return yield* webhooks.listEndpoints((yield* CurrentUser.current).principal);
+            return yield* webhooks.listEndpoints(yield* CurrentUser.current);
           }),
           getEndpoint: Effect.fnUntraced(function* ({
             params,
           }: {
             params: WebhooksApi.EndpointIdParams;
           }) {
-            return yield* webhooks.getEndpoint(
-              (yield* CurrentUser.current).principal,
-              params.endpointId,
-            );
+            return yield* webhooks.getEndpoint(yield* CurrentUser.current, params.endpointId);
           }),
           updateEndpoint: Effect.fnUntraced(function* ({
             params,
@@ -441,7 +437,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             payload: WebhooksApi.UpdateEndpointPayload;
           }) {
             return yield* webhooks.updateEndpoint(
-              (yield* CurrentUser.current).principal,
+              yield* CurrentUser.current,
               params.endpointId,
               payload,
             );
@@ -451,20 +447,14 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           }: {
             params: WebhooksApi.EndpointIdParams;
           }) {
-            yield* webhooks.deleteEndpoint(
-              (yield* CurrentUser.current).principal,
-              params.endpointId,
-            );
+            yield* webhooks.deleteEndpoint(yield* CurrentUser.current, params.endpointId);
           }),
           rotateSecret: Effect.fnUntraced(function* ({
             params,
           }: {
             params: WebhooksApi.EndpointIdParams;
           }) {
-            return yield* webhooks.rotateSecret(
-              (yield* CurrentUser.current).principal,
-              params.endpointId,
-            );
+            return yield* webhooks.rotateSecret(yield* CurrentUser.current, params.endpointId);
           }),
           listDeliveries: Effect.fnUntraced(function* ({
             params,
@@ -474,7 +464,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             query: WebhooksApi.ListDeliveriesQuery;
           }) {
             return yield* webhooks.listDeliveries(
-              (yield* CurrentUser.current).principal,
+              yield* CurrentUser.current,
               params.endpointId,
               query,
             );
@@ -484,20 +474,14 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
           }: {
             params: WebhooksApi.DeliveryIdParams;
           }) {
-            return yield* webhooks.retryDelivery(
-              (yield* CurrentUser.current).principal,
-              params.deliveryId,
-            );
+            return yield* webhooks.retryDelivery(yield* CurrentUser.current, params.deliveryId);
           }),
           testEndpoint: Effect.fnUntraced(function* ({
             params,
           }: {
             params: WebhooksApi.EndpointIdParams;
           }) {
-            return yield* webhooks.testEndpoint(
-              (yield* CurrentUser.current).principal,
-              params.endpointId,
-            );
+            return yield* webhooks.testEndpoint(yield* CurrentUser.current, params.endpointId);
           }),
         });
       }),
@@ -522,21 +506,21 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
        * Gate first (fail-closed), then the administrator's own rate limit: a caller who fails the
        * gate learns nothing else, and one who passes cannot hammer the write path.
        */
-      const authorize = Effect.fnUntraced(function* (caller: Api.UserPrincipal, action: string) {
+      const authorize = Effect.fnUntraced(function* (caller: CurrentUser.Caller, action: string) {
         const settings = yield* configNow;
         const allowed = yield* settings.canManageWebhooks({
-          admin: makeSubject({ id: caller.ref.id }),
+          admin: makeSubject({ id: caller.userId }),
           action,
         });
         if (!allowed) {
           yield* events.publish({
             _tag: "auth.admin.actionDenied",
-            adminUserId: Users.UserId(caller.ref.id),
+            adminUserId: caller.userId,
             action: `webhooks.${action}`,
           });
           return yield* Effect.fail(new WebhooksApi.WebhooksActionDenied());
         }
-        yield* limits.spend("admin", { userId: caller.ref.id }, { endpoint: action });
+        yield* limits.spend("admin", { userId: caller.userId }, { endpoint: action });
         return settings;
       });
 
@@ -554,8 +538,6 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             }),
           ),
         );
-
-      const adminId = (caller: Api.UserPrincipal) => Users.UserId(caller.ref.id);
 
       /** The SSRF floor and the filter check: `InvalidWebhookEndpoint` with the rule that failed. */
       const validateTarget = Effect.fnUntraced(function* (
@@ -629,7 +611,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
                 description: input.description?.trim(),
                 eventTags: input.eventTags,
                 secret,
-                createdBy: caller.ref.id,
+                createdBy: caller.userId,
                 headers:
                   input.headers === undefined || Object.keys(input.headers).length === 0
                     ? undefined
@@ -644,7 +626,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             );
           yield* Effect.logInfo("awthaq/webhooks: endpoint created", { endpointId: id });
           yield* events.emit(WebhookEvents.WebhookEndpointCreatedEvent, {
-            adminUserId: adminId(caller),
+            adminUserId: caller.userId,
             endpointId: id,
           });
           return new WebhooksApi.EndpointWithSecretDto({
@@ -704,7 +686,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             );
           }
           yield* events.emit(WebhookEvents.WebhookEndpointUpdatedEvent, {
-            adminUserId: adminId(caller),
+            adminUserId: caller.userId,
             endpointId,
             // Names only: a URL or a description never enters the audit trail.
             fields: UPDATE_FIELDS.filter((field) => input[field] !== undefined),
@@ -726,7 +708,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             );
           yield* Effect.logInfo("awthaq/webhooks: endpoint deleted", { endpointId });
           yield* events.emit(WebhookEvents.WebhookEndpointDeletedEvent, {
-            adminUserId: adminId(caller),
+            adminUserId: caller.userId,
             endpointId,
           });
         },
@@ -757,7 +739,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             );
           yield* Effect.logInfo("awthaq/webhooks: endpoint secret rotated", { endpointId });
           yield* events.emit(WebhookEvents.WebhookSecretRotatedEvent, {
-            adminUserId: adminId(caller),
+            adminUserId: caller.userId,
             endpointId,
           });
           return new WebhooksApi.EndpointWithSecretDto({
@@ -840,7 +822,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
             },
           ]);
           yield* events.emit(WebhookEvents.WebhookTestQueuedEvent, {
-            adminUserId: adminId(caller),
+            adminUserId: caller.userId,
             endpointId,
           });
           // An endpoint deleted concurrently takes its deliveries with it (plan 25 F9): that is a plain not-found.

@@ -6,7 +6,7 @@
 // `canImpersonate` function (no `Layer.mock` needed — it is a bare config
 // predicate, not a service).
 import { Api } from "@awthaq/api";
-import { Auth, AuthEvents, Sessions, Tenant, Users } from "@awthaq/core";
+import { Auth, AuthEvents, CurrentUser, Sessions, Tenant, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -51,12 +51,14 @@ const asCaller = (input: {
   readonly id: string;
   readonly sessionId: string;
   readonly actingAs?: { readonly type: string; readonly id: string };
-}): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id: input.id }),
-    sessionId: input.sessionId,
-    ...(input.actingAs === undefined ? {} : { actingAs: new Api.PrincipalRef(input.actingAs) }),
-  });
+}): CurrentUser.Caller =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id: input.id }),
+      sessionId: input.sessionId,
+      ...(input.actingAs === undefined ? {} : { actingAs: new Api.PrincipalRef(input.actingAs) }),
+    }),
+  );
 
 describe("Admin", () => {
   it.effect(

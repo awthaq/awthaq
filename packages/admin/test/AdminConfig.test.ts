@@ -2,7 +2,7 @@
 // configuration, dumped through the admin surface behind the same fail-closed gate as user
 // administration — sensitive values redacted, never unwrapped.
 import { Api } from "@awthaq/api";
-import { AuditChain, Auth, EffectiveConfig } from "@awthaq/core";
+import { AuditChain, Auth, CurrentUser, EffectiveConfig } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -26,11 +26,13 @@ const buildLayer = (config: Partial<Admin.AdminConfigShape>, catalog: boolean) =
     ),
   });
 
-const asCaller = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: "admin-session",
-  });
+const asCaller = (id: string): CurrentUser.Caller =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: "admin-session",
+    }),
+  );
 
 describe("Admin.effectiveConfig", () => {
   it.effect(

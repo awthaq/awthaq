@@ -177,14 +177,14 @@ export interface PasskeySignals {
 export interface PasskeyShape {
   readonly registerOptions: (
     userId: Users.UserId,
-    sessionId: string,
+    sessionId: Sessions.SessionId,
   ) => Effect.Effect<
     PasskeyApi.PublicKeyCredentialCreationOptions,
     PasskeyApi.PasskeyReauthRequired | Errors.StoreUnavailable
   >;
   readonly registerOptionsConditional: (
     userId: Users.UserId,
-    sessionId: string,
+    sessionId: Sessions.SessionId,
   ) => Effect.Effect<
     PasskeyApi.PublicKeyCredentialCreationOptions,
     | PasskeyApi.PasskeyConditionalCreateDisabled
@@ -193,7 +193,7 @@ export interface PasskeyShape {
   >;
   readonly registerVerify: (
     userId: Users.UserId,
-    sessionId: string,
+    sessionId: Sessions.SessionId,
     input: PasskeyApi.RegisterVerifyPayload,
   ) => Effect.Effect<
     PasskeyCredentials.PasskeyCredentialRecord,
@@ -215,11 +215,11 @@ export interface PasskeyShape {
    */
   readonly reauthenticateOptions: (
     userId: Users.UserId,
-    sessionId: string,
+    sessionId: Sessions.SessionId,
   ) => Effect.Effect<PasskeyApi.PublicKeyCredentialRequestOptions, Errors.StoreUnavailable>;
   readonly reauthenticateVerify: (
     userId: Users.UserId,
-    sessionId: string,
+    sessionId: Sessions.SessionId,
     input: PasskeyApi.ReauthenticateVerifyPayload,
   ) => Effect.Effect<
     void,
@@ -297,30 +297,20 @@ export const PasskeyHandlers = Layer.mergeAll(
       const passkey = yield* Passkey;
       return handlers.handleAll({
         registerOptions: Effect.fnUntraced(function* () {
-          const { principal } = yield* CurrentUser.current;
-          return yield* passkey.registerOptions(
-            Users.UserId(principal.ref.id),
-            principal.sessionId,
-          );
+          const { userId, sessionId } = yield* CurrentUser.current;
+          return yield* passkey.registerOptions(userId, sessionId);
         }),
         registerOptionsConditional: Effect.fnUntraced(function* () {
-          const { principal } = yield* CurrentUser.current;
-          return yield* passkey.registerOptionsConditional(
-            Users.UserId(principal.ref.id),
-            principal.sessionId,
-          );
+          const { userId, sessionId } = yield* CurrentUser.current;
+          return yield* passkey.registerOptionsConditional(userId, sessionId);
         }),
         registerVerify: Effect.fnUntraced(function* ({
           payload,
         }: {
           payload: PasskeyApi.RegisterVerifyPayload;
         }) {
-          const { principal } = yield* CurrentUser.current;
-          const record = yield* passkey.registerVerify(
-            Users.UserId(principal.ref.id),
-            principal.sessionId,
-            payload,
-          );
+          const { userId, sessionId } = yield* CurrentUser.current;
+          const record = yield* passkey.registerVerify(userId, sessionId, payload);
           return toCredentialDto(record);
         }),
       });
@@ -356,13 +346,13 @@ export const PasskeyHandlers = Layer.mergeAll(
       const passkey = yield* Passkey;
       return handlers.handleAll({
         listCredentials: Effect.fnUntraced(function* () {
-          const { principal } = yield* CurrentUser.current;
-          const records = yield* passkey.listCredentials(Users.UserId(principal.ref.id));
+          const { userId } = yield* CurrentUser.current;
+          const records = yield* passkey.listCredentials(userId);
           return records.map(toCredentialDto);
         }),
         signals: Effect.fnUntraced(function* () {
-          const { principal } = yield* CurrentUser.current;
-          const signals = yield* passkey.signals(Users.UserId(principal.ref.id));
+          const { userId } = yield* CurrentUser.current;
+          const signals = yield* passkey.signals(userId);
           return new PasskeyApi.PasskeySignalsDto(signals);
         }),
         renameCredential: Effect.fnUntraced(function* ({
@@ -372,12 +362,8 @@ export const PasskeyHandlers = Layer.mergeAll(
           params: PasskeyApi.CredentialIdParams;
           payload: PasskeyApi.RenamePayload;
         }) {
-          const { principal } = yield* CurrentUser.current;
-          const record = yield* passkey.renameCredential(
-            Users.UserId(principal.ref.id),
-            params.id,
-            payload.name,
-          );
+          const { userId } = yield* CurrentUser.current;
+          const record = yield* passkey.renameCredential(userId, params.id, payload.name);
           return toCredentialDto(record);
         }),
         removeCredential: Effect.fnUntraced(function* ({
@@ -385,8 +371,8 @@ export const PasskeyHandlers = Layer.mergeAll(
         }: {
           params: PasskeyApi.CredentialIdParams;
         }) {
-          const { principal } = yield* CurrentUser.current;
-          yield* passkey.removeCredential(Users.UserId(principal.ref.id), params.id);
+          const { userId } = yield* CurrentUser.current;
+          yield* passkey.removeCredential(userId, params.id);
         }),
       });
     }),
@@ -415,23 +401,16 @@ export const PasskeyHandlers = Layer.mergeAll(
       const passkey = yield* Passkey;
       return handlers.handleAll({
         reauthenticateOptions: Effect.fnUntraced(function* () {
-          const { principal } = yield* CurrentUser.current;
-          return yield* passkey.reauthenticateOptions(
-            Users.UserId(principal.ref.id),
-            principal.sessionId,
-          );
+          const { userId, sessionId } = yield* CurrentUser.current;
+          return yield* passkey.reauthenticateOptions(userId, sessionId);
         }),
         reauthenticateVerify: Effect.fnUntraced(function* ({
           payload,
         }: {
           payload: PasskeyApi.ReauthenticateVerifyPayload;
         }) {
-          const { principal } = yield* CurrentUser.current;
-          yield* passkey.reauthenticateVerify(
-            Users.UserId(principal.ref.id),
-            principal.sessionId,
-            payload,
-          );
+          const { userId, sessionId } = yield* CurrentUser.current;
+          yield* passkey.reauthenticateVerify(userId, sessionId, payload);
         }),
       });
     }),
@@ -847,11 +826,11 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
        * live for its owner fails closed the same as a stale one. This maps it to the
        * plugin's own wire error.
        */
-      const requireFreshSession = (userId: Users.UserId, sessionId: string) =>
+      const requireFreshSession = (userId: Users.UserId, sessionId: Sessions.SessionId) =>
         Effect.gen(function* () {
           const config = yield* configNow;
           yield* sessions
-            .requireFresh(userId, Sessions.SessionId(sessionId), config.reauthMaxAgeSeconds)
+            .requireFresh(userId, sessionId, config.reauthMaxAgeSeconds)
             .pipe(
               Effect.catchTag("Sessions/Stale", (stale) =>
                 Effect.fail(
@@ -1230,7 +1209,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // BEH-EA-319: ended since the middleware's verify (revoked, superseded,
           // expired) is "no longer authenticated": 401, not a defect.
           yield* sessions
-            .reauthenticate(userId, Sessions.SessionId(sessionId), amr)
+            .reauthenticate(userId, sessionId, amr)
             .pipe(
               Effect.catchTag("Sessions/NotFound", () => Effect.fail(new Api.Unauthenticated())),
             );

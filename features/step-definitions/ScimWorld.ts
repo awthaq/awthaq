@@ -12,6 +12,7 @@ import {
   Accounts,
   AuditLog,
   Auth,
+  CurrentUser,
   Erasure,
   Errors,
   HookPoint,
@@ -217,10 +218,12 @@ export const withContext = <A, E>(effect: Effect.Effect<A, E, AppServices>) =>
   });
 
 const ownerPrincipal = (id: string) =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: `${id}-session`,
-  });
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: `${id}-session`,
+    }),
+  );
 
 /** An organization owned by `owner-1`, and a SCIM connection for it: its identity and its bearer token. */
 export const seedConnection = Effect.fn("features.scim.seedConnection")(function* (

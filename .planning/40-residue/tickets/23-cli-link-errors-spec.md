@@ -26,7 +26,7 @@ must_haves:
       via: "test-file row"
       pattern: "LinkErrors\\.test\\.ts"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 22
 
 <objective>
@@ -64,3 +64,4 @@ No BDD change: the CLI BDD world runs `Cli.run` over `Config.layerFixed` (`featu
 <success_criteria>`pnpm check` green with Part C complete.</success_criteria>
 
 ## Comments
+Done. 26-cli.md was at 1.8, so BEH-EA-201 Implementation note went in as rev 1.9 (not 1.7). traceability.md bumped from its current revision (LinkErrors.test.ts row added, ConfigLoader row extended). Changeset .changeset/cli-link-errors.md (core minor, cli patch, api patch; Migration line).

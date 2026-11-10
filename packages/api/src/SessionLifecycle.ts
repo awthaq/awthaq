@@ -22,6 +22,7 @@
 
 import type * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
@@ -104,6 +105,13 @@ const kindsOf = (middleware: Iterable<{ readonly key: string }>) =>
 export const kindOf = (middleware: Iterable<{ readonly key: string }>): Kind | undefined =>
   kindsOf(middleware)[0];
 
+/** BEH-EA-343: an endpoint declares two session lifecycles. Raised while the contract is composed, so a link error. */
+export class Conflict extends Data.TaggedError("SessionLifecycle/Conflict")<{
+  readonly endpoint: string;
+  readonly kinds: ReadonlyArray<string>;
+  readonly message: string;
+}> {}
+
 /**
  * BEH-EA-343: every declared endpoint of `api`, keyed by its default OpenAPI `operationId`
  * (`group.endpoint`, or `endpoint` for a top-level group). Throws, at composition time, on an endpoint
@@ -121,9 +129,11 @@ export const inventory = <Id extends string, Groups extends HttpApiGroup.Constra
         ? endpoint.identifier
         : `${group.identifier}.${endpoint.identifier}`;
       if (kinds.length > 1) {
-        throw new Error(
-          `awthaq: ${id} declares more than one session lifecycle (${kinds.join(", ")})`,
-        );
+        throw new Conflict({
+          endpoint: id,
+          kinds,
+          message: `awthaq: ${id} declares more than one session lifecycle (${kinds.join(", ")})`,
+        });
       }
       const [kind] = kinds;
       if (kind !== undefined) declared.set(id, kind);

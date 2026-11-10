@@ -26,7 +26,7 @@ must_haves:
       via: "load(fixture) → asLoadFailure"
       pattern: "load\\(\"(user-field-invalid|conflicting-depends-on|sealed-column-invalid)\\.config\\.ts\"\\)"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: none
 
 <objective>
@@ -74,3 +74,4 @@ Output: three fixtures, three failing loader cases. Committed together with tick
 <success_criteria>3 red cases reproduce C-F1.</success_criteria>
 
 ## Comments
+Red at HEAD: exactly 3 failed | 9 passed; each `expected 'ConfigUnavailable' to equal 'LinkProblem'` (user-field-invalid, conflicting-depends-on, sealed-column-invalid). Fixtures use a minimal `AuthPlugin.Service` each; conflicting-depends-on registers `Twin` twice in static members.

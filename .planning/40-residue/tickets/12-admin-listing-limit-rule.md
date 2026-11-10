@@ -28,7 +28,7 @@ must_haves:
       via: "MAX_PAGE_SIZE (200) is the clamp"
       pattern: "MAX_PAGE_SIZE"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 11 (shares the impersonation contract file and AdminTenants.test.ts)
 
 <objective>
@@ -80,3 +80,5 @@ Output: one limit rule per package, red tests first.
 <success_criteria>B-F1, B-F2 closed: five limit cases green on both adapters; 3 unvalidated sites → 0.</success_criteria>
 
 ## Comments
+
+Result: red first (3 failures: memory, SQLite, AdminTenants), then green. One `pageLimit` exported from packages/admin/src/ImpersonationRecords.ts (trunc, clamp 1..MAX_PAGE_SIZE imported from AdminApi.ts, 50 when absent/non-finite) used at both adapters and by AdminTenants.listOrganizations (its local DEFAULT_PAGE_SIZE deleted). Changeset .changeset/admin-listing-limit.md. node scripts/circular.mjs clean. test:pg not run (SQL case changed; no Postgres here).

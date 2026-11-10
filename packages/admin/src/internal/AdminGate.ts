@@ -12,8 +12,15 @@
 // same "id only, no roles, no permissions" shape `@awthaq/qadi`'s own `SubjectResolver.ts` documents
 // as its default resolution (BEH-EA-137). A host whose predicate needs more than an id looks the
 // rest up itself (e.g. by closing over its own `Roles`/`SubjectResolver` at `config()` call time).
-import { Api } from "@awthaq/api";
-import { AuthEvents, ConfigDescriptor, Errors, Sessions, Tenant, Users } from "@awthaq/core";
+import {
+  AuthEvents,
+  ConfigDescriptor,
+  type CurrentUser,
+  Errors,
+  Sessions,
+  Tenant,
+  Users,
+} from "@awthaq/core";
 import { TenantScoped } from "@awthaq/sql";
 import type { AuthSubject } from "@qadi/core";
 import { makeSubject } from "@qadi/core";
@@ -258,13 +265,13 @@ export const make = Effect.gen(function* () {
 
   /** BEH-EA-224: a genuine refusal, never validation noise. An attempt event (ADR-EA-037): it survives a rollback. */
   const refuse = Effect.fnUntraced(function* (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     action: string,
     named: { readonly targetUserId?: Users.UserId; readonly organizationId?: string },
   ) {
     yield* events.publish({
       _tag: "auth.admin.actionDenied",
-      adminUserId: Users.UserId(caller.ref.id),
+      adminUserId: caller.userId,
       action,
       ...named,
     });
@@ -272,7 +279,7 @@ export const make = Effect.gen(function* () {
   });
 
   const decide = Effect.fnUntraced(function* (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     action: keyof Actions,
     target: Option.Option<string>,
   ) {
@@ -280,9 +287,9 @@ export const make = Effect.gen(function* () {
     const entry = actions[action];
     const allowed =
       entry.gate === "canAdministerTenants"
-        ? yield* config[entry.gate]({ admin: subject(caller.ref.id), organizationId: target })
+        ? yield* config[entry.gate]({ admin: subject(caller.userId), organizationId: target })
         : yield* config[entry.gate]({
-            admin: subject(caller.ref.id),
+            admin: subject(caller.userId),
             target: Option.map(target, subject),
             tenantId: yield* Tenant.TenantContext,
           });
@@ -303,16 +310,16 @@ export const make = Effect.gen(function* () {
   });
 
   /** `listUsers`, `effectiveConfig`, `listOrganizations`: the predicate sees no target. */
-  const collection = (caller: Api.UserPrincipal, action: CollectionAction) =>
+  const collection = (caller: CurrentUser.Caller, action: CollectionAction) =>
     Effect.map(decide(caller, action, Option.none()), (config) =>
-      clearance({ adminUserId: Users.UserId(caller.ref.id), config }),
+      clearance({ adminUserId: caller.userId, config }),
     );
 
   /** BEH-EA-221: per-user. The predicate sees the target; `target` loads it afterwards. */
-  const user = (caller: Api.UserPrincipal, action: UserAction, userId: Users.UserId) =>
+  const user = (caller: CurrentUser.Caller, action: UserAction, userId: Users.UserId) =>
     Effect.map(decide(caller, action, Option.some(userId)), (config) =>
       userClearance({
-        adminUserId: Users.UserId(caller.ref.id),
+        adminUserId: caller.userId,
         config,
         userId,
         target: targetOf(userId),
@@ -321,13 +328,13 @@ export const make = Effect.gen(function* () {
 
   /** BEH-EA-237 / EP-003: per-organization. */
   const organization = (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     action: OrganizationAction,
     organizationId: string,
   ) =>
     Effect.map(decide(caller, action, Option.some(organizationId)), (config) =>
       organizationClearance({
-        adminUserId: Users.UserId(caller.ref.id),
+        adminUserId: caller.userId,
         config,
         organizationId,
       }),
@@ -335,7 +342,7 @@ export const make = Effect.gen(function* () {
 
   /** IDS-006: the impersonation denial names the refused call and what it named. */
   const impersonationDenied = Effect.fnUntraced(function* (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     attempt: {
       readonly operation: "impersonate" | "forceStop";
       readonly targetUserId: Users.UserId;
@@ -344,7 +351,7 @@ export const make = Effect.gen(function* () {
   ) {
     yield* events.publish({
       _tag: "auth.admin.impersonationDenied",
-      adminUserId: Users.UserId(caller.ref.id),
+      adminUserId: caller.userId,
       operation: attempt.operation,
       targetUserId: attempt.targetUserId,
       ...(attempt.sessionId === undefined ? {} : { sessionId: attempt.sessionId }),
@@ -354,12 +361,12 @@ export const make = Effect.gen(function* () {
 
   /** BEH-EA-212/213, IDS-001/002/003. Call it after the self/nested refusals (BEH-EA-214/218 never reach the gate). */
   const impersonation = Effect.fnUntraced(function* (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     targetUserId: Users.UserId,
   ) {
     const config = yield* inForce;
     const allowed = yield* config.canImpersonate({
-      admin: subject(caller.ref.id),
+      admin: subject(caller.userId),
       target: subject(targetUserId),
       tenantId: yield* Tenant.TenantContext,
     });
@@ -367,7 +374,7 @@ export const make = Effect.gen(function* () {
       return yield* impersonationDenied(caller, { operation: "impersonate", targetUserId });
     }
     return userClearance({
-      adminUserId: Users.UserId(caller.ref.id),
+      adminUserId: caller.userId,
       config,
       userId: targetUserId,
       target: targetOf(targetUserId),
@@ -376,12 +383,12 @@ export const make = Effect.gen(function* () {
 
   /** BEH-EA-217 / IDS-001: `forceStop`'s per-episode gate. The episode was looked up first, because the gate needs it. */
   const episode = Effect.fnUntraced(function* (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     record: ImpersonationRecords.ImpersonationRecord,
   ) {
     const config = yield* inForce;
     const allowed = yield* config.canManageEpisode({
-      admin: subject(caller.ref.id),
+      admin: subject(caller.userId),
       episode: record,
     });
     if (!allowed) {
@@ -391,27 +398,27 @@ export const make = Effect.gen(function* () {
         sessionId: Sessions.SessionId(record.sessionId),
       });
     }
-    return clearance({ adminUserId: Users.UserId(caller.ref.id), config });
+    return clearance({ adminUserId: caller.userId, config });
   });
 
   /** BEH-EA-219 / IDS-001: `list`'s per-row gate. It filters, and never publishes or fails. */
   const visibleEpisodes = (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     records: ReadonlyArray<ImpersonationRecords.ImpersonationRecord>,
   ) =>
     Effect.flatMap(inForce, (config) =>
       Effect.filter(
         records,
-        (record) => config.canManageEpisode({ admin: subject(caller.ref.id), episode: record }),
+        (record) => config.canManageEpisode({ admin: subject(caller.userId), episode: record }),
         { concurrency: 8 },
       ),
     );
 
   /** IDS-002: a `CrossTenant` witness for a caller who passes `canAdministerTenants`, else `None` (confinement stays). */
-  const crossTenantScope = (caller: Api.UserPrincipal) =>
+  const crossTenantScope = (caller: CurrentUser.Caller) =>
     Effect.flatMap(inForce, (config) =>
       config
-        .canAdministerTenants({ admin: subject(caller.ref.id), organizationId: Option.none() })
+        .canAdministerTenants({ admin: subject(caller.userId), organizationId: Option.none() })
         .pipe(
           Effect.map((allowed) =>
             allowed

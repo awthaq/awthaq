@@ -29,6 +29,8 @@ const fineGrained = Effect.provideService(Scheduler.MaxOpsBeforeYield, 4);
 /** How many times each racing reader calls `verifyChain`, so reads land throughout the writes. */
 const READS = 8;
 
+const codeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
 const adminId = Users.UserId("admin-1");
 const targetId = Users.UserId("target-1");
 
@@ -471,7 +473,8 @@ export const impersonationRecords = RecordsContract.suite(
             run: Effect.gen(function* () {
               const records = yield* ImpersonationRecords.ImpersonationRecords;
               // Five rows at the same (test-clock) instant: only the id tiebreak orders them.
-              for (const n of [1, 2, 3, 4, 5]) yield* seed(records, `session-${n}`);
+              const created: Array<ImpersonationRecords.ImpersonationRecord> = [];
+              for (const n of [1, 2, 3, 4, 5]) created.push(yield* seed(records, `session-${n}`));
 
               const seen: Array<string> = [];
               let cursor: ImpersonationRecords.ImpersonationCursor | undefined = undefined;
@@ -489,9 +492,65 @@ export const impersonationRecords = RecordsContract.suite(
               }
               assert.strictEqual(pages, 3);
               assert.deepStrictEqual(
-                [...seen].sort(),
-                [1, 2, 3, 4, 5].map((n) => `session-${n}`),
+                seen,
+                [...created].sort((a, b) => codeUnit(b.id, a.id)).map((row) => row.sessionId),
               );
+            }),
+          },
+          {
+            name: "ESS-006: every page size traverses the exact newest-first order across ties",
+            run: Effect.gen(function* () {
+              const records = yield* ImpersonationRecords.ImpersonationRecords;
+              // Three rows at T0, one at T1, three at T2: only the id tiebreak orders a group.
+              const created: Array<ImpersonationRecords.ImpersonationRecord> = [];
+              for (const [group, count] of [3, 1, 3].entries()) {
+                if (group > 0) yield* TestClock.adjust(Duration.millis(1));
+                for (let n = 0; n < count; n++)
+                  created.push(yield* seed(records, `session-${group}-${n}`));
+              }
+              const expected = created
+                .map((row) => ({
+                  id: row.id,
+                  sessionId: row.sessionId,
+                  at: DateTime.toEpochMillis(row.startedAt),
+                }))
+                .sort((a, b) => b.at - a.at || codeUnit(b.id, a.id))
+                .map((row) => row.sessionId);
+              for (const limit of [1, 2, 3, 4, 5, 6, 7, 8]) {
+                const seen: Array<string> = [];
+                let cursor: ImpersonationRecords.ImpersonationCursor | undefined = undefined;
+                let pages = 0;
+                for (;;) {
+                  const page: ImpersonationRecords.ImpersonationPage = yield* records.list({
+                    limit,
+                    ...(cursor === undefined ? {} : { cursor }),
+                  });
+                  pages++;
+                  assert.isAtMost(page.items.length, limit);
+                  seen.push(...page.items.map((row) => row.sessionId));
+                  if (Option.isNone(page.nextCursor)) break;
+                  cursor = page.nextCursor.value;
+                }
+                assert.deepStrictEqual(seen, expected, `limit ${limit}`);
+                assert.strictEqual(pages, Math.ceil(7 / limit), `limit ${limit}`);
+              }
+            }),
+          },
+          {
+            name: "ESS-006: an in-process limit is normalised like Users.list",
+            run: Effect.gen(function* () {
+              const records = yield* ImpersonationRecords.ImpersonationRecords;
+              for (const n of [1, 2, 3]) yield* seed(records, `session-${n}`);
+              const sized = (limit: number) =>
+                Effect.map(records.list({ limit }), (page) => [
+                  page.items.length,
+                  Option.isSome(page.nextCursor),
+                ]);
+              assert.deepStrictEqual(yield* sized(0), [1, true]);
+              assert.deepStrictEqual(yield* sized(-3), [1, true]);
+              assert.deepStrictEqual(yield* sized(2.5), [2, true]);
+              assert.deepStrictEqual(yield* sized(Number.NaN), [3, false]);
+              assert.deepStrictEqual(yield* sized(10_000), [3, false]);
             }),
           },
           {

@@ -4,7 +4,7 @@
 // XML-signature adapter, sealed SP keys over a real `Encryption`) and play the IdP's side of each protocol message themselves.
 import { Api } from "@awthaq/api";
 import { TestAuth } from "@awthaq/test";
-import { AuditLog, Sessions, Tenant, Users } from "@awthaq/core";
+import { AuditLog, CurrentUser, Sessions, Tenant, Users } from "@awthaq/core";
 import { Organization, OrganizationActor, OrganizationConnections } from "@awthaq/organization";
 import { MembershipRecords } from "@awthaq/organization/records";
 import { Encryption } from "@awthaq/ports";
@@ -59,10 +59,12 @@ const ownerPrincipal = new Api.UserPrincipal({
   ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
   sessionId: "owner-session",
 });
-const adminPrincipal = new Api.UserPrincipal({
-  ref: new Api.PrincipalRef({ type: "user", id: "admin-1" }),
-  sessionId: "admin-session",
-});
+const adminPrincipal = CurrentUser.of(
+  new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id: "admin-1" }),
+    sessionId: "admin-session",
+  }),
+);
 
 // ---- IdP-side messages --------------------------------------------------------------------------
 
@@ -803,10 +805,12 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
     const started = yield* inApp(
       Effect.flatMap(Saml.Saml, (saml) =>
         saml.logout(
-          new Api.UserPrincipal({
-            ref: new Api.PrincipalRef({ type: "user", id: userId }),
-            sessionId: ids.at(-1) ?? "",
-          }),
+          CurrentUser.of(
+            new Api.UserPrincipal({
+              ref: new Api.PrincipalRef({ type: "user", id: userId }),
+              sessionId: ids.at(-1) ?? "",
+            }),
+          ),
           { callbackURL: "/bye" },
         ),
       ),
@@ -1040,7 +1044,9 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
       if (remembered !== undefined) return remembered;
       const created = yield* inApp(
         Effect.flatMap(Organization.Organization, (organization) =>
-          organization.create({ caller: ownerPrincipal, name, slug: name }).pipe(Effect.orDie),
+          organization
+            .create({ caller: CurrentUser.of(ownerPrincipal), name, slug: name })
+            .pipe(Effect.orDie),
         ),
       );
       bookOf(world).organizations.set(name, created.id);
@@ -1432,7 +1438,7 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
       ).pipe(Effect.orDie),
     );
     assert.equal(rows.length, 1);
-    assert.deepEqual(rows[0]?.actorUserId, Option.some(adminPrincipal.ref.id));
+    assert.deepEqual(rows[0]?.actorUserId, Option.some(adminPrincipal.userId));
     // Core stores the plugin's event as a foreign one; the plugin's definition decodes it (ADR-EA-049).
     assert.deepEqual(
       Option.map(

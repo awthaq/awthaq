@@ -2,7 +2,7 @@
 // state the real services and store adapters produced: the raw `"tenantId"` column, the response
 // a router middleware wrote, the typed refusal an organization operation returned.
 import { TestAuth, TestMailbox } from "@awthaq/test";
-import { Accounts, AuditLog, Sessions, Users, Verification } from "@awthaq/core";
+import { Accounts, AuditLog, CurrentUser, Sessions, Users, Verification } from "@awthaq/core";
 import { AuditLogStore, Encryption, PasswordHasher, Tenant } from "@awthaq/ports";
 import {
   Organization,
@@ -213,7 +213,7 @@ const ownsOrganization = Effect.fn("features.tenancy.ownsOrganization")(function
   const record = yield* organization(
     Effect.gen(function* () {
       const plugin = yield* Organization.Organization;
-      return yield* plugin.create({ caller, name: slug, slug });
+      return yield* plugin.create({ caller: CurrentUser.of(caller), name: slug, slug });
     }),
   );
   yield* organizationIds.set(slug, record.id);
@@ -320,7 +320,7 @@ const suspend = Effect.fn("features.tenancy.suspend")(function* (
   const record = yield* organization(
     Effect.gen(function* () {
       const tenants = yield* AdminTenants.AdminTenants;
-      return yield* tenants.suspendOrganization(admin, id, {});
+      return yield* tenants.suspendOrganization(CurrentUser.of(admin), id, {});
     }),
   );
   return Option.match(record.suspendedAt, { onNone: () => "none", onSome: DateTime.formatIso });
@@ -1138,7 +1138,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
         yield* adminAccounts(
           outcomeTag(
             Effect.flatMap(AdminAccounts.AdminAccounts, (accounts) =>
-              accounts.deleteUser(callerOf("an-administrator"), id),
+              accounts.deleteUser(CurrentUser.of(callerOf("an-administrator")), id),
             ).pipe(Effect.provide(AdminAccountsTenantConfig.get(tenant))),
           ),
         ),
@@ -1164,7 +1164,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
   const passwordMinLength = (inTenant: string | null) =>
     adminAccounts(
       Effect.flatMap(Admin.Admin, (admin) =>
-        admin.effectiveConfig(callerOf("an-administrator")),
+        admin.effectiveConfig(CurrentUser.of(callerOf("an-administrator"))),
       ).pipe(
         inTenant === null
           ? (self) => self
@@ -1226,7 +1226,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
         yield* adminAccounts(
           outcomeTag(
             Effect.flatMap(AdminAccounts.AdminAccounts, (accounts) =>
-              accounts.setUserPassword(callerOf("an-administrator"), id, {
+              accounts.setUserPassword(CurrentUser.of(callerOf("an-administrator")), id, {
                 password: Redacted.make("a thirty-six character password, short"),
               }),
             ).pipe(Effect.provide(AdminAccountsTenantConfig.get(tenant))),
@@ -1276,7 +1276,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const tag = yield* organization(
         outcomeTag(
           Effect.flatMap(AdminTenants.AdminTenants, (tenants) =>
-            tenants.suspendOrganization(admin, id, { reason }),
+            tenants.suspendOrganization(CurrentUser.of(admin), id, { reason }),
           ),
         ),
       );
@@ -1321,7 +1321,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const record = yield* organization(
         Effect.gen(function* () {
           const tenants = yield* AdminTenants.AdminTenants;
-          return yield* tenants.unsuspendOrganization(admin, id);
+          return yield* tenants.unsuspendOrganization(CurrentUser.of(admin), id);
         }),
       );
       assert.ok(Option.isNone(record.suspendedAt));
@@ -1336,7 +1336,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const outcome = yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* outcomeTag(plugin.get(caller, id));
+          return yield* outcomeTag(plugin.get(CurrentUser.of(caller), id));
         }),
       );
       assert.equal(outcome, tag);
@@ -1351,7 +1351,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const outcome = yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* outcomeTag(plugin.update(caller, id, { name: "Renamed" }));
+          return yield* outcomeTag(plugin.update(CurrentUser.of(caller), id, { name: "Renamed" }));
         }),
       );
       assert.equal(outcome, tag);
@@ -1365,7 +1365,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const outcome = yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* outcomeTag(plugin.get(caller, "no-such-organization"));
+          return yield* outcomeTag(plugin.get(CurrentUser.of(caller), "no-such-organization"));
         }),
       );
       assert.equal(outcome, tag);
@@ -1378,7 +1378,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     const record = yield* organization(
       Effect.gen(function* () {
         const plugin = yield* Organization.Organization;
-        return yield* plugin.get(caller, id);
+        return yield* plugin.get(CurrentUser.of(caller), id);
       }),
     );
     assert.equal(record.id, id);
@@ -1392,7 +1392,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const listed = yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* plugin.list(caller);
+          return yield* plugin.list(CurrentUser.of(caller));
         }),
       );
       assert.deepEqual(
@@ -1411,7 +1411,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* plugin.setActive(caller, id);
+          return yield* plugin.setActive(CurrentUser.of(caller), id);
         }),
       );
     },
@@ -1422,7 +1422,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     const outcome = yield* organization(
       Effect.gen(function* () {
         const plugin = yield* Organization.Organization;
-        return yield* outcomeTag(plugin.getActiveMember(caller));
+        return yield* outcomeTag(plugin.getActiveMember(CurrentUser.of(caller)));
       }),
     );
     assert.equal(outcome, "NoActiveOrganization");
@@ -1433,7 +1433,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     const context = yield* organization(
       Effect.gen(function* () {
         const plugin = yield* Organization.Organization;
-        return yield* plugin.getActive(caller);
+        return yield* plugin.getActive(CurrentUser.of(caller));
       }),
     );
     assert.ok(Option.isNone(context.activeOrganizationId));
@@ -1448,7 +1448,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const context = yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* plugin.getActive(caller);
+          return yield* plugin.getActive(CurrentUser.of(caller));
         }),
       );
       assert.deepEqual(context.activeOrganizationId, Option.some(id));
@@ -1463,7 +1463,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const outcome = yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* outcomeTag(plugin.setActive(caller, id));
+          return yield* outcomeTag(plugin.setActive(CurrentUser.of(caller), id));
         }),
       );
       assert.equal(outcome, tag);
@@ -1487,7 +1487,10 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
           });
           yield* users.verifyEmail(created.id);
           const plugin = yield* Organization.Organization;
-          const invited = yield* plugin.invite(inviter, id, { email, role: ["member"] });
+          const invited = yield* plugin.invite(CurrentUser.of(inviter), id, {
+            email,
+            role: ["member"],
+          });
           // MTI-010: the capability only travels by email; read it back as the invitee would.
           const mail = yield* (yield* TestMailbox.Mailbox).mail.waitFor({
             to: email,
@@ -1510,7 +1513,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const outcome = yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* outcomeTag(plugin.cancelInvitation(caller, id));
+          return yield* outcomeTag(plugin.cancelInvitation(CurrentUser.of(caller), id));
         }),
       );
       assert.equal(outcome, tag);
@@ -1527,11 +1530,11 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
           const plugin = yield* Organization.Organization;
           switch (act) {
             case "reading":
-              return yield* outcomeTag(plugin.getInvitationByToken(caller, token));
+              return yield* outcomeTag(plugin.getInvitationByToken(CurrentUser.of(caller), token));
             case "accepting":
-              return yield* outcomeTag(plugin.acceptInvitation(caller, id, token));
+              return yield* outcomeTag(plugin.acceptInvitation(CurrentUser.of(caller), id, token));
             case "rejecting":
-              return yield* outcomeTag(plugin.rejectInvitation(caller, id, token));
+              return yield* outcomeTag(plugin.rejectInvitation(CurrentUser.of(caller), id, token));
             default:
               return assert.fail(`unknown invitation act "${act}"`);
           }
@@ -1592,7 +1595,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
         yield* organization(
           Effect.gen(function* () {
             const tenants = yield* AdminTenants.AdminTenants;
-            return yield* outcomeTag(tenants.suspendOrganization(caller, id, {}));
+            return yield* outcomeTag(tenants.suspendOrganization(CurrentUser.of(caller), id, {}));
           }),
         ),
       );
@@ -1607,7 +1610,9 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* organization(
         Effect.gen(function* () {
           const tenants = yield* AdminTenants.AdminTenants;
-          return yield* outcomeTag(tenants.suspendOrganization(caller, "no-such-organization", {}));
+          return yield* outcomeTag(
+            tenants.suspendOrganization(CurrentUser.of(caller), "no-such-organization", {}),
+          );
         }),
       ),
     );

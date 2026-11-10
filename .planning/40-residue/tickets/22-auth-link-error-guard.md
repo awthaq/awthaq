@@ -31,7 +31,7 @@ must_haves:
       via: "asLoadFailure → Auth.isLinkError"
       pattern: "Auth\\.isLinkError"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 21
 
 <objective>
@@ -102,3 +102,4 @@ Output: `Auth.LinkError`, `Auth.linkErrorTags`, `Auth.isLinkError`; `SessionLife
 <success_criteria>11 → 14 (15) tags classified; the mirror deleted; a new link error without a tag-set entry fails typecheck or `LinkErrors.test.ts`.</success_criteria>
 
 ## Comments
+Done. Q8 = yes: `SessionLifecycle.Conflict` (tag "SessionLifecycle/Conflict") added; 15 tags. `Auth.LinkError`, `linkErrorTags` (satisfies), `isLinkError` (Predicate.hasProperty + Object.hasOwn); `linkErrorCodes` deleted from Config.ts. LinkErrors.test.ts: 18 cases green (15 triggers, table-vs-tags, negatives, source scan). LinkerInvariantViolation cannot be provoked from a well-formed input, so its trigger throws a constructed instance (commented). EmptyPluginTuple is provoked via `Auth.make([])` under @ts-expect-error. ConfigLoader 12/12 green. tsc/circular/check:error-tags clean for touched files.

@@ -12,9 +12,7 @@ import {
   Accounts,
   AuditLog,
   AuthEvents,
-  CurrentUser,
   DataExport,
-  Defects,
   Erasure,
   Hooks,
   Persistence,
@@ -33,8 +31,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Path from "effect/Path";
-import * as Cause from "effect/Cause";
-import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
@@ -681,33 +677,6 @@ describe("AuthHttp + Session: a concurrently revoked current session (EHA-009)",
       Effect.provideService(Api.AuthRequestContext, Api.AuthRequestContext.noRequest),
       Effect.provide(makeAppLayer(VanishingSessions)),
     ),
-  );
-});
-
-describe("server handler invariants (GC-003/GC-008)", () => {
-  it.effect(
-    "a non-User principal reaching a required-auth group dies with Defects/InvariantViolation",
-    () =>
-      Effect.gen(function* () {
-        const exit = yield* CurrentUser.current.pipe(
-          Effect.provideService(
-            Api.CurrentPrincipal,
-            new Api.ApiKeyPrincipal({
-              ref: new Api.PrincipalRef({ type: "apikey", id: "k1" }),
-              scopes: [],
-            }),
-          ),
-          Effect.exit,
-        );
-        assert.isTrue(Exit.isFailure(exit));
-        if (!Exit.isFailure(exit)) return;
-        assert.isTrue(Cause.hasDies(exit.cause));
-        const defect = Cause.squash(exit.cause);
-        assert.instanceOf(defect, Defects.InvariantViolation);
-        if (defect instanceof Defects.InvariantViolation) {
-          assert.strictEqual(defect.invariant, "NonUserPrincipal");
-        }
-      }),
   );
 });
 

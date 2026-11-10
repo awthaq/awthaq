@@ -4,7 +4,7 @@
 //
 // Domain-level like `Admin.test.ts`: real in-memory `Users`/`Sessions`/`AuthEvents`.
 import { Api } from "@awthaq/api";
-import { Auth, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Auth, AuthEvents, CurrentUser, Sessions, Users } from "@awthaq/core";
 import { AuditLogStore } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -33,11 +33,13 @@ const decodeStored = Schema.decodeUnknownSync(
   ),
 );
 
-const asCaller = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: "admin-session",
-  });
+const asCaller = (id: string): CurrentUser.Caller =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: "admin-session",
+    }),
+  );
 
 const seed = Effect.gen(function* () {
   const users = yield* Users.Users;

@@ -14,9 +14,8 @@
 // only in this file (the AdminGate clearance idiom); `AuthorizationBoundary.test.ts` keeps it so.
 //
 // Never re-exported by `index.ts`.
-
 import type { Api } from "@awthaq/api";
-import { AuthEvents, Users } from "@awthaq/core";
+import { AuthEvents, type CurrentUser, Users } from "@awthaq/core";
 import { Tenant } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Effect from "effect/Effect";
@@ -77,6 +76,9 @@ const memberAccessOf = Brand.nominal<MemberAccess>();
 const statementAccessOf = <R extends Resource, A extends string>() =>
   Brand.nominal<StatementAccess<R, A>>();
 
+/** Named so the inferred type of `make` can be emitted (TS2883 needs the `Api` namespace in scope). @public */
+export type AccessWire = Api.StoreUnavailable;
+
 /** Yielded once at the top of the plugin's `make` (a service captured in a handler closure leaks into the handler's requirements). */
 export const make = Effect.gen(function* () {
   const directory = yield* OrganizationDirectory.OrganizationDirectory;
@@ -90,23 +92,22 @@ export const make = Effect.gen(function* () {
   // EP-007: the configuration in force is decided per operation (the tenant middleware may override it).
   const configNow = yield* Tenant.inForce(OrganizationConfigScoped);
 
-  const callerId = (caller: Api.UserPrincipal) => Users.UserId(caller.ref.id);
-  const actorOf = (caller: Api.UserPrincipal) =>
+  const actorOf = (caller: CurrentUser.Caller) =>
     OrganizationActor.ActorSchema.cases.User.make({
-      userId: caller.ref.id,
+      userId: caller.userId,
       sessionId: caller.sessionId,
     });
 
   /** PERS-005: a denied statement-gated operation leaves a durable who/what/why (attempt lane, ADR-EA-037). */
   const denied = (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     wanted: Statement,
     reason: "notMember" | "missingStatement",
   ) =>
     events.emit(OrganizationEvents.OrganizationPermissionDeniedEvent, {
       organizationId,
-      userId: callerId(caller),
+      userId: caller.userId,
       resource: wanted.resource,
       action: wanted.action,
       reason,
@@ -116,12 +117,12 @@ export const make = Effect.gen(function* () {
 
   /** EP-003 then MTI-009: a suspended, unknown or not-a-member organization is one answer. */
   const visibleMembership = Effect.fnUntraced(function* (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     audited: Statement | undefined,
   ) {
     const organization = yield* directory.requireActive(organizationId);
-    const found = yield* members.find(organizationId, callerId(caller));
+    const found = yield* members.find(organizationId, caller.userId);
     if (Option.isNone(found)) {
       if (audited !== undefined) yield* denied(caller, organizationId, audited, "notMember");
       return yield* new OrganizationErrors.OrganizationNotFound();
@@ -136,7 +137,7 @@ export const make = Effect.gen(function* () {
 
   /** The statement on the statements in scope; `teamId` widens with team authority within this organization. */
   const granted = Effect.fnUntraced(function* <R extends Resource, A extends string>(
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     base: MemberAccess,
     wanted: Statement<R, A>,
     teamId: string | undefined,
@@ -162,8 +163,8 @@ export const make = Effect.gen(function* () {
   });
 
   /** The invitee of an invitation: a user whose own email address it names (FAMS-002). */
-  const isInvitee = (caller: Api.UserPrincipal, email: string) =>
-    users.findById(callerId(caller)).pipe(
+  const isInvitee = (caller: CurrentUser.Caller, email: string) =>
+    users.findById(caller.userId).pipe(
       Effect.map((user) => ownsEmail(user, email)),
       Effect.catchTag("UserNotFound", () => Effect.succeed(false)),
     );
@@ -181,8 +182,8 @@ export const make = Effect.gen(function* () {
   // ---- entry points: the only places the order is written ---------------------------------
 
   /** `create`: who may create an organization at all (`allowUserToCreateOrganization`); the rest is the Directory's. */
-  const creator = Effect.fnUntraced(function* (caller: Api.UserPrincipal) {
-    const userId = callerId(caller);
+  const creator = Effect.fnUntraced(function* (caller: CurrentUser.Caller) {
+    const userId = caller.userId;
     if (!(yield* (yield* configNow).allowUserToCreateOrganization(userId))) {
       return yield* new OrganizationErrors.OrganizationCreationNotAllowed();
     }
@@ -190,12 +191,12 @@ export const make = Effect.gen(function* () {
   });
 
   /** Reads any member may use (get, getFull, listMembers, leave, listInvitationsForOrganization). */
-  const member = (caller: Api.UserPrincipal, organizationId: string) =>
+  const member = (caller: CurrentUser.Caller, organizationId: string) =>
     visibleMembership(caller, organizationId, undefined);
 
   /** Team reads: membership BEFORE the gate (PV-300), so a non-member never sees `TeamsDisabled`. */
   const teamMember = Effect.fnUntraced(function* (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
   ) {
     const access = yield* visibleMembership(caller, organizationId, undefined);
@@ -205,7 +206,7 @@ export const make = Effect.gen(function* () {
 
   /** An organization-scoped statement (update, delete, removeMember, updateMemberRole, invite). */
   const require = Effect.fnUntraced(function* <R extends Resource, A extends string>(
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     wanted: Statement<R, A>,
   ) {
@@ -215,7 +216,7 @@ export const make = Effect.gen(function* () {
 
   /** Dynamic roles: membership BEFORE the dynamic-access-control gate (A-F1), then the statement. */
   const requireRole = Effect.fnUntraced(function* <A extends string>(
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     wanted: Statement<"role", A>,
   ) {
@@ -226,7 +227,7 @@ export const make = Effect.gen(function* () {
 
   /** Team writes: membership, the teams gate, then the statement on `teamId` (`undefined` = organization level). */
   const requireOnTeam = Effect.fnUntraced(function* <A extends string>(
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     wanted: Statement<"team", A>,
     teamId: string | undefined,
@@ -238,7 +239,7 @@ export const make = Effect.gen(function* () {
 
   /** A second team statement on the same visible membership (moveTeam's destination); no new membership read. */
   const alsoOnTeam = <A extends string>(
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     proof: StatementAccess<"team", string>,
     wanted: Statement<"team", A>,
     teamId: string | undefined,
@@ -260,7 +261,7 @@ export const make = Effect.gen(function* () {
    * every miss answered `InvitationNotFound`.
    */
   const invitation = Effect.fnUntraced(function* (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     invitationId: string,
     audited: Statement<"invitation", string> | undefined,
   ) {
@@ -276,7 +277,7 @@ export const make = Effect.gen(function* () {
 
   /** A statement on an access already proven (cancelInvitation's `invitation:cancel` after its status check, D6). */
   const upgrade = <R extends Resource, A extends string>(
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     base: MemberAccess,
     wanted: Statement<R, A>,
   ) => granted(caller, base, wanted, undefined);
@@ -286,7 +287,7 @@ export const make = Effect.gen(function* () {
    * invitation. A read, so nothing is audited, and every refusal is `InvitationNotFound`.
    */
   const readInvitation = Effect.fnUntraced(function* (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     invitationId: string,
   ) {
     const found = yield* invitations.find(invitationId);
@@ -310,7 +311,10 @@ export const make = Effect.gen(function* () {
   });
 
   /** `getInvitationByToken`: the emailed token names an active organization's invitation addressed to the caller. */
-  const invitationByToken = Effect.fnUntraced(function* (caller: Api.UserPrincipal, token: string) {
+  const invitationByToken = Effect.fnUntraced(function* (
+    caller: CurrentUser.Caller,
+    token: string,
+  ) {
     const found = yield* invitations.findByToken(token);
     if (Option.isNone(found)) return yield* new OrganizationErrors.InvitationNotFound();
     yield* activeInvitation(found.value);

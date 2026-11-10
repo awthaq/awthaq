@@ -12,7 +12,7 @@
 // freezes, another. A tap's `Layer` requires its point, which
 // `OrganizationHooksLive` provides last in `buildLayer`'s pipe.
 import { Api } from "@awthaq/api";
-import { Auth, HookPoint } from "@awthaq/core";
+import { Auth, CurrentUser, HookPoint } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Fs from "node:fs";
 import * as Path from "node:path";
@@ -44,11 +44,13 @@ const buildLayer = (
     taps: extraHooks,
   });
 
-const asCaller = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: `session-${id}`,
-  });
+const asCaller = (id: string) =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: `session-${id}`,
+    }),
+  );
 
 describe("OrganizationHooks (BEH-EA-089-096, ticket 19)", () => {
   it.effect(

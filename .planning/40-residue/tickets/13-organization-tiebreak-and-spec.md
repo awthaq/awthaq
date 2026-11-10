@@ -25,7 +25,7 @@ must_haves:
       via: "ticket 11's exact-order case keeps it honest"
       pattern: "every page size traverses"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 12 (the spec note describes 12's rule)
 
 <objective>
@@ -64,3 +64,5 @@ Output: code-unit compare; BEH-EA-036 note; changeset.
 <success_criteria>`localeCompare` 1 → 0; BEH-EA-036 revised; spec verify green.</success_criteria>
 
 ## Comments
+
+Result: localeCompare replaced by code-unit compare in the organization memory adapter; BEH-EA-036 "As shipped (limit rule)" paragraph added, spec/behaviors/05-persistence-stratum.md revision 1.12 -> 1.13; changeset .changeset/organization-keyset-tiebreak.md. Organization contract green; pnpm spec:verify:strict PASS 32/0.

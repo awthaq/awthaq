@@ -27,7 +27,7 @@ must_haves:
       via: "handlers destructure userId/sessionId"
       pattern: "\\{ userId, sessionId \\} = yield\\* CurrentUser\\.current"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 01
 
 <objective>
@@ -71,3 +71,4 @@ Output: handlers destructure `userId`/`sessionId`; `PasskeyShape` takes `Session
 <success_criteria>A1 gate for passkey+password = 0 (baseline 12); A4 gate for passkey = 0 (baseline 2); passkey and password suites green; no test deleted.</success_criteria>
 
 ## Comments
+Result: passkey/password handlers destructure userId/sessionId; PasskeyShape and requireFreshSession take Sessions.SessionId; both internal re-brands gone. Passkey, password, webhooks suites green (827 tests); tsc -b and test tsc clean for these packages. No test edits needed in passkey/password.

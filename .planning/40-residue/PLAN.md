@@ -684,3 +684,5 @@ None becomes a feature tag (no BDD scenario changes, §5.A, §5.C); they are pla
 Blocking: Q4 blocks 14–17. Q9 blocks 03. Q3 decides whether 08 runs and what 09's gate is. Nothing blocks Wave 0.
 
 ## Decisions taken
+
+- Part B gate (ticket 11): NO-GO. All order cases green on memory and SQLite (Postgres test:pg not run); no order drift. Tickets 14-17 not executed.

@@ -29,7 +29,7 @@ must_haves:
       via: "RecordsContract.suite runs the cases on memory and SQL"
       pattern: "impersonationRecords"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: none
 
 <objective>
@@ -95,3 +95,5 @@ Output: one traversal case per listing, two tightened assertions, one domain-lev
 <success_criteria>3 of 3 keyset listings assert exact order (baseline 1 of 3); gate result recorded.</success_criteria>
 
 ## Comments
+
+Result: exact-order traversal (limits 1..8, 7 rows, 3 timestamp groups) added to the organization and impersonation records contracts, plus two set-equality assertions tightened to exact order, plus an AdminTenants.listOrganizations traversal. All green on memory and SQLite (npx vitest run packages/admin packages/organization: 1210 passed). ORDER DRIFT: none. Part B gate (Q4): stays NO-GO; tickets 14-17 NOT executed. test:pg (Postgres) was not run (no Postgres here), so the Postgres half of the gate is unverified.

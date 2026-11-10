@@ -41,7 +41,7 @@ must_haves:
       via: "actorOf(caller) → ActorSchema.cases.User.make({ userId: caller.userId, sessionId: caller.sessionId })"
       pattern: "actorOf = \\(caller: CurrentUser\\.Caller\\)"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 01, 05 (shares `packages/saml/test/SamlAdmin.test.ts`). Runs only if PLAN §10 Q3 = yes (default yes).
 
 <objective>
@@ -107,3 +107,5 @@ Split rule waived (PLAN §4.3).
 <success_criteria>A2/A3 gates for organization = 0 (baselines 6 / 57); authorization matrix green; no assertion changed in any of the 11 test files.</success_criteria>
 
 ## Comments
+
+Result (uncommitted): organization src (Shape, access.ts, Organization.ts, Handlers, ActiveContext.sessionOf) takes `CurrentUser.Caller`; `callerId` deleted; no assertion changed. Declaration emit (TS2883) needed named type aliases for `Api` and `Users` (`AccessWire` in access.ts, `OrganizationHandlersWire`, `AccessServices` widened). Tests: 7 organization helpers wrapped with `CurrentUser.of`; saml `ownerPrincipal` and SamlConnections `owner` and scim `ownerPrincipal` are now Callers (SamlRoleMapping reads `ownerPrincipal.userId`). Features: QadiResolversSteps, SamlWorld, ScimWorld, TenancySteps (organization calls wrapped), SamlFederationSteps. Vitest organization+saml+scim 1517 green; features organization/saml/scim/qadi green. features tenancy: 12 scenarios still red and tsc errors remain in TenancySteps, all calls to AdminTenants/AdminAccounts (ticket 07's), not organization. Changeset added.

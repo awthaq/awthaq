@@ -2,7 +2,7 @@
 // compile-time checks (`tsc -p tsconfig.test.json` is the assertion) with token runtime tests so the file
 // is a suite: the real `internal/access.ts` proofs and the real `OrganizationActor.Bound`.
 import { Api } from "@awthaq/api";
-import { Auth } from "@awthaq/core";
+import { Auth, CurrentUser } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -34,7 +34,7 @@ export const readsAsStatements = (statements: OrganizationActor.CeilingStatement
   statements;
 
 // 4. The generic entry points keep the statement's literals at the call site.
-const roleCreate = (access: Access, caller: Api.UserPrincipal) =>
+const roleCreate = (access: Access, caller: CurrentUser.Caller) =>
   access.requireRole(caller, "org-1", OrganizationAccess.statement("role", "create"));
 type RoleCreate = Effect.Success<ReturnType<typeof roleCreate>>;
 export const inferred = (proof: RoleCreate): OrganizationAccess.StatementAccess<"role", "create"> =>
@@ -42,13 +42,13 @@ export const inferred = (proof: RoleCreate): OrganizationAccess.StatementAccess<
 export const widened = (proof: RoleCreate): OrganizationAccess.StatementAccess<"role", "delete"> =>
   // @ts-expect-error the literal is kept, so another action does not fit
   proof;
-const teamUpdate = (access: Access, caller: Api.UserPrincipal) =>
+const teamUpdate = (access: Access, caller: CurrentUser.Caller) =>
   access.requireOnTeam(caller, "org-1", OrganizationAccess.statement("team", "update"), "team-1");
 export const teamInferred = (
   proof: Effect.Success<ReturnType<typeof teamUpdate>>,
 ): OrganizationAccess.StatementAccess<"team", "update"> => proof;
 // A role entry point refuses a team statement.
-export const wrongResource = (access: Access, caller: Api.UserPrincipal) =>
+export const wrongResource = (access: Access, caller: CurrentUser.Caller) =>
   // @ts-expect-error requireRole takes only a `role` statement
   access.requireRole(caller, "org-1", OrganizationAccess.statement("team", "update"));
 // `member` cannot fail with a permission denial: its union is inferred from the steps it composes.
@@ -79,10 +79,12 @@ describe("access brands (plan 30 tickets 05, 07, 10)", () => {
       const organization = yield* Organization.Organization;
       const authority = yield* OrganizationAuthority.OrganizationAuthority;
       const org = yield* organization.create({
-        caller: new Api.UserPrincipal({
-          ref: new Api.PrincipalRef({ type: "user", id: "owner" }),
-          sessionId: "owner-session",
-        }),
+        caller: CurrentUser.of(
+          new Api.UserPrincipal({
+            ref: new Api.PrincipalRef({ type: "user", id: "owner" }),
+            sessionId: "owner-session",
+          }),
+        ),
         name: "Acme",
         slug: "acme",
       });

@@ -2,7 +2,7 @@
 // real in-memory core, the organization plugin (`Scim` `dependsOn: [Organization]`), the SCIM records, connection
 // store and bearer authentication come from the plugins' own declarations: the same layer graph an application builds.
 import { Api } from "@awthaq/api";
-import { Auth, Erasure, Hooks, Users } from "@awthaq/core";
+import { Auth, CurrentUser, Erasure, Hooks, Users } from "@awthaq/core";
 import { Organization, OrganizationHooks } from "@awthaq/organization";
 import { TestAuth } from "@awthaq/test";
 import * as Effect from "effect/Effect";
@@ -80,11 +80,13 @@ export const ScimLiveSql = (
     taps,
   });
 
-const ownerPrincipal = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: `${id}-session`,
-  });
+const ownerPrincipal = (id: string) =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: `${id}-session`,
+    }),
+  );
 
 /** An organization owned by `owner` (default `owner-1`), and a SCIM connection for it (its identity and bearer token). */
 export const seedConnection = (name = "Okta", owner = "owner-1") =>

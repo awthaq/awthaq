@@ -7,7 +7,7 @@
 // `@qadi/core`, mirroring `usage-qadi.md` §7's own worked example
 // (`hasRelationship("member", { depth: 2 })` inside a real policy).
 import { Api } from "@awthaq/api";
-import { Auth, Users } from "@awthaq/core";
+import { Auth, CurrentUser, Users } from "@awthaq/core";
 import { addMember } from "./support.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -44,11 +44,13 @@ const buildQadiLayer = (configOverrides: Partial<Organization.OrganizationConfig
     ),
   ).pipe(Layer.provideMerge(buildOrganizationLayer(configOverrides)));
 
-const asCaller = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: `session-${id}`,
-  });
+const asCaller = (id: string) =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: `session-${id}`,
+    }),
+  );
 
 describe("Organization.relationships composed into a real qadi policy", () => {
   it.effect("hasRelationship('member') allows a real member and denies a real non-member", () =>

@@ -215,7 +215,7 @@ export const layerMemory = Layer.effect(
             .sort(
               (a, b) =>
                 DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt) ||
-                a.id.localeCompare(b.id),
+                (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
             )
             .filter((row) =>
               Option.match(after, {

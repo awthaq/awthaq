@@ -14,7 +14,7 @@
 // record, enforced by the organization plugin's own access checks (its
 // `requireOrganization` gate and qadi relationships); this plugin only flips it.
 
-import { Api } from "@awthaq/api";
+import type { Api } from "@awthaq/api";
 import type { AuthEvents, Users } from "@awthaq/core";
 import { CurrentUser, AuthPlugin, HookPoint } from "@awthaq/core";
 import { Organization, OrganizationActor, OrganizationDirectory } from "@awthaq/organization";
@@ -24,6 +24,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as AdminApi from "./AdminApi.ts";
+import * as ImpersonationRecords from "./ImpersonationRecords.ts";
 import * as AdminTenantsApi from "./AdminTenantsApi.ts";
 import * as AdminGate from "./internal/AdminGate.ts";
 
@@ -41,14 +42,14 @@ export interface OrganizationPage {
 export interface AdminTenantsShape {
   /** Every organization, keyset-paginated on `(createdAt, id)`. Errors: `AdminActionDenied` (gate). */
   readonly listOrganizations: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     input?: {
       readonly cursor?: OrganizationCursor | undefined;
       readonly limit?: number | undefined;
     },
   ) => Effect.Effect<OrganizationPage, AdminApi.AdminActionDenied | StoreFailure.StoreUnavailable>;
   readonly getOrganization: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
   ) => Effect.Effect<
     OrganizationDirectory.Organization,
@@ -62,7 +63,7 @@ export interface AdminTenantsShape {
    * suspension time is kept); publishes `auth.admin.organizationSuspended`.
    */
   readonly suspendOrganization: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     input: { readonly reason?: string | undefined },
   ) => Effect.Effect<
@@ -73,7 +74,7 @@ export interface AdminTenantsShape {
     | StoreFailure.StoreUnavailable
   >;
   readonly unsuspendOrganization: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
   ) => Effect.Effect<
     OrganizationDirectory.Organization,
@@ -111,7 +112,7 @@ export const AdminTenantsHandlers = HttpApiBuilder.group(
       }: {
         query: AdminTenantsApi.ListOrganizationsQuery;
       }) {
-        const { principal: caller } = yield* CurrentUser.current;
+        const caller = yield* CurrentUser.current;
         const page = yield* tenants.listOrganizations(caller, {
           cursor: query.cursor,
           limit: query.limit,
@@ -126,7 +127,7 @@ export const AdminTenantsHandlers = HttpApiBuilder.group(
       }: {
         params: AdminTenantsApi.OrganizationIdParams;
       }) {
-        const { principal: caller } = yield* CurrentUser.current;
+        const caller = yield* CurrentUser.current;
         return toOrganizationDto(yield* tenants.getOrganization(caller, params.organizationId));
       }),
       suspendOrganization: Effect.fnUntraced(function* ({
@@ -136,7 +137,7 @@ export const AdminTenantsHandlers = HttpApiBuilder.group(
         params: AdminTenantsApi.OrganizationIdParams;
         payload: AdminTenantsApi.SuspendOrganizationPayload;
       }) {
-        const { principal: caller } = yield* CurrentUser.current;
+        const caller = yield* CurrentUser.current;
         return toOrganizationDto(
           yield* tenants.suspendOrganization(caller, params.organizationId, {
             reason: payload.reason,
@@ -148,7 +149,7 @@ export const AdminTenantsHandlers = HttpApiBuilder.group(
       }: {
         params: AdminTenantsApi.OrganizationIdParams;
       }) {
-        const { principal: caller } = yield* CurrentUser.current;
+        const caller = yield* CurrentUser.current;
         return toOrganizationDto(
           yield* tenants.unsuspendOrganization(caller, params.organizationId),
         );
@@ -164,8 +165,8 @@ export const AdminTenantsHandlers = HttpApiBuilder.group(
  */
 export type GateServices = AuthEvents.AuthEvents | Users.Users;
 
-/** ADR-EA-018: the default page size when a caller names no `limit`. */
-const DEFAULT_PAGE_SIZE = 50;
+/** The request-edge services the handler group names; naming them keeps declaration emit portable (TS2883). */
+export type EdgeServices = Api.AdminAuthentication | Api.CsrfProtection | Api.RequestContext;
 
 export class AdminTenants extends AuthPlugin.Service<AdminTenants, AdminTenantsShape>()(
   "admin.tenants",
@@ -195,7 +196,7 @@ export class AdminTenants extends AuthPlugin.Service<AdminTenants, AdminTenantsS
       const listOrganizations: AdminTenantsShape["listOrganizations"] = Effect.fnUntraced(
         function* (caller, input) {
           yield* gate.collection(caller, "listOrganizations");
-          const limit = input?.limit ?? DEFAULT_PAGE_SIZE;
+          const limit = ImpersonationRecords.pageLimit(input?.limit);
           const rows = yield* directory.listPage({
             after: Option.fromNullishOr(input?.cursor),
             limit: limit + 1,

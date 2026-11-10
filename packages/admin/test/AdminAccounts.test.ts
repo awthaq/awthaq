@@ -9,6 +9,7 @@ import {
   Accounts,
   Auth,
   AuthEvents,
+  CurrentUser,
   EmailChange,
   HookPoint,
   Hooks,
@@ -92,11 +93,13 @@ const manageAll = {
   canManageCredentials: () => Effect.succeed(true),
 };
 
-const asCaller = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: "admin-session",
-  });
+const asCaller = (id: string): CurrentUser.Caller =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: "admin-session",
+    }),
+  );
 
 const seed = Effect.gen(function* () {
   const users = yield* Users.Users;

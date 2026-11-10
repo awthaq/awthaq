@@ -6,7 +6,7 @@
 // error, never a silent denial.
 import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
-import { Auth, AuthEvents, AuthPlugin, Sessions, Slots, Users } from "@awthaq/core";
+import { Auth, AuthEvents, AuthPlugin, CurrentUser, Sessions, Slots, Users } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
 import { DecisionLogging, Resolvers } from "@awthaq/qadi";
 import { defineSteps } from "@effect-cucumber/vitest";
@@ -263,10 +263,12 @@ export const resolversSteps = defineSteps<World>(({ Given, When, Then }) => {
     return context;
   });
 
-  const owner = new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
-    sessionId: "session-owner-1",
-  });
+  const owner = CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
+      sessionId: "session-owner-1",
+    }),
+  );
 
   Given("a project that belongs to an organization a subject is a member of", function* () {
     const world = yield* World;

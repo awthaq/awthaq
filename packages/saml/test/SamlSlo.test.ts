@@ -4,7 +4,7 @@
 // it names, at the connection it came from, with reason `federatedLogout`.
 import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
-import { AuditLog, Retention, Sessions, Users } from "@awthaq/core";
+import { AuditLog, CurrentUser, Retention, Sessions, Users } from "@awthaq/core";
 import { RateLimiter } from "@awthaq/ports";
 import * as Layer from "effect/Layer";
 import { assert, describe, it } from "@effect/vitest";
@@ -47,7 +47,9 @@ let assertions = 0;
 const freshAssertionId = () => `_assertion-${(assertions += 1)}`;
 
 const principalOf = (userId: Users.UserId, sessionId: Sessions.SessionId) =>
-  new Api.UserPrincipal({ ref: new Api.PrincipalRef({ type: "user", id: userId }), sessionId });
+  CurrentUser.of(
+    new Api.UserPrincipal({ ref: new Api.PrincipalRef({ type: "user", id: userId }), sessionId }),
+  );
 const sloUrlOf = (connectionId: string) => `${BASE_URL}/auth/saml/slo/${connectionId}`;
 
 const iso = (instant: DateTime.Utc) => DateTime.formatIso(instant).replace(/\.\d+Z$/, "Z");

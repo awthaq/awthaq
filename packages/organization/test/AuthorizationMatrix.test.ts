@@ -5,7 +5,7 @@
 // `invoke` and a `route` here (their mapped types), and an entry point that runs its steps in another
 // order turns a generated case red.
 import { Api } from "@awthaq/api";
-import { AuditLog, Auth, Sessions, Users } from "@awthaq/core";
+import { AuditLog, Auth, CurrentUser, Sessions, Users } from "@awthaq/core";
 import { TestAuth, type UserAgent } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -55,7 +55,7 @@ interface Ids {
 
 type Invoke = (
   organization: OrganizationShape,
-  caller: Api.UserPrincipal,
+  caller: CurrentUser.Caller,
   ids: Ids,
 ) => Effect.Effect<unknown, { readonly _tag: string }>;
 
@@ -134,10 +134,12 @@ const withFeatures = TestAuth.layer(built, { services: Organization.config(allFe
 const withoutFeatures = TestAuth.layer(built, { services: Organization.config({}) });
 
 const caller = (id: string) =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: `${id}-session`,
-  });
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: `${id}-session`,
+    }),
+  );
 const owner = caller("owner");
 const admin = caller("admin");
 const member = caller("member");

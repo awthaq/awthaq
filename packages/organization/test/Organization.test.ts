@@ -3,7 +3,7 @@
 // `MembershipRecords`, a hand-built `Api.UserPrincipal` the same way
 // `@awthaq/admin`'s own `Admin.test.ts` does.
 import { Api } from "@awthaq/api";
-import { AuditLog, Auth, Tenant, Users } from "@awthaq/core";
+import { AuditLog, Auth, CurrentUser, Tenant, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -24,11 +24,13 @@ const built = Auth.make([Organization.Organization]);
 const buildLayer = (configOverrides: Partial<Organization.OrganizationConfigShape> = {}) =>
   TestAuth.layer(built, { services: Organization.config(configOverrides) });
 
-const asCaller = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: `${id}-session`,
-  });
+const asCaller = (id: string) =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: `${id}-session`,
+    }),
+  );
 
 /** An audit record's event as published (core stores the plugin's event as a foreign one, ADR-EA-049), as a plain record. */
 const payloadOf = (record: AuditLog.AuditLogRecord | undefined): Record<string, unknown> =>

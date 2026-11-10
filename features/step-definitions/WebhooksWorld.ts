@@ -10,7 +10,7 @@
 import { Admin } from "@awthaq/admin";
 import { Organization, OrganizationEvents } from "@awthaq/organization";
 import { Api } from "@awthaq/api";
-import { Auth, AuditLog, AuthEvents, DataExport, Erasure, Users } from "@awthaq/core";
+import { Auth, AuditLog, AuthEvents, CurrentUser, DataExport, Erasure, Users } from "@awthaq/core";
 import { Encryption, HostResolver, RateLimiter, RelayCursorStore, Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import { WebhookDelivery, WebhookRecords, WebhookTransport, Webhooks } from "@awthaq/webhooks";
@@ -400,15 +400,19 @@ export const run = <A, E>(effect: Effect.Effect<A, E, AppServices>) =>
 
 // ---- events ------------------------------------------------------------------------------------
 
-export const ADMIN = new Api.UserPrincipal({
-  ref: new Api.PrincipalRef({ type: "user", id: "admin-1" }),
-  sessionId: "admin-session",
-});
+export const ADMIN = CurrentUser.of(
+  new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id: "admin-1" }),
+    sessionId: "admin-session",
+  }),
+);
 
-export const otherAdmin = new Api.UserPrincipal({
-  ref: new Api.PrincipalRef({ type: "user", id: "admin-2" }),
-  sessionId: "admin-session-2",
-});
+export const otherAdmin = CurrentUser.of(
+  new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id: "admin-2" }),
+    sessionId: "admin-session-2",
+  }),
+);
 
 let counter = 0;
 

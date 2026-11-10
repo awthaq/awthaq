@@ -24,7 +24,7 @@
 // type stripping, Bun, or `tsx awthaq …`); when the import fails for that
 // reason the message says so.
 
-import type { Auth, AuthPlugin, Migrations } from "@awthaq/core";
+import { Auth, type AuthPlugin, type Migrations } from "@awthaq/core";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -106,26 +106,10 @@ const isSqlLayer = (u: unknown): u is Layer.Layer<SqlClient.SqlClient, unknown> 
 const describeError = (error: unknown) =>
   error instanceof Error ? error.message : typeof error === "string" ? error : "unknown error";
 
-const linkErrorCodes: ReadonlySet<string> = new Set([
-  "CircularPluginDependency",
-  "EmptyPluginTuple",
-  "GroupIdConflict",
-  "RouteConflict",
-  "LinkerInvariantViolation",
-  "UndeclaredTableDependency",
-  "Auth/TenancyDeclarationInvalid",
-  "Auth/SealedColumnDeclarationInvalid",
-  "Auth/MigrationDeclarationInvalid",
-  "UserFieldConflict",
-  // ADR-EA-049: two declarations of one event tag.
-  "Auth/EventTagConflict",
-]);
-
-/** `Auth.make` raises a tagged link error while the module is evaluated; anything else is just a load failure. */
+/** A link error (`Auth.isLinkError`) is raised while the module is evaluated; anything else is just a load failure. */
 const asLoadFailure = (error: unknown): LinkProblem | ConfigUnavailable => {
-  if (isRecord(error) && typeof error["_tag"] === "string" && linkErrorCodes.has(error["_tag"])) {
-    return new LinkProblem({ code: error["_tag"], message: describeError(error) });
-  }
+  if (Auth.isLinkError(error))
+    return new LinkProblem({ code: error._tag, message: describeError(error) });
   const message = describeError(error);
   const needsTypeStripping =
     isRecord(error) &&

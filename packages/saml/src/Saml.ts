@@ -181,7 +181,7 @@ export interface SamlShape {
   >;
   /** BEH-EA-315: the signed-in user's own SP-initiated logout: ends their session and, when the connection has a logout endpoint, sends the IdP a `LogoutRequest`. */
   readonly logout: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     input: { readonly callbackURL?: string | undefined },
   ) => Effect.Effect<SamlSlo.LogoutStart, ServerError | ServerError>;
   /** BEH-EA-318: the administrator's operations (the `saml.admin` group). */
@@ -561,8 +561,8 @@ export const SamlAccountHandlers = HttpApiBuilder.group(
     return handlers.handleAll({
       logout: Effect.fnUntraced(function* ({ payload }: { payload: SamlApi.LogoutPayload }) {
         yield* noReferrer;
-        const { principal } = yield* CurrentUser.current;
-        const started = yield* saml.logout(principal, { callbackURL: payload.callbackURL });
+        const caller = yield* CurrentUser.current;
+        const started = yield* saml.logout(caller, { callbackURL: payload.callbackURL });
         // The caller's own session ended (`SessionLifecycle.Ends`), so its cookie is expired and a bearer
         // client told so, whatever the IdP does next.
         yield* SessionDelivery.end;
@@ -598,27 +598,21 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
       }: {
         payload: SamlApi.CreateConnectionPayload;
       }) {
-        return yield* admin.createConnection((yield* CurrentUser.current).principal, payload);
+        return yield* admin.createConnection(yield* CurrentUser.current, payload);
       }),
       listConnections: Effect.fnUntraced(function* ({
         query,
       }: {
         query: SamlApi.ListConnectionsQuery;
       }) {
-        return yield* admin.listConnections(
-          (yield* CurrentUser.current).principal,
-          query.organizationId,
-        );
+        return yield* admin.listConnections(yield* CurrentUser.current, query.organizationId);
       }),
       getConnection: Effect.fnUntraced(function* ({
         params,
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        return yield* admin.getConnection(
-          (yield* CurrentUser.current).principal,
-          params.connectionId,
-        );
+        return yield* admin.getConnection(yield* CurrentUser.current, params.connectionId);
       }),
       updateConnection: Effect.fnUntraced(function* ({
         params,
@@ -628,7 +622,7 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
         payload: SamlApi.UpdateConnectionPayload;
       }) {
         return yield* admin.updateConnection(
-          (yield* CurrentUser.current).principal,
+          yield* CurrentUser.current,
           params.connectionId,
           payload,
         );
@@ -638,17 +632,14 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        yield* admin.deleteConnection((yield* CurrentUser.current).principal, params.connectionId);
+        yield* admin.deleteConnection(yield* CurrentUser.current, params.connectionId);
       }),
       refreshMetadata: Effect.fnUntraced(function* ({
         params,
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        return yield* admin.refreshMetadata(
-          (yield* CurrentUser.current).principal,
-          params.connectionId,
-        );
+        return yield* admin.refreshMetadata(yield* CurrentUser.current, params.connectionId);
       }),
       rotateSigningKey: Effect.fnUntraced(function* ({
         params,
@@ -658,7 +649,7 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
         payload: SamlApi.SigningKeyPayload;
       }) {
         return yield* admin.rotateSigningKey(
-          (yield* CurrentUser.current).principal,
+          yield* CurrentUser.current,
           params.connectionId,
           payload,
         );
@@ -668,10 +659,7 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        return yield* admin.listSigningKeys(
-          (yield* CurrentUser.current).principal,
-          params.connectionId,
-        );
+        return yield* admin.listSigningKeys(yield* CurrentUser.current, params.connectionId);
       }),
     });
   }),

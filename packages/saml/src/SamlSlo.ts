@@ -21,7 +21,14 @@
 // Outbound messages (our request, our response) are signed with the connection's SP key whenever it has one.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, Sessions, Tenant, Verification, VerificationLink } from "@awthaq/core";
+import {
+  AuthEvents,
+  CurrentUser,
+  Sessions,
+  Tenant,
+  Verification,
+  VerificationLink,
+} from "@awthaq/core";
 import { Hmac, XmlSignature } from "@awthaq/ports";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -174,11 +181,11 @@ export const makeSlo = (deps: SloDeps) => {
   // ---- SP-initiated -----------------------------------------------------------------------------
 
   const logout = Effect.fnUntraced(function* (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     input: { readonly callbackURL?: string | undefined },
   ) {
     const callbackURL = deps.resolveCallbackURL(input.callbackURL);
-    const sessionId = Sessions.SessionId(caller.sessionId);
+    const sessionId = caller.sessionId;
     const row = yield* records.findSession(sessionId);
     const owner = Option.isNone(row)
       ? Option.none()

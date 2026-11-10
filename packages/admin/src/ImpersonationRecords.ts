@@ -35,6 +35,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
+import { MAX_PAGE_SIZE } from "./AdminApi.ts";
 
 type UserId = Users.UserId;
 
@@ -105,6 +106,12 @@ export interface ChainBreak {
 
 /** ESS-006: applied when a caller names no `limit`, so no read is ever unbounded. */
 export const DEFAULT_PAGE_SIZE = 50;
+
+/** ESS-006: the one in-process `limit` rule (same as `Users.list`): truncated, clamped to 1..200, 50 when absent or non-finite. */
+export const pageLimit = (limit: number | undefined) =>
+  limit === undefined || !Number.isFinite(limit)
+    ? DEFAULT_PAGE_SIZE
+    : Math.min(Math.max(Math.trunc(limit), 1), MAX_PAGE_SIZE);
 
 export interface ImpersonationRecordsShape {
   /**
@@ -448,7 +455,7 @@ export const layerMemory = Layer.effect(
       Effect.gen(function* () {
         const seen = yield* TenantScoped.visibility(grant);
         const s = yield* Ref.get(state);
-        const limit = input?.limit ?? DEFAULT_PAGE_SIZE;
+        const limit = pageLimit(input?.limit);
         const cursor = input?.cursor;
         const rows = newestFirst(Array.from(HashMap.values(s))).filter(
           (row) =>
@@ -758,7 +765,7 @@ export const layerSql = Layer.effect(
       ).pipe(liftFor(grant), unavailable("closeExpired"));
 
     const list: ImpersonationRecordsShape["list"] = (input, grant) => {
-      const limit = input?.limit ?? DEFAULT_PAGE_SIZE;
+      const limit = pageLimit(input?.limit);
       return TenantScoped.visibility(grant).pipe(
         Effect.flatMap((seen) =>
           listQuery({

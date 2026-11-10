@@ -26,7 +26,7 @@ must_haves:
       via: "handlers pass `yield* CurrentUser.current`; authorize reads caller.userId"
       pattern: "caller: CurrentUser\\.Caller"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 01
 
 <objective>
@@ -82,3 +82,4 @@ Output: `caller: CurrentUser.Caller` throughout; `adminId` helper deleted.
 <success_criteria>`caller: Api.UserPrincipal` in webhooks src: 0 (baseline 11); `caller.ref.id`: 0 (baseline 5); webhooks suite green with no assertion changed.</success_criteria>
 
 ## Comments
+Result: all 11 admin operations take CurrentUser.Caller; adminId deleted; Users import dropped. Kept helper name `adminPrincipal` in support.ts (now returns CurrentUser.of(...)); no assertion changed. Webhooks suite green. Breakage outside scope: features/step-definitions/WebhooksOperationsSteps.ts (lines ~185-227) passes Api.UserPrincipal and needs CurrentUser.of(...).

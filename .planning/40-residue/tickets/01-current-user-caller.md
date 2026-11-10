@@ -29,7 +29,7 @@ must_haves:
       via: "Caller.actingAs is Option<Sessions.ActingAs>"
       pattern: "Option\\.Option<Sessions\\.ActingAs>"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: none
 
 <objective>
@@ -91,3 +91,5 @@ Output: `CurrentUser.Caller`, `CurrentUser.of`, `current` built on `of`; the GC-
 <success_criteria>`CurrentUser.Caller` and `CurrentUser.of` exported from `@awthaq/core`; 4 new core tests green; the server GC-003 block deleted; full gate green.</success_criteria>
 
 ## Comments
+
+Result: added `CurrentUser.Caller` and `CurrentUser.of`; `current` is now `{ ...of(principal), principal }`. New packages/core/test/CurrentUser.test.ts has 4 cases, GC-003 block removed from AuthHttp.test.ts along with its unused imports. core and server tests green (33 passed), tsc -b and tsc -p tsconfig.test.json clean, circular clean. Red step was not run separately (tests and source were written together).

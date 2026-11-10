@@ -4,10 +4,14 @@
 import { RecordsContract, type TestAuth } from "@awthaq/test";
 import { assert } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
 import * as OrganizationRecords from "../../src/OrganizationRecords.ts";
 import { grant } from "../support.ts";
+
+const codeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 let isolationCounter = 0;
 const isolationCase: TestAuth.TableCase<
@@ -299,10 +303,47 @@ export const organizationRecords = RecordsContract.suite(OrganizationRecords.Org
               limit: 10,
             });
             assert.strictEqual(second.length, 3);
-            assert.sameMembers(
+            const expected = created
+              .map((row) => ({ id: row.id, at: DateTime.toEpochMillis(row.createdAt) }))
+              .sort((a, b) => a.at - b.at || codeUnit(a.id, b.id))
+              .map((row) => row.id);
+            assert.deepStrictEqual(
               [...first, ...second].map((row) => row.id),
-              created.map((row) => row.id),
+              expected,
             );
+          }),
+        },
+        {
+          name: "ESS-006/EP-003: every page size traverses the exact declared order across ties",
+          run: Effect.gen(function* () {
+            const records = yield* OrganizationRecords.OrganizationRecords;
+            // Three rows at T0, one at T1, three at T2: only the id tiebreak orders a group.
+            const created: Array<OrganizationRecords.OrganizationRecord> = [];
+            for (const [group, slugs] of [["a", "b", "c"], ["d"], ["e", "f", "g"]].entries()) {
+              if (group > 0) yield* TestClock.adjust(Duration.millis(1));
+              for (const slug of slugs) created.push(yield* records.create({ name: slug, slug }));
+            }
+            const expected = created
+              .map((row) => ({ id: row.id, at: DateTime.toEpochMillis(row.createdAt) }))
+              .sort((a, b) => a.at - b.at || codeUnit(a.id, b.id))
+              .map((row) => row.id);
+            for (const limit of [1, 2, 3, 4, 5, 6, 7, 8]) {
+              const seen: Array<string> = [];
+              let after: Option.Option<{ createdAt: DateTime.Utc; id: string }> = Option.none();
+              let pages = 0;
+              for (;;) {
+                const page = yield* records.listPage(grant, { after, limit });
+                pages++;
+                assert.isAtMost(page.length, limit);
+                seen.push(...page.map((row) => row.id));
+                const last = page.at(-1);
+                if (page.length < limit || last === undefined) break;
+                after = Option.some({ createdAt: last.createdAt, id: last.id });
+              }
+              assert.deepStrictEqual(seen, expected, `limit ${limit}`);
+              // The store has no cursor: a short (or empty) page ends the walk.
+              assert.strictEqual(pages, Math.floor(7 / limit) + 1, `limit ${limit}`);
+            }
           }),
         },
       ],

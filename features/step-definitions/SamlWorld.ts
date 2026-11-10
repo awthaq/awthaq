@@ -9,7 +9,16 @@
 // IdP (a signed response for a given AuthnRequest). Everything goes through `Saml.acs`, the service behind
 // `POST /auth/saml/acs`, so the chain a scenario exercises is the production one, cookie to session.
 import { Api } from "@awthaq/api";
-import { Accounts, AuditLog, Auth, AuthEvents, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  Auth,
+  AuthEvents,
+  CurrentUser,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { Organization, OrganizationConnections } from "@awthaq/organization";
 import { MembershipRecords } from "@awthaq/organization/records";
 import type { Encryption } from "@awthaq/ports";
@@ -404,10 +413,12 @@ export const setClock = (millis: number) => inApp(TestClock.setTime(millis));
 
 // ---- connections and logins ------------------------------------------------------------------------
 
-const ownerPrincipal = new Api.UserPrincipal({
-  ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
-  sessionId: "owner-session",
-});
+const ownerPrincipal = CurrentUser.of(
+  new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
+    sessionId: "owner-session",
+  }),
+);
 
 /** The organization-owned SAML connection called `name`, seeded on first use with whatever the scenario planned for it. */
 export const ensureConnection = Effect.fn("features.saml.ensureConnection")(function* (

@@ -11,6 +11,7 @@ import {
   AuditChain,
   Auth,
   AuthEvents,
+  CurrentUser,
   EmailChange,
   Sessions,
   Tenant,
@@ -104,11 +105,13 @@ const only = (predicate: Predicate): Partial<Admin.AdminConfigShape> => ({
   canManageEpisode: predicate === "canManageEpisode" ? allow : deny,
 });
 
-const asCaller = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: `${id}-session`,
-  });
+const asCaller = (id: string): CurrentUser.Caller =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: `${id}-session`,
+    }),
+  );
 
 const adminCaller = asCaller("admin-1");
 

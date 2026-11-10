@@ -4,7 +4,7 @@
 // and every successful mutation audited by identifiers only.
 import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
-import { AuditLog, Tenant } from "@awthaq/core";
+import { AuditLog, CurrentUser, Tenant } from "@awthaq/core";
 import { RateLimiter } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -34,10 +34,12 @@ import { TenantScoped } from "@awthaq/sql";
 /** The witness this test presents where a protocol message would. */
 const grant = TenantScoped.crossTenant("saml admin test: a connection named by its own id");
 
-const admin = new Api.UserPrincipal({
-  ref: new Api.PrincipalRef({ type: "user", id: "admin-1" }),
-  sessionId: "admin-session",
-});
+const admin = CurrentUser.of(
+  new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id: "admin-1" }),
+    sessionId: "admin-session",
+  }),
+);
 
 const allow = () => Effect.succeed(true);
 
@@ -181,10 +183,12 @@ describe("the gate is fail-closed", () => {
       const limited = yield* ops.listConnections(admin, acme.id).pipe(Effect.flip);
       assert.strictEqual(limited._tag, "RateLimited");
       // Another administrator has their own budget.
-      const other = new Api.UserPrincipal({
-        ref: new Api.PrincipalRef({ type: "user", id: "admin-2" }),
-        sessionId: "s2",
-      });
+      const other = CurrentUser.of(
+        new Api.UserPrincipal({
+          ref: new Api.PrincipalRef({ type: "user", id: "admin-2" }),
+          sessionId: "s2",
+        }),
+      );
       yield* ops.listConnections(other, acme.id);
     }).pipe(
       TestAuth.withoutRequest,

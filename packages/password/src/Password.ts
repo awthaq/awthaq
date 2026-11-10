@@ -487,12 +487,12 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
       }: {
         payload: PasswordApi.ChangePasswordPayload;
       }) {
-        const { principal } = yield* CurrentUser.current;
+        const { userId, sessionId } = yield* CurrentUser.current;
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
           password.changePassword({
-            userId: Users.UserId(principal.ref.id),
-            currentSessionId: Sessions.SessionId(principal.sessionId),
+            userId: userId,
+            currentSessionId: sessionId,
             currentPassword: payload.currentPassword,
             newPassword: payload.newPassword,
           }),
@@ -505,10 +505,10 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
       }: {
         payload: PasswordApi.ChangeEmailPayload;
       }) {
-        const { principal } = yield* CurrentUser.current;
+        const { userId, sessionId } = yield* CurrentUser.current;
         yield* password.requestEmailChange({
-          userId: Users.UserId(principal.ref.id),
-          currentSessionId: Sessions.SessionId(principal.sessionId),
+          userId: userId,
+          currentSessionId: sessionId,
           newEmail: payload.newEmail,
         });
       }),
@@ -518,10 +518,10 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
       }: {
         payload: PasswordApi.ReauthenticatePayload;
       }) {
-        const { principal } = yield* CurrentUser.current;
+        const { userId, sessionId } = yield* CurrentUser.current;
         yield* password.reauthenticate({
-          userId: Users.UserId(principal.ref.id),
-          currentSessionId: Sessions.SessionId(principal.sessionId),
+          userId: userId,
+          currentSessionId: sessionId,
           currentPassword: payload.password,
         });
       }),
