@@ -32,6 +32,7 @@ import {
   Errors,
   HookPoint,
   Hooks,
+  Migrations,
   RateLimits,
   Sessions,
   SignIn,
@@ -55,7 +56,7 @@ import * as TwoFactorEvents from "./TwoFactorEvents.ts";
 import {
   TwoFactorRecoveryCodes,
   TwoFactorSecrets,
-  migrations,
+  migrations as twoFactorMigrations,
   records as twoFactorRecords,
   secretColumn,
 } from "./TwoFactorStore.ts";
@@ -426,7 +427,14 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
   },
   // Plan 17: the sealed TOTP secret, declared beside the records that seal it.
   sealedColumns: [secretColumn],
-  migrations,
+  migrations: Migrations.ledger(
+    [twoFactorMigrations],
+    [
+      "create_two_factor_secret",
+      "create_two_factor_recovery_code",
+      "create_two_factor_recovery_code_user_id_index",
+    ],
+  ),
   // ADR-EA-049: the events this plugin publishes (`SecondFactor` emits them), defined in `TwoFactorEvents.ts`.
   events: TwoFactorEvents.events,
   // Plan 08 (BEH-EA-T4): the secret and recovery-code stores, memory and SQL, matched.

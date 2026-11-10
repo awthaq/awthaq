@@ -28,7 +28,6 @@ import {
   AuthEvents,
   AuthPlugin,
   DataExport,
-  Defects,
   Erasure,
   Errors,
   Hooks,
@@ -187,29 +186,14 @@ const ClaimsRow = Schema.Struct({ subject: Schema.String, claims: Schema.String 
  * Single-word lowercase columns so the same statements decode on SQLite and Postgres (Postgres
  * folds unquoted identifiers to lowercase). One row per user; a user with no claims has no row.
  */
-const userClaimsMigrations: Migrations.Migrations = [
-  {
-    name: "create_claims_user",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`
-          CREATE TABLE claims_user (
-            subject TEXT PRIMARY KEY,
-            claims TEXT NOT NULL,
-            updated TIMESTAMPTZ NOT NULL
-          )`,
-        sqlite: () => sql`
-          CREATE TABLE claims_user (
-            subject TEXT PRIMARY KEY,
-            claims TEXT NOT NULL,
-            updated TEXT NOT NULL
-          )`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-];
+export const migrations = Migrations.group({
+  create_claims_user: ({ sql, timestamp }) => sql`
+    CREATE TABLE claims_user (
+      subject TEXT PRIMARY KEY,
+      claims TEXT NOT NULL,
+      updated ${timestamp} NOT NULL
+    )`,
+});
 
 /** Over the `claims_user` table (run `UserClaims.migrations`, or `Auth.make`'s aggregate). */
 export const layerSql = Layer.effect(
@@ -289,7 +273,7 @@ export class UserClaims extends AuthPlugin.Service<UserClaims, UserClaimsShape>(
   tables: {
     claims_user: AuthPlugin.Table.global("per-user claims document; the directory is global"),
   },
-  migrations: userClaimsMigrations,
+  migrations: Migrations.ledger([migrations], ["create_claims_user"]),
   // ADR-EA-049: the event this plugin publishes, defined in `UserClaimsEvents.ts`.
   events: UserClaimsEvents.events,
   // Plan 08 (BEH-EA-T4): the claims document store, memory and SQL, matched.

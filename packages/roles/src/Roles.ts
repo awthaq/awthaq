@@ -46,7 +46,6 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as HttpApi from "effect/http-api/HttpApi";
-import * as SqlClient from "effect/sql/SqlClient";
 import type { Role } from "@qadi/core";
 import { fromRoles, withAttributes } from "@qadi/core";
 
@@ -184,51 +183,6 @@ const rolesMake = Effect.gen(function* () {
 });
 
 /**
- * BAM-006 (.issues/high): the migration this plugin's own header used to
- * defer — `UNIQUE(userId, role)` makes `assign` idempotent at the database
- * layer too, matching `layerMemory`'s own "assigning an already-held role
- * name is a no-op" contract. Columns left unquoted under `pg`, like
- * `@awthaq/jwt`'s own `jwtMigrations`: this table's own queries above
- * already reference every column unquoted.
- */
-const rolesMigrations: Migrations.Migrations = [
-  {
-    name: "create_roles_assignments",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`
-          CREATE TABLE roles_assignments (
-            "userId" TEXT NOT NULL,
-            role TEXT NOT NULL,
-            "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
-            UNIQUE ("userId", role)
-          )`,
-        sqlite: () => sql`
-          CREATE TABLE roles_assignments (
-            "userId" TEXT NOT NULL,
-            role TEXT NOT NULL,
-            "createdAt" TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-            UNIQUE ("userId", role)
-          )`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  {
-    name: "create_roles_assignments_user_id_index",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`CREATE INDEX roles_assignments_user_id ON roles_assignments("userId")`,
-        sqlite: () => sql`CREATE INDEX roles_assignments_user_id ON roles_assignments("userId")`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-];
-
-/**
  * Factored out of `Roles.layer` so `layerSql` can share it: builds the
  * `SubjectResolver` override from whichever `RolesShape` implementation
  * gets merged underneath (`rolesMake`/`rolesMakeSql`) — see `Roles.layer`'s
@@ -320,7 +274,10 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   tables: {
     roles_assignments: AuthPlugin.Table.global("global roles, ADR-EA-025"),
   },
-  migrations: rolesMigrations,
+  migrations: Migrations.ledger(
+    [RoleAssignments.migrations],
+    ["create_roles_assignments", "create_roles_assignments_user_id_index"],
+  ),
   // ADR-EA-049: the events this plugin publishes, defined in `RolesEvents.ts`.
   events: RolesEvents.events,
   // Plan 08 (BEH-EA-T4): the assignment store, memory and SQL, matched. The catalog (`Roles.config`) stays config.
