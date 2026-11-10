@@ -35,7 +35,7 @@ must_haves:
       to: packages/oauth/src/IdToken.ts
       via: "IdToken.verify with a literal ResolvedProvider and FakeProvider.fakeHttpClient"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: none
 
 <objective>
@@ -218,3 +218,6 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular
 </success_criteria>
 
 ## Comments
+
+Result: 26 vectors (node check ok); jwt runner 20 pass + 6 expected-fail (drift 6), oauth runner 24 pass + 2 expected-fail (drift 2). Drift proof: with both driftLists emptied, exactly the 6 jwt and 2 oauth names failed (run recorded, lists restored). AuthHttp B1 and Jwt B4 are `it.fails`/`it.effect.fails` and pass.
+Deviation (plan error): the peer-algorithm characterization is NOT green at HEAD for a new algorithm. `JwtCodec.verify` checks the allowlist (algorithms of the keys held before the refetch) before the kid lookup, so an ES256 key added by a peer fails "algorithm not allowed" and never reaches the refetch. Pinned instead as two tests: same algorithm (EdDSA) after one forced refresh, plain green; new algorithm (ES256), `it.effect.fails` "plan 38 Q6", to be flipped to plain by ticket 06 (Q6's `Jws.algorithms` allowlist fixes it, so Q6 is an improvement, not just "no regression"). The peer key is added with `KeyRing.importKey` (the minted private half is sealed in the store, so a rotated key cannot sign in a test).

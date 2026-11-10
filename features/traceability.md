@@ -14,7 +14,7 @@
 
 ---
 
-Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1355 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1566; the ids of a scenario that was removed are retired, never reused).
+Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its source `.feature` file, and its scenario title. Generated mechanically by `features/scripts/allocate-req-ea.py` in one deterministic, idempotent pass (fixed file order, sequential numbering, existing ids never renumbered) — see `spec/traceability.md` §6 for the file-level summary this rolls up to. 1357 `REQ-EA-NNN` ids allocated across 37 `.feature` files (highest issued: REQ-EA-1568; the ids of a scenario that was removed are retired, never reused).
 
 | REQ-EA | BEH-EA | Feature file | Scenario |
 |---|---|---|---|
@@ -1373,3 +1373,5 @@ Full manifest: one row per `REQ-EA-NNN` scenario id, its `BEH-EA-NNN` rule, its 
 | REQ-EA-1564 | [BEH-EA-236](../spec/behaviors/28-tenancy.md#beh-ea-236-per-tenant-configuration-applies-per-request-without-changing-the-plugin-tuple) | [12-multi-tenancy/28-tenancy.feature](features/12-multi-tenancy/28-tenancy.feature) | With no tenant the view shows the build-time configuration |
 | REQ-EA-1565 | [BEH-EA-336](../spec/behaviors/25-testing-harness.md#beh-ea-336-every-shipped-plugin-runs-the-contract-suite-which-checks-its-records) | [08-tooling/25-testing-harness.feature](features/08-tooling/25-testing-harness.feature) | A scripts/test-pg.sh that names a test file fails pnpm check |
 | REQ-EA-1566 | [BEH-EA-336](../spec/behaviors/25-testing-harness.md#beh-ea-336-every-shipped-plugin-runs-the-contract-suite-which-checks-its-records) | [08-tooling/25-testing-harness.feature](features/08-tooling/25-testing-harness.feature) | The same repository passes once scripts/test-pg.sh names no test file |
+| REQ-EA-1567 | [BEH-EA-293](../spec/behaviors/36-jwt.md#beh-ea-293-verification-is-strict-and-every-way-of-failing-it-looks-the-same) | [11-jwt/36-jwt.feature](features/11-jwt/36-jwt.feature) | Text whose segments are not base64url gets the same answer |
+| REQ-EA-1568 | [BEH-EA-293](../spec/behaviors/36-jwt.md#beh-ea-293-verification-is-strict-and-every-way-of-failing-it-looks-the-same) | [11-jwt/36-jwt.feature](features/11-jwt/36-jwt.feature) | A token with a critical header the verifier does not understand is not accepted |

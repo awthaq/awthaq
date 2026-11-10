@@ -457,7 +457,7 @@ lowest free id when the ticket lands, as batch 3 did for plan 27, and records it
 | 35 | ADR-EA-054 (a port's interface carries only what a production adapter implements), BEH-EA-359–, REQ-EA-1560– | — |
 | 36 | ADR-EA-018 rev 1.7*, ADR-EA-006 rev 1.4, BEH-EA-355 (28-tenancy) and BEH-EA-356 (26-cli), REQ-EA-1563–1564 (used; the plan reserved BEH-EA-362–363 and REQ-EA-1570–, but the catalog ended at BEH-EA-354 and strict verify rejects gaps) | ADR-EA-055 (unless Q4) |
 | 37 | ADR-EA-041 rev 1.6, BEH-EA-357 (plan said 365), REQ-EA-1565–1566 (replace retired 1500/1501; plan said 1580–1581), plan-internal REQ-EA-1571 (plan said 1586) | ADR-EA-056, BEH-EA-366–367 |
-| 38 | ADR-EA-057 (one JWS module in `@awthaq/ports`), ADR-EA-017 rev 1.1; amends BEH-EA-127/293/298; REQ-EA-1590–1591 | BEH-EA-368–370 |
+| 38 | ADR-EA-057 (one JWS module in `@awthaq/ports`), ADR-EA-017 rev 1.1; amends BEH-EA-127 (16-oauth rev 1.8)/293/298 (36-jwt rev 1.3), no new BEH; REQ-EA-1567–1568 (used; the plan reserved 1590–1591 and plan-internal 1592–1596, but the catalog ended at 1566) | ADR-EA-050–053, 055, 056 gaps (accepted by strict verify), BEH-EA-368–370 |
 | 39 | REQ-EA-1600–1603 | ADR-EA-058, BEH-EA-371–373 |
 | 40 | ADR-EA-042 rev 1.2 | ADR-EA-059, BEH-EA-374–376 |
 

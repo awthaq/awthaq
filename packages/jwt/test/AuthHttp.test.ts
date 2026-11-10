@@ -222,6 +222,17 @@ describe("AuthHttp + Jwt (real HTTP)", () => {
       assert.isFalse(inactiveBody.active);
     });
   });
+
+  it("plan 38 B1: introspection of a token whose header is not base64url answers {active:false}, not a defect", async () => {
+    await withHandler(async ({ signIn }) => {
+      const alice = await signIn("alice@example.com");
+      const response = await alice.request("POST", "/jwt/introspect", {
+        json: { token: "!!.e30.e30" },
+      });
+      assert.strictEqual(response.status, 200);
+      assert.deepStrictEqual(await response.json(), { active: false });
+    });
+  });
 });
 
 // TIR-007: the HTTP introspection endpoint applies session liveness whenever

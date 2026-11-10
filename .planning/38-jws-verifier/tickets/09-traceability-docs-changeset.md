@@ -28,7 +28,7 @@ must_haves:
       to: spec/decisions/057-one-jws-verifier.md
       via: "ADR row (verify-traceability check 3)"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 07
 
 <objective>
@@ -127,3 +127,6 @@ pnpm check
 </success_criteria>
 
 ## Comments
+Result (uncommitted). REQ ids used: 1567/1568 (plan's 1590/1591); the plan-internal 1592-1596 appear in no spec, code, test, changeset or doc (only in plan/ticket frontmatter). traceability.md rev 1.84 -> 1.85: ADR-EA-057 row, ADR-EA-017 row + Jwt.test.ts, OAuth and jwt/test rows, Jws.test.ts row, section 6 file 11 row (1567-1568, 52/52). READMEs: ports (Jws), jwt (lite verifier), oauth (key_ops/crit, stale ES256/EdDSA bullet removed). `packages/oauth/src/index.ts` header comment edited (comment only, ticket-mandated). `.changeset/jws-verifier.md` (ports minor, jwt minor, oauth patch, Migration line). docs/plugin-authoring.md not named by this ticket, untouched. Gates run: spec:verify:strict PASS 32 / FAIL 0; check:readmes PASS; oxfmt on touched files clean; check:error-tags FAILS only on packages/test/src/TestAuth.ts:624 and TestMailbox.ts:82,97 (plan 35, not this plan). Not run (not allowed): pnpm check, test, lint, knip, coverage, package:smoke.
+
+Acceptance checklist (section 9): 01-09 done in tree, uncommitted; 09's `pnpm check` not run in full.

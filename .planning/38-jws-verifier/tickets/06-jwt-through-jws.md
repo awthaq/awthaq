@@ -35,7 +35,7 @@ must_haves:
       to: packages/jwt/src/JwtCodec.ts
       via: "verifyWith: refetch = keyRefresh.refreshOnMiss then verifiableKeys; algorithms = Jws.algorithms"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 02, 03, 04
 
 <objective>
@@ -196,3 +196,7 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular && pnpm c
 </success_criteria>
 
 ## Comments
+
+Result (uncommitted). `JwtCodec.verify` now delegates to `Jws.verify` (requireKid) and `Jws.timeProblem`; it is generic in a new optional `refetch` input. The lite verifier passes `keys.refreshOnMiss` as `refetch` and keeps alg-less keys; the plugin's `verifyWith` passes `Jws.algorithms` plus a refetch (`keyRefresh.refreshOnMiss` then `verifiableKeys`). Both `catchIf("unknown kid")` retries are gone. The jwt drift list is empty. The Q6 test is a plain `it.effect` now. `peekTyp` runs before any crypto; a non-parsable token now reports "typ mismatch" instead of "malformed token" (still refused, no test asserts it).
+Tests: `JwtCodec.test.ts` 14 tests. Deleted the 11 moved to ports. The two "malformed exp" tests used to forge an unsigned payload; since signature now precedes claim decode, they sign the forged payload via a `signRaw` helper (same assertions). `npx vitest run packages/jwt packages/ports`: 515 pass; `tsc -p tsconfig.test.json` clean; circular clean.
+Task 3 greps: `subtle.verify(` is only in ports/src/Jws.ts; `RSASSA-PKCS1-v1_5` is in Jws.ts plus JwtCodec.ts:124, a generateKey param in `generateParams` (needed for RS256 key generation, not a verify site). `reason === "unknown kid"` in src: 0. `JwksDocumentSchema` in src: 0. Import gate: 0. Not run (not allowed): EdDSA edge tests in packages/next, lint, knip, package:smoke. The oauth `RSASSA` copy is ticket 05's.

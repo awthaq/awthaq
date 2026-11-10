@@ -28,7 +28,7 @@ must_haves:
       to: effect/encoding/Base64Url
       via: "Base64Url.decode returns Result; Failure maps to JwtInvalidError('malformed token')"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 01
 
 <objective>
@@ -121,3 +121,4 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular
 </success_criteria>
 
 ## Comments
+Result: `JwtCodec` decodes header, payload and signature through `Base64Url.decode` (`decodeSegment`, a `Result`); `atob(` count 0 in packages/jwt/src. B1 test in AuthHttp is plain; jwt driftList 6 -> 4 (`alg-less-okp`, `alg-less-rsa`, `enc-key-shares-kid`, `crit-unknown`). Gate run: AuthHttp, JwsDifferential, JwtCodec (25), verify, next Edge tests all green. Changeset `.changeset/jwt-malformed-segment.md` (names BEH-EA-293, Migration: none). The explicit red run was reached via ticket 01's expected-failure form (the `.fails` tests passed, i.e. the body failed, before the fix).

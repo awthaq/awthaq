@@ -169,6 +169,19 @@ Feature: JWT
       When "alice" introspects the text "definitely.not.a-token"
       Then the introspection answer is exactly '{"active":false}'
 
+    @REQ-EA-1567
+    Scenario: Text whose segments are not base64url gets the same answer
+      Given a signed-in user "alice"
+      When "alice" introspects the text "!!.e30.e30"
+      Then the introspection answer is exactly '{"active":false}'
+
+    @REQ-EA-1568
+    Scenario: A token with a critical header the verifier does not understand is not accepted
+      Given a signed-in user "alice"
+      And a token signed by the issuer's key with the defect "with an unknown critical header"
+      When "alice" introspects the forged token
+      Then the introspection answer is exactly '{"active":false}'
+
   # BEH-EA-294 — spec/behaviors/36-jwt.md
   @BEH-EA-294
   Rule: Principal tokens and general-purpose tokens are different classes that cannot pass for one another

@@ -25,7 +25,7 @@ must_haves:
       to: packages/jwt/src/KeyRing.ts (SigningKey.kid / .alg)
       via: "the record's own kid and alg override whatever the stored JWK carries"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 01
 
 <objective>
@@ -110,3 +110,4 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular
 </success_criteria>
 
 ## Comments
+Result: `Jwt.jwks` serves `{ ...publicKeyJwk, kid, alg }` from the record; KeyRing.ts and SigningKeyRecords.ts untouched. B4 test is plain and green; AuthHttp "no private material" test, KeyRing and RemoteSigning tests pass unchanged. `packages/jwt/test`: 234 passed, 5 expected-fail (4 jwt drift + the Q6 test, flipped by ticket 06). Changeset `.changeset/jwt-jwks-remote-key.md` (Migration line).

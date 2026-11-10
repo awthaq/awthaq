@@ -248,7 +248,8 @@ export type Defect =
   | "from another issuer"
   | "for another audience"
   | "of an unexpected class"
-  | "not valid yet";
+  | "not valid yet"
+  | "with an unknown critical header";
 
 export const isDefect = (value: string): value is Defect =>
   value === "none" ||
@@ -256,7 +257,8 @@ export const isDefect = (value: string): value is Defect =>
   value === "from another issuer" ||
   value === "for another audience" ||
   value === "of an unexpected class" ||
-  value === "not valid yet";
+  value === "not valid yet" ||
+  value === "with an unknown critical header";
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
@@ -264,6 +266,7 @@ const nowSeconds = () => Math.floor(Date.now() / 1000);
 export const signWithCurrentKey = Effect.fn("features.jwt.signWithCurrentKey")(function* (
   typ: string,
   claims: Readonly<Record<string, unknown>>,
+  extraHeader?: Readonly<Record<string, unknown>>,
 ) {
   const app = yield* currentApp;
   return yield* Effect.promise(() =>
@@ -275,12 +278,34 @@ export const signWithCurrentKey = Effect.fn("features.jwt.signWithCurrentKey")(f
           onNone: () => Effect.die(new Error("the current signing key has no local private key")),
         });
         const iat = nowSeconds();
+        const allClaims = {
+          iss: ISSUER,
+          aud: ISSUER,
+          sub: "user-forged",
+          iat,
+          exp: iat + 900,
+          ...claims,
+        };
+        const signer = JwtCodec.localSigner(material);
+        // JwtCodec.sign fixes the header to alg/kid/typ, so extra header members mean assembling the JWS by hand.
+        if (extraHeader !== undefined) {
+          const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+          const signingInput = `${b64({ alg: key.alg, kid: key.kid, typ, ...extraHeader })}.${b64(allClaims)}`;
+          const signature = yield* signer
+            .sign({
+              kid: key.kid,
+              alg: key.alg,
+              signingInput: new TextEncoder().encode(signingInput),
+            })
+            .pipe(Effect.orDie);
+          return `${signingInput}.${Buffer.from(signature).toString("base64url")}`;
+        }
         return yield* JwtCodec.sign({
           kid: key.kid,
           alg: key.alg,
           typ,
-          signer: JwtCodec.localSigner(material),
-          claims: { iss: ISSUER, aud: ISSUER, sub: "user-forged", iat, exp: iat + 900, ...claims },
+          signer,
+          claims: allClaims,
         }).pipe(Effect.orDie);
       }),
     ),
@@ -304,6 +329,8 @@ export const forgeDefective = Effect.fn("features.jwt.forgeDefective")(function*
       return yield* signWithCurrentKey("application/octet-stream", {});
     case "not valid yet":
       return yield* signWithCurrentKey("at+jwt", { nbf: iat + 3600 });
+    case "with an unknown critical header":
+      return yield* signWithCurrentKey("at+jwt", {}, { crit: ["x-unknown"], "x-unknown": true });
   }
 });
 

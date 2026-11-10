@@ -32,7 +32,7 @@ must_haves:
       to: packages/ports/src/index.ts
       via: "the surface:ports block lists Jws (drift check 13)"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 01
 
 <objective>
@@ -194,3 +194,4 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular
 </success_criteria>
 
 ## Comments
+Result: `packages/ports/src/Jws.ts` (exported as `Jws` from the ports index) + `packages/ports/test/Jws.test.ts`: 86 tests (26 vectors + kid-less/requireKid + 6 refetch-contract + 20 hostile strings + moved cases: 4 selection + 4 ignored-entry + lone-kid-less + private-member, 6 decoding, 5 per-algorithm + wrong type/curve + algorithm table, 9 pinning/slots, 3 timeProblem). Gates: `subtle.verify(` in packages/ports/src = 1 (Jws.ts); Jws.ts imports only effect and node:crypto (type); tsc -b and tsconfig.test.json clean; circular.mjs exit 0; spec ports-inventory check PASS (31 modules); ports+jwt+oauth+next Edge/EdgeImports: 54 files, 780 passed, 7 expected-fail. spec/overview.md: `Jws` in the surface:ports block, the ports row and the helpers row (no ADR link; ticket 07 adds it). Deviations: module written before the test file (the vectors table is the failing spec; all 86 passed on first run); the moved cases are re-expressed against `Jws.verify` and the originals in oauth/test/Jwt.test.ts and jwt/test/JwtCodec.test.ts are left for tickets 05/06 to delete (replace-don't-layer happens when the code moves). Behaviour notes: `kid: ""` counts as missing when `requireKid`; an `alg` missing or non-string header is `malformed` (schema), not `alg`.

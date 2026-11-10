@@ -32,6 +32,7 @@ export * as Encryption from "./Encryption.ts";
 export * as Hmac from "./Hmac.ts";
 export * as HostResolver from "./HostResolver.ts";
 export * as Ids from "./Ids.ts";
+export * as Jws from "./Jws.ts";
 export * as KeyProvider from "./KeyProvider.ts";
 export * as LegacySessionBridge from "./LegacySessionBridge.ts";
 export * as Mailer from "./Mailer.ts";

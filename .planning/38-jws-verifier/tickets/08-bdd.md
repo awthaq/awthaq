@@ -27,7 +27,7 @@ must_haves:
       to: features/step-definitions/JwtSteps.ts
       via: "existing steps only: 'introspects the text', 'a token signed by the issuer's key with the defect'"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 07
 
 <objective>
@@ -104,3 +104,4 @@ pnpm typecheck && pnpm lint
 </success_criteria>
 
 ## Comments
+Result (uncommitted). Scenarios tagged REQ-EA-1567 (non-base64url text) and REQ-EA-1568 (unknown `crit`), not the plan's 1590/1591 (catalog contiguous: highest was 1566). New defect "with an unknown critical header" in JwtWorld.ts (`signWithCurrentKey` takes an optional `extraHeader` and assembles the JWS by hand). Manifest regenerated (1357 rows), `allocate-req-ea.py --check` exit 0. BDD run: `pnpm --filter @awthaq/features test -t "base64url|critical header"` 2 passed; whole `features/11-jwt` file 52 passed. Note: the features run resolves `@awthaq/*` through gitignored `packages/*/lib`, which was stale (pre-Jws), so the crit scenario failed until `npx tsc -b packages/jwt/tsconfig.json packages/oauth/tsconfig.json` rebuilt lib (build output only, no source change).

@@ -50,7 +50,7 @@
 
 import { Api } from "@awthaq/api";
 import { AuthPlugin, Errors, Migrations, Retention, Sessions, Tenant, Users } from "@awthaq/core";
-import { Defects, type Encryption, RefreshingCache, type SqlTransaction } from "@awthaq/ports";
+import { Defects, type Encryption, Jws, RefreshingCache, type SqlTransaction } from "@awthaq/ports";
 import { Authentication, Credentials } from "@awthaq/server";
 import { SealedColumn } from "@awthaq/sql";
 import * as Arr from "effect/Array";
@@ -741,29 +741,35 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
             readonly requireSubject: boolean;
           },
         ) => {
-          const attempt = Effect.gen(function* () {
+          return Effect.gen(function* () {
             const config = yield* configNow;
-            const keys = yield* verifiableKeys;
-            return yield* JwtCodec.verify({
-              token,
-              keys: keys.map((key) => ({
+            const toVerificationKeys = (
+              keys: ReadonlyArray<{
+                readonly kid: string;
+                readonly alg: JwtCodec.Algorithm;
+                readonly publicKeyJwk: Record<string, unknown>;
+              }>,
+            ) =>
+              keys.map((key) => ({
                 kid: key.kid,
                 alg: key.alg,
                 publicKeyJwk: key.publicKeyJwk,
-              })),
-              algorithms: Array.from(new Set(keys.map((key) => key.alg))),
+              }));
+            return yield* JwtCodec.verify({
+              token,
+              keys: toVerificationKeys(yield* verifiableKeys),
+              refetch: Effect.andThen(keyRefresh.refreshOnMiss, verifiableKeys).pipe(
+                Effect.map(toVerificationKeys),
+              ),
+              // every ring key declares its alg and Jws requires equality, so the accepted algorithms are exactly those of the keys present
+              // the allowlist must not be computed before the refetch, or a peer's key of a new algorithm is refused (plan 38 Q6)
+              algorithms: Jws.algorithms,
               issuer: config.issuer,
               audience: expected.audience,
               expectedTyp: expected.typ,
               requireSubject: expected.requireSubject,
             });
           });
-          return attempt.pipe(
-            Effect.catchIf(
-              (error) => error._tag === "JwtInvalidError" && error.reason === "unknown kid",
-              () => Effect.andThen(keyRefresh.refreshOnMiss, attempt),
-            ),
-          );
         };
 
         // Principal tokens only (`typ: "at+jwt"`, a `sub` is mandatory):
@@ -824,8 +830,10 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
             return claims;
           });
 
+        // BEH-EA-292: every served key names its kid and alg from the record, whatever JWK was
+        // registered (plan 38 B4).
         const jwks: JwtShape["jwks"] = Effect.map(verifiableKeys, (keys) => ({
-          keys: keys.map((key) => key.publicKeyJwk),
+          keys: keys.map((key) => ({ ...key.publicKeyJwk, kid: key.kid, alg: key.alg })),
         }));
 
         const introspect: JwtShape["introspect"] = (token) =>

@@ -10,7 +10,7 @@
 // these two factories with a vendor's issuer/endpoints/claim mapping, so the
 // factories remain the escape hatch for any provider not listed.
 
-import { Defects } from "@awthaq/ports";
+import { Defects, Jws } from "@awthaq/ports";
 import * as Config from "effect/Config";
 import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
@@ -19,7 +19,6 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
-import * as Jwt from "./Jwt.ts";
 import * as ProviderHttp from "./ProviderHttp.ts";
 
 export interface OAuthEndpoints {
@@ -112,10 +111,10 @@ export interface OAuthProviderConfig {
   /**
    * AOMS-005: the `id_token` signature algorithms this provider may use — an allowlist the token
    * header can select within but never widen. Unset: the discovery document's
-   * `id_token_signing_alg_values_supported` intersected with what `Jwt.SIGNING_ALGS` verifies, or
+   * `id_token_signing_alg_values_supported` intersected with what `Jws.algorithms` verifies, or
    * `["RS256"]` when discovery does not advertise any. An empty effective list dies at boot.
    */
-  readonly idTokenSigningAlgs?: ReadonlyArray<Jwt.SigningAlg>;
+  readonly idTokenSigningAlgs?: ReadonlyArray<Jws.Algorithm>;
   readonly mapProfile: (claims: Record<string, unknown>) => OAuthProfile;
 }
 
@@ -158,7 +157,7 @@ export interface ResolvedProvider {
   readonly skipPkce: boolean;
   readonly tokenEndpointAuthMethod: TokenEndpointAuthMethod;
   /** AOMS-005: the effective `id_token` algorithm allowlist (never empty for an `oidc` provider). */
-  readonly idTokenSigningAlgs: ReadonlyArray<Jwt.SigningAlg>;
+  readonly idTokenSigningAlgs: ReadonlyArray<Jws.Algorithm>;
   readonly mapProfile: (claims: Record<string, unknown>) => OAuthProfile;
 }
 
@@ -371,14 +370,14 @@ export const resolve = (
     const idTokenSigningAlgs =
       config.idTokenSigningAlgs ??
       (advertisedIdTokenAlgs === undefined
-        ? Jwt.SIGNING_ALGS.filter((alg) => alg === "RS256")
-        : Jwt.SIGNING_ALGS.filter((alg) => advertisedIdTokenAlgs.includes(alg)));
+        ? Jws.algorithms.filter((alg) => alg === "RS256")
+        : Jws.algorithms.filter((alg) => advertisedIdTokenAlgs.includes(alg)));
     if (config.kind === "oidc" && idTokenSigningAlgs.length === 0) {
       return yield* Defects.invalidConfiguration(
         "provider",
         `awthaq/oauth: provider "${config.id}" advertises id_token signing algorithms ` +
           `[${(advertisedIdTokenAlgs ?? []).join(", ")}], none of which this plugin verifies ` +
-          `(${Jwt.SIGNING_ALGS.join(", ")}); set idTokenSigningAlgs explicitly or use another provider`,
+          `(${Jws.algorithms.join(", ")}); set idTokenSigningAlgs explicitly or use another provider`,
       );
     }
 
@@ -400,7 +399,3 @@ export const resolve = (
       mapProfile: config.mapProfile,
     };
   });
-
-// Re-exported so a caller validating an `id_token` doesn't need its own
-// import of the internal verifier module.
-export { Jwt };

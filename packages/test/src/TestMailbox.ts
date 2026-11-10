@@ -5,7 +5,7 @@
 // Suites run under `TestClock`, so every deadline here is a real timer (`setTimeout`), never `Clock`, `sleep` or
 // `timeout`. A failure text names the template, the position and the count recorded; never a recipient or `data`
 // (EOTS-010).
-import { Mailer, SmsSender } from "@awthaq/ports";
+import { Defects, Mailer, SmsSender } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
 import * as DurationModule from "effect/Duration";
@@ -102,10 +102,9 @@ const makeOutbox = <M extends { readonly to: string; readonly template: string }
         const found = untilSnapshot(ref, (snapshot) => snapshot.filter(matches(match))[nth - 1]);
         const deadline = realTimer(options.timeout ?? "5 seconds", () =>
           Effect.flatMap(SubscriptionRef.get(ref), (recorded) =>
-            Effect.die(
-              new Error(
-                `no mail matching ${describe(match)} (#${nth}) arrived in time; ${recorded.length} recorded`,
-              ),
+            Defects.invariantViolation(
+              "TestMailbox",
+              `no mail matching ${describe(match)} (#${nth}) arrived in time; ${recorded.length} recorded`,
             ),
           ),
         );
@@ -117,10 +116,9 @@ const makeOutbox = <M extends { readonly to: string; readonly template: string }
           snapshot.filter(matches(match)).length > beyond ? snapshot.length : undefined,
         ).pipe(
           Effect.flatMap((recorded) =>
-            Effect.die(
-              new Error(
-                `more than ${beyond} mail matching ${describe(match)} was recorded (${recorded} in all)`,
-              ),
+            Defects.invariantViolation(
+              "TestMailbox",
+              `more than ${beyond} mail matching ${describe(match)} was recorded (${recorded} in all)`,
             ),
           ),
         );

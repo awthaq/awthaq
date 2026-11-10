@@ -8,8 +8,8 @@
 // `OAuthTokenAccess` (BE-002: the scoped provider-token-refresh port), and
 // `OAuthApi` (this plugin's own contract, mounted under the shared `"auth"`
 // id, group `"oauth"`) — see `OAuth.ts`'s own header comment for exactly
-// what is and isn't built (RS256-only `id_token` verification, no vendor
-// presets).
+// what is and isn't built (`id_token` verification through `@awthaq/ports`'s `Jws`;
+// vendor presets under `./presets`).
 //
 // See spec/overview.md for the full package map.
 

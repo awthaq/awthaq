@@ -31,7 +31,7 @@ must_haves:
       to: packages/ports/src/Jws.ts
       via: "idTokenSigningAlgs: ReadonlyArray<Jws.Algorithm>; Jws.algorithms replaces SIGNING_ALGS"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 04
 
 <objective>
@@ -149,3 +149,5 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular && pnpm c
 </success_criteria>
 
 ## Comments
+
+Result: `IdToken.verify` runs one `Jws.verify` (cache as KeySource, `requireKid: false`) with `Jws/Rejected` mapped to the unchanged `CallbackFailureReason`s; `claimProblem` uses `Jws.timeProblem` then the `maxIdTokenAge` arms. `OAuthProvider` types use `Jws.Algorithm`/`Jws.algorithms`; the unused `Jwt` re-export is dropped. Deleted `oauth/src/Jwt.ts` and `oauth/test/Jwt.test.ts`; oauth drift list emptied (`[]`); OAuth.test.ts untouched. `npx vitest run packages/oauth packages/ports`: 520 passed. circular.mjs exit 0; `JwtVerificationError` in packages/*/src = 0. tsconfig.test.json: only a transient error in packages/jwt/src/JwtCodec.ts (ticket 06, other agent). Deviation: the old `alg` log detail (header value) is dropped, as the ticket states. Not run: pnpm check:error-tags, lint, knip.

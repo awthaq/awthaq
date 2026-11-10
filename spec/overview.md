@@ -44,7 +44,7 @@ The system is organized into seven strata plus client, tooling, and plugin packa
 |---|---|---|
 | 1 Contract | `@awthaq/api` | `Principal`, `SessionView`, `SubjectDto`, errors, `Authentication` and `CsrfProtection` middleware definitions, core groups. Isomorphic — no server code, importable in the browser. |
 | 1 Contract | `@awthaq/<plugin>/api` | Each plugin's own groups, schemas, errors, and contract `HttpApi`. |
-| 2 Ports | `@awthaq/ports` | The capabilities a plugin requires and the application provides: `PasswordHasher`, `Mailer`, `SmsSender`, `WebAuthn`, `Encryption`, `KeyProvider`, `RateLimiter`, `SqlTransaction`, `ClientAddress`, `LegacySessionBridge`, `WebCrypto`, plus helpers (`Hmac`, `RefreshingCache`, `Defects`, `Tenant`, `PasswordHasherWorkerPool`, `OutboundUrl`, `PinnedHttp`) and the `XmlSignature` and `HostResolver` services. Each service ships the layers its own module documents — not a uniform `layer`/`layerNoop`/`layerMemory` triple. |
+| 2 Ports | `@awthaq/ports` | The capabilities a plugin requires and the application provides: `PasswordHasher`, `Mailer`, `SmsSender`, `WebAuthn`, `Encryption`, `KeyProvider`, `RateLimiter`, `SqlTransaction`, `ClientAddress`, `LegacySessionBridge`, `WebCrypto`, plus helpers (`Hmac`, `RefreshingCache`, `Jws`, `Defects`, `Tenant`, `PasswordHasherWorkerPool`, `OutboundUrl`, `PinnedHttp`) and the `XmlSignature` and `HostResolver` services. Each service ships the layers its own module documents — not a uniform `layer`/`layerNoop`/`layerMemory` triple. |
 | 3 Persistence | `@awthaq/sql` | Models, the SQL store adapters (`*StoreSql`) and `CoreStoresSql`, migration records, `SealedColumn` and `CoreSealedColumns` (core's six sealed columns). |
 | 4 Domain | `@awthaq/core` | Domain services, hook points, `AuthEvents`, config references, slots, the `Auth` namespace. |
 | 5 HTTP | `@awthaq/server` | Middleware implementations, core handlers, `AuthHttp`, `AuthHost` (the servable layer derived from `Auth.make`). |
@@ -102,6 +102,7 @@ Encryption
 Hmac
 HostResolver
 Ids
+Jws
 KeyProvider
 LegacySessionBridge
 Mailer
@@ -153,6 +154,7 @@ The block above is the module list of `packages/ports/src/index.ts`, one name pe
 | `UserStore` | `Context.Service` | the store port under `Users` (`insertOrHolder`, `get`/`getByEmail`/`getByPhone`, `updateProfile`, `casIdentity`, `setStatus`, `delete`, `listPage`, `readFields`/`writeFields`, each atomic by contract); `layerMemory` is the `Ref` adapter, the SQL adapter is `@awthaq/sql`'s `UserStoreSql`; the bar is `StoreContract.users` ([ADR-EA-041](decisions/041-domain-store-ports.md)) |
 | `VerificationStore` | `Context.Service` | the store port under `Verification` (`upsertLive`, `present`, `settle`, `transaction`, `reserve`, `deleteByUser`, `purgeExpired`, each atomic by contract); `layerMemory` is the `Ref` adapter, the SQL adapter is `@awthaq/sql`'s `VerificationStoreSql`; the bar is `StoreContract.verification` ([ADR-EA-041](decisions/041-domain-store-ports.md)) |
 | `Ids`, `Store`, `PruneExpired` | helpers | the identifier brands of the core entities (`UserId`, `AccountId`, `SessionId`, `VerificationTokenId`, `E164`; `@awthaq/sql`'s `Models` re-exports them), what every core store port shares (`StoreUnavailable`, `Consistency`, `ReadOptions`; [ADR-EA-041](decisions/041-domain-store-ports.md)) and the in-memory eviction the `Ref` adapters use (TMS-004) |
+| `Jws` | helpers | compact-JWS verification for every verifier in the repo: strict decoding, `crit` refusal, the five-algorithm table, RFC 7517 key selection, one refetch on an unknown `kid` through a `KeySource`, and time-claim judgement (plan 38) |
 | `Hmac`, `RefreshingCache`, `Defects`, `Tenant` | helpers | constant-time comparison and HMAC, a single-flight TTL cache, tagged defect classes, the ambient `TenantContext` |
 
 ### Domain stratum (4)

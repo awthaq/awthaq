@@ -10,8 +10,7 @@
 //
 // Scoped deliberately, documented rather than silently assumed: no
 // `google()`/`github()`/`apple()` vendor presets (see `OAuthProvider.ts`'s
-// own header), and `Jwt.ts`'s own header documents its RS256-only
-// signature-verification scope.
+// own header); signature verification is `@awthaq/ports`'s `Jws`.
 //
 // BE-002 (.issues/high): the exchanged access/refresh token pair is now
 // persisted (`@awthaq/core`'s `Accounts.ProviderTokenSet`, via `link`/
@@ -285,7 +284,7 @@ const withExchangeCode = (callbackURL: string, baseOrigin: string, code: string)
 /**
  * OIT-007: the only response type this plugin ever requests — authorization
  * code. Pinned here (not a parameter) because `at_hash` validation is
- * deliberately absent (see `Jwt.ts`'s header) and only becomes required if a
+ * deliberately absent (`Jws` verifies signatures only) and only becomes required if a
  * hybrid/implicit type is ever added.
  */
 const RESPONSE_TYPE = "code";

@@ -79,6 +79,7 @@ import {
 } from "@awthaq/core";
 import {
   ClientAddress,
+  Defects,
   type Encryption,
   type Mailer,
   PasswordHasher,
@@ -907,10 +908,9 @@ export const lazyApp = <O, R>(
       configure: (update) =>
         SynchronizedRef.updateEffect(state, (current) =>
           Option.isSome(current.built)
-            ? Effect.die(
-                new Error(
-                  `${name}: configure after the app was built; configure in a Given before the first request, or call replace`,
-                ),
+            ? Defects.invariantViolation(
+                "TestAuth",
+                `${name}: configure after the app was built; configure in a Given before the first request, or call replace`,
               )
             : Effect.succeed({ ...current, options: update(current.options) }),
         ),

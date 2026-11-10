@@ -27,7 +27,7 @@ must_haves:
       to: spec/decisions/057-one-jws-verifier.md
       via: "index entry (verify-traceability check 1)"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 05, 06
 
 <objective>
@@ -131,3 +131,4 @@ pnpm typecheck && pnpm test && pnpm lint && pnpm knip && pnpm circular
 </success_criteria>
 
 ## Comments
+Result (uncommitted). ADR-EA-057 kept (`spec/decisions/057-one-jws-verifier.md`, indexed; strict verify accepts the unused 050-053/055/056 gaps, `FAIL: 0`). ADR-EA-017 rev 1.1 (decision 6 note). BEH-EA-293/298 amended in 36-jwt.md (rev 1.2 -> 1.3), BEH-EA-127 in 16-oauth.md (rev 1.7 -> 1.8, bumped from the current value); no BEH id added (highest stays BEH-EA-357; plan's 368-370 unused, Q8). 292 text unchanged. Deviation: spec/README.md and spec/overview.md not touched (README's ADR table stops at 040; overview already had the Jws entries from ticket 04).
