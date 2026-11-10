@@ -26,7 +26,7 @@ must_haves:
       via: "handlers destructure userId/sessionId"
       pattern: "\\{ userId(, sessionId)? \\} = yield\\* CurrentUser\\.current"
 ---
-Status: ready-for-human
+Status: done (uncommitted)
 Blocked by: 01, and the uncommitted plugin-DDL-locality work in `packages/two-factor/src/{TwoFactor,TwoFactorStore}.ts` (with `.changeset/plugin-ddl-locality.md`) being committed by its owner. A human flips this to ready-for-agent when `git status --porcelain packages/two-factor/src` prints nothing (PLAN §10 Q9).
 
 <objective>
@@ -67,3 +67,6 @@ Output: handlers destructure `userId`/`sessionId`; `TwoFactorShape` takes `Sessi
 <success_criteria>A1 gate for two-factor = 0 (baseline 5); A4 gate for two-factor = 0 (baseline 1); suites green; the WIP's lines untouched.</success_criteria>
 
 ## Comments
+- 2026-11-10: precondition held (DDL work committed at 85a9a5ce). Five handlers destructure `{ userId, sessionId }` / `{ userId }` from `CurrentUser.current`; `TwoFactorShape` session params, `requireFactor` and `requireFreshSession` take `Sessions.SessionId`; the internal `Sessions.SessionId(sessionId)` re-brand is gone (Q6 yes). No `migrations` line touched. Changeset `.changeset/current-user-caller-two-factor.md` written (minor + Migration line).
+- Out-of-package fix: `features/step-definitions/TwoFactorWorld.ts` `sessionId: string` -> `Sessions.SessionId` (the only source of the 7 tsc errors in TwoFactorSteps/SecuritySteps). device-authorization needed no change.
+- Ran: tsc -b and tsc -p tsconfig.test.json clean; vitest two-factor, device-authorization, roles: 355 passed; BDD 26-cli, 31-two-factor, 18-roles: 188 passed; circular 0; spec:verify:strict PASS 32.

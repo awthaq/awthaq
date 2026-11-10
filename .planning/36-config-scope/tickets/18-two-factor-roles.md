@@ -33,7 +33,7 @@ must_haves:
       via: "Tenant.inForce"
       pattern: "inForce\\((TwoFactorConfigScoped|RolesConfigScoped|Roles\\.RolesConfigScoped)\\)"
 ---
-Status: ready-for-agent
+Status: done (uncommitted)
 Blocked by: 04; precondition: someone else's uncommitted edits in `packages/two-factor` and `packages/roles` are committed (see Task 1)
 
 <objective>
@@ -117,3 +117,7 @@ Raw reads 6 → 0 across both packages; 2 declarations; no edit made while the p
 </success_criteria>
 
 ## Comments
+- 2026-11-10: precondition held (two-factor/roles committed at 85a9a5ce). `TwoFactorConfigScoped` / `RolesConfigScoped = Tenant.perDeployment(...)`; both `config(...)` return the declaration's layer (Roles.config lost `Layer.Layer<never>`; `RolesConfig` lost its type annotation). Four raw reads + RolesAdmin now `yield* yield* Tenant.inForce(...Scoped)`; descriptors made from the declarations. Roles takes `Tenant` from `@awthaq/core` (no new dependency).
+- Removed the bare-Reference overload of `ConfigDescriptor.make` (and `isDeclaration`), the `PENDING_TICKET_18` allowlist and its `shortcut:` comment; converted bare callers: features/step-definitions/CliWorld.ts, packages/cli/test/support/WidgetPlugin.ts, packages/core/test/EffectiveConfig.test.ts.
+- Spec: BEH-EA-355 text + 28-tenancy.md rev 1.14; `.changeset/config-scope.md` note, plus roles/two-factor patch entries and a Migration line.
+- Ran: tsc -b, tsc -p tsconfig.test.json clean; vitest two-factor, roles, core guard+EffectiveConfig, cli, admin: 545 passed.

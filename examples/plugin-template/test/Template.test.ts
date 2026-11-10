@@ -8,6 +8,7 @@ import {
   Auth,
   AuthEvents,
   ConfigDescriptor,
+  CurrentUser,
   EffectiveConfig,
   HookPoint,
 } from "@awthaq/core";
@@ -75,10 +76,12 @@ describe("plugin-template: per-tenant configuration (ADR-EA-018 D8)", () => {
   it.effect("a NotesConfig provided for the request overrides the build-time maxLength", () =>
     Effect.gen(function* () {
       const notes = yield* Template.Notes;
-      const caller = new Api.UserPrincipal({
-        ref: new Api.PrincipalRef({ type: "user", id: "tenant-user" }),
-        sessionId: "tenant-session",
-      });
+      const caller = CurrentUser.of(
+        new Api.UserPrincipal({
+          ref: new Api.PrincipalRef({ type: "user", id: "tenant-user" }),
+          sessionId: "tenant-session",
+        }),
+      );
       const text = "x".repeat(25);
       // Build-time `maxLength: 20` refuses it ...
       const refused = yield* notes.create(caller, text).pipe(Effect.flip);
@@ -217,10 +220,12 @@ for (const records of TestAuth.recordModes) {
 // `pnpm test:pg`) Postgres.
 for (const records of TestAuth.recordModes) {
   describe(`plugin-template: the per-owner note quota (${records} records)`, () => {
-    const caller = new Api.UserPrincipal({
-      ref: new Api.PrincipalRef({ type: "user", id: "quota-user" }),
-      sessionId: "quota-session",
-    });
+    const caller = CurrentUser.of(
+      new Api.UserPrincipal({
+        ref: new Api.PrincipalRef({ type: "user", id: "quota-user" }),
+        sessionId: "quota-session",
+      }),
+    );
     const quota = (taps: Layer.Layer<never, never, Template.BeforeCreateNote>) => {
       const options = {
         taps,
@@ -277,10 +282,12 @@ for (const records of TestAuth.recordModes) {
 // `emit`, recorded in the audit log with its actor, readable with `payloadAs`, and typed for subscribers.
 for (const records of TestAuth.recordModes) {
   describe(`plugin-template: its own event (${records} records)`, () => {
-    const caller = new Api.UserPrincipal({
-      ref: new Api.PrincipalRef({ type: "user", id: "event-user" }),
-      sessionId: "event-session",
-    });
+    const caller = CurrentUser.of(
+      new Api.UserPrincipal({
+        ref: new Api.PrincipalRef({ type: "user", id: "event-user" }),
+        sessionId: "event-session",
+      }),
+    );
     const layer =
       records === "sql"
         ? TestAuth.layer(built, {

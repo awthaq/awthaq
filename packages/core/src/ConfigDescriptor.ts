@@ -147,18 +147,13 @@ export type Declaration<A> = Tenant.Declared<never, A> & {
   readonly reference: Context.Reference<A>;
 };
 
-const isDeclaration = <A>(
-  source: Declaration<A> | Context.Reference<A>,
-): source is Declaration<A> => "scope" in source && "reference" in source;
-
 /**
  * Wraps a scope declaration over a `Context.Reference` as a descriptor (BEH-EA-355). `sensitive` is checked against
  * the value's own keys at the type level, so a renamed field cannot leave a stale entry behind. `audit` receives the
  * effective value; the descriptor does the reading, so an audit rule is a plain function of the value.
  */
 export const make = <A>(
-  // shortcut: a bare reference is declared deployment-scoped for two-factor and roles only, until plan 36 ticket 18 lands.
-  source: Declaration<A> | Context.Reference<A>,
+  source: Declaration<A>,
   options?: {
     readonly sensitive?: ReadonlyArray<Extract<keyof A, string>>;
     readonly audit?: (value: A, environment: Environment) => ReadonlyArray<Finding>;
@@ -166,10 +161,8 @@ export const make = <A>(
     readonly project?: (value: A) => unknown;
   },
 ): ConfigDescriptor => {
-  const reference = isDeclaration(source) ? source.reference : source;
-  const declared: Tenant.Declared<never, A> = isDeclaration(source)
-    ? source
-    : Tenant.perDeployment(source);
+  const reference = source.reference;
+  const declared: Tenant.Declared<never, A> = source;
   const sensitive: ReadonlyArray<string> = options?.sensitive ?? [];
   const built = (context: Context.Context<never>): A =>
     Context.getOrElse(context, reference, () => reference.defaultValue());

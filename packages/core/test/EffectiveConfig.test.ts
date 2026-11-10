@@ -192,7 +192,7 @@ describe("EffectiveConfig", () => {
         const context = yield* contextOf(Layer.empty);
         const [item] = EffectiveConfig.read(
           context,
-          EffectiveConfig.owned("app", [ConfigDescriptor.make(Url)]),
+          EffectiveConfig.owned("app", [ConfigDescriptor.make(Tenant.perDeployment(Url))]),
         );
         assert.strictEqual(item?.entries[0]?.value, "postgres://app:<redacted>@db.internal/app");
       }),

@@ -36,12 +36,13 @@ describe("CurrentUser (GC-003)", () => {
     );
   });
 
-  it.effect("current yields the fields of of(principal)", () =>
+  it.effect("current yields exactly of(principal): a Caller and no wire principal", () =>
     Effect.gen(function* () {
-      const { userId, sessionId, actingAs } = yield* CurrentUser.current.pipe(
+      const caller = yield* CurrentUser.current.pipe(
         Effect.provideService(Api.CurrentPrincipal, impersonated),
       );
-      assert.deepStrictEqual({ userId, sessionId, actingAs }, CurrentUser.of(impersonated));
+      assert.deepStrictEqual(caller, CurrentUser.of(impersonated));
+      assert.deepStrictEqual(Object.keys(caller).sort(), ["actingAs", "sessionId", "userId"]);
     }),
   );
 

@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-042 |
-> | Revision | 1.1 |
+> | Revision | 1.2 |
 > | Effective Date | 2026-10-18 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-10-18): Initial release (architecture plan 11) <br> 1.1 (2026-11-08): Related: ADR-EA-047, request facts are read from `AuthRequestContext` (architecture plan 26) |
+> | Change History | 1.0 (2026-10-18): Initial release (architecture plan 11) <br> 1.1 (2026-11-08): Related: ADR-EA-047, request facts are read from `AuthRequestContext` (architecture plan 26) <br> 1.2 (2026-11-10): decision 9: CurrentUser.Caller is the domain caller; admin-tier modules take it (architecture plan 40) |
 
 ---
 
@@ -39,6 +39,8 @@ It was written four times: `Authentication.ts` (the user and machine tiers and, 
 **8. The cookie naming rule lives in `@awthaq/api`** (`Api.sessionCookieName`), the stratum that already owns both default names, so `hasSessionCookie` can follow the configured mode without importing `@awthaq/core` at runtime (edge-safe). `hasSessionCookie(request, cookie)` takes the mode.
 
 **9. Housekeeping on the same path:** `CurrentUser.current` (core) replaces eleven hand-written "the principal must be a `User`" guards; `Sessions.IssuedSession`/`VerifiedSession` replace seven declarations; `ClientAddress.facts`/`address` build the explicit `ip`/`userAgent` arguments plugin Shapes take (plan 01 Q1: they stay explicit).
+
+`CurrentUser.of` is the one re-brand of a verified user principal; `CurrentUser.current` returns a `CurrentUser.Caller` (`userId`, `sessionId`, `actingAs`) and no wire principal. A domain module that needs its caller takes a `CurrentUser.Caller`, never `Api.UserPrincipal`. The caller is not `OrganizationActor.Actor` (plan 04 Q7 stands): a caller is who asks and may be authorized; an actor is who acted and never is. The principal-any readers that are not user-tier handlers stay on the wire principal: `device-authorization` (optional tier), qadi's `Resolvers` reauth obligation and `SubjectResolver`, roles' subject resolver, and `jwt`.
 
 ## Alternatives considered
 

@@ -180,7 +180,7 @@ export interface Person {
   readonly email: string;
   readonly userId: Users.UserId;
   /** The sign-up session: fresh for ten minutes (the re-authentication window enrolment needs). */
-  readonly sessionId: string;
+  readonly sessionId: Sessions.SessionId;
   /** The base32 secret shown by `enable`, once known. */
   readonly secret: Option.Option<string>;
   /** The recovery codes `confirm` returned, once known (as shown: grouped). */

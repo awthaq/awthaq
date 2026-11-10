@@ -42,6 +42,5 @@ export const current = Effect.gen(function* () {
       `awthaq: a user-tier group was reached with a non-User principal: ${principal._tag}`,
     );
   }
-  // `principal` stays only until plan 40 ticket 09 removes it.
-  return { ...of(principal), principal };
+  return of(principal);
 });

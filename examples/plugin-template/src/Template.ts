@@ -15,7 +15,6 @@ import {
   HookPoint,
   Migrations,
   RateLimits,
-  Users,
 } from "@awthaq/core";
 import { RateLimiter, Tenant } from "@awthaq/ports";
 import { Models as SqlModels, SqlStore, StoreFailure, TenantScoped } from "@awthaq/sql";
@@ -324,7 +323,7 @@ const notesMigrations: Migrations.Migrations = [
 
 export interface NotesShape {
   readonly create: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     text: string,
   ) => Effect.Effect<
     NoteRecord,
@@ -335,7 +334,7 @@ export interface NotesShape {
     | StoreFailure.StoreUnavailable
   >;
   readonly list: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
   ) => Effect.Effect<ReadonlyArray<NoteRecord>, StoreFailure.StoreUnavailable>;
 }
 
@@ -357,11 +356,11 @@ export const NotesHandlers = HttpApiBuilder.group(
       }: {
         payload: TemplateApi.CreateNotePayload;
       }) {
-        const { principal: caller } = yield* CurrentUser.current;
+        const caller = yield* CurrentUser.current;
         return toDto(yield* notes.create(caller, payload.text));
       }),
       list: Effect.fnUntraced(function* () {
-        const { principal: caller } = yield* CurrentUser.current;
+        const caller = yield* CurrentUser.current;
         return (yield* notes.list(caller)).map(toDto);
       }),
     });
@@ -427,11 +426,11 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
 
       const create: NotesShape["create"] = Effect.fnUntraced(function* (caller, text) {
         const settings = yield* settingsNow;
-        yield* limits.spend("createByUser", { userId: caller.ref.id });
+        yield* limits.spend("createByUser", { userId: caller.userId });
         if (text.length > settings.maxLength) {
           return yield* Effect.fail(new TemplateApi.NoteTooLong());
         }
-        const owner = caller.ref.id;
+        const owner = caller.userId;
         // An early check, so the refusal comes before the veto hook runs. It is not the authority: two
         // concurrent creates can both pass it, and the store's `within` refuses the second.
         if ((yield* records.listByOwner(owner)).length >= settings.maxNotesPerOwner) {
@@ -451,15 +450,14 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
           );
         yield* afterCreate.run({ owner, text: vetoed.text, noteId: record.id });
         // The audit row (actor: the caller) and every subscriber; `_tag` is filled in by the definition.
-        // `Users.UserId` is a `Brand.nominal` constructor, not an assertion.
         yield* events.emit(NotesEvents.NoteCreatedEvent, {
-          userId: Users.UserId(caller.ref.id),
+          userId: caller.userId,
           noteId: record.id,
         });
         return record;
       });
 
-      const list: NotesShape["list"] = (caller) => records.listByOwner(caller.ref.id);
+      const list: NotesShape["list"] = (caller) => records.listByOwner(caller.userId);
 
       return Notes.of({ create, list });
     }),

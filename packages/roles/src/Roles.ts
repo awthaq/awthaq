@@ -28,7 +28,7 @@
 // `RevocationStore.layerSql` (`INSERT ... ON CONFLICT ... DO NOTHING`,
 // same plugin-owned-table pattern this plugin now follows).
 import { Api } from "@awthaq/api";
-import { Defects, Errors, Users } from "@awthaq/core";
+import { Defects, Errors, Tenant, Users } from "@awthaq/core";
 import {
   AuthEvents,
   AuthPlugin,
@@ -111,10 +111,9 @@ export interface RolesConfigShape {
  * `Roles.config(catalog)` is *required* for any effect, and building the layer
  * with no catalog logs `awthaq.roles.emptyCatalog`.
  */
-export const RolesConfig: Context.Reference<RolesConfigShape> = Context.Reference(
-  "awthaq/roles/Config",
-  { defaultValue: (): RolesConfigShape => ({ catalog: [] }) },
-);
+export const RolesConfig = Context.Reference<RolesConfigShape>("awthaq/roles/Config", {
+  defaultValue: (): RolesConfigShape => ({ catalog: [] }),
+});
 
 /**
  * RRM-004: the catalog, validated once, then indexed by name. A repeated role
@@ -127,7 +126,7 @@ export const RolesConfig: Context.Reference<RolesConfigShape> = Context.Referenc
  * definitions.)
  */
 const validatedCatalog = Effect.gen(function* () {
-  const rolesConfig = yield* RolesConfig;
+  const rolesConfig = yield* yield* Tenant.inForce(RolesConfigScoped);
   const names = rolesConfig.catalog.map((role) => role.name);
   const duplicates = Array.from(new Set(names.filter((name, i) => names.indexOf(name) !== i)));
   if (duplicates.length > 0) {
@@ -139,8 +138,9 @@ const validatedCatalog = Effect.gen(function* () {
   return new Map(rolesConfig.catalog.map((role) => [role.name, role] as const));
 });
 
-export const config = (catalog: ReadonlyArray<Role>): Layer.Layer<never> =>
-  Layer.succeed(RolesConfig, { catalog });
+export const RolesConfigScoped = Tenant.perDeployment(RolesConfig);
+
+export const config = (catalog: ReadonlyArray<Role>) => RolesConfigScoped.layer({ catalog });
 
 /**
  * The one domain implementation of `Roles` (plan 08): catalog validation, `UnknownRole` and the audit events,
@@ -190,7 +190,7 @@ const rolesMake = Effect.gen(function* () {
  */
 const subjectResolverMake = Effect.gen(function* () {
   const roles = yield* Roles;
-  const rolesConfig = yield* RolesConfig;
+  const rolesConfig = yield* yield* Tenant.inForce(RolesConfigScoped);
   const catalog = yield* validatedCatalog;
   // RRM-010: an empty catalog is fail-closed, but almost always a forgotten
   // `Roles.config([...])` — say so once, at build.
@@ -284,7 +284,7 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   records: RoleAssignments.records,
   // The catalog is listed by role name (each `Role` carries its whole permission tree).
   config: [
-    ConfigDescriptor.make(RolesConfig, {
+    ConfigDescriptor.make(RolesConfigScoped, {
       project: (value) => ({ catalog: value.catalog.map((role) => role.name) }),
       audit: (value) =>
         value.catalog.length === 0

@@ -72,3 +72,6 @@ Output: `current` returns `Caller`; ADR-EA-042 rev 1.2; glossary 1.16; plugin-au
 <success_criteria>A1 = 1 (CurrentUser.ts), A2 = 0, A3 = 0, A4 = 0, A5 = 0; `pnpm check` green.</success_criteria>
 
 ## Comments
+
+Status: done (uncommitted)
+Result: `CurrentUser.current` returns `of(principal)` (Caller only). Precondition grep and tsc (build + test) clean. The only remaining `.principal` reader was `examples/plugin-template` (`Notes` took `Api.UserPrincipal`): converted to `CurrentUser.Caller` (src + test via `CurrentUser.of`). Principal-any readers (device-authorization, qadi Resolvers, roles) did not use `current`'s principal; left per Q2. GC-003 guard test now asserts `current` deep-equals `of(principal)` with keys exactly userId/sessionId/actingAs. ADR-EA-042 rev 1.2, glossary 1.16, plugin-authoring, `.changeset/current-user-caller.md` written. No traceability/README/overview change needed (spec:verify:strict 32/0, check:readmes pass). `pnpm check` not run (not allowed).

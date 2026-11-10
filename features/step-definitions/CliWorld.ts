@@ -32,7 +32,7 @@ import {
   Slots,
   Users,
 } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
+import { SqlTransaction, Tenant } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { Roles } from "@awthaq/roles";
 import { CoreMigrations } from "@awthaq/sql";
@@ -112,7 +112,7 @@ class Widget extends AuthPlugin.Service<Widget, { readonly ok: true }>()("widget
   apiVersion: 1,
   contract: WidgetApi,
   config: [
-    ConfigDescriptor.make(WidgetConfig, {
+    ConfigDescriptor.make(Tenant.perDeployment(WidgetConfig), {
       sensitive: ["clientSecret"],
       audit: (value) =>
         value.minLength < 8

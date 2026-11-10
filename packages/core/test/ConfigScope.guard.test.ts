@@ -29,10 +29,6 @@ const sources = ["packages", "examples"].flatMap((group) =>
   }),
 );
 
-// shortcut: two-factor and roles still read their keys raw (plan 36 ticket 18 waits on uncommitted work there);
-// drop this list when it lands.
-const PENDING_TICKET_18 = ["packages/two-factor/src/", "packages/roles/src/"];
-
 // Plan 36 Q5/Q10: host-level keys that carry no descriptor and are never read per tenant.
 const HOST_LEVEL = [
   "packages/core/src/AuthEvents.ts",
@@ -56,8 +52,7 @@ describe("configuration scope guard (BEH-EA-355)", () => {
         ({ path, text }) =>
           KEY.test(text) &&
           !/Tenant\.per(?:Tenant|Deployment)\(/.test(text) &&
-          !HOST_LEVEL.includes(path) &&
-          !PENDING_TICKET_18.some((prefix) => path.startsWith(prefix)),
+          !HOST_LEVEL.includes(path),
       )
       .map(({ path }) => path);
     assert.deepStrictEqual(undeclared, []);
@@ -65,12 +60,10 @@ describe("configuration scope guard (BEH-EA-355)", () => {
 
   it("every ConfigDescriptor.make call takes a Scoped declaration", () => {
     const bare = sources
-      .filter(
-        ({ path, text }) =>
-          !PENDING_TICKET_18.some((prefix) => path.startsWith(prefix)) &&
-          [...text.matchAll(/ConfigDescriptor\.make\(\s*([\w.]+)/g)].some(
-            ([, arg]) => !(arg ?? "").endsWith("Scoped") && !(arg ?? "").includes("Tenant.per"),
-          ),
+      .filter(({ text }) =>
+        [...text.matchAll(/ConfigDescriptor\.make\(\s*([\w.]+)/g)].some(
+          ([, arg]) => !(arg ?? "").endsWith("Scoped") && !(arg ?? "").includes("Tenant.per"),
+        ),
       )
       .map(({ path }) => path);
     assert.deepStrictEqual(bare, []);
