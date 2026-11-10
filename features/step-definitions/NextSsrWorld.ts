@@ -47,9 +47,9 @@ export interface WorldShape {
   readonly roles: Ref.Ref<ReadonlyArray<string>>;
   /** How many times the `SubjectResolver` was consulted. */
   readonly resolverCalls: Ref.Ref<number>;
-  readonly runtime: ReturnType<typeof makeApp>["runtime"];
+  readonly runtime: Effect.Success<ReturnType<typeof makeApp>>["runtime"];
   /** The web handler over the same running services — real responses, `Set-Cookie` included. */
-  readonly handler: ReturnType<typeof makeApp>["handler"];
+  readonly handler: Effect.Success<ReturnType<typeof makeApp>>["handler"];
 }
 
 export class World extends Context.Service<World, WorldShape>()("features/NextSsrWorld") {}
@@ -82,11 +82,11 @@ const appLayer = (roles: Ref.Ref<ReadonlyArray<string>>, calls: Ref.Ref<number>)
 /**
  * One application, two ways in: the web `handler` (what a server action's in-process client dispatches to — the only
  * path that applies pre-response handlers, so the only one whose responses carry `Set-Cookie`) and a `ManagedRuntime`
- * (what `getSession` runs on). `TestAuth.app` resolves both against one memo map, so they share the very same
+ * (what `getSession` runs on). `TestAuth.serve` resolves both against one memo map, so they share the very same
  * `Sessions`/`Users` instances — a session issued through either is visible to the other.
  */
 const makeApp = (roles: Ref.Ref<ReadonlyArray<string>>, calls: Ref.Ref<number>) =>
-  TestAuth.app(appLayer(roles, calls));
+  TestAuth.serve(appLayer(roles, calls));
 
 export const WorldLive = Layer.effect(
   World,
@@ -94,10 +94,7 @@ export const WorldLive = Layer.effect(
     const roles = yield* Ref.make<ReadonlyArray<string>>([]);
     const resolverCalls = yield* Ref.make(0);
     const written = yield* Ref.make<ReadonlyArray<RecordedCookie>>([]);
-    const app = yield* Effect.acquireRelease(
-      Effect.sync(() => makeApp(roles, resolverCalls)),
-      (built) => Effect.promise(() => built.dispose()),
-    );
+    const app = yield* makeApp(roles, resolverCalls);
     return World.of({
       outcomes: yield* makeOutcomes,
       jar: {
@@ -129,13 +126,13 @@ export const send = (request: Request) =>
 
 /**
  * IC-007: the same application under `SessionCookie.SecureDomain`, so `getSession` has to read `__Secure-session`
- * (and not `__Host-session`). Built per scenario that needs it and disposed by that scenario.
+ * (and not `__Host-session`). Built per scenario that needs it and released with that scenario.
  */
 export const makeSecureDomainApp = (
   roles: Ref.Ref<ReadonlyArray<string>>,
   calls: Ref.Ref<number>,
 ) =>
-  TestAuth.app(
+  TestAuth.serve(
     appLayer(roles, calls).pipe(
       Layer.provideMerge(
         SessionCookie.config({

@@ -154,8 +154,7 @@ export const layer: Layer.Layer<
     const accounts = yield* Accounts.Accounts;
     const httpClient = yield* HttpClient.HttpClient;
     // EP-007: the exchange deadline is the tenant's when one is provided in the calling fiber.
-    const config_ = yield* OAuthConfig.OAuthConfig;
-    const configNow = Tenant.configInForce(OAuthConfig.OAuthConfig, config_);
+    const configNow = yield* Tenant.inForce(OAuthConfig.OAuthConfigScoped);
     // NAM-004: the one shared, already-resolved registry — the same instance
     // `OAuth.layer` reads, so discovery is fetched once per process.
     const providers = yield* OAuthProviders.OAuthProviders;

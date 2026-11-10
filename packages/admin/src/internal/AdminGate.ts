@@ -1,7 +1,7 @@
 // @awthaq/admin — internal/AdminGate
 //
 // ADR-EA-018 Decision 8 / BEH-EA-221 / BEH-EA-236 (plan 13): the one admin gate. Every gated admin
-// operation asks it, and it alone reads `AdminConfig` per operation, through `Tenant.configInForce`.
+// operation asks it, and it alone reads `AdminConfig` per operation, through `Tenant.inForce`.
 // What an operation needs from the configuration (`maxDuration`, `links`) comes
 // from the clearance the gate returns, i.e. from the very value that authorized it.
 //
@@ -21,7 +21,6 @@ import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as AdminApi from "../AdminApi.ts";
 import type * as ImpersonationRecords from "../ImpersonationRecords.ts";
@@ -149,8 +148,11 @@ const AdminConfig: Context.Reference<AdminConfigShape> = Context.Reference("awth
   defaultValue: () => defaultAdminConfig,
 });
 
+/** BEH-EA-355: tenant-scoped, no boot fields: every field is a gate predicate or read per operation (ADR-EA-018 D8). */
+const AdminConfigScoped = Tenant.perTenant(AdminConfig);
+
 export const config = (partial: Partial<AdminConfigShape>) =>
-  Layer.succeed(AdminConfig, {
+  AdminConfigScoped.layer({
     ...defaultAdminConfig,
     ...partial,
     canManageEpisode:
@@ -159,7 +161,7 @@ export const config = (partial: Partial<AdminConfigShape>) =>
   });
 
 /** EP-009: the descriptor `Admin` declares (same key, so `EffectiveConfig` output is unchanged). Precedent: `server/src/BodyLimit.ts:57`. */
-export const descriptor = ConfigDescriptor.make(AdminConfig);
+export const descriptor = ConfigDescriptor.make(AdminConfigScoped);
 
 // ---- 2. The action table -------------------------------------------------------------------------
 
@@ -244,7 +246,7 @@ export const make = Effect.gen(function* () {
   const users = yield* Users.Users;
   const events = yield* AuthEvents.AuthEvents;
   // The one read of the built value: what `Layer.provide(Admin.config(...))` gave this layer.
-  const inForce = Tenant.configInForce(AdminConfig, yield* AdminConfig);
+  const inForce = yield* Tenant.inForce(AdminConfigScoped);
 
   /** IDS-001 / BEH-EA-137: identity-only; a host needing roles looks them up by id. */
   const subject = (id: string) => makeSubject({ id });

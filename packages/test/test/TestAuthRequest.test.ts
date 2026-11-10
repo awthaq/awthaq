@@ -33,7 +33,10 @@ const ProbeHandlers = HttpApiBuilder.group(ProbeApi, "probe", (handlers) =>
       Effect.gen(function* () {
         const user = yield* users
           .create({
-            identity: { _tag: "Email", email: `probe-${Math.random()}@example.com` },
+            identity: {
+              _tag: "Email",
+              email: `probe-${Math.random()}@example.com`,
+            },
             name: "Probe",
           })
           .pipe(Effect.orDie);
@@ -62,56 +65,59 @@ const built = Auth.make([Probe]);
 
 describe("TestAuth request context (ADR-EA-047)", () => {
   it("a wire request records the fixed clientAddress and the user-agent header it sent", async () => {
-    const app = TestAuth.app(TestAuth.layer(built, { clientAddress: "198.51.100.4" }));
-    try {
-      const response = await app.request("POST", "/probe/mint", {
-        headers: { "user-agent": "probe-agent/1" },
-      });
-      assert.strictEqual(response.status, 200);
-      assert.deepStrictEqual(await response.json(), {
-        ip: "198.51.100.4",
-        userAgent: "probe-agent/1",
-      });
-    } finally {
-      await app.dispose();
-    }
+    await TestAuth.withApp(
+      TestAuth.layer(built, { clientAddress: "198.51.100.4" }),
+      undefined,
+      async (app) => {
+        const response = await app.request("POST", "/probe/mint", {
+          headers: { "user-agent": "probe-agent/1" },
+        });
+        assert.strictEqual(response.status, 200);
+        assert.deepStrictEqual(await response.json(), {
+          ip: "198.51.100.4",
+          userAgent: "probe-agent/1",
+        });
+      },
+    );
   });
 
   it("without clientAddress a web-handler request records no address", async () => {
-    const app = TestAuth.app(TestAuth.layer(built));
-    try {
+    await TestAuth.withApp(TestAuth.layer(built), undefined, async (app) => {
       const response = await app.request("POST", "/probe/mint");
-      assert.deepStrictEqual(await response.json(), { ip: null, userAgent: null });
-    } finally {
-      await app.dispose();
-    }
+      assert.deepStrictEqual(await response.json(), {
+        ip: null,
+        userAgent: null,
+      });
+    });
   });
 
   it("run answers no request by default, and the request app's option names", async () => {
-    const plain = TestAuth.app(TestAuth.layer(built));
-    const requested = TestAuth.app(TestAuth.layer(built), {
-      request: { ip: "203.0.113.5", userAgent: "run/1" },
-    });
-    try {
-      assert.deepStrictEqual(
-        await plain.run(Effect.service(Api.AuthRequestContext)),
-        Api.AuthRequestContext.noRequest,
-      );
-      const signedIn = await requested.run(
-        Effect.flatMap(Effect.service(Sessions.Sessions), (sessions) =>
-          Effect.flatMap(Effect.service(Users.Users), (users) =>
-            users
-              .create({ identity: { _tag: "Email", email: "run@example.com" }, name: "Run" })
-              .pipe(Effect.flatMap((user) => sessions.issue({ userId: user.id }))),
-          ),
-        ),
-      );
-      assert.deepStrictEqual(signedIn.session.ipAddress, Option.some("203.0.113.5"));
-      assert.deepStrictEqual(signedIn.session.userAgent, Option.some("run/1"));
-    } finally {
-      await plain.dispose();
-      await requested.dispose();
-    }
+    await TestAuth.withApp(TestAuth.layer(built), undefined, (plain) =>
+      TestAuth.withApp(
+        TestAuth.layer(built),
+        { request: { ip: "203.0.113.5", userAgent: "run/1" } },
+        async (requested) => {
+          assert.deepStrictEqual(
+            await plain.run(Effect.service(Api.AuthRequestContext)),
+            Api.AuthRequestContext.noRequest,
+          );
+          const signedIn = await requested.run(
+            Effect.flatMap(Effect.service(Sessions.Sessions), (sessions) =>
+              Effect.flatMap(Effect.service(Users.Users), (users) =>
+                users
+                  .create({
+                    identity: { _tag: "Email", email: "run@example.com" },
+                    name: "Run",
+                  })
+                  .pipe(Effect.flatMap((user) => sessions.issue({ userId: user.id }))),
+              ),
+            ),
+          );
+          assert.deepStrictEqual(signedIn.session.ipAddress, Option.some("203.0.113.5"));
+          assert.deepStrictEqual(signedIn.session.userAgent, Option.some("run/1"));
+        },
+      ),
+    );
   });
 
   it.effect("signInAs({ request }) records the facts; without one the session records none", () =>

@@ -260,11 +260,13 @@ export interface HttpApp {
   ) => Promise<{ readonly status: number; readonly tag: string | undefined }>;
 }
 
-const buildHttpApp = (options: Options): HttpApp => {
+const buildHttpApp = Effect.fnUntraced(function* (options: Options) {
   const receiver = makeReceiver();
   // The web handler runs on the real clock, so the session it authenticates is issued on the real clock too, against
-  // the very services the handler runs on (`TestAuth.app` serves and reads one memo map).
-  const http = TestAuth.app(composition(options, receiver, makeResolver()), { baseUrl: ORIGIN });
+  // the very services the handler runs on (`TestAuth.serve` serves and reads one memo map).
+  const http = yield* TestAuth.serve(composition(options, receiver, makeResolver()), {
+    baseUrl: ORIGIN,
+  });
   const signIn = () => http.signIn("admin-1@example.com");
   const call: HttpApp["call"] = async (method, path, callOptions = {}) => {
     const browser = callOptions.as ?? (await http.agent());
@@ -282,8 +284,9 @@ const buildHttpApp = (options: Options): HttpApp => {
         : undefined;
     return { status: response.status, tag };
   };
-  return { signIn, call };
-};
+  const httpApp: HttpApp = { signIn, call };
+  return httpApp;
+});
 
 // ---- the World ---------------------------------------------------------------------------
 
@@ -376,7 +379,8 @@ export const httpApp = Effect.gen(function* () {
   const world = yield* World;
   const existing = yield* Ref.get(world.httpApp);
   if (existing !== undefined) return existing;
-  const built = buildHttpApp(yield* Ref.get(world.options));
+  // Served into the World's scope: released with the scenario.
+  const built = yield* buildHttpApp(yield* Ref.get(world.options)).pipe(Scope.provide(world.scope));
   yield* Ref.set(world.httpApp, built);
   return built;
 });

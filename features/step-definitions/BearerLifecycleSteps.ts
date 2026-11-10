@@ -1,7 +1,7 @@
 // BEH-EA-175 (22-client-effect.feature), ADR-EA-045: a bearer client built the way the README says
 // (`make(api, { transformClient: bearerTransformClient(store) })`) follows the session through the headers a
 // declared response carries, with no call wrapped by hand. The client talks to a real `Password` composition
-// served in process (`TestAuth.app`, reached through `fetch`), so what a scenario proves is the wire.
+// served in process (`TestAuth.serve`, reached through `fetch`), so what a scenario proves is the wire.
 import { AuthClient } from "@awthaq/client";
 import { Auth } from "@awthaq/core";
 import { Password } from "@awthaq/password";
@@ -31,7 +31,9 @@ const withSignedUpClient = <A>(
   }) => Effect.Effect<A, unknown, AuthClient.BearerTokenStore>,
 ) =>
   Effect.gen(function* () {
-    const app = TestAuth.app(TestAuth.layer(built, { services: TestAuth.httpClient.noBreach }));
+    const app = yield* TestAuth.serve(
+      TestAuth.layer(built, { services: TestAuth.httpClient.noBreach }),
+    );
     // `fetch` answered by the composition's own handler: the real wire, no socket.
     const inProcess: typeof globalThis.fetch = (input, init) =>
       app.handler(new Request(input, init));
@@ -51,7 +53,6 @@ const withSignedUpClient = <A>(
         ),
       ),
       Effect.provideService(FetchHttpClient.Fetch, inProcess),
-      Effect.ensuring(Effect.promise(app.dispose)),
     );
   }).pipe(Effect.orDie);
 

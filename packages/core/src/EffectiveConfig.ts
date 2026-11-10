@@ -8,9 +8,12 @@
 //     an application's *configuration Layer* on its own (`Password.config(...)`
 //     needs no ports and no database), and reads the descriptors back out of the
 //     resulting `Context` — no application is running.
-//   - `snapshot(...)` is the same read from inside a running application (or a
-//     per-tenant scope, EP-009): it reads the ambient `Context`, so a value a
-//     `LayerMap` overrides for one tenant shows up for that tenant.
+//   - `snapshot(built, ...)` is the same read from inside a running application
+//     (or a per-tenant scope, EP-009): `built` is what the application's layer
+//     was built in, the calling fiber's context is the ambient one, and each
+//     descriptor resolves the two by its key's scope (BEH-EA-355), so a value a
+//     `LayerMap` sets for one tenant shows up for that tenant only where an
+//     operation reads it.
 //
 // Neither ever unwraps a `Redacted` or a field a descriptor declares sensitive
 // (`ConfigDescriptor.flatten` renders it `<redacted>`).
@@ -19,8 +22,10 @@ import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Accounts from "./Accounts.ts";
 import * as ConfigDescriptor from "./ConfigDescriptor.ts";
 import * as MailDispatch from "./MailDispatch.ts";
+import * as RateLimits from "./RateLimits.ts";
 import * as SessionCookie from "./SessionCookie.ts";
 import * as Sessions from "./Sessions.ts";
 
@@ -79,12 +84,12 @@ const cookieAudit = (
 const NINETY_DAYS = Duration.days(90);
 
 /**
- * The configuration references `@awthaq/core` itself reads. They belong to no
+ * The configuration keys `@awthaq/core` itself reads, tenant- and deployment-scoped. They belong to no
  * plugin (the domain services are not plugins), so the manifest cannot list
  * them: the CLI adds this list next to `manifest.config`.
  */
 export const core: ReadonlyArray<Owned> = owned("core", [
-  ConfigDescriptor.make(Sessions.SessionConfig, {
+  ConfigDescriptor.make(Sessions.SessionConfigScoped, {
     audit: (value) =>
       Duration.isGreaterThan(value.absolute, NINETY_DAYS)
         ? [
@@ -96,16 +101,22 @@ export const core: ReadonlyArray<Owned> = owned("core", [
           ]
         : [],
   }),
-  ConfigDescriptor.make(SessionCookie.SessionCookieConfig, { audit: cookieAudit }),
-  ConfigDescriptor.make(MailDispatch.MailDispatchConfig),
+  ConfigDescriptor.make(Accounts.AccountsPolicyScoped),
+  ConfigDescriptor.make(RateLimits.RateLimitOverridesScoped),
+  ConfigDescriptor.make(SessionCookie.SessionCookieConfigScoped, { audit: cookieAudit }),
+  ConfigDescriptor.make(MailDispatch.MailDispatchConfigScoped),
 ]);
 
-/** Renders every descriptor's value as read from `context` (a default when the context never set it). */
+/**
+ * Renders every descriptor's value as read from `built` (a default when the context never set it); `calling`, when
+ * given, is the calling fiber's context, resolved by each key's scope.
+ */
 export const read = (
-  context: Context.Context<never>,
+  built: Context.Context<never>,
   descriptors: ReadonlyArray<Owned>,
+  calling?: Context.Context<never>,
 ): ReadonlyArray<Item> =>
-  descriptors.map(({ owner, descriptor }) => ({ owner, ...descriptor.view(context) }));
+  descriptors.map(({ owner, descriptor }) => ({ owner, ...descriptor.view(built, calling) }));
 
 /** Audits every descriptor against `context`; a finding is tagged with its owner. */
 export const audit = (
@@ -118,14 +129,14 @@ export const audit = (
   );
 
 /**
- * The same read from inside a running application: the ambient `Context` is
- * the application's own, so what it reports is what is in effect right now
- * (for the tenant scope it runs in, when there is one). Sensitive values are
- * `<redacted>`; a caller exposing this over HTTP still gates it (an admin
- * permission), because the *shape* of configuration is operational detail.
+ * The same read from inside a running application: `built` is the context the application's layer was built in, the
+ * calling fiber's context is the ambient one. Sensitive values are `<redacted>`; a caller exposing this over HTTP still
+ * gates it (an admin permission), because the *shape* of configuration is operational detail.
  */
-export const snapshot = (descriptors: ReadonlyArray<Owned>) =>
-  Effect.context<never>().pipe(Effect.map((context) => read(context, descriptors)));
+export const snapshot = (built: Context.Context<never>, descriptors: ReadonlyArray<Owned>) =>
+  Effect.contextWith((calling: Context.Context<never>) =>
+    Effect.succeed(read(built, descriptors, calling)),
+  );
 
 /**
  * EP-009: the descriptors a *running* application reports on. A plugin that serves an effective-config

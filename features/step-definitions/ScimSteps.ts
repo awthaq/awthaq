@@ -256,6 +256,13 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
     yield* configureApp({ vetoCreateTeam: true });
   });
 
+  Given(
+    "a beforeUpdateTeam hook that refuses renaming a team to {string}",
+    function* (name: string) {
+      yield* configureApp({ vetoUpdateTeam: name });
+    },
+  );
+
   const teamsConfig = (overrides: Partial<Organization.OrganizationConfigShape["teams"]>) => ({
     enabled: true,
     maximumTeams: Number.POSITIVE_INFINITY,
@@ -836,6 +843,41 @@ export const scimSteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* patchGroup(connection, name, [
         { op: "replace", path: "displayName", value: displayName },
       ]);
+    },
+  );
+
+  When(
+    "{string} patches the group {string} renaming it to {string} and adding the members {string}",
+    function* (connection: string, name: string, displayName: string, members: string) {
+      yield* patchGroup(connection, name, [
+        { op: "replace", path: "displayName", value: displayName },
+        { op: "add", path: "members", value: yield* memberValues(members) },
+      ]);
+    },
+  );
+
+  When(
+    "{string} patches the group {string} with a path-less object renaming it to {string} with the members {string}",
+    function* (connection: string, name: string, displayName: string, members: string) {
+      yield* patchGroup(connection, name, [
+        {
+          op: "replace",
+          value: { displayName, members: yield* memberValues(members) },
+        },
+      ]);
+    },
+  );
+
+  When(
+    "{string} replaces the group {string} with displayName {string} and externalId {string}",
+    function* (connection: string, name: string, displayName: string, externalId: string) {
+      const world = yield* World;
+      const response = yield* sendAs(connection, {
+        method: "PUT",
+        path: `${GROUPS}/${yield* world.groupIds.get(name)}`,
+        body: { displayName, externalId, members: [] },
+      });
+      yield* renameFromResponse(response, name);
     },
   );
 

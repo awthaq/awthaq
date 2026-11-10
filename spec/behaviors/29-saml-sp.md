@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-29 |
-> | Revision | 1.12 |
+> | Revision | 1.14 |
 > | Effective Date | 2026-11-08 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release — the ordered validation chain adopted before any code exists (SFS-007, SFS-003; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-09-29): implemented as `@awthaq/saml` over the `XmlSignature` port (SFS-003): the port is generic XML-DSig (the SAML assertion reader is the plugin's), the request is bound to the browser by a state cookie, assertion ids are one-time, and linking by email is a per-connection flag <br> 1.2 (2026-09-29): signed AuthnRequests and the SP signing key at rest (BEH-EA-314), Single Logout in both directions (306), role mapping under a ceiling (307), the `Sso` dispatcher (308) and the administrator's connection CRUD with metadata import (309); IdP-initiated login and encrypted assertions stay refused, as a recorded decision ([ADR-EA-036](../decisions/036-saml-refusals-are-decisions.md)) <br> 1.3 (2026-10-13): the `BeforeSessionIssue` divert context carries `amr: ["fed"]`, the same methods the session records (plan 10 item 1); a session-store outage during the ACS completion is the typed `StoreUnavailable`, not a defect (ADR-EA-028) <br> 1.4 (2026-10-13): SAML and SSO rate-limit rules are declared, registered and tunable with `RateLimits.overrides` (plan 06) <br> 1.5 (2026-10-13): BEH-EA-240/315/316: the Single Logout record and role mapping are a sign-in continuation that survives a second factor (ADR-EA-038, architecture plan 01) <br> 1.6 (2026-10-13): BEH-EA-314: the SP private key is a sealed column re-sealed on read and an unopenable key is a `sealedColumn.readable` defect; the records are Keyed/Derived and fail with StoreUnavailable (plan 05 phase 7) <br> 1.7 (2026-10-13): BEH-EA-316: the mapping is `OrganizationMembers.setRoles` with an `IdentityProvider` actor, and a veto tap that rewrites the roles is re-bounded (ADR-EA-040, architecture plan 04 phase 3) <br> 1.8 (2026-10-14): BEH-EA-317: an email domain belongs to one organization across protocols (`DomainClaims`, plan 10 item 7) <br> 1.9 (2026-10-18): BEH-EA-245: a first sign-in that loses a race to a concurrent one for the same NameID signs in as the user the winner linked, never a server error (plan 14 phase 0) <br> 1.10 (2026-10-18): BEH-EA-245: resolution is core's `FederatedIdentity` (BEH-EA-338): `trustsEmail` is bounded to the connection's claimed domains (BEH-EA-317), a trusting connection's first-time user is verified, a second lost race is the uniform rejection (plan 14 phase 3) <br> 1.11 (2026-11-08): `acs` declares `Mints`, SP-initiated `logout` `Ends` (ADR-EA-045, architecture plan 21) <br> 1.12 (2026-11-08): BEH-EA-315: a sign-in's session row is one upsert (plan 24 C10); BEH-EA-318: a connection and its domains are created, updated and removed as one step, and `emailDomains` read back ascending (plan 24 R5); `SamlRecords` runs the `RecordsContract` suite (plan 25 ticket 22) |
+> | Change History | 1.0 (2026-09-29): Initial release — the ordered validation chain adopted before any code exists (SFS-007, SFS-003; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-09-29): implemented as `@awthaq/saml` over the `XmlSignature` port (SFS-003): the port is generic XML-DSig (the SAML assertion reader is the plugin's), the request is bound to the browser by a state cookie, assertion ids are one-time, and linking by email is a per-connection flag <br> 1.2 (2026-09-29): signed AuthnRequests and the SP signing key at rest (BEH-EA-314), Single Logout in both directions (306), role mapping under a ceiling (307), the `Sso` dispatcher (308) and the administrator's connection CRUD with metadata import (309); IdP-initiated login and encrypted assertions stay refused, as a recorded decision ([ADR-EA-036](../decisions/036-saml-refusals-are-decisions.md)) <br> 1.3 (2026-10-13): the `BeforeSessionIssue` divert context carries `amr: ["fed"]`, the same methods the session records (plan 10 item 1); a session-store outage during the ACS completion is the typed `StoreUnavailable`, not a defect (ADR-EA-028) <br> 1.4 (2026-10-13): SAML and SSO rate-limit rules are declared, registered and tunable with `RateLimits.overrides` (plan 06) <br> 1.5 (2026-10-13): BEH-EA-240/315/316: the Single Logout record and role mapping are a sign-in continuation that survives a second factor (ADR-EA-038, architecture plan 01) <br> 1.6 (2026-10-13): BEH-EA-314: the SP private key is a sealed column re-sealed on read and an unopenable key is a `sealedColumn.readable` defect; the records are Keyed/Derived and fail with StoreUnavailable (plan 05 phase 7) <br> 1.7 (2026-10-13): BEH-EA-316: the mapping is `OrganizationMembers.setRoles` with an `IdentityProvider` actor, and a veto tap that rewrites the roles is re-bounded (ADR-EA-040, architecture plan 04 phase 3) <br> 1.8 (2026-10-14): BEH-EA-317: an email domain belongs to one organization across protocols (`DomainClaims`, plan 10 item 7) <br> 1.9 (2026-10-18): BEH-EA-245: a first sign-in that loses a race to a concurrent one for the same NameID signs in as the user the winner linked, never a server error (plan 14 phase 0) <br> 1.10 (2026-10-18): BEH-EA-245: resolution is core's `FederatedIdentity` (BEH-EA-338): `trustsEmail` is bounded to the connection's claimed domains (BEH-EA-317), a trusting connection's first-time user is verified, a second lost race is the uniform rejection (plan 14 phase 3) <br> 1.11 (2026-11-08): `acs` declares `Mints`, SP-initiated `logout` `Ends` (ADR-EA-045, architecture plan 21) <br> 1.12 (2026-11-08): BEH-EA-315: a sign-in's session row is one upsert (plan 24 C10); BEH-EA-318: a connection and its domains are created, updated and removed as one step, and `emailDomains` read back ascending (plan 24 R5); `SamlRecords` runs the `RecordsContract` suite (plan 25 ticket 22) <br> 1.13 (2026-11-09): BEH-EA-347 (architecture plan 31 ticket 02): a by-id administrative operation reads the connection first and asks the gate with its organization; BEH-EA-318: create/list pass the organization the request names, by-id operations follow BEH-EA-347, and denials name `organizationId` <br> 1.14 (2026-11-09): BEH-EA-350: under a `Strict` session cookie the ACS lands through the same-site interstitial, so the first landing request is signed in (architecture plan 33) |
 ---
 
 > `@awthaq/saml` implements this ([MOD-EA-010](../models/10-saml.md)). It was written first on purpose — SAML's failure modes are silent signature bypasses, so the checks and their order were fixed before an implementation could drift — and every rule below has a negative test, including the XML signature-wrapping (XSW) corpus from the SAML security literature (`packages/saml/test/XmlSignatureNode.test.ts`). The signature step is the `XmlSignature` port (`@awthaq/ports`), implemented over the maintained `xml-crypto` library (Node adapter in `@awthaq/saml`); the plugin reads the assertion ONLY from the signed bytes that port returns.
@@ -303,8 +303,9 @@ REQUIREMENT: The `saml.admin` group MUST be admin-tier (BEH-EA-071), behind
              `Api.AdminAuthentication` and CSRF, and every operation (create, list,
              get, update, delete, refresh metadata, rotate or list SP signing keys)
              MUST be gated by `SamlConfig.canManageSaml({ admin, action,
-             organizationId? })`, which denies by default: a denial MUST answer
-             403, publish `auth.admin.actionDenied` (`saml.<action>`) and reveal
+             organizationId? })` (create and list pass the organization the request names; the by-id
+             operations follow BEH-EA-347), which denies by default: a denial MUST answer
+             403, publish `auth.admin.actionDenied` (`saml.<action>`, naming `organizationId` when the call named one) and reveal
              nothing about which ids exist; past the gate each administrator is
              limited to `adminRate` (429; the rule is declared and registered like any plugin's and tunable with `RateLimits.overrides`, the knob names unchanged). Inside a tenant only that tenant's
              organization is in reach: another organization's connection MUST be
@@ -328,8 +329,46 @@ REQUIREMENT: The `saml.admin` group MUST be admin-tier (BEH-EA-071), behind
 
 Importing metadata is trusting the channel it arrived by, which is why the channel is guarded as hard as a webhook URL and why what is pinned afterwards is the fingerprint, not the document.
 
-`saml.acs` declares `SessionLifecycle.Mints` (its session cookie rides the redirect through `SessionDelivery.redirect`) and the SP-initiated `saml.account.logout` declares `Ends` (`SessionDelivery.end`) ([ADR-EA-045](../decisions/045-session-lifecycle-on-the-contract.md)); the IdP-initiated SLO stays undeclared, since it revokes sessions the request does not present.
+`saml.acs` declares `SessionLifecycle.Mints` (its session cookie rides the landing through `SessionDelivery.land`: the interstitial under a `Strict` cookie, BEH-EA-350) and the SP-initiated `saml.account.logout` declares `Ends` (`SessionDelivery.end`) ([ADR-EA-045](../decisions/045-session-lifecycle-on-the-contract.md)); the IdP-initiated SLO stays undeclared, since it revokes sessions the request does not present.
 
 A connection and its email domains are one step in `SamlRecords` (plan 25 ticket 22, ADR-EA-041 decision 9): `create`, `update` and `remove` each run in one transaction, the connection row first (an update is `UPDATE … WHERE id AND organization RETURNING *`), so a taken domain rolls the whole write back, concurrent claims of one domain leave exactly one holder, and an update racing a removal neither brings the connection or a domain back nor deadlocks on Postgres. `emailDomains` are answered ascending by both adapters (plan 24 R5). Every operation carries a `RecordsContract` verdict, with 8-way race cases for `create`, `update`, `remove` and `saveSession`.
 
 _Previous: [BEH-EA-317](29-saml-sp.md#beh-ea-317-the-sso-dispatcher-routes-an-email-domain-across-oidc-and-saml-connections-to-the-owning-plugins-login-url)_
+
+## BEH-EA-347: A by-id administrative operation reads the connection first and asks the gate with its organization
+
+```text
+REQUIREMENT: Get, update, delete, refresh metadata, rotate and list SP signing keys
+             MUST read the connection first (a connection outside the ambient
+             tenant reads as absent, BEH-EA-318) and MUST ask
+             `SamlConfig.canManageSaml` with THAT connection's `organizationId`;
+             an absent `organizationId` means "the action in general". A
+             connection the predicate refuses, and an id that names no connection
+             in reach, MUST be answered `404 SamlConnectionNotFound` when the
+             administrator holds the action in general and `403 SamlActionDenied`
+             otherwise, so the answer never depends on whether a connection the
+             caller may not manage exists. Every refusal MUST publish exactly one
+             `auth.admin.actionDenied` (`saml.<action>`) naming the connection's
+             `organizationId` when a connection was read. A not-found answer to an
+             administrator who holds the action MUST spend the `adminRate` budget.
+             A store outage during the read is `StoreUnavailable` (503) whatever
+             the predicate.
+```
+
+_Previous: [BEH-EA-318](29-saml-sp.md#beh-ea-318-the-administrator-manages-connections-fail-closed-tenant-scoped-importing-idp-metadata-with-pinned-certificates)_
+
+## BEH-EA-350: The ACS's first landing request carries a `Strict` session
+
+```text
+REQUIREMENT: While the session cookie is `SameSite=Strict` (the default `Host`
+             mode, or `SecureDomain` with `sameSite: "strict"`), a successful ACS
+             MUST answer `200 text/html` with the same-site interstitial of
+             BEH-EA-122 (`Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
+             a meta refresh to the `callbackURL`, HTML-escaped, with an anchor
+             fallback) and the session cookie on it, not a `302`. Under a `Lax` or
+             `None` session cookie the ACS MUST answer the `302`.
+```
+
+The IdP's POST is cross-site, so a `302` would keep the landing request in a cross-site redirect chain, and `Strict` would withhold the cookie from it. The choice is `SessionDelivery.land`'s, shared with the OAuth callback. Over HTTP: `packages/saml/test/SamlHttp.test.ts`; the choice itself: `packages/server/test/SessionLifecycle.test.ts`.
+
+_Previous: [BEH-EA-347](29-saml-sp.md#beh-ea-347-a-by-id-administrative-operation-reads-the-connection-first-and-asks-the-gate-with-its-organization)_

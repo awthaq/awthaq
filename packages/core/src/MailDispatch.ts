@@ -28,6 +28,7 @@ import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as AuthEvents from "./AuthEvents.ts";
 import type { UserId } from "./Users.ts";
+import * as Tenant from "./Tenant.ts";
 
 export interface MailDispatchConfigShape {
   /** Concurrent `send` attempts; the rest wait (retry back-off does not hold a slot). */
@@ -53,8 +54,11 @@ export const MailDispatchConfig: Context.Reference<MailDispatchConfigShape> = Co
   { defaultValue: () => defaultMailDispatchConfig },
 );
 
-export const config = (partial: Partial<MailDispatchConfigShape>): Layer.Layer<never> =>
-  Layer.succeed(MailDispatchConfig, { ...defaultMailDispatchConfig, ...partial });
+/** BEH-EA-355: deployment-scoped. */
+export const MailDispatchConfigScoped = Tenant.perDeployment(MailDispatchConfig);
+
+export const config = (partial: Partial<MailDispatchConfigShape>) =>
+  MailDispatchConfigScoped.layer({ ...defaultMailDispatchConfig, ...partial });
 
 /** What is safe to say about a mail without saying who it went to. */
 export interface MailMeta {
@@ -87,7 +91,7 @@ const isRetryable = (error: unknown): boolean =>
  * plugins is `layer` below.
  */
 export const make = Effect.gen(function* () {
-  const settings = yield* MailDispatchConfig;
+  const settings = yield* yield* Tenant.inForce(MailDispatchConfigScoped);
   const events = yield* AuthEvents.AuthEvents;
   const fibers = yield* FiberSet.make<void, never>();
   const slots = yield* Semaphore.make(settings.concurrency);

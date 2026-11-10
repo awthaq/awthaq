@@ -254,7 +254,7 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
   When(
     "{string}'s handler Layer is built with {string}",
     function* (_plugin: string, _builder: string) {
-      yield* register("password", passwordApp());
+      yield* register("password", yield* passwordApp());
     },
   );
 
@@ -281,7 +281,7 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   When("{string}'s handler Layer is built", function* (_plugin: string) {
-    yield* register("invite", inviteApp());
+    yield* register("invite", yield* inviteApp());
   });
 
   Then(
@@ -307,21 +307,21 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "a plugin {string} whose handler Layer was built solely against its own contract",
     function* (_plugin: string) {
-      yield* register("isolated", passwordApp());
+      yield* register("isolated", yield* passwordApp());
     },
   );
 
   Given(
     "a plugin {string} whose handlers were authored before any other plugin was chosen",
     function* (_plugin: string) {
-      yield* register("isolated", passwordApp());
+      yield* register("isolated", yield* passwordApp());
     },
   );
 
   When(
     "{string}'s handler Layer is folded into the merged {string} produced by {string}",
     function* (_plugin: string, _api: string, _make: string) {
-      yield* register("merged", passwordInviteApp());
+      yield* register("merged", yield* passwordInviteApp());
     },
   );
 
@@ -329,7 +329,7 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
     "{string} is composed alongside a newly-added plugin {string}",
     function* (_plugin: string, addition: string) {
       assert.equal(addition, "Invite");
-      yield* register("merged", passwordInviteApp());
+      yield* register("merged", yield* passwordInviteApp());
     },
   );
 
@@ -434,7 +434,10 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal(call, "AuthHttp.routes(auth.api)");
     // The composition the Given chose, served through the very call under test.
     const composition = yield* getOutcome("composition");
-    yield* register("routes", composition === "app" ? passwordWithAppApp() : passwordApp());
+    yield* register(
+      "routes",
+      composition === "app" ? yield* passwordWithAppApp() : yield* passwordApp(),
+    );
   });
 
   Then("the composed API's routes are registered with the router", function* () {
@@ -485,7 +488,7 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("the {string} Layer produced by {string}", function* (layer: string, call: string) {
     assert.equal(layer, "Routes");
     assert.equal(call, "AuthHttp.routes(auth.api)");
-    yield* register("routes", passwordApp());
+    yield* register("routes", yield* passwordApp());
   });
 
   When(
@@ -517,7 +520,7 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
       assert.equal(value, "auth.api");
       assert.equal(routes, "AuthHttp.routes");
       assert.equal(docs, "AuthHttp.docs");
-      yield* register("docs", passwordApp());
+      yield* register("docs", yield* passwordApp());
     },
   );
 
@@ -545,8 +548,8 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
 
   Given("a plugin group is added to {string}", function* (_value: string) {
-    yield* register("before", passwordApp());
-    yield* register("after", passwordInviteApp());
+    yield* register("before", yield* passwordApp());
+    yield* register("after", yield* passwordInviteApp());
   });
 
   When(
@@ -650,7 +653,7 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
     "it is served once via {string} and once via {string}",
     function* (_serve: string, _web: string) {
       yield* setOutcome("nodeAnswers", yield* overNodeServer(answersOver));
-      const web = passwordApp().handler;
+      const web = (yield* passwordApp()).handler;
       yield* setOutcome(
         "webAnswers",
         Object.fromEntries(
@@ -773,7 +776,7 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
     function* () {
       // `@awthaq/api-key`, a plugin from its own package: `DELETE /api-key/:id` is answered
       // for keys that exist and keys that do not — exactly the probe an enumerator would use.
-      const app = apiKeyApp();
+      const app = yield* apiKeyApp();
       const owner = yield* app.withContext(TestAuth.signInAs({ email: "owner@example.com" }));
       const other = yield* app.withContext(TestAuth.signInAs({ email: "other@example.com" }));
       const foreignKey = yield* app.withContext(
@@ -889,7 +892,7 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
   // ---- REQ-EA-240/241: statuses come from the error's own annotation ----
 
   Given("a handler fails with the {string} tagged error", function* (tag: string) {
-    const app = errorsApp();
+    const app = yield* errorsApp();
     yield* register("errors", app);
     yield* setOutcome("errorTag", tag);
     assert.ok(tag in ErrorEndpoints);
@@ -919,7 +922,7 @@ export const httpErrorSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given(
     "two different contract errors declared with two different httpApiStatus annotations",
     function* () {
-      yield* register("errors", errorsApp());
+      yield* register("errors", yield* errorsApp());
     },
   );
 

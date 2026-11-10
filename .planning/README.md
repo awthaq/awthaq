@@ -351,3 +351,129 @@ Why this order:
 The shared conventions above say the repo pins `effect@4.0.0-rc.116`. The catalog is now `effect ^4.1.2` (dev) /
 `^4.1.0` (peer), and batch-3 plans checked APIs against the installed 4.1.2. `scripts/test-pg.sh` can't start
 Postgres where the docker socket refuses the user; podman works (25 Q6 proposes a fallback).
+
+---
+
+# Batch 4: deepening plans 31–40 (review of 2026-11-09)
+
+Source: the architecture review of 2026-11-09 (`/improve-codebase-architecture`), against
+`architecture/deepening-plans-2` @ `04fa3526`, with plans 01–30 excluded. Three read-only explorers covered core
+composition and the HTTP edge, the plugin domain packages, and the test and persistence substrate. One GSD planner
+(methodology: `gsd-planner`) wrote each plan and re-verified its candidate; where the review was wrong, the
+plan's §2 "Evidence corrections" says so.
+
+**Format change for trackability.** Each plan directory holds `PLAN.md` (the ten sections, a plan-wide
+`must_haves` block and an empty "Decisions taken" heading) **and** `tickets/NN-<slug>.md`. Each ticket is a
+GSD plan: frontmatter (`wave`, `depends_on`, `files_modified`, `requirements`, `must_haves`), a
+`Status:` / `Blocked by:` line, two or three `<task>`s with `<files>`, `<action>`, `<verify><automated>`
+and `<done>`, a `<threat_model>` where a trust boundary is touched, and a `## Comments` log. The tickets
+live under `.planning/` (not `.scratch/`) so that the plan and its tracking are versioned together; the
+`Status:` lines use the triage vocabulary of `docs/agents/triage-labels.md`.
+
+Tracking commands:
+
+```sh
+grep -h "^Status:" .planning/3[1-9]-*/tickets/*.md .planning/40-*/tickets/*.md | cut -d' ' -f2 | sort | uniq -c
+grep -l "^Status: ready-for-human" .planning/3[1-9]-*/tickets/*.md .planning/40-*/tickets/*.md
+```
+
+## Plans
+
+| # | Plan | Strength (after re-verification) | Dependency category | Live bugs (by reading unless marked) | Wire change | Lines | Tickets |
+|---|---|---|---|---|---|---|---|
+| 31 | [One admin-tier gate in core: the predicate sees the target](31-admin-tier-gate/PLAN.md) | **Strong** | in-process | **SECURITY: SAML by-id admin operations ask the gate with `organizationId: undefined`** (`SamlAdmin.ts:300,307,344,360,393,419`): an administrator delegated to organization A reads, updates, deletes or rotates keys on B's connection (and could then sign in to B through an IdP they control); a strict per-organization predicate refuses an admin's own connection | yes | 672 | 17 |
+| 32 | [SCIM resource engine: interpret the whole PATCH, apply it once](32-scim-resource-engine/PLAN.md) | **Strong** | in-process · local-substitutable | group PATCH refused at op N keeps ops 1…N−1 (RFC 7644 §3.5.2) · on SQL a later veto/limit/conflict keeps earlier steps · PUT commits `externalId` before the rename veto · group list capped at 10,000 · path-less PATCH applies only the first attribute · deactivation commits suspension then revokes sessions separately | yes | 660 | 11 |
+| 33 | [A browser return-trip module owns the redirect landing](33-browser-return-trip/PLAN.md) | **Strong** | in-process | **SAML ACS answers a plain 302 under the default `SameSite=Strict` cookie**: the first landing sees the user signed out (OAuth fixed this as PV-016) · SLO answers undeclared `200 text/html` | yes | 415 | 9 |
+| 34 | [A test app whose lifetime belongs to a scope](34-scoped-test-app/PLAN.md) | **Strong** | in-process · local-substitutable | 21 of 32 `TestAuth.app` test files leak apps (14 never dispose, 7 under-dispose); SQL-mode leaks hold Postgres pools (idle timeout ≈100,000 days); api-key/device-authorization harnesses leak in SQL mode. "Fibers outlive DROP SCHEMA" refuted | no (test-only) | 667 | 22 |
+| 35 | [A test mailbox; `sent` leaves the production ports](35-test-mailbox/PLAN.md) | GO, moderate | in-process | none at runtime · `sent` on `MailerShape`/`SmsSenderShape` and in the README's adapter recipe · 7 copied fixed-yield mail pollers · dev mailers keep every mailed token for the process lifetime | no (package interface break) | 544 | 20 |
+| 36 | [Each plugin declares its config scope; one accessor resolves it](36-config-scope/PLAN.md) | Worth exploring, GO | in-process | `GET /admin/config` never shows a tenant's value (`Admin.ts:696,721`) · `EffectiveConfig.snapshot` reads only the calling fiber · 29 config keys, 4 read patterns, 11 keys missing from BEH-EA-236's list | yes (additive) | 657 | 22 |
+| 37 | [StoreContract gets RecordsContract's shape and an exported runner](37-store-contract-runner/PLAN.md) | GO, moderate | local-substitutable · ports & adapters | none in production · a no-op `settle(…,"returned")` passes all 17 verification cases · `RateLimiterStore` has 2 adapters and no contract · `test-pg.sh` misses 9 PG-reaching files | no | 601 | 12 |
+| 38 | [One JWS verifier for OAuth `id_token`, the jwt plugin and the lite verifier](38-jws-verifier/PLAN.md) | **Strong (narrow)** | in-process | **a non-base64url token segment → 500 on `/jwt/introspect`** (confirmed by running a probe) · `crit` ignored (confirmed for jwt) · lite verifier drops JWKs without `alg` · `GET /jwt/jwks` serves a remote key without `kid`/`alg` (BEH-EA-292) · OAuth ignores `key_ops` | yes (bug fixes only) | 567 | 9 |
+| 39 | [Hashed credential (`SecretHash`)](39-hashed-credential/PLAN.md) | **NO-GO** for the deepening; residue only | in-process | none; no timing leak at any site. Five hex-encoder copies, `NEVER_MATCHES` re-declared | no | 443 | 5 |
+| 40 | [Residue: (A) `CurrentUser.Caller` · (B) keyset page · (C) CLI link errors](40-residue/PLAN.md) | A: Worth exploring · B: Speculative (module NO-GO by default) · C: **Strong** | in-process · local-substitutable | **C: `awthaq doctor` exits 9 instead of 3 and loses its report on 3 missed link errors (BEH-EA-201)** · B: two listings don't bound an in-process `limit` (SQLite treats a negative limit as unbounded) | A: in-process only | 686 | 19 |
+
+Total: 10 plans, 5,912 plan lines, 146 tickets.
+
+## Execution order
+
+```
+Wave 0: hotfixes and red tests, each its own small PR, security first
+  31 · 01-04   SAML by-id operations resolve the connection, then ask the gate   (needs Q1; ships alone)
+  33 · 01-05   SAML ACS lands through the same-site bounce under Strict          (run 02 before 01's red tests)
+  38 · 01-03   malformed token → inactive, not 500; JWKS serves kid/alg
+  32 · 01-06   one transaction per SCIM write; validate the whole PATCH first; list through the store
+  40 · 21-23   core exports the link-error set; the CLI stops mirroring it
+  40 · 11-13   keyset order tests and the limit bound
+  34 · 01-02   leak counters + report-only guard; SQL-World hotfix only if 01 measures a leak (Q8)
+  37 · 01-02   give-back contract case + mutant; test-pg runs every suite
+  36 · 01-02   red tests only (no hotfix possible)
+
+Wave H: the deepenings (production code)
+  31 rest (needs Q2, Q7) ◄──either order──► 36 (ticket 16 matches whatever SamlAdmin does by then)
+  40 A (CurrentUser.Caller)  ◄──either order──► 31 (second to land rebases; 40·03 waits for the
+                                                 uncommitted two-factor work)
+  33 06-09 ReturnTrip · 32 07-11 engine · 38 04-09 Jws module · 39 01-05 residue
+
+Wave I: the test edge
+  34 03-22 (scoped app, listening mode, delete TestAuth.app) ◄──either order──► 35 (ticket 01 is its go/no-go)
+  37 03-12 (verdict suites, exported runner, rateLimiterStore)
+```
+
+Why this order:
+- **31·01–04 first**: it is the only finding that grants access across organizations.
+- **33 and 38 hotfixes next**: they are user-visible defects at the default configuration (signed-out landing,
+  a 500 on introspection).
+- **32·02 before the engine**: one transaction per write fixes most of the atomicity on SQL in under 30 lines,
+  so the engine (07–11) becomes optional polish if Phase 0 reads well.
+- **Production deepenings (H) before the test edge (I)**: 34·21 deletes `TestAuth.app`, so any red test a
+  Wave 0/H ticket adds with `TestAuth.app` is migrated by 34's repo-wide grep once, not twice.
+
+## Questions that block a wave (all have recommended defaults in the plan)
+
+| Plan · Q | Blocks | Question | Default |
+|---|---|---|---|
+| 31 · Q1 | Wave 0 (31·01–04) | A refused by-id target answers the same as a missing one (`404`)? | yes |
+| 31 · Q7 | 31 refactor track | Reverse plan 13 Q5 ("no shared core gate") and record ADR-EA-050? | yes |
+| 31 · Q2 | 31·10, 11, 16 | Give administrators a rate limit (tunable with `RateLimits.overrides`)? | yes |
+| 34 · Q8 | 34·02 | Ship the SQL-World hotfix? Decided by 34·01's measurement | measure first |
+| 35 · Q2 | 35·01 (SMS half) | Should `TestAuth` provide `SmsSender`? | see plan |
+| 36 · Q1 | 36 wave 1 | Refuse a per-deployment key in a tenant lookup at compile time? | yes |
+| 36 · Q2 / Q8 / Q9 | 36·06–07 / 14 / 16 | Cookie, subject, retention per deployment · `scope` + `"tenant"` source on `/admin/config` · SAML per deployment if 31 has not landed | yes · yes · yes |
+| 37 · Q1 | 37·02 | How `test:pg` picks suites | run everything, as CI does |
+| 40 · Q4 / Q9 / Q3 | 40·14–17 / 40·03 / 40·08 | Keyset gate · two-factor waits for the uncommitted work · convert organization callers | NO-GO · wait · yes |
+
+## Numbers
+
+Reserved for this batch; most plans did not need theirs. **`pnpm spec:verify:strict` rejects gaps in BEH ids,
+and the REQ allocator takes the next free number**, so the ranges below are provisional. An executor takes the
+lowest free id when the ticket lands, as batch 3 did for plan 27, and records it in "Decisions taken".
+
+| Plan | Used | Released |
+|---|---|---|
+| 31 | ADR-EA-050 (one admin-tier gate that sees the target), ADR-EA-018 rev 1.7*, BEH-EA-347–349, REQ-EA-1520– | — |
+| 32 | BEH-EA-350–351, REQ-EA-1530–1533 | ADR-EA-051, BEH-EA-352 |
+| 33 | BEH-EA-353, ADR-EA-045 rev 1.1, REQ-EA-1540– | ADR-EA-052 |
+| 34 | BEH-EA-356–358, REQ-EA-1550–1552 | ADR-EA-053, REQ-EA-1553–1559 |
+| 35 | ADR-EA-054 (a port's interface carries only what a production adapter implements), BEH-EA-359–, REQ-EA-1560– | — |
+| 36 | ADR-EA-018 rev 1.7*, ADR-EA-006 rev 1.4, BEH-EA-355 (28-tenancy) and BEH-EA-356 (26-cli), REQ-EA-1563–1564 (used; the plan reserved BEH-EA-362–363 and REQ-EA-1570–, but the catalog ended at BEH-EA-354 and strict verify rejects gaps) | ADR-EA-055 (unless Q4) |
+| 37 | ADR-EA-041 rev 1.6, BEH-EA-365, REQ-EA-1580–1581 (replace retired 1500/1501) | ADR-EA-056, BEH-EA-366–367 |
+| 38 | ADR-EA-057 (one JWS module in `@awthaq/ports`), ADR-EA-017 rev 1.1; amends BEH-EA-127/293/298; REQ-EA-1590–1591 | BEH-EA-368–370 |
+| 39 | REQ-EA-1600–1603 | ADR-EA-058, BEH-EA-371–373 |
+| 40 | ADR-EA-042 rev 1.2 | ADR-EA-059, BEH-EA-374–376 |
+
+\* **ADR-EA-018 revision 1.7 is claimed by both 31 and 36.** Assign revisions in landing order (the second takes 1.8).
+
+## Cross-plan reconciliations (batch 4)
+
+| Topic | Plans | Resolution |
+|---|---|---|
+| SAML admin config read | 31, 36 | 31 reads it per operation through today's `configInForce`; 36·16 checks `SamlAdmin.ts` and declares SAML config scope to match. Either order. |
+| Admin-tier caller | 31, 40 A | 40 owns `CurrentUser.Caller` (not plan 04's organization `Actor`, which stayed in organization per 04 Q7). 31 does not require it; 5 caller-before-gate sites stay for 40. 40·04/05/07 stop if a 31 branch is open on the same files. |
+| `TestAuth.ts` | 34, 35 | 34 owns app lifetime and `listen`; 35 edits only `testPorts` and one doc comment. Worlds use 34's app accessor. Either order. |
+| `scripts/test-pg.sh` | 37, 32, 34 | 37 owns it; after 37·02 (run every suite) neither 32's new SCIM SQL tests nor 34 need an edit. |
+| SCIM files | 32, 39, 40 | 39·02 touches `ScimConnections.ts` (hashing); 40·08 one helper in `scim/test/support.ts`; 32 owns `Scim.ts`. Second to land rebases. |
+| `OAuth.ts` / `Jwt.ts` / `ApiKey.ts` | 33, 36, 38, 39 | Textual overlaps only; second to land rebases. |
+| `OrganizationInvitations.ts` | 39, 29 (PR #62) | Second to land rebases. |
+| Hex encoders / `NEVER_MATCHES` | 39, 40 | 39 owns the consolidation; 40 must not repeat it. |
+| `SecretHash` | 38, 39 | 39 owns it; 38 does not touch it. |
+| Spec Document Control revisions | all | Tickets re-read the current revision before bumping; assign in landing order. |

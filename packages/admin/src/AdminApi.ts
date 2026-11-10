@@ -235,7 +235,9 @@ export class ConfigEntryDto extends Schema.Class<ConfigEntryDto>("AdminConfigEnt
 export class ConfigItemDto extends Schema.Class<ConfigItemDto>("AdminConfigItemDto")({
   owner: Schema.String,
   key: Schema.String,
-  source: Schema.Literals(["default", "override"]),
+  /** BEH-EA-355: whether a tenant can set it (`"tenant"`) or only the deployment can (`"deployment"`). */
+  scope: Schema.Literals(["tenant", "deployment"]),
+  source: Schema.Literals(["default", "override", "tenant"]),
   entries: Schema.Array(ConfigEntryDto),
 }) {}
 

@@ -62,6 +62,7 @@ import { ErasureClearance } from "./internal/erasureClearance.ts";
 import { Sessions } from "./Sessions.ts";
 import { emailOf, UserRemoval, Users, type UserId, type UserNotFound } from "./Users.ts";
 import { Verification } from "./Verification.ts";
+import * as Tenant from "./Tenant.ts";
 
 export * from "./ErasureRegistry.ts";
 
@@ -83,8 +84,11 @@ export const ErasureConfig = Context.Reference<ErasureConfigShape>("awthaq/core/
   defaultValue: () => ({ auditLog: "pseudonymize" }),
 });
 
+/** BEH-EA-355: deployment-scoped. */
+export const ErasureConfigScoped = Tenant.perDeployment(ErasureConfig);
+
 export const config = (partial: Partial<ErasureConfigShape>) =>
-  Layer.succeed(ErasureConfig, { auditLog: "pseudonymize", ...partial });
+  ErasureConfigScoped.layer({ auditLog: "pseudonymize", ...partial });
 
 /**
  * Who asked for the erasure. Required, so no caller is silently labelled "self".
@@ -145,7 +149,7 @@ export const layer = Layer.effect(
     const registry = yield* ErasureRegistry;
     const sqlTransaction = yield* SqlTransaction.SqlTransaction;
     const beforeDelete = yield* Hooks.BeforeUserDelete;
-    const { auditLog: auditPolicy } = yield* ErasureConfig;
+    const { auditLog: auditPolicy } = yield* yield* Tenant.inForce(ErasureConfigScoped);
 
     const eraseAccount: AccountErasureShape["eraseAccount"] = (userId, initiator) =>
       Effect.gen(function* () {

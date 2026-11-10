@@ -17,7 +17,7 @@ import {
   configureApp,
   direct,
   mailOf,
-  mailsOf,
+  expectMailCount,
   request,
   secretOf,
   SESSION_COOKIE,
@@ -256,12 +256,12 @@ export const emailOtpSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
 
   Then("only {string} was mailed a code", function* (email: string) {
-    assert.equal((yield* mailsOf("email-otp", email)).length, 1);
-    assert.equal((yield* mailsOf("email-otp", "nobody@example.com")).length, 0);
+    yield* expectMailCount("email-otp", email, 1);
+    yield* expectMailCount("email-otp", "nobody@example.com", 0);
   });
 
   Then("{string} was mailed {int} code(s)", function* (email: string, count: number) {
-    assert.equal((yield* mailsOf("email-otp", email)).length, count);
+    yield* expectMailCount("email-otp", email, count);
   });
 
   Then("presenting the mailed code signs {string} in", function* (email: string) {

@@ -16,17 +16,18 @@
 //   why bearer delivery is opt-in per request. The marker makes every declared response `no-store`.
 //
 // `respond(mint)` runs `mint` and delivers; `deliverBearer` (RFC 8628 device grant) and `deliverExchanged`
-// (the OAuth native exchange) always deliver bearer; `redirect` puts the cookie on a browser navigation
-// (OAuth callback, SAML ACS); `end` expires the caller's session and says so (`x-awthaq-session-ended`);
+// (the OAuth native exchange) always deliver bearer; `land` lands a browser navigation (OAuth callback, SAML ACS: the
+// same-site interstitial under a Strict cookie, a 302 otherwise); `end` expires the caller's session and says so (`x-awthaq-session-ended`);
 // `swapIn`/`swapOut` move the impersonation cookie; `decline` settles a response that changes nothing.
 
 import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
-import type { Sessions } from "@awthaq/core";
+import { SessionCookie as CoreSessionCookie, type Sessions } from "@awthaq/core";
 import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as HttpEffect from "effect/http/HttpEffect";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
+import * as BrowserPage from "./internal/BrowserPage.ts";
 import * as SessionCookie from "./internal/SessionCookie.ts";
 import { toSessionDto } from "./internal/SessionDto.ts";
 
@@ -83,13 +84,27 @@ export const deliverExchanged = (dto: SessionContract.SessionDto) =>
     return dto;
   });
 
-/** A browser navigation (OAuth callback, SAML ACS): the session cookie rides the redirect or the interstitial. */
-export const redirect = (
-  response: HttpServerResponse.HttpServerResponse,
-  issued: Sessions.IssuedSession,
+/**
+ * Lands a browser return trip (OAuth callback, SAML ACS): the same-site interstitial while the session cookie is
+ * `Strict` (PV-016), a `302` otherwise; the session cookie rides it. It declines `Mints` when nothing was minted
+ * (an account link, a native deep link, a refused callback). `bounce: false` keeps the `302` under `Strict`.
+ */
+export const land = (
+  location: string,
+  issued: Sessions.IssuedSession | undefined,
+  options?: { readonly bounce?: boolean },
 ) =>
   Effect.gen(function* () {
     const grant = yield* SessionLifecycle.MintGrant;
+    const config = yield* CoreSessionCookie.SessionCookieConfig;
+    const response =
+      options?.bounce !== false && CoreSessionCookie.isStrict(config)
+        ? BrowserPage.bounce(location)
+        : HttpServerResponse.redirect(location);
+    if (issued === undefined) {
+      yield* grant.settle("declined");
+      return response;
+    }
     const cookie = yield* SessionCookie.render(issued.session, issued.token);
     const withCookie = yield* HttpServerResponse.setCookie(
       response,

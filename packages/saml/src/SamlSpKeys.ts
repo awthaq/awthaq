@@ -9,6 +9,7 @@
 // Several keys per connection are a rotation overlap: the NEWEST unexpired one signs, and every unexpired certificate is
 // published, so an IdP that has not refreshed the metadata yet still trusts the previous key until it expires.
 
+import { Tenant } from "@awthaq/ports";
 import { SealedColumn, StoreFailure } from "@awthaq/sql";
 import type { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
@@ -89,7 +90,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const records = yield* SamlRecords.SamlRecords;
     const random = yield* SecureRandom.SecureRandom;
-    const settings = yield* SamlConfig.SamlConfig;
+    const settings = yield* yield* Tenant.inForce(SamlConfig.SamlConfigScoped);
 
     const store = Effect.fnUntraced(function* (connectionId: string, key: SamlKeys.SigningKey) {
       const id = yield* random

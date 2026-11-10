@@ -31,7 +31,7 @@ import * as Option from "effect/Option";
 import * as ConnectionRecords from "./ConnectionRecords.ts";
 import * as OrganizationActiveContext from "./OrganizationActiveContext.ts";
 import * as OrganizationApi from "./OrganizationApi.ts";
-import { OrganizationConfig } from "./OrganizationConfig.ts";
+import { OrganizationConfigScoped } from "./OrganizationConfig.ts";
 import * as OrganizationHandlers from "./OrganizationHandlers.ts";
 import { organizationMigrations } from "./OrganizationMigrations.ts";
 import {
@@ -115,7 +115,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     records: OrganizationBundle,
     // Plan 08: the 46 hook points this plugin owns; `TestAuth.layer` provides them once beneath application taps.
     hookPoints: OrganizationHooksLive,
-    config: [ConfigDescriptor.make(OrganizationConfig)],
+    config: [ConfigDescriptor.make(OrganizationConfigScoped)],
     tables: {
       organization_org: AuthPlugin.Table.keyed("id"),
       organization_membership: AuthPlugin.Table.keyed("organizationId"),

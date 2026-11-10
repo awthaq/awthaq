@@ -8,5 +8,7 @@ import * as Admin from "../src/Admin.ts";
 
 it("admin: the migrated schema and the migration names are locked", async () => {
   const locked = await TestAuth.migratedSchema(Admin.Admin);
-  await expect(JSON.stringify(locked, null, 2)).toMatchFileSnapshot("schema.sqlite.json");
+  await expect(JSON.stringify(locked, null, 2)).toMatchFileSnapshot(
+    "schema.sqlite.json",
+  );
 });

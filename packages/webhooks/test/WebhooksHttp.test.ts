@@ -7,14 +7,14 @@ import { TestAuth, type UserAgent } from "@awthaq/test";
 import * as Webhooks from "../src/Webhooks.ts";
 import { deliveryLayer } from "./support.ts";
 
-const build = (config: Partial<Webhooks.WebhooksConfigShape>) => {
-  const app = TestAuth.app(deliveryLayer({ config }));
+const build = Effect.fn(function* (config: Partial<Webhooks.WebhooksConfigShape>) {
+  const app = yield* TestAuth.serve(deliveryLayer({ config }));
   /** A browser signed in as the administrator: it keeps its cookies and echoes its CSRF cookie itself. */
   const signIn = () => app.signIn("admin-1@example.com");
   /** A fresh anonymous browser. */
   const anonymous = () => app.agent();
   return { signIn, anonymous };
-};
+});
 
 const call = (
   browser: UserAgent.UserAgent,
@@ -36,7 +36,7 @@ const newEndpoint = { url: "https://hooks.example.com/awthaq", eventTags: ["auth
 describe("webhooks admin over HTTP", () => {
   it.effect("an unauthenticated request is 401 before the gate is ever asked", () =>
     Effect.gen(function* () {
-      const { anonymous } = build({ canManageWebhooks: () => Effect.succeed(true) });
+      const { anonymous } = yield* build({ canManageWebhooks: () => Effect.succeed(true) });
       const stranger = yield* Effect.promise(anonymous);
       const response = yield* Effect.promise(() =>
         call(stranger, "POST", "/admin/webhooks/endpoints", { body: newEndpoint }),
@@ -47,7 +47,7 @@ describe("webhooks admin over HTTP", () => {
 
   it.effect("an authenticated caller is 403 while the gate is unconfigured (deny by default)", () =>
     Effect.gen(function* () {
-      const { signIn } = build({});
+      const { signIn } = yield* build({});
       const admin = yield* Effect.promise(signIn);
       const response = yield* Effect.promise(() =>
         call(admin, "POST", "/admin/webhooks/endpoints", { body: newEndpoint }),
@@ -64,7 +64,7 @@ describe("webhooks admin over HTTP", () => {
     "create returns the secret once; list and get never do; the SSRF floor is a typed 422",
     () =>
       Effect.gen(function* () {
-        const { signIn } = build({ canManageWebhooks: () => Effect.succeed(true) });
+        const { signIn } = yield* build({ canManageWebhooks: () => Effect.succeed(true) });
         const admin = yield* Effect.promise(signIn);
 
         const created = yield* Effect.promise(() =>
@@ -124,7 +124,9 @@ describe("webhooks admin over HTTP", () => {
     "the test ping queues a delivery over HTTP, and an unknown endpoint is a typed 404",
     () =>
       Effect.gen(function* () {
-        const { signIn, anonymous } = build({ canManageWebhooks: () => Effect.succeed(true) });
+        const { signIn, anonymous } = yield* build({
+          canManageWebhooks: () => Effect.succeed(true),
+        });
         const admin = yield* Effect.promise(signIn);
         const created = yield* Effect.promise(() =>
           call(admin, "POST", "/admin/webhooks/endpoints", { body: newEndpoint }),
@@ -153,7 +155,7 @@ describe("webhooks admin over HTTP", () => {
 
   it.effect("a state-changing request without the CSRF token is refused before the gate", () =>
     Effect.gen(function* () {
-      const { signIn } = build({ canManageWebhooks: () => Effect.succeed(true) });
+      const { signIn } = yield* build({ canManageWebhooks: () => Effect.succeed(true) });
       const admin = yield* Effect.promise(signIn);
       // The browser's cookies go out, but the request carries no echo of the CSRF cookie.
       const response = yield* Effect.promise(() =>

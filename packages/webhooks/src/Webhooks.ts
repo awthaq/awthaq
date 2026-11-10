@@ -331,7 +331,7 @@ export const webhooksRetention = Retention.contribute({
   id: "webhooks.deliveries",
   make: Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
-    const settings = yield* WebhooksConfig.WebhooksConfig;
+    const settings = yield* yield* Tenant.inForce(WebhooksConfig.WebhooksConfigScoped);
     return (now: DateTime.Utc) =>
       WebhookDelivery.pruneAt(now).pipe(
         Effect.provideService(WebhookRecords.WebhookRecords, records),
@@ -403,7 +403,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
   events: WebhookEvents.events,
   // Plan 08 (BEH-EA-T4): the endpoint and delivery store, memory and SQL, matched.
   records: WebhookRecords.records,
-  config: [ConfigDescriptor.make(WebhooksConfig.WebhooksConfig)],
+  config: [ConfigDescriptor.make(WebhooksConfig.WebhooksConfigScoped)],
 }) {
   static readonly layer = AuthPlugin.layer(Webhooks, {
     ports: [HostResolver.HostResolver, RateLimiter.RateLimiter],
@@ -513,8 +513,7 @@ export class Webhooks extends AuthPlugin.Service<Webhooks, WebhooksShape>()("web
       // EP-007: the knobs are decided per operation, so a tenant's `Webhooks.config(...)` in the calling
       // fiber applies; with none, the build-time value does. (The background worker is deployment-wide
       // and reads the build-time value.)
-      const builtSettings = yield* WebhooksConfig.WebhooksConfig;
-      const configNow = Tenant.configInForce(WebhooksConfig.WebhooksConfig, builtSettings);
+      const configNow = yield* Tenant.inForce(WebhooksConfig.WebhooksConfigScoped);
       const limits = yield* RateLimits.budget(Webhooks, {
         tune: Effect.map(configNow, (settings) => ({ admin: settings.adminRate })),
       });

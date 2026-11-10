@@ -1,7 +1,8 @@
 // ADR-EA-047 (plan 26 ticket 27): every request awthaq serves carries one request context, captured once at its edge;
-// in-process work states that it answers none. Driven through `TestAuth.app` over `Auth.make([Password])`, whose
+// in-process work states that it answers none. Driven through `TestAuth.serve` over `Auth.make([Password])`, whose
 // requests go through the real `RequestContext` middleware (the harness fixes the address every request resolves to).
 import { Api } from "@awthaq/api";
+import type * as Layer from "effect/Layer";
 import { AuditLog, Auth, Sessions, Users } from "@awthaq/core";
 import { Password } from "@awthaq/password";
 import { TestAuth } from "@awthaq/test";
@@ -17,31 +18,22 @@ const PASSWORD = "correct horse battery staple";
 
 const built = Auth.make([Password.Password]);
 
-const makeApp = (clientAddress: string) =>
-  TestAuth.app(
-    TestAuth.layer(built, {
-      services: TestAuth.httpClient.noBreach,
-      rateLimiter: "enforcing",
-      clientAddress,
-    }),
-  );
+const makeLayer = (clientAddress: string) =>
+  TestAuth.layer(built, {
+    services: TestAuth.httpClient.noBreach,
+    rateLimiter: "enforcing",
+    clientAddress,
+  });
 
 /** One scenario's app and what it observed. Scenarios of a feature run one after another. */
 interface Observed {
-  app?: ReturnType<typeof makeApp> | undefined;
+  app?: TestAuth.App<Layer.Success<ReturnType<typeof makeLayer>>> | undefined;
   session?: Sessions.SessionView | undefined;
   correlationIds?: ReadonlyArray<Option.Option<string>>;
   outcomes?: ReadonlyArray<string>;
   exceeded?: ReadonlyArray<string>;
 }
 let observed: Observed = {};
-
-const serve = (clientAddress: string) => {
-  // The previous scenario's app is released before the next is served.
-  const previous = observed.app;
-  if (previous !== undefined) void previous.dispose();
-  observed = { app: makeApp(clientAddress) };
-};
 
 const appOf = () => {
   const app = observed.app;
@@ -55,7 +47,8 @@ export const requestContextSteps = defineSteps(({ Given, When, Then }) => {
   Given(
     "a composition served with the request context, whose clients resolve to {string}",
     function* (address: string) {
-      serve(address);
+      // The scenario's scope releases the app.
+      observed = { app: yield* TestAuth.serve(makeLayer(address)) };
     },
   );
 

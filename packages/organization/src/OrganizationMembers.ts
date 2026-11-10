@@ -23,7 +23,7 @@ import * as ActiveContextRecords from "./ActiveContextRecords.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
 import * as OrganizationAuthority from "./OrganizationAuthority.ts";
-import { OrganizationConfig } from "./OrganizationConfig.ts";
+import { OrganizationConfigScoped } from "./OrganizationConfig.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationErrors from "./OrganizationErrors.ts";
 import * as OrganizationEvents from "./OrganizationEvents.ts";
@@ -144,8 +144,7 @@ export class OrganizationMembers extends Context.Service<
       const teams = yield* TeamRecords.TeamRecords;
       const authority = yield* OrganizationAuthority.OrganizationAuthority;
       const sqlTransaction = yield* SqlTransaction.SqlTransaction;
-      const builtConfig = yield* OrganizationConfig;
-      const configNow = Tenant.configInForce(OrganizationConfig, builtConfig);
+      const configNow = yield* Tenant.inForce(OrganizationConfigScoped);
       const beforeAdd = yield* OrganizationHooks.BeforeAddMember;
       const afterAdd = yield* OrganizationHooks.AfterAddMember;
       const beforeRemove = yield* OrganizationHooks.BeforeRemoveMember;

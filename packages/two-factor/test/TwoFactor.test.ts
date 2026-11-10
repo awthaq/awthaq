@@ -1,7 +1,7 @@
 // THS-001, AOMS-003, ARF-005, THS-004/005/007, BCR-002/006 (BEH-EA-259 to BEH-EA-266): the plugin
 // end to end at the domain level — the real `Password` plugin as the first factor, the real
 // `TwoFactor` plugin and its two gates, real (in-memory) stores, the real `Encryption` port.
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import { AuditLog, AuthEvents, Hooks, SignIn, Users } from "@awthaq/core";
 import { SealedColumn } from "@awthaq/sql";
 import { Password } from "@awthaq/password";
@@ -20,14 +20,7 @@ import * as SecondFactor from "../src/SecondFactor.ts";
 import * as TwoFactor from "../src/TwoFactor.ts";
 import * as TwoFactorEvents from "../src/TwoFactorEvents.ts";
 import * as TwoFactorStore from "../src/TwoFactorStore.ts";
-import {
-  buildDurableAuditLayer,
-  awaitMail,
-  buildLayer,
-  codeFor,
-  realLimiter,
-  tokenOf,
-} from "./support/harness.ts";
+import { buildDurableAuditLayer, buildLayer, codeFor, realLimiter } from "./support/harness.ts";
 
 const pw = Redacted.make("correct horse battery staple");
 const secret = (text: string) => Redacted.make(text);
@@ -37,8 +30,11 @@ const registerUser = (email: string) =>
   Effect.gen(function* () {
     const password = yield* Password.Password;
     const issued = yield* password.signUp({ email, password: pw });
-    const verifyMail = yield* awaitMail("verify-email");
-    yield* password.verifyEmail({ token: Redacted.make(tokenOf(verifyMail)) });
+    const verifyMail = yield* (yield* TestMailbox.Mailbox).mail.waitFor({
+      to: email,
+      template: "verify-email",
+    });
+    yield* password.verifyEmail({ token: Redacted.make(TestMailbox.secret(verifyMail)) });
     return { email, userId: issued.session.userId, sessionId: issued.session.id };
   });
 
@@ -639,9 +635,14 @@ describe("TwoFactor x Password.confirmReset (ARF-005, BEH-EA-259)", () => {
   const requestResetToken = (email: string) =>
     Effect.gen(function* () {
       const password = yield* Password.Password;
+      const box = yield* TestMailbox.Mailbox;
+      const match = { to: email, template: "reset-password" };
+      const before = (yield* box.mail.messages).filter(
+        (m) => m.to === email && m.template === match.template,
+      ).length;
       yield* password.requestReset({ email });
-      const mail = yield* awaitMail("reset-password");
-      return Redacted.make(tokenOf(mail));
+      const mail = yield* box.mail.waitFor(match, { nth: before + 1 });
+      return Redacted.make(TestMailbox.secret(mail));
     });
   const newPassword = Redacted.make("a brand new strong password");
 

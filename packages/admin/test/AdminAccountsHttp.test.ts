@@ -3,8 +3,7 @@
 // behind DELETE, the 202 of a mailed email change, the 422 of a weak password.
 import { Accounts, Auth, Sessions, Users } from "@awthaq/core";
 import { Password } from "@awthaq/password";
-import { Mailer } from "@awthaq/ports";
-import { TestAuth, type UserAgent } from "@awthaq/test";
+import { TestAuth, TestMailbox, type UserAgent } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -12,12 +11,18 @@ import * as Option from "effect/Option";
 import * as Admin from "../src/Admin.ts";
 import * as AdminAccounts from "../src/AdminAccounts.ts";
 
-const built = Auth.make([Admin.Admin, Password.Password, AdminAccounts.AdminAccounts]);
+const built = Auth.make([
+  Admin.Admin,
+  Password.Password,
+  AdminAccounts.AdminAccounts,
+]);
 
 const allow = () => Effect.succeed(true);
 
-const buildHandler = (config: Partial<Admin.AdminConfigShape>) => {
-  const app = TestAuth.app(
+const buildHandler = Effect.fn(function* (
+  config: Partial<Admin.AdminConfigShape>,
+) {
+  const app = yield* TestAuth.serve(
     TestAuth.layer(built, {
       services: Layer.merge(Admin.config(config), TestAuth.httpClient.noBreach),
       openapiPath: "/openapi.json",
@@ -29,7 +34,7 @@ const buildHandler = (config: Partial<Admin.AdminConfigShape>) => {
     program: Effect.Effect<
       A,
       E,
-      Users.Users | Sessions.Sessions | Accounts.Accounts | Mailer.Mailer
+      Users.Users | Sessions.Sessions | Accounts.Accounts | TestMailbox.Mailbox
     >,
   ): Promise<A> => app.run(program);
 
@@ -70,31 +75,35 @@ const buildHandler = (config: Partial<Admin.AdminConfigShape>) => {
   ) => browser.request(method, path, body === undefined ? {} : { json: body });
 
   return { inApp, seedUser, signInAs, call };
-};
+});
 
 describe("AdminAccounts (real HTTP)", () => {
-  it.effect("is fail-closed: every endpoint answers 403 until its predicate says yes", () =>
-    Effect.gen(function* () {
-      const app = buildHandler({});
-      const adminId = yield* Effect.promise(() => app.seedUser("admin"));
-      const targetId = yield* Effect.promise(() => app.seedUser("target"));
-      const admin = yield* Effect.promise(() => app.signInAs(adminId));
-      const statuses = yield* Effect.promise(() =>
-        Promise.all([
-          app.call("DELETE", `/admin/users/${targetId}`, admin),
-          app.call("POST", `/admin/users/${targetId}/email`, admin, { email: "new@example.com" }),
-          app.call("POST", `/admin/users/${targetId}/password`, admin, {
-            password: "a brand new strong password",
-          }),
-        ]).then((responses) => responses.map((response) => response.status)),
-      );
-      assert.deepStrictEqual(statuses, [403, 403, 403]);
-    }),
+  it.effect(
+    "is fail-closed: every endpoint answers 403 until its predicate says yes",
+    () =>
+      Effect.gen(function* () {
+        const app = yield* buildHandler({});
+        const adminId = yield* Effect.promise(() => app.seedUser("admin"));
+        const targetId = yield* Effect.promise(() => app.seedUser("target"));
+        const admin = yield* Effect.promise(() => app.signInAs(adminId));
+        const statuses = yield* Effect.promise(() =>
+          Promise.all([
+            app.call("DELETE", `/admin/users/${targetId}`, admin),
+            app.call("POST", `/admin/users/${targetId}/email`, admin, {
+              email: "new@example.com",
+            }),
+            app.call("POST", `/admin/users/${targetId}/password`, admin, {
+              password: "a brand new strong password",
+            }),
+          ]).then((responses) => responses.map((response) => response.status)),
+        );
+        assert.deepStrictEqual(statuses, [403, 403, 403]);
+      }),
   );
 
   it.effect("DELETE erases the user through the cascade and answers 204", () =>
     Effect.gen(function* () {
-      const app = buildHandler({ canDeleteUsers: allow });
+      const app = yield* buildHandler({ canDeleteUsers: allow });
       const adminId = yield* Effect.promise(() => app.seedUser("admin"));
       const targetId = yield* Effect.promise(() => app.seedUser("target"));
       const admin = yield* Effect.promise(() => app.signInAs(adminId));
@@ -111,7 +120,9 @@ describe("AdminAccounts (real HTTP)", () => {
         app.inApp(
           Effect.gen(function* () {
             const users = yield* Users.Users;
-            return yield* users.findById(Users.UserId(targetId)).pipe(Effect.option);
+            return yield* users
+              .findById(Users.UserId(targetId))
+              .pipe(Effect.option);
           }),
         ),
       );
@@ -127,25 +138,33 @@ describe("AdminAccounts (real HTTP)", () => {
     "setUserEmail answers 202 and mails the new address; setUserPassword answers 204 or 422",
     () =>
       Effect.gen(function* () {
-        const app = buildHandler({ canManageCredentials: allow });
+        const app = yield* buildHandler({ canManageCredentials: allow });
         const adminId = yield* Effect.promise(() => app.seedUser("admin"));
         const targetId = yield* Effect.promise(() => app.seedUser("target"));
         const admin = yield* Effect.promise(() => app.signInAs(adminId));
 
         const email = yield* Effect.promise(() =>
-          app.call("POST", `/admin/users/${targetId}/email`, admin, { email: "new@example.com" }),
+          app.call("POST", `/admin/users/${targetId}/email`, admin, {
+            email: "new@example.com",
+          }),
         );
         assert.strictEqual(email.status, 202);
-        const sent = yield* Effect.promise(() =>
-          app.inApp(Mailer.Mailer.use((mailer) => mailer.sent)),
+        const mail = yield* Effect.promise(() =>
+          app.inApp(
+            Effect.flatMap(TestMailbox.Mailbox, (box) =>
+              box.mail.waitFor({
+                to: "new@example.com",
+                template: "change-email",
+              }),
+            ),
+          ),
         );
-        assert.deepStrictEqual(
-          sent.map((mail) => [mail.template, mail.to]),
-          [["change-email", "new@example.com"]],
-        );
+        assert.strictEqual(mail.to, "new@example.com");
 
         const weak = yield* Effect.promise(() =>
-          app.call("POST", `/admin/users/${targetId}/password`, admin, { password: "short" }),
+          app.call("POST", `/admin/users/${targetId}/password`, admin, {
+            password: "short",
+          }),
         );
         assert.strictEqual(weak.status, 422);
         const changed = yield* Effect.promise(() =>

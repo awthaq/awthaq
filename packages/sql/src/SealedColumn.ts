@@ -20,7 +20,7 @@
 //   `sweepAll` runs it over every column and logs one summary per column. `Deployed` lists the
 //   columns a composition (`Persistence.sql(options)`) really seals, and `sweepDeployed` sweeps them.
 
-import { Encryption, KeyProvider, Sealed as SealedPort, SqlTransaction } from "@awthaq/ports";
+import { Encryption, KeyProvider, Sealed as SealedPort, SqlTransaction, Tenant } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -101,6 +101,9 @@ export const SealedColumnConfig = Context.Reference<{ readonly resealOnRead: boo
   "awthaq/sql/SealedColumnConfig",
   { defaultValue: () => ({ resealOnRead: true }) },
 );
+
+/** BEH-EA-355: deployment-scoped. */
+export const SealedColumnConfigScoped = Tenant.perDeployment(SealedColumnConfig);
 
 /** Persists a re-seal only while the row still holds `stored`; `false` when a concurrent writer won. */
 export interface Swap {
@@ -183,7 +186,7 @@ export const reveal = (
 export const codec = <A>(declared: Column<A>, swap: Swap) =>
   Effect.gen(function* () {
     const encryption = yield* Encryption.Encryption;
-    const config = yield* SealedColumnConfig;
+    const config = yield* yield* Tenant.inForce(SealedColumnConfigScoped);
     const encode = Schema.encodeEffect(declared.schema);
     const decode = Schema.decodeUnknownEffect(declared.schema);
 

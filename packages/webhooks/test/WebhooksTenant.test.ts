@@ -164,6 +164,24 @@ describe("administration is scoped to the ambient tenant", () => {
   );
 
   it.effect(
+    "EP-007 (plan 36): a tenant's Webhooks.config in the calling fiber governs its own operations",
+    () =>
+      Effect.gen(function* () {
+        const tenantConfig = Webhooks.config({
+          canManageWebhooks: () => Effect.succeed(true),
+          maxEndpoints: 1,
+        });
+        const inA = create().pipe(Tenant.withTenant("org-a"), Effect.provide(tenantConfig));
+        yield* inA;
+        const over = yield* inA.pipe(Effect.flip);
+        assert.strictEqual(over._tag, "WebhookEndpointLimitReached");
+        // org-b carries no override: the build value (the default budget) applies.
+        yield* create().pipe(Tenant.withTenant("org-b"));
+        yield* create().pipe(Tenant.withTenant("org-b"));
+      }).pipe(Effect.provide(adminLayer())),
+  );
+
+  it.effect(
     "the receiver of a tenant's endpoint is sent only that tenant's events end to end",
     () => {
       const receiver = fakeReceiver();

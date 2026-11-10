@@ -58,6 +58,28 @@ export const ScimLive = (
     taps,
   });
 
+/** The same composition over SQL (SQLite `:memory:`; a per-suite Postgres schema under `AWTHAQ_POSTGRES_URL`), for atomicity cases. */
+export const ScimLiveSql = (
+  suite: string,
+  organizationConfig: Partial<Organization.OrganizationConfigShape> = {},
+  taps: Layer.Layer<
+    never,
+    never,
+    | Hooks.BeforeSignUp
+    | Hooks.BeforeUserDelete
+    | Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
+  > = Layer.empty,
+) =>
+  TestAuth.layer(built, {
+    records: "sql",
+    suite,
+    services: Layer.mergeAll(
+      Scim.config({}),
+      Organization.config({ teams: groupsTeams, ...organizationConfig }),
+    ),
+    taps,
+  });
+
 const ownerPrincipal = (id: string): Api.UserPrincipal =>
   new Api.UserPrincipal({
     ref: new Api.PrincipalRef({ type: "user", id }),

@@ -14,12 +14,11 @@
 // which is what a "Sign in with SSO" button needs to know and what a scraper should not be able to sweep for.
 
 import { Api } from "@awthaq/api";
-import { AuthPlugin, RateLimits } from "@awthaq/core";
+import { AuthPlugin, ConfigDescriptor, RateLimits } from "@awthaq/core";
 import { OrganizationConnections } from "@awthaq/organization";
-import { RateLimiter } from "@awthaq/ports";
+import { RateLimiter, Tenant } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -101,8 +100,10 @@ export const SsoConfig: Context.Reference<SsoConfigShape> = Context.Reference(
   },
 );
 
+export const SsoConfigScoped = Tenant.perDeployment(SsoConfig);
+
 export const config = (partial: Partial<SsoConfigShape>) =>
-  Layer.succeed(SsoConfig, { preferred: partial.preferred ?? "saml" });
+  SsoConfigScoped.layer({ preferred: partial.preferred ?? "saml" });
 
 export interface SsoShape {
   /** Every connection the hint routes to, across both protocols (the preferred protocol first). */
@@ -154,6 +155,7 @@ export class Sso extends AuthPlugin.Service<Sso, SsoShape>()("sso", {
   rateLimitRules: rules,
   tables: {},
   migrations: [],
+  config: [ConfigDescriptor.make(SsoConfigScoped)],
 }) {
   static readonly layer = AuthPlugin.layer(Sso, {
     ports: [RateLimiter.RateLimiter],
@@ -174,8 +176,8 @@ export class Sso extends AuthPlugin.Service<Sso, SsoShape>()("sso", {
     make: Effect.gen(function* () {
       const saml = yield* SamlConnections.SamlConnectionStore;
       const oidc = yield* OrganizationConnections.OrganizationConnectionStore;
-      const settings = yield* SamlConfig.SamlConfig;
-      const preference = yield* SsoConfig;
+      const settings = yield* yield* Tenant.inForce(SamlConfig.SamlConfigScoped);
+      const preference = yield* yield* Tenant.inForce(SsoConfigScoped);
       const limits = yield* RateLimits.budget(Sso, {
         tune: Effect.succeed({ start: settings.rateLimits.sso }),
       });

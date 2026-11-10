@@ -43,7 +43,7 @@ export const reactTuple = Auth.make([Password.Password], {
 
 const appLayer = TestAuth.layer(reactTuple, { services: ReactServices });
 
-const makeApp = () => TestAuth.app(appLayer);
+const makeApp = () => TestAuth.serve(appLayer);
 
 /** One request the "browser" sent. */
 export interface SentRequest {
@@ -110,7 +110,7 @@ const installBrowserGlobals = () => {
 export interface WorldShape {
   readonly outcomes: Outcomes;
   readonly browser: Browser;
-  readonly runtime: ReturnType<typeof makeApp>["runtime"];
+  readonly runtime: Effect.Success<ReturnType<typeof makeApp>>["runtime"];
 }
 
 export class World extends Context.Service<World, WorldShape>()("features/ReactWorld") {}
@@ -119,16 +119,11 @@ export const WorldLive = Layer.effect(
   World,
   Effect.gen(function* () {
     installBrowserGlobals();
-    const app = yield* Effect.acquireRelease(
-      Effect.sync(() => makeApp()),
-      (built) =>
-        Effect.promise(() => built.dispose()).pipe(
-          Effect.andThen(
-            Effect.sync(() => {
-              currentBrowser = undefined;
-            }),
-          ),
-        ),
+    const app = yield* makeApp();
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        currentBrowser = undefined;
+      }),
     );
     const browser = makeBrowser(app.handler);
     currentBrowser = browser;

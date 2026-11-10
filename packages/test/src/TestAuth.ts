@@ -77,7 +77,14 @@ import {
   Sessions,
   Users,
 } from "@awthaq/core";
-import { ClientAddress, type Encryption, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import {
+  ClientAddress,
+  type Encryption,
+  type Mailer,
+  PasswordHasher,
+  RateLimiter,
+  type SmsSender,
+} from "@awthaq/ports";
 import { AuthHost, Credentials, Csrf } from "@awthaq/server";
 import { CoreMigrations } from "@awthaq/sql";
 import { UserAgent } from "@awthaq/web";
@@ -85,10 +92,13 @@ import { memoryFoundation } from "./internal/foundation.ts";
 import * as RecordsContract from "./RecordsContract.ts";
 import * as RedactionGuard from "./RedactionGuard.ts";
 import * as TestEncryption from "./TestEncryption.ts";
+import * as TestMailbox from "./TestMailbox.ts";
 import * as TestSql from "./TestSql.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
 import { createHmac, randomBytes } from "node:crypto";
+import * as http from "node:http";
 import * as Arbitrary from "effect/Arbitrary";
 import * as Cause from "effect/Cause";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -103,6 +113,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as TestClock from "effect/testing/TestClock";
 import * as Cookies from "effect/http/Cookies";
 import * as HttpClient from "effect/http/HttpClient";
@@ -110,6 +121,8 @@ import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as NetAddress from "effect/net/NetAddress";
 import * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as Migrator from "effect/sql/Migrator";
@@ -146,7 +159,7 @@ export type FoundationServices =
 export { memoryFoundation } from "./internal/foundation.ts";
 
 /**
- * The test ports: a cheap real hasher, a capturing mailer, a permissive (or the real) limiter, the socket peer, a fixed
+ * The test ports: a cheap real hasher, the recording `TestMailbox.layer` (`Mailer` and `SmsSender`), a permissive (or the real) limiter, the socket peer, a fixed
  * key, and the platform crypto services. `rateLimiter` is `RateLimiter.layerPermissive` (BEH-EA-112: a test that signs
  * in fifty times in a loop should not fail for a reason unrelated to what it tests) unless a suite asks for
  * `"enforcing"`: the real limiter over the in-memory store, so lockout and throttle behaviour is the production one.
@@ -159,7 +172,7 @@ const testPorts = (
 ) =>
   Layer.mergeAll(
     TestHasher,
-    Mailer.layerMemory,
+    TestMailbox.layer,
     rateLimiter === "enforcing" ? RateLimiter.layerMemory : RateLimiter.layerPermissive,
     // AGA-001/NHS-003: the raw-`remoteAddress` passthrough every zero-config app gets by default (a web handler
     // reports none); ADR-EA-047: a suite that needs a known address over HTTP fixes one.
@@ -201,7 +214,7 @@ const GuardLive = RedactionGuard.layerEvents.pipe(Layer.provideMerge(RedactionGu
 
 /**
  * The default CSRF configuration of every `TestAuth` composition: a fixed secret (at least 32 bytes), no
- * allowed origins. `options.csrf` overrides fields of it. `TestAuth.app(...).request` reads the composition's
+ * allowed origins. `options.csrf` overrides fields of it. `TestAuth.serve(...).request` reads the composition's
  * own value back, so a test never repeats the secret.
  */
 export const TestCsrfConfig: Csrf.CsrfConfigShape = {
@@ -218,7 +231,7 @@ export interface CommonOptions<S, SE, SR, D, DR, T = never> {
    * What is genuinely the test's own: plugin configuration (`Plugin.config(...)`), adapters (`XmlSignature`,
    * `WebAuthn`, `HttpClient`, a fake fetcher, a transport), and doubles. It is **merged into the output**, so
    * a test that `yield*`s a service only this provides gets the very instance the plugins used (a capturing
-   * `Mailer` given here is the one the plugin sends through and the one the test reads). It sits closest to
+   * `Mailer` given here shadows the mailbox for the plugins). It sits closest to
    * the plugins, so it may override a derived middleware or a base service *for the plugins*; a base service
    * captured by a core store (a custom `SecureRandom`) is not seen by it: use `decorate` or `memoryFoundation` for
    * that. Never put a core store, a plugin record layer or host middleware here: the harness provides them.
@@ -264,6 +277,9 @@ export type MemoryMode = { readonly records?: "memory" };
 /** What `TestAuth` adds beneath `AuthHost.layer`: the test ports and the HTTP platform. */
 type TestProvided =
   | Layer.Success<ReturnType<typeof testPorts>>
+  // Named here so the inferred type of `testPorts` stays portable (TS2883).
+  | Mailer.Mailer
+  | SmsSender.SmsSender
   | Layer.Success<typeof HttpServer.layerServices>
   | Layer.Success<typeof HttpRouter.layer>;
 
@@ -359,7 +375,7 @@ const makeLayer = <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpAp
  * `TestCsrfConfig`, BEH-EA-T1), every composed plugin's `records` bundle for the chosen mode and its declared
  * `hookPoints` (BEH-EA-T4/T5), the core services over `Persistence.memory` / `Persistence.sql()` with the
  * migrations applied, the registries, erasure and export; `TestAuth` adds a cheap argon2id hasher,
- * `Mailer.layerMemory`, a permissive `RateLimiter`, `Encryption` over a fixed key, `ClientAddress`, the platform
+ * `TestMailbox.layer` (a recording `Mailer` and `SmsSender`, read through `TestMailbox.Mailbox`), a permissive `RateLimiter`, `Encryption` over a fixed key, `ClientAddress`, the platform
  * crypto services and the recording `RedactionGuard` (EOTS-002). `BodyLimit.layer` is off; the request context is derived
  * with the host middleware, as in production (ADR-EA-047).
  * Its `RIn` is `never` exactly when the composition is complete, and every service in its `ROut` is present
@@ -590,7 +606,7 @@ export interface App<A, E = never> {
   /**
    * A `ManagedRuntime` over the same composition and memo map, for code that takes a runtime instead of a context
    * (`getSession(headers, runtime)`): a session issued through `handler`, `run` or this runtime is visible to the others.
-   * Built lazily; `dispose` releases it.
+   * Built lazily; released with the app.
    */
   readonly runtime: ManagedRuntime.ManagedRuntime<A, E>;
   /**
@@ -600,45 +616,49 @@ export interface App<A, E = never> {
    * rejects.
    */
   readonly advance: (by: Duration.Input) => Promise<void>;
-  /** Releases everything the composition built. */
-  readonly dispose: () => Promise<void>;
 }
 
-/** What `app` itself reads from the composition: the CSRF config, and the stores `signIn` writes through. */
+/** What `serve` itself reads from the composition: the CSRF config, and the stores `signIn` writes through. */
 export type AppNeeds = Csrf.CsrfConfig | Users.Users | Sessions.Sessions;
 
-/**
- * BEH-EA-T3/BEH-EA-333: serves `appLayer` (normally `TestAuth.layer(Auth.make([...]), ...)`) and returns the
- * handle a wire-level suite uses: agents that keep cookies, echo CSRF and follow rotations. It replaces the
- * hand-rolled `Layer.makeMemoMapUnsafe` + `HttpRouter.toWebHandler` + `buildWithMemoMap` blocks, the per-suite
- * CSRF token mint and the hand-threaded cookies.
- */
-export const app = <A, E>(
-  composition: Layer.Layer<A | AppNeeds, E>,
-  options: {
-    /**
-     * The origin agents address (default `http://localhost`, a secure context): a plugin that derives a URL from
-     * the request's host sees it, and an agent applies a browser's `Domain`/`Secure` rules against it.
-     */
-    readonly baseUrl?: string;
-    /**
-     * Serve the composition over one `TestClock` (time starts at the epoch): `advance` moves it for the handler,
-     * for `run` and for every agent's cookie store alike.
-     */
-    readonly testClock?: boolean;
-    /** An existing memo map to build into, so several apps (or a hand-made router) share the instances they have in common. */
-    readonly memoMap?: Layer.MemoMap;
-    /** ADR-EA-047: the request `run` answers (`withRequest`'s facts); by default none (`noRequest`). */
-    readonly request?: Parameters<typeof withRequest>[0];
-  } = {},
-): App<A | AppNeeds, E> => {
+// Measurement for the leak guard (plan 34): apps served and not yet released.
+let openAppCount = 0;
+export const openApps = () => openAppCount;
+
+/** How an app runs (BEH-EA-351). */
+export interface ServeOptions {
+  /**
+   * The origin agents address (default `http://localhost`, a secure context): a plugin that derives a URL from
+   * the request's host sees it, and an agent applies a browser's `Domain`/`Secure` rules against it.
+   */
+  readonly baseUrl?: string;
+  /**
+   * Serve the composition over one `TestClock` (`true`: time starts at the epoch; `"now"`: at the wall clock): `advance` moves it for the handler,
+   * for `run` and for every agent's cookie store alike.
+   */
+  readonly testClock?: boolean | "now";
+  /** An existing memo map to build into, so several apps (or a hand-made router) share the instances they have in common. */
+  readonly memoMap?: Layer.MemoMap;
+  /** ADR-EA-047: the request `run` answers (`withRequest`'s facts); by default none (`noRequest`). */
+  readonly request?: Parameters<typeof withRequest>[0];
+}
+
+const make = <A, E>(composition: Layer.Layer<A | AppNeeds, E>, options: ServeOptions) => {
   const baseUrl = options.baseUrl ?? "http://localhost";
   const memoMap = options.memoMap ?? Layer.makeMemoMapUnsafe();
+  const simulated = options.testClock === true || options.testClock === "now";
   const appLayer = Layer.merge(
     composition,
-    options.testClock === true ? TestClock.layer() : Layer.empty,
+    options.testClock === "now"
+      ? Layer.effectDiscard(TestClock.setTime(Date.now())).pipe(
+          Layer.provideMerge(TestClock.layer()),
+        )
+      : options.testClock === true
+        ? TestClock.layer()
+        : Layer.empty,
   );
   const scope = Scope.makeUnsafe();
+  openAppCount++;
   const web = HttpRouter.toWebHandler(appLayer, { memoMap, disableLogger: true });
   let context: Promise<Context.Context<A | AppNeeds>> | undefined;
   const built = () => {
@@ -655,9 +675,9 @@ export const app = <A, E>(
   // or the wall clock.
   let clockMs = 0;
   const syncClock = async () => {
-    if (options.testClock === true) clockMs = await run(Clock.currentTimeMillis);
+    if (simulated) clockMs = await run(Clock.currentTimeMillis);
   };
-  const now = options.testClock === true ? () => clockMs : Date.now;
+  const now = simulated ? () => clockMs : Date.now;
 
   // The CSRF cookie every agent starts with, minted from the composition's own config.
   let csrfConfig:
@@ -692,7 +712,7 @@ export const app = <A, E>(
     return made;
   };
 
-  return {
+  const app: App<A | AppNeeds, E> = {
     handler,
     run,
     agent,
@@ -725,19 +745,182 @@ export const app = <A, E>(
     memoMap,
     runtime,
     advance: async (by) => {
-      if (options.testClock !== true) {
+      if (!simulated) {
         throw new Error("TestAuth.app: `advance` needs the `testClock: true` option");
       }
       await run(TestClock.adjust(by));
       await syncClock();
     },
-    dispose: async () => {
-      await web.dispose();
-      await runtime.dispose();
-      await Effect.runPromise(Scope.close(scope, Exit.void));
-    },
   };
+  const release = async () => {
+    await web.dispose();
+    await runtime.dispose();
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+    openAppCount--;
+  };
+  return { app, release, appLayer, memoMap };
 };
+
+/**
+ * BEH-EA-351: serves `composition` for as long as the caller's scope is open (built lazily, on the real clock) and
+ * releases everything it built when the scope closes, whether by success, failure or interruption. It replaces the
+ * hand-rolled `Layer.makeMemoMapUnsafe` + `HttpRouter.toWebHandler` + `buildWithMemoMap` blocks, the per-suite
+ * CSRF token mint and the hand-threaded cookies: agents keep cookies, echo CSRF and follow rotations.
+ */
+export const serve = <A, E>(
+  composition: Layer.Layer<A | AppNeeds, E>,
+  options: ServeOptions = {},
+) =>
+  Effect.acquireRelease(
+    Effect.sync(() => make(composition, options)),
+    (made) => Effect.promise(made.release),
+  ).pipe(Effect.map((made) => made.app));
+
+/** BEH-EA-353: the same app, also bound to 127.0.0.1 on an ephemeral port. */
+export interface ListeningApp<A, E = never> extends App<A, E> {
+  readonly url: string;
+  /**
+   * `METHOD /path?query`, oldest first, for every request the socket answered. In-process `handler` and agent
+   * requests are not logged: the log is the socket's.
+   */
+  readonly requests: () => ReadonlyArray<string>;
+}
+
+/**
+ * BEH-EA-353: `serve`, plus a Node HTTP listener on `127.0.0.1:0` over the same instances, for an out-of-process
+ * client (the CLI's generated `HttpApiClient`). Agents stay in-process. The socket closes before the app releases.
+ */
+export const listen = <A, E>(
+  composition: Layer.Layer<A | AppNeeds, E>,
+  options: ServeOptions = {},
+) =>
+  Effect.gen(function* () {
+    const made = yield* Effect.acquireRelease(
+      Effect.sync(() => make(composition, options)),
+      (acquired) => Effect.promise(acquired.release),
+    );
+    const log: Array<string> = [];
+    const socketScope = yield* Scope.fork(yield* Effect.scope, "sequential");
+    const server = yield* Layer.buildWithMemoMap(
+      HttpRouter.serve(made.appLayer, {
+        disableLogger: true,
+        disableListenLog: true,
+        middleware: (app) =>
+          Effect.gen(function* () {
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            log.push(`${request.method} ${request.url}`);
+            return yield* app;
+          }),
+      }).pipe(
+        Layer.provideMerge(
+          NodeHttpServer.layer(() => http.createServer(), { port: 0, host: "127.0.0.1" }),
+        ),
+      ),
+      made.memoMap,
+      socketScope,
+    ).pipe(Effect.map((context) => Context.get(context, HttpServer.HttpServer)));
+    if (!NetAddress.isInetAddress(server.address)) {
+      return yield* Effect.die("TestAuth.listen: the server did not bind a TCP port");
+    }
+    const listening: ListeningApp<A | AppNeeds, E> = {
+      ...made.app,
+      url: `http://127.0.0.1:${server.address.port}`,
+      requests: () => [...log],
+    };
+    return listening;
+  });
+
+/** BEH-EA-351: the bracket for a promise-style test; the app is released when `use` settles, either way. */
+export const withApp = async <A, E, T>(
+  composition: Layer.Layer<A | AppNeeds, E>,
+  options: ServeOptions | undefined,
+  use: (app: App<A | AppNeeds, E>) => Promise<T>,
+) => {
+  const settled = await Effect.runPromise(
+    Effect.scoped(
+      Effect.flatMap(serve(composition, options), (served) =>
+        // The callback's own rejection is carried out of the scope as a value, so it is thrown unchanged once the app is released.
+        Effect.promise(() =>
+          use(served).then(
+            (value) => ({ failed: false as const, value }),
+            (error: unknown) => ({ failed: true as const, error }),
+          ),
+        ),
+      ),
+    ),
+  );
+  if (settled.failed) throw settled.error;
+  return settled.value;
+};
+
+/** BEH-EA-352: a World's one app cell. */
+export interface LazyApp<O, R> {
+  readonly options: Effect.Effect<O>;
+  /** Accumulates a Given's choice. A defect once `get` has built ("configure before the first request"). */
+  readonly configure: (update: (current: O) => O) => Effect.Effect<void>;
+  /** Releases what `get` built (if anything) and starts over from `options`: the one explicit rebuild. */
+  readonly replace: (options: O) => Effect.Effect<void>;
+  /** Builds on first use from the accumulated options, into a child of the cell's scope; then the same value. */
+  readonly get: Effect.Effect<R>;
+}
+
+/**
+ * BEH-EA-352: a lazily built app that lives in the scope that created the cell (a World's per-scenario scope). `build`
+ * runs once, on the first `get`, from the options accumulated by `configure`; `replace` is the one explicit rebuild.
+ * `alignStepClock` sets the caller's `TestClock` to the wall clock before the first build.
+ */
+export const lazyApp = <O, R>(
+  initial: O,
+  build: (options: O) => Effect.Effect<R, never, Scope.Scope>,
+  settings: { readonly name?: string; readonly alignStepClock?: boolean } = {},
+) =>
+  Effect.gen(function* () {
+    const parent = yield* Effect.scope;
+    const name = settings.name ?? "TestAuth.lazyApp";
+    type State = {
+      readonly options: O;
+      readonly built: Option.Option<{ readonly value: R; readonly scope: Scope.Closeable }>;
+    };
+    const state = yield* SynchronizedRef.make<State>({ options: initial, built: Option.none() });
+    const get = SynchronizedRef.modifyEffect(state, (current) =>
+      Option.match(current.built, {
+        onSome: ({ value }) => Effect.succeed([value, current] as const),
+        onNone: () =>
+          Effect.gen(function* () {
+            if (settings.alignStepClock === true) yield* TestClock.setTime(Date.now());
+            const child = yield* Scope.fork(parent, "sequential");
+            const value = yield* build(current.options).pipe(Scope.provide(child));
+            return [
+              value,
+              { options: current.options, built: Option.some({ value, scope: child }) },
+            ] as const;
+          }),
+      }),
+    );
+    const release = (current: State) =>
+      Option.match(current.built, {
+        onNone: () => Effect.void,
+        onSome: ({ scope }) => Scope.close(scope, Exit.void),
+      });
+    return {
+      options: Effect.map(SynchronizedRef.get(state), (current) => current.options),
+      configure: (update) =>
+        SynchronizedRef.updateEffect(state, (current) =>
+          Option.isSome(current.built)
+            ? Effect.die(
+                new Error(
+                  `${name}: configure after the app was built; configure in a Given before the first request, or call replace`,
+                ),
+              )
+            : Effect.succeed({ ...current, options: update(current.options) }),
+        ),
+      replace: (options) =>
+        SynchronizedRef.updateEffect(state, (current) =>
+          Effect.as(release(current), { options, built: Option.none() }),
+        ),
+      get,
+    } satisfies LazyApp<O, R>;
+  });
 
 /**
  * Builds `layer` into a context on the real clock and resolves it, for a World that runs effects *directly* on its own

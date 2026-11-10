@@ -14,7 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as OrganizationActor from "./OrganizationActor.ts";
-import { OrganizationConfig } from "./OrganizationConfig.ts";
+import { OrganizationConfigScoped } from "./OrganizationConfig.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationErrors from "./OrganizationErrors.ts";
 import * as OrganizationEvents from "./OrganizationEvents.ts";
@@ -103,8 +103,7 @@ export class OrganizationRoles extends Context.Service<OrganizationRoles, Organi
       const events = yield* AuthEvents.AuthEvents;
       const directory = yield* OrganizationDirectory.OrganizationDirectory;
       const orgRoles = yield* OrgRoleRecords.OrgRoleRecords;
-      const builtConfig = yield* OrganizationConfig;
-      const configNow = Tenant.configInForce(OrganizationConfig, builtConfig);
+      const configNow = yield* Tenant.inForce(OrganizationConfigScoped);
       const beforeCreate = yield* OrganizationHooks.BeforeCreateRole;
       const afterCreate = yield* OrganizationHooks.AfterCreateRole;
       const beforeUpdate = yield* OrganizationHooks.BeforeUpdateRole;

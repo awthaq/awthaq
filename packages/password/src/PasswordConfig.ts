@@ -4,10 +4,9 @@
 // file so `Password.ts` and `PasswordCredential.ts` both read it without importing each other;
 // `Password.ts` re-exports it, so `Password.config(...)` and `Password.PasswordConfig` are unchanged.
 
-import { RateLimits } from "@awthaq/core";
+import { RateLimits, Tenant } from "@awthaq/core";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as Redacted from "effect/Redacted";
 
@@ -118,6 +117,14 @@ export const PasswordConfig: Context.Reference<PasswordConfigShape> = Context.Re
   { defaultValue: () => defaultPasswordConfig },
 );
 
+/**
+ * BEH-EA-355: tenant-scoped. Boot fields are derived once at build from the build value (the digest key and the
+ * rate-limit email-key function); `signInTimingFloor` is read per operation, so it is not boot.
+ */
+export const PasswordConfigScoped = Tenant.perTenant(PasswordConfig, {
+  boot: ["identifierDigestKey", "rateLimitEmailKey"],
+});
+
 /** BEH-EA-018/120: a partial override, type-checked against `PasswordConfigShape`, never runtime-validated. */
-export const config = (partial: Partial<PasswordConfigShape>): Layer.Layer<never> =>
-  Layer.succeed(PasswordConfig, { ...defaultPasswordConfig, ...partial });
+export const config = (partial: Partial<PasswordConfigShape>) =>
+  PasswordConfigScoped.layer({ ...defaultPasswordConfig, ...partial });

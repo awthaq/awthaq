@@ -19,6 +19,7 @@
 // `Context` yields the effective value it sets, and a reference the Layer never
 // provided reads back as its default (`source: "default"`).
 
+import { Tenant } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
@@ -56,7 +57,10 @@ export const REDACTED = "<redacted>";
 /** The effective value of one descriptor, rendered. */
 export interface View {
   readonly key: string;
-  readonly source: "default" | "override";
+  /** BEH-EA-355: the key's declared scope. */
+  readonly scope: Tenant.ConfigScope;
+  /** `"tenant"`: the calling fiber's value, for a tenant-scoped key; otherwise `"override"` when the build context sets it, else `"default"`. */
+  readonly source: "default" | "override" | "tenant";
   readonly entries: ReadonlyArray<Entry>;
 }
 
@@ -64,9 +68,18 @@ export interface View {
 export interface ConfigDescriptor {
   /** The reference's own key, e.g. `awthaq/password/Config`. */
   readonly key: string;
+  /** BEH-EA-355: copied from the key's scope declaration. */
+  readonly scope: Tenant.ConfigScope;
+  /** Fields of a tenant-scoped key that are read only from the build value. */
+  readonly boot: ReadonlyArray<string>;
   /** Top-level fields declared sensitive (a plain string secret, say). `Redacted` values are always redacted regardless. */
   readonly sensitive: ReadonlyArray<string>;
-  readonly view: (context: Context.Context<never>) => View;
+  /**
+   * `built` is what the application's layer was built in; `calling` is the fiber's own context (defaults to empty, so
+   * a static read such as the CLI's sees the build value). Rendered through `Tenant.resolveConfig`, the rule the
+   * operations read.
+   */
+  readonly view: (built: Context.Context<never>, calling?: Context.Context<never>) => View;
   readonly audit: (
     context: Context.Context<never>,
     environment: Environment,
@@ -129,14 +142,23 @@ const flatten = (path: string, value: unknown, sensitive: boolean): ReadonlyArra
   return [leaf(path, name === "" ? "[object]" : `[${name}]`, false)];
 };
 
+/** A scope declaration over a `Context.Reference` (the keys that have a default, and so a view). */
+export type Declaration<A> = Tenant.Declared<never, A> & {
+  readonly reference: Context.Reference<A>;
+};
+
+const isDeclaration = <A>(
+  source: Declaration<A> | Context.Reference<A>,
+): source is Declaration<A> => "scope" in source && "reference" in source;
+
 /**
- * Wraps a `Context.Reference` as a descriptor. `sensitive` is checked against
- * the value's own keys at the type level, so a renamed field cannot leave a
- * stale entry behind. `audit` receives the effective value; the descriptor does
- * the reading, so an audit rule is a plain function of the value.
+ * Wraps a scope declaration over a `Context.Reference` as a descriptor (BEH-EA-355). `sensitive` is checked against
+ * the value's own keys at the type level, so a renamed field cannot leave a stale entry behind. `audit` receives the
+ * effective value; the descriptor does the reading, so an audit rule is a plain function of the value.
  */
 export const make = <A>(
-  reference: Context.Reference<A>,
+  // shortcut: a bare reference is declared deployment-scoped for two-factor and roles only, until plan 36 ticket 18 lands.
+  source: Declaration<A> | Context.Reference<A>,
   options?: {
     readonly sensitive?: ReadonlyArray<Extract<keyof A, string>>;
     readonly audit?: (value: A, environment: Environment) => ReadonlyArray<Finding>;
@@ -144,14 +166,21 @@ export const make = <A>(
     readonly project?: (value: A) => unknown;
   },
 ): ConfigDescriptor => {
+  const reference = isDeclaration(source) ? source.reference : source;
+  const declared: Tenant.Declared<never, A> = isDeclaration(source)
+    ? source
+    : Tenant.perDeployment(source);
   const sensitive: ReadonlyArray<string> = options?.sensitive ?? [];
-  const read = (context: Context.Context<never>): A =>
+  const built = (context: Context.Context<never>): A =>
     Context.getOrElse(context, reference, () => reference.defaultValue());
   return {
     key: reference.key,
+    scope: declared.scope,
+    boot: declared.scope === "tenant" ? declared.boot : [],
     sensitive,
-    view: (context) => {
-      const value = options?.project === undefined ? read(context) : options.project(read(context));
+    view: (context, calling = Context.empty()) => {
+      const resolved = Tenant.resolveConfig(declared, built(context), calling);
+      const value = options?.project === undefined ? resolved : options.project(resolved);
       const entries = isPlainObject(value)
         ? Object.keys(value).flatMap((field) =>
             flatten(field, value[field], sensitive.includes(field)),
@@ -159,11 +188,17 @@ export const make = <A>(
         : flatten("value", value, false);
       return {
         key: reference.key,
-        source: context.mapUnsafe.has(reference.key) ? "override" : "default",
+        scope: declared.scope,
+        source:
+          declared.scope === "tenant" && calling.mapUnsafe.has(reference.key)
+            ? "tenant"
+            : context.mapUnsafe.has(reference.key)
+              ? "override"
+              : "default",
         entries,
       };
     },
-    audit: (context, environment) => options?.audit?.(read(context), environment) ?? [],
+    audit: (context, environment) => options?.audit?.(built(context), environment) ?? [],
   };
 };
 

@@ -22,26 +22,28 @@ const usersDown = Layer.effect(
 
 describe("TestAuth.layer `decorate`", () => {
   it("the plugin's sign-in sees the outage, and so does the test's own `Users`", async () => {
-    const app = TestAuth.app(
+    await TestAuth.withApp(
       TestAuth.layer(Auth.make([Password.Password]), {
         services: TestAuth.httpClient.noBreach,
         decorate: usersDown,
       }),
+      undefined,
+      async (app) => {
+        const response = await app.request("POST", "/password/sign-in", {
+          json: {
+            email: "down@example.com",
+            password: "a sufficiently long test password",
+          },
+        });
+        assert.strictEqual(response.status, 503);
+        const lookup = await app.run(
+          Effect.flatMap(Users.Users, (users) => users.findByEmail("down@example.com")).pipe(
+            Effect.map(Option.some),
+            Effect.catch(() => Effect.succeed(Option.none())),
+          ),
+        );
+        assert.isTrue(Option.isNone(lookup));
+      },
     );
-    try {
-      const response = await app.request("POST", "/password/sign-in", {
-        json: { email: "down@example.com", password: "a sufficiently long test password" },
-      });
-      assert.strictEqual(response.status, 503);
-      const lookup = await app.run(
-        Effect.flatMap(Users.Users, (users) => users.findByEmail("down@example.com")).pipe(
-          Effect.map(Option.some),
-          Effect.catch(() => Effect.succeed(Option.none())),
-        ),
-      );
-      assert.isTrue(Option.isNone(lookup));
-    } finally {
-      await app.dispose();
-    }
   });
 });

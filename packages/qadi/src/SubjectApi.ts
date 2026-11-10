@@ -29,11 +29,10 @@
 // real, well-formed `AuthSubject` too (qadi's own `anonymous` value,
 // `SubjectResolver.ts`'s `resolveIdentityOnly`) — this endpoint should
 // resolve for every caller, logged in or not, never 401.
-import { Defects } from "@awthaq/ports";
+import { Defects, Tenant } from "@awthaq/ports";
 import { Api, SubjectContract } from "@awthaq/api";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
@@ -78,9 +77,12 @@ export const SubjectApiConfig = Context.Reference<SubjectApiConfigShape>(
   },
 );
 
-/** Sugar for `Layer.succeed(SubjectApiConfig, { exposedAttributes })`. */
+/** BEH-EA-355: deployment-scoped. */
+export const SubjectApiConfigScoped = Tenant.perDeployment(SubjectApiConfig);
+
+/** Sugar for `SubjectApiConfigScoped.layer({ exposedAttributes })`. */
 export const config = (exposedAttributes: ReadonlyArray<string>) =>
-  Layer.succeed(SubjectApiConfig, { exposedAttributes });
+  SubjectApiConfigScoped.layer({ exposedAttributes });
 
 const toDto = (
   subject: AuthSubject,
@@ -105,6 +107,7 @@ export const SubjectHandlers = HttpApiBuilder.group(SubjectApi, "subject", (hand
   handlers.handleAll({
     current: Effect.fnUntraced(function* () {
       const subject = yield* CurrentSubject;
+      // Ambient read: the host's value from the calling fiber (PLAN.md 1.4).
       const { exposedAttributes } = yield* SubjectApiConfig;
       const exposed: Record<string, unknown> = {};
       const pending = exposedAttributes.filter((name) => !(name in subject.attributes));

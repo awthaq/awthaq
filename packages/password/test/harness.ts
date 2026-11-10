@@ -6,7 +6,6 @@ import type { Accounts, Sessions, Users } from "@awthaq/core";
 import type { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
-import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import type * as HttpClient from "effect/http/HttpClient";
@@ -50,14 +49,3 @@ export const makeTestLayer = <
     ...(options.coreOverride === undefined ? {} : { decorate: options.coreOverride }),
     ...(options.taps === undefined ? {} : { taps: options.taps }),
   });
-
-/** Cooperative scheduler turns for the background mail fibers (see `Password.test.ts`). */
-export const letForkedFibersRun = Effect.gen(function* () {
-  for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
-});
-
-/** A mailed token, whether the adapter-facing value is a plain string or `Redacted` (EOTS-010). */
-export const tokenOf = (mail: Mailer.MailMessage | undefined): string => {
-  const token = mail?.data?.["token"];
-  return Redacted.isRedacted(token) ? String(Redacted.value(token)) : String(token);
-};

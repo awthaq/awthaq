@@ -1,9 +1,9 @@
 // BAM-007, MLO-005, MLO-002, ARF-005 Fix A (BEH-EA-267 to BEH-EA-270): the MagicLink plugin at the
 // domain level — real in-memory stores, the real mail dispatcher, the real `@awthaq/two-factor`
 // gates for the MFA divert.
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import { AuditLog, Sessions, Users } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
+import { Tenant } from "@awthaq/ports";
 import { SignInProbe } from "@awthaq/test";
 import { SecondFactor, Totp, TwoFactor } from "@awthaq/two-factor";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -18,30 +18,21 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as MagicLink from "../src/MagicLink.ts";
-import {
-  awaitMails,
-  buildLayer,
-  letForkedFibersRun,
-  realLimiter,
-  secretOf,
-} from "./support/harness.ts";
+import { buildLayer, realLimiter } from "./support/harness.ts";
 
 const outage = Ref.makeUnsafe(true);
-
-const link = Effect.gen(function* () {
-  const mailer = yield* Mailer.Mailer;
-  const mail = (yield* mailer.sent).findLast((message) => message.template === "magic-link");
-  return { mail, token: Redacted.make(secretOf(mail, "token")) };
-});
 
 const requestAndRead = (email: string) =>
   Effect.gen(function* () {
     const magicLink = yield* MagicLink.MagicLink;
-    const mailer = yield* Mailer.Mailer;
-    const before = (yield* mailer.sent).length;
+    const box = yield* TestMailbox.Mailbox;
+    const match = { to: email, template: "magic-link" };
+    const before = (yield* box.mail.messages).filter(
+      (m) => m.to === email && m.template === "magic-link",
+    ).length;
     yield* magicLink.requestLink({ email });
-    yield* awaitMails(mailer.sent, before + 1);
-    return yield* link;
+    const mail = yield* box.mail.waitFor(match, { nth: before + 1 });
+    return { mail, token: Redacted.make(TestMailbox.secret(mail)) };
   });
 
 describe("MagicLink.requestLink (BEH-EA-268)", () => {
@@ -51,23 +42,23 @@ describe("MagicLink.requestLink (BEH-EA-268)", () => {
       Effect.gen(function* () {
         const magicLink = yield* MagicLink.MagicLink;
         const users = yield* Users.Users;
-        const mailer = yield* Mailer.Mailer;
+        const box = yield* TestMailbox.Mailbox;
         yield* users.create({ identity: { _tag: "Email", email: "ada@example.com" }, name: "Ada" });
 
         // Both requests resolve to the same `void`, whatever exists behind them.
         const known = yield* magicLink.requestLink({ email: "ada@example.com" });
         const unknown = yield* magicLink.requestLink({ email: "nobody@example.com" });
         assert.strictEqual(known, unknown);
-        yield* awaitMails(mailer.sent, 1);
-        yield* letForkedFibersRun;
+        yield* box.mail.waitFor({ template: "magic-link" });
+        yield* box.mail.refute({ template: "magic-link" }, { beyond: 1 });
 
-        const sent = yield* mailer.sent;
+        const sent = yield* box.mail.messages;
         assert.deepStrictEqual(
           sent.map((mail) => [mail.template, mail.to]),
           [["magic-link", "ada@example.com"]],
         );
         // The token names neither the user nor the address (ARF-009).
-        const token = secretOf(sent[0], "token");
+        const token = TestMailbox.secret(sent[0]!);
         const userId = Option.getOrThrow(yield* users.findByEmail("ada@example.com")).id;
         assert.notInclude(token, userId);
         // The whole address, plain or base64url-encoded. A bare "ada" would be a coin toss: a
@@ -81,6 +72,20 @@ describe("MagicLink.requestLink (BEH-EA-268)", () => {
         TestAuth.withoutRequest,
         Effect.provide(buildLayer({ magicLink: { allowSignUp: false } })),
       ),
+  );
+
+  it.effect(
+    "ADR-EA-018 D8 (plan 36): magic link configuration is per deployment; a calling-fiber override is not read",
+    () =>
+      Effect.gen(function* () {
+        const magicLink = yield* MagicLink.MagicLink;
+        const box = yield* TestMailbox.Mailbox;
+        yield* magicLink
+          .requestLink({ email: "stranger@example.com" })
+          .pipe(Effect.provide(MagicLink.config({ allowSignUp: false })));
+        const mail = yield* box.mail.waitFor({ to: "stranger@example.com", template: "magic-link" });
+        assert.strictEqual(mail.to, "stranger@example.com");
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
   it.effect("mail data carries the expiry, and a fragment link when a baseUrl is configured", () =>
@@ -105,16 +110,15 @@ describe("MagicLink.requestLink (BEH-EA-268)", () => {
   it.effect("MLO-002: an address is mailed at most one link per resend window", () =>
     Effect.gen(function* () {
       const magicLink = yield* MagicLink.MagicLink;
-      const mailer = yield* Mailer.Mailer;
+      const box = yield* TestMailbox.Mailbox;
+      const match = { to: "again@example.com", template: "magic-link" };
       for (let i = 0; i < 3; i += 1) yield* magicLink.requestLink({ email: "again@example.com" });
-      yield* awaitMails(mailer.sent, 1);
-      yield* letForkedFibersRun;
-      assert.strictEqual((yield* mailer.sent).length, 1);
+      yield* box.mail.waitFor(match);
+      yield* box.mail.refute(match, { beyond: 1 });
       yield* TestClock.adjust(Duration.seconds(61));
       yield* magicLink.requestLink({ email: "again@example.com" });
-      yield* awaitMails(mailer.sent, 2);
-      yield* letForkedFibersRun;
-      assert.strictEqual((yield* mailer.sent).length, 2);
+      yield* box.mail.waitFor(match, { nth: 2 });
+      yield* box.mail.refute(match, { beyond: 2 });
     }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
   );
 
@@ -323,5 +327,16 @@ describe("MagicLink.verify redeems the link (ADR-EA-039)", () => {
       const second = yield* magicLink.verify({ token }).pipe(Effect.flip);
       assert.strictEqual(second._tag, "MagicLinkConsumed");
     }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
+  );
+});
+
+describe("MagicLink.config (BEH-EA-355)", () => {
+  it.effect("provides the deployment marker for its key", () =>
+    Effect.gen(function* () {
+      // Compiles only while the constructor's output carries the marker.
+      const layer: Layer.Layer<Tenant.DeploymentConfigApplied> = MagicLink.config({});
+      const marker = yield* Tenant.DeploymentConfigApplied.pipe(Effect.provide(layer));
+      assert.strictEqual(marker.key, MagicLink.MagicLinkConfig.key);
+    }),
   );
 });

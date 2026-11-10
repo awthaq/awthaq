@@ -3,6 +3,7 @@
 // This plugin's parts of the account erasure (ADR-EA-031) and the data-subject export (CSG-005).
 
 import { DataExport, Erasure, Retention } from "@awthaq/core";
+import { Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -114,7 +115,7 @@ export const organizationInvitationRetention = Retention.contribute({
   id: "organization.invitations",
   make: Effect.gen(function* () {
     const invitations = yield* InvitationRecords.InvitationRecords;
-    const settings = yield* OrganizationConfig.OrganizationConfig;
+    const settings = yield* yield* Tenant.inForce(OrganizationConfig.OrganizationConfigScoped);
     return (now: DateTime.Utc) =>
       invitations.purgeExpired(
         retentionGrant,

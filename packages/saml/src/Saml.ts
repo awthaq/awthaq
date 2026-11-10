@@ -440,7 +440,7 @@ export const SamlHandlers = HttpApiBuilder.group(
   "saml",
   Effect.fnUntraced(function* (handlers) {
     const saml = yield* Saml;
-    const settings = yield* SamlConfig.SamlConfig;
+    const settings = yield* yield* Tenant.inForce(SamlConfig.SamlConfigScoped);
     // ADR-EA-047: no handler reads the address or the user agent; the group's request context carries them.
     return handlers.handleAll({
       metadata: Effect.fnUntraced(function* ({ query }: { query: SamlApi.ConnectionQuery }) {
@@ -474,11 +474,9 @@ export const SamlHandlers = HttpApiBuilder.group(
           samlResponse: payload.SAMLResponse,
           cookieState: request.cookies[REQUEST_COOKIE],
         });
-        // ADR-EA-045: the session cookie rides the redirect through `SessionDelivery` (`SessionLifecycle.Mints`).
-        return yield* SessionDelivery.redirect(
-          HttpServerResponse.redirect(outcome.callbackURL),
-          outcome.session,
-        );
+        // BEH-EA-353 / PV-016: the IdP's POST is cross-site, so under a Strict session cookie the landing goes
+        // through the same-site interstitial (`SessionDelivery.land`); the session cookie rides it (ADR-EA-045, `Mints`).
+        return yield* SessionDelivery.land(outcome.callbackURL, outcome.session);
       }),
 
       slo: Effect.fnUntraced(function* ({
@@ -555,7 +553,7 @@ export const SamlAccountHandlers = HttpApiBuilder.group(
   "saml.account",
   Effect.fnUntraced(function* (handlers) {
     const saml = yield* Saml;
-    const settings = yield* SamlConfig.SamlConfig;
+    const settings = yield* yield* Tenant.inForce(SamlConfig.SamlConfigScoped);
     return handlers.handleAll({
       logout: Effect.fnUntraced(function* ({ payload }: { payload: SamlApi.LogoutPayload }) {
         yield* noReferrer;
@@ -765,7 +763,7 @@ export const samlSessionRetention = Retention.contribute({
   id: "saml.sessions",
   make: Effect.gen(function* () {
     const records = yield* SamlRecords.SamlRecords;
-    const settings = yield* SamlConfig.SamlConfig;
+    const settings = yield* yield* Tenant.inForce(SamlConfig.SamlConfigScoped);
     return (now: DateTime.Utc) =>
       records.pruneSessions(
         sweepGrant,
@@ -814,7 +812,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const xmlSignature = yield* XmlSignature.XmlSignature;
       const random = yield* SecureRandom.SecureRandom;
       const hasher = yield* Digest.Digest;
-      const settings = yield* SamlConfig.SamlConfig;
+      const settings = yield* yield* Tenant.inForce(SamlConfig.SamlConfigScoped);
       const federation = yield* FederatedIdentity.make;
       const completion = yield* SignIn.make;
 

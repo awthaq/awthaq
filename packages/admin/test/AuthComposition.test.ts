@@ -34,12 +34,18 @@ describe("Auth.make([Admin])", () => {
 // EP-003 (ADR-EA-018): the tenant-administration sub-surface is its own plugin that
 // `dependsOn: [Organization]`, so `Admin` alone still composes without it.
 describe("Auth.make([Organization, Admin, AdminTenants])", () => {
-  const auth = Auth.make([Organization.Organization, Admin.Admin, AdminTenants.AdminTenants]);
+  const auth = Auth.make([
+    Organization.Organization,
+    Admin.Admin,
+    AdminTenants.AdminTenants,
+  ]);
 
   it("orders the organization plugin before the one that depends on it", () => {
     const ids = auth.manifest.plugins.map((plugin) => plugin.id);
     assert.isBelow(ids.indexOf("organization"), ids.indexOf("admin.tenants"));
-    const tenants = auth.manifest.plugins.find((plugin) => plugin.id === "admin.tenants");
+    const tenants = auth.manifest.plugins.find(
+      (plugin) => plugin.id === "admin.tenants",
+    );
     assert.deepStrictEqual(tenants?.dependsOn, ["organization"]);
   });
 
@@ -55,7 +61,11 @@ describe("Auth.make([Organization, Admin, AdminTenants])", () => {
 // BAM-005/BAM-009: destructive and credential administration is its own opt-in plugin, admin tier,
 // so `Admin` alone composes without the erasure cascade, the password credential and mailer it needs.
 describe("Auth.make([Admin, Password, AdminAccounts])", () => {
-  const auth = Auth.make([Admin.Admin, Password.Password, AdminAccounts.AdminAccounts]);
+  const auth = Auth.make([
+    Admin.Admin,
+    Password.Password,
+    AdminAccounts.AdminAccounts,
+  ]);
 
   // ADR-EA-048: an administrator-set password goes through Password's credential module and policy,
   // so a tuple without Password is refused before it is built (BEH-EA-329).
@@ -64,13 +74,18 @@ describe("Auth.make([Admin, Password, AdminAccounts])", () => {
     Auth.make([Admin.Admin, AdminAccounts.AdminAccounts]);
     const ids = auth.manifest.plugins.map((plugin) => plugin.id);
     assert.isBelow(ids.indexOf("password"), ids.indexOf("admin.accounts"));
-    const accounts = auth.manifest.plugins.find((plugin) => plugin.id === "admin.accounts");
+    const accounts = auth.manifest.plugins.find(
+      (plugin) => plugin.id === "admin.accounts",
+    );
     assert.deepStrictEqual(accounts?.dependsOn, ["password"]);
   });
 
   it("puts the accounts group on the admin tier, out of the public API", () => {
     assert.include(Object.keys(auth.adminApi.groups), "admin.accounts");
     assert.notInclude(Object.keys(auth.publicApi.groups), "admin.accounts");
-    assert.notInclude(Object.keys(Auth.make([Admin.Admin]).adminApi.groups), "admin.accounts");
+    assert.notInclude(
+      Object.keys(Auth.make([Admin.Admin]).adminApi.groups),
+      "admin.accounts",
+    );
   });
 });

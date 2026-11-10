@@ -8,22 +8,6 @@ import * as Redacted from "effect/Redacted";
 import * as References from "effect/References";
 import * as SmsSender from "../src/SmsSender.ts";
 
-describe("SmsSender.layerMemory", () => {
-  it.effect("records every sent message, in order, and starts empty", () =>
-    Effect.gen(function* () {
-      const sms = yield* SmsSender.SmsSender;
-      assert.deepStrictEqual(yield* sms.sent, []);
-      yield* sms.send({ to: "+15550100", template: "otp", data: { code: "123456" } });
-      yield* sms.send({ to: "+442079460958", template: "notice" });
-      assert.deepStrictEqual(yield* sms.sent, [
-        { to: "+15550100", template: "otp", data: { code: "123456" } },
-        { to: "+442079460958", template: "notice" },
-      ]);
-      assert.isTrue(sms.development);
-    }).pipe(Effect.provide(SmsSender.layerMemory)),
-  );
-});
-
 describe("SmsSender.layerNoop", () => {
   it.effect("dies loudly, and the defect names the template but never the recipient or code", () =>
     Effect.gen(function* () {
@@ -38,7 +22,6 @@ describe("SmsSender.layerNoop", () => {
         assert.notInclude(rendered, "+15550100");
         assert.notInclude(rendered, "s3cret");
       }
-      assert.deepStrictEqual(yield* sms.sent, []);
       assert.isTrue(sms.development);
     }).pipe(Effect.provide(SmsSender.layerNoop)),
   );
@@ -66,7 +49,6 @@ describe("SmsSender.SmsDeliveryFailed", () => {
                   retryable: false,
                 }),
               ),
-            sent: Effect.succeed([]),
           }),
         ),
       ),
@@ -75,21 +57,18 @@ describe("SmsSender.SmsDeliveryFailed", () => {
 });
 
 describe("SmsSender.layerConsole", () => {
-  it.effect(
-    "logs the recipient, template and data (a Redacted code unwrapped) and records it",
-    () =>
-      Effect.gen(function* () {
-        const logged: Array<Record<string, unknown>> = [];
-        const capture = Logger.make<unknown, void>((options) => {
-          logged.push({ ...options.fiber.getRef(References.CurrentLogAnnotations) });
-        });
-        const sms = yield* SmsSender.SmsSender;
-        yield* sms
-          .send({ to: "+15550100", template: "otp", data: { code: Redacted.make("424242") } })
-          .pipe(Effect.provide(Logger.layer([capture])));
-        assert.deepStrictEqual(logged, [{ to: "+15550100", template: "otp", code: "424242" }]);
-        assert.strictEqual((yield* sms.sent).length, 1);
-        assert.isTrue(sms.development);
-      }).pipe(Effect.provide(SmsSender.layerConsole)),
+  it.effect("logs the recipient, template and data (a Redacted code unwrapped)", () =>
+    Effect.gen(function* () {
+      const logged: Array<Record<string, unknown>> = [];
+      const capture = Logger.make<unknown, void>((options) => {
+        logged.push({ ...options.fiber.getRef(References.CurrentLogAnnotations) });
+      });
+      const sms = yield* SmsSender.SmsSender;
+      yield* sms
+        .send({ to: "+15550100", template: "otp", data: { code: Redacted.make("424242") } })
+        .pipe(Effect.provide(Logger.layer([capture])));
+      assert.deepStrictEqual(logged, [{ to: "+15550100", template: "otp", code: "424242" }]);
+      assert.isTrue(sms.development);
+    }).pipe(Effect.provide(SmsSender.layerConsole)),
   );
 });

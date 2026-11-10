@@ -83,17 +83,14 @@ const orderOf = (word: string) => {
 const depthOf = (plugin: { readonly dependsOn: ReadonlyArray<AuthPlugin.Any> }): number =>
   plugin.dependsOn.reduce((deepest, dependency) => Math.max(deepest, 1 + depthOf(dependency)), 0);
 
-const failingMailer: Mailer.MailerShape = {
-  send: (message) =>
-    Effect.fail(
-      new Mailer.MailDeliveryFailed({
-        template: message.template,
-        reason: "the mail provider is unavailable",
-        retryable: true,
-      }),
-    ),
-  sent: Effect.succeed([]),
-};
+const failingSend = (message: Mailer.MailMessage) =>
+  Effect.fail(
+    new Mailer.MailDeliveryFailed({
+      template: message.template,
+      reason: "the mail provider is unavailable",
+      retryable: true,
+    }),
+  );
 
 const installWelcome = Effect.gen(function* () {
   const { seen } = yield* World;
@@ -101,7 +98,7 @@ const installWelcome = Effect.gen(function* () {
   yield* addTap(
     Hooks.AfterSignUp.tap((input) =>
       note("Welcome", "attempted").pipe(
-        Effect.andThen(failingMailer.send({ to: input.email ?? "", template: "welcome" })),
+        Effect.andThen(failingSend({ to: input.email ?? "", template: "welcome" })),
       ),
     ),
   );

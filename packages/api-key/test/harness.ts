@@ -39,7 +39,9 @@ const ProbeUser = HttpApiGroup.make("probeUser")
   .middleware(Api.RequestContext);
 const ProbeApi = HttpApi.make("auth").add(ProbeMachine).add(ProbeUser);
 
-const built = Auth.make([Jwt.Jwt, ApiKey.ApiKey], { extraGroups: [ProbeMachine, ProbeUser] });
+const built = Auth.make([Jwt.Jwt, ApiKey.ApiKey], {
+  extraGroups: [ProbeMachine, ProbeUser],
+});
 
 const ProbeHandlers = Layer.mergeAll(
   HttpApiBuilder.group(ProbeApi, "probeMachine", (handlers) =>
@@ -69,21 +71,26 @@ export const buildLayer = (options: HarnessOptions) => {
     services: Layer.mergeAll(
       ProbeHandlers,
       ApiKey.config(options.config ?? {}),
-      JwtConfig.config({ issuer: "https://issuer.test", audience: "https://api.test" }),
+      JwtConfig.config({
+        issuer: "https://issuer.test",
+        audience: "https://api.test",
+      }),
       options.random ?? Layer.empty,
     ),
   };
   return options.store === "sql"
-    ? TestAuth.layer(built, { ...common, records: "sql", suite: options.suite ?? "api_key" })
+    ? TestAuth.layer(built, {
+        ...common,
+        records: "sql",
+        suite: options.suite ?? "api_key",
+      })
     : TestAuth.layer(built, common);
 };
 
 export type HarnessServices = Layer.Success<ReturnType<typeof buildLayer>>;
 
 /** A running app: the real web handler, and a way to reach the very services it runs against. */
-export const makeApp = (options: HarnessOptions) => {
-  const layer = buildLayer(options);
-  const app = TestAuth.app(layer, { baseUrl: ORIGIN });
+const harnessOf = (app: TestAuth.App<HarnessServices>, layer: ReturnType<typeof buildLayer>) => {
   const withContext = <A, E>(effect: Effect.Effect<A, E, HarnessServices>): Promise<A> =>
     app.run(effect);
 
@@ -112,7 +119,24 @@ export const makeApp = (options: HarnessOptions) => {
       }),
     );
 
-  return { handler: app.handler, withContext, signIn, request: app.request, layer };
+  return {
+    handler: app.handler,
+    withContext,
+    signIn,
+    request: app.request,
+    layer,
+  };
+};
+
+export type HarnessApp = ReturnType<typeof harnessOf>;
+
+/** Serves the harness composition for the length of `use`; the app is released when it settles. */
+export const withHarnessApp = <T>(
+  options: HarnessOptions,
+  use: (app: HarnessApp) => Promise<T>,
+) => {
+  const layer = buildLayer(options);
+  return TestAuth.withApp(layer, { baseUrl: ORIGIN }, (app) => use(harnessOf(app, layer)));
 };
 
 /**
@@ -143,5 +167,8 @@ export const orphanOwner = (userId: Users.UserId) =>
 export const seedUser = (email: string) =>
   Effect.gen(function* () {
     const users = yield* Users.Users;
-    return (yield* users.create({ identity: { _tag: "Email", email }, name: email })).id;
+    return (yield* users.create({
+      identity: { _tag: "Email", email },
+      name: email,
+    })).id;
   });

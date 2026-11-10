@@ -4,7 +4,7 @@
 // and read.
 import { Auth, AuditLog, HookPoint, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
-import { Rendezvous, TestAuth } from "@awthaq/test";
+import { Rendezvous, TestAuth, TestMailbox } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -44,14 +44,25 @@ const buildLayer = (
     never,
     Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
   > = Layer.empty,
-  mailer: Layer.Layer<Mailer.Mailer> = Mailer.layerMemory,
-) => TestAuth.layer(built, { services: Layer.mergeAll(Organization.config(config), mailer), taps });
+  mailer?: Layer.Layer<Mailer.Mailer>,
+) =>
+  TestAuth.layer(built, {
+    services: Layer.mergeAll(
+      Organization.config(config),
+      mailer ?? Layer.empty,
+    ),
+    taps,
+  });
 
-const application = OrganizationActor.application("OrganizationInvitations.test");
+const application = OrganizationActor.application(
+  "OrganizationInvitations.test",
+);
 const unbounded = OrganizationActor.Bound.Unbounded();
 const owner = Users.UserId("owner-1");
 
-const flipTag = <A, E extends { readonly _tag: string }, R>(effect: Effect.Effect<A, E, R>) =>
+const flipTag = <A, E extends { readonly _tag: string }, R>(
+  effect: Effect.Effect<A, E, R>,
+) =>
   effect.pipe(
     Effect.flip,
     Effect.map((error) => error._tag),
@@ -61,11 +72,17 @@ const flipTag = <A, E extends { readonly _tag: string }, R>(effect: Effect.Effec
 const arrange = Effect.gen(function* () {
   const directory = yield* OrganizationDirectory.OrganizationDirectory;
   const invitations = yield* OrganizationInvitations.OrganizationInvitations;
-  const org = yield* directory.create(application, { owner, name: "Acme", slug: "acme" });
+  const org = yield* directory.create(application, {
+    owner,
+    name: "Acme",
+    slug: "acme",
+  });
   const invite = (
     email: string,
     extra: Partial<
-      Parameters<OrganizationInvitations.OrganizationInvitationsShape["create"]>[1]
+      Parameters<
+        OrganizationInvitations.OrganizationInvitationsShape["create"]
+      >[1]
     > = {},
   ) =>
     invitations.create(application, {
@@ -79,51 +96,55 @@ const arrange = Effect.gen(function* () {
   return { org, invitations, invite };
 });
 
-/** The capability only ever travels by email: read it back from the recording mailer, as an invitee would. */
+/** The capability only ever travels by email: read it back from the mailbox, as an invitee would. */
 const mailedToken = (invitationId: string) =>
   Effect.gen(function* () {
-    const mailer = yield* Mailer.Mailer;
-    for (const message of (yield* mailer.sent).toReversed()) {
-      const data = message.data;
-      if (
-        data !== undefined &&
-        data["invitationId"] === invitationId &&
-        typeof data["token"] === "string"
-      ) {
-        return data["token"];
-      }
+    const box = yield* TestMailbox.Mailbox;
+    for (const message of (yield* box.mail.messages).toReversed()) {
+      if (message.data?.["invitationId"] === invitationId)
+        return TestMailbox.secret(message);
     }
-    return yield* Effect.die(new Error(`no invitation mail was sent for ${invitationId}`));
+    return yield* Effect.die(
+      new Error(`no invitation mail was sent for ${invitationId}`),
+    );
   });
 
 const verifiedUser = (email: string) =>
   Effect.gen(function* () {
     const users = yield* Users.Users;
-    const created = yield* users.create({ identity: { _tag: "Email", email }, name: email });
+    const created = yield* users.create({
+      identity: { _tag: "Email", email },
+      name: email,
+    });
     yield* users.verifyEmail(created.id);
     return created;
   });
 
 describe("OrganizationInvitations.create", () => {
-  it.effect("mails the capability with the organization's name, and stores only its hash", () =>
-    Effect.gen(function* () {
-      const { org, invite } = yield* arrange;
-      const invitation = yield* invite("invitee@example.com");
-      assert.strictEqual(invitation.status, "pending");
-      const mailer = yield* Mailer.Mailer;
-      const sent = yield* mailer.sent;
-      assert.strictEqual(sent.length, 1);
-      assert.strictEqual(sent[0]?.template, "organization-invite");
-      assert.strictEqual(sent[0]?.data?.["organizationName"], "Acme");
-      const token = yield* mailedToken(invitation.id);
-      assert.notStrictEqual(token, invitation.id);
-      assert.isTrue(Option.isSome(invitation.tokenHash));
-      assert.notStrictEqual(Option.getOrNull(invitation.tokenHash), token);
-      const invitations = yield* OrganizationInvitations.OrganizationInvitations;
-      assert.isTrue(yield* invitations.holdsToken(invitation, token));
-      assert.isFalse(yield* invitations.holdsToken(invitation, "wrong"));
-      assert.strictEqual(invitation.organizationId, org.id);
-    }).pipe(Effect.provide(buildLayer())),
+  it.effect(
+    "mails the capability with the organization's name, and stores only its hash",
+    () =>
+      Effect.gen(function* () {
+        const { org, invite } = yield* arrange;
+        const invitation = yield* invite("invitee@example.com");
+        assert.strictEqual(invitation.status, "pending");
+        const box = yield* TestMailbox.Mailbox;
+        const mail = yield* box.mail.waitFor({
+          to: "invitee@example.com",
+          template: "organization-invite",
+        });
+        yield* box.mail.refute({}, { beyond: 1 });
+        assert.strictEqual(mail.data?.["organizationName"], "Acme");
+        const token = yield* mailedToken(invitation.id);
+        assert.notStrictEqual(token, invitation.id);
+        assert.isTrue(Option.isSome(invitation.tokenHash));
+        assert.notStrictEqual(Option.getOrNull(invitation.tokenHash), token);
+        const invitations =
+          yield* OrganizationInvitations.OrganizationInvitations;
+        assert.isTrue(yield* invitations.holdsToken(invitation, token));
+        assert.isFalse(yield* invitations.holdsToken(invitation, "wrong"));
+        assert.strictEqual(invitation.organizationId, org.id);
+      }).pipe(Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -142,20 +163,16 @@ describe("OrganizationInvitations.create", () => {
           buildLayer(
             { teams: teamsOn },
             Layer.empty,
-            Layer.succeed(
-              Mailer.Mailer,
-              Mailer.Mailer.of({
-                send: (message) =>
-                  Effect.fail(
-                    new Mailer.MailDeliveryFailed({
-                      template: message.template,
-                      reason: "down",
-                      retryable: true,
-                    }),
-                  ),
-                sent: Effect.succeed([]),
-              }),
-            ),
+            Layer.mock(Mailer.Mailer)({
+              send: (message) =>
+                Effect.fail(
+                  new Mailer.MailDeliveryFailed({
+                    template: message.template,
+                    reason: "down",
+                    retryable: true,
+                  }),
+                ),
+            }),
           ),
         ),
       ),
@@ -190,21 +207,32 @@ describe("OrganizationInvitations.create", () => {
     },
   );
 
-  it.effect("cancelPendingInvitationsOnReInvite cancels the old one, and says so (D8)", () =>
-    Effect.gen(function* () {
-      const { invite } = yield* arrange;
-      const first = yield* invite("invitee@example.com");
-      const second = yield* invite("invitee@example.com");
-      assert.notStrictEqual(second.id, first.id);
-      const invitations = yield* OrganizationInvitations.OrganizationInvitations;
-      assert.strictEqual(Option.getOrThrow(yield* invitations.find(first.id)).status, "canceled");
-      const canceled = yield* (yield* AuditLog.AuditLog).list({
-        eventTag: "auth.organization.invitationCanceled",
-      });
-      assert.strictEqual(canceled.length, 1);
-    }).pipe(
-      Effect.provide(buildLayer({ teams: teamsOn, cancelPendingInvitationsOnReInvite: true })),
-    ),
+  it.effect(
+    "cancelPendingInvitationsOnReInvite cancels the old one, and says so (D8)",
+    () =>
+      Effect.gen(function* () {
+        const { invite } = yield* arrange;
+        const first = yield* invite("invitee@example.com");
+        const second = yield* invite("invitee@example.com");
+        assert.notStrictEqual(second.id, first.id);
+        const invitations =
+          yield* OrganizationInvitations.OrganizationInvitations;
+        assert.strictEqual(
+          Option.getOrThrow(yield* invitations.find(first.id)).status,
+          "canceled",
+        );
+        const canceled = yield* (yield* AuditLog.AuditLog).list({
+          eventTag: "auth.organization.invitationCanceled",
+        });
+        assert.strictEqual(canceled.length, 1);
+      }).pipe(
+        Effect.provide(
+          buildLayer({
+            teams: teamsOn,
+            cancelPendingInvitationsOnReInvite: true,
+          }),
+        ),
+      ),
   );
 
   it.effect(
@@ -221,8 +249,12 @@ describe("OrganizationInvitations.create", () => {
           role: ["member"],
         });
         void users;
-        assert.strictEqual(yield* flipTag(invite("member@example.com")), "AlreadyMember");
-        const invitations = yield* OrganizationInvitations.OrganizationInvitations;
+        assert.strictEqual(
+          yield* flipTag(invite("member@example.com")),
+          "AlreadyMember",
+        );
+        const invitations =
+          yield* OrganizationInvitations.OrganizationInvitations;
         assert.strictEqual(
           Option.getOrThrow(yield* invitations.find(pending.id)).status,
           "canceled",
@@ -240,25 +272,35 @@ describe("OrganizationInvitations.create", () => {
     Effect.gen(function* () {
       const { invite } = yield* arrange;
       yield* invite("a@example.com");
-      assert.strictEqual(yield* flipTag(invite("b@example.com")), "InvitationLimitReached");
+      assert.strictEqual(
+        yield* flipTag(invite("b@example.com")),
+        "InvitationLimitReached",
+      );
     }).pipe(Effect.provide(buildLayer({ teams: teamsOn, invitationLimit: 1 }))),
   );
 
-  it.effect("an unknown role is refused, and a Ceiling bounds what the invitation confers", () =>
-    Effect.gen(function* () {
-      const { org, invite } = yield* arrange;
-      assert.strictEqual(
-        yield* flipTag(invite("a@example.com", { role: ["ghost"] })),
-        "UnknownOrgRole",
-      );
-      const authority = yield* OrganizationAuthority.OrganizationAuthority;
-      const adminCeiling = yield* authority.ceilingOf(org.id, ["admin"]);
-      assert.strictEqual(
-        yield* flipTag(invite("a@example.com", { role: ["owner"], bound: adminCeiling })),
-        "RolePermissionEscalation",
-      );
-      yield* invite("a@example.com", { role: ["admin"], bound: adminCeiling });
-    }).pipe(Effect.provide(buildLayer())),
+  it.effect(
+    "an unknown role is refused, and a Ceiling bounds what the invitation confers",
+    () =>
+      Effect.gen(function* () {
+        const { org, invite } = yield* arrange;
+        assert.strictEqual(
+          yield* flipTag(invite("a@example.com", { role: ["ghost"] })),
+          "UnknownOrgRole",
+        );
+        const authority = yield* OrganizationAuthority.OrganizationAuthority;
+        const adminCeiling = yield* authority.ceilingOf(org.id, ["admin"]);
+        assert.strictEqual(
+          yield* flipTag(
+            invite("a@example.com", { role: ["owner"], bound: adminCeiling }),
+          ),
+          "RolePermissionEscalation",
+        );
+        yield* invite("a@example.com", {
+          role: ["admin"],
+          bound: adminCeiling,
+        });
+      }).pipe(Effect.provide(buildLayer())),
   );
 
   it.effect("a team needs teams on and an existing team", () =>
@@ -274,7 +316,10 @@ describe("OrganizationInvitations.create", () => {
   it.effect("a team is refused while teams are off", () =>
     Effect.gen(function* () {
       const { invite } = yield* arrange;
-      assert.strictEqual(yield* flipTag(invite("a@example.com", { teamId: "x" })), "TeamsDisabled");
+      assert.strictEqual(
+        yield* flipTag(invite("a@example.com", { teamId: "x" })),
+        "TeamsDisabled",
+      );
     }).pipe(Effect.provide(buildLayer({}))),
   );
 
@@ -284,9 +329,15 @@ describe("OrganizationInvitations.create", () => {
       const aborted = yield* invite("blocked@example.com").pipe(Effect.flip);
       assert.strictEqual(aborted._tag, "HookAborted");
       if (aborted._tag === "HookAborted") {
-        assert.strictEqual(aborted.point, OrganizationHooks.BeforeCreateInvitation.id);
+        assert.strictEqual(
+          aborted.point,
+          OrganizationHooks.BeforeCreateInvitation.id,
+        );
       }
-      assert.deepStrictEqual(yield* invitations.listForOrganization(org.id), []);
+      assert.deepStrictEqual(
+        yield* invitations.listForOrganization(org.id),
+        [],
+      );
     }).pipe(
       Effect.provide(
         buildLayer(
@@ -314,7 +365,11 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
         const userId = invitee.id;
         assert.strictEqual(
           yield* flipTag(
-            invitations.accept({ invitationId: invitation.id, token: "wrong", userId }),
+            invitations.accept({
+              invitationId: invitation.id,
+              token: "wrong",
+              userId,
+            }),
           ),
           "InvitationNotFound",
         );
@@ -324,7 +379,9 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
           userId,
         });
         assert.deepStrictEqual(membership.role, ["member"]);
-        assert.isTrue(Option.isSome(yield* members.findByUserAndOrg(userId, org.id)));
+        assert.isTrue(
+          Option.isSome(yield* members.findByUserAndOrg(userId, org.id)),
+        );
         assert.strictEqual(
           Option.getOrThrow(yield* invitations.find(invitation.id)).status,
           "accepted",
@@ -389,44 +446,54 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
         const token = yield* mailedToken(invitation.id);
         assert.strictEqual(
           yield* flipTag(
-            invitations.accept({ invitationId: invitation.id, token, userId: stranger.id }),
+            invitations.accept({
+              invitationId: invitation.id,
+              token,
+              userId: stranger.id,
+            }),
           ),
           "InvitationEmailMismatch",
         );
         assert.strictEqual(
           yield* flipTag(
-            invitations.accept({ invitationId: invitation.id, token, userId: unverified.id }),
+            invitations.accept({
+              invitationId: invitation.id,
+              token,
+              userId: unverified.id,
+            }),
           ),
           "EmailVerificationRequired",
         );
       }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect("accepting while already a member cancels the stale invitation and says so", () =>
-    Effect.gen(function* () {
-      const { org, invitations, invite } = yield* arrange;
-      const invitee = yield* verifiedUser("invitee@example.com");
-      const invitation = yield* invite("invitee@example.com");
-      yield* (yield* MembershipRecords.MembershipRecords).create({
-        userId: invitee.id,
-        organizationId: org.id,
-        role: ["admin"],
-      });
-      assert.strictEqual(
-        yield* flipTag(
-          invitations.accept({
-            invitationId: invitation.id,
-            token: yield* mailedToken(invitation.id),
-            userId: invitee.id,
-          }),
-        ),
-        "AlreadyMember",
-      );
-      assert.strictEqual(
-        Option.getOrThrow(yield* invitations.find(invitation.id)).status,
-        "canceled",
-      );
-    }).pipe(Effect.provide(buildLayer())),
+  it.effect(
+    "accepting while already a member cancels the stale invitation and says so",
+    () =>
+      Effect.gen(function* () {
+        const { org, invitations, invite } = yield* arrange;
+        const invitee = yield* verifiedUser("invitee@example.com");
+        const invitation = yield* invite("invitee@example.com");
+        yield* (yield* MembershipRecords.MembershipRecords).create({
+          userId: invitee.id,
+          organizationId: org.id,
+          role: ["admin"],
+        });
+        assert.strictEqual(
+          yield* flipTag(
+            invitations.accept({
+              invitationId: invitation.id,
+              token: yield* mailedToken(invitation.id),
+              userId: invitee.id,
+            }),
+          ),
+          "AlreadyMember",
+        );
+        assert.strictEqual(
+          Option.getOrThrow(yield* invitations.find(invitation.id)).status,
+          "canceled",
+        );
+      }).pipe(Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -436,9 +503,14 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
       return Effect.gen(function* () {
         const { org, invitations, invite } = yield* arrange;
         const teams = yield* TeamRecords.TeamRecords;
-        const team = yield* teams.createTeam({ organizationId: org.id, name: "Eng" });
+        const team = yield* teams.createTeam({
+          organizationId: org.id,
+          name: "Eng",
+        });
         const invitee = yield* verifiedUser("invitee@example.com");
-        const invitation = yield* invite("invitee@example.com", { teamId: team.id });
+        const invitation = yield* invite("invitee@example.com", {
+          teamId: team.id,
+        });
         seen.length = 0; // the creator's own membership fired first (D7)
         yield* invitations.accept({
           invitationId: invitation.id,
@@ -446,7 +518,11 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
           userId: invitee.id,
         });
         assert.strictEqual((yield* teams.listTeamMembers(team.id)).length, 1);
-        assert.deepStrictEqual(seen, ["accepted:User", "memberAdded:User", "teamMemberAdded:User"]);
+        assert.deepStrictEqual(seen, [
+          "accepted:User",
+          "memberAdded:User",
+          "teamMemberAdded:User",
+        ]);
       }).pipe(
         Effect.provide(
           buildLayer(
@@ -471,23 +547,29 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
     },
   );
 
-  it.effect("the veto point of an acceptance runs first, before the token is looked at", () =>
-    Effect.gen(function* () {
-      const { invitations } = yield* arrange;
-      const aborted = yield* invitations
-        .accept({ invitationId: "no-such-invitation", token: "x", userId: Users.UserId("u") })
-        .pipe(Effect.flip);
-      assert.strictEqual(aborted._tag, "HookAborted");
-    }).pipe(
-      Effect.provide(
-        buildLayer(
-          { teams: teamsOn },
-          OrganizationHooks.BeforeAcceptInvitation.tap(() =>
-            Effect.fail(new HookPoint.HookAbort({ code: "HOLD" })),
+  it.effect(
+    "the veto point of an acceptance runs first, before the token is looked at",
+    () =>
+      Effect.gen(function* () {
+        const { invitations } = yield* arrange;
+        const aborted = yield* invitations
+          .accept({
+            invitationId: "no-such-invitation",
+            token: "x",
+            userId: Users.UserId("u"),
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(aborted._tag, "HookAborted");
+      }).pipe(
+        Effect.provide(
+          buildLayer(
+            { teams: teamsOn },
+            OrganizationHooks.BeforeAcceptInvitation.tap(() =>
+              Effect.fail(new HookPoint.HookAbort({ code: "HOLD" })),
+            ),
           ),
         ),
       ),
-    ),
   );
 
   // BEH-EA-237 (plan 30, A-F4): the invitee's acts name an organization through the invitation.
@@ -500,12 +582,25 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
         const invitee = yield* verifiedUser("invitee@example.com");
         const invitation = yield* invite("invitee@example.com");
         const token = yield* mailedToken(invitation.id);
-        yield* directory.suspend(OrganizationActor.platformAdmin(Users.UserId("admin")), {
-          organizationId: org.id,
-        });
-        const input = { invitationId: invitation.id, token, userId: invitee.id };
-        assert.strictEqual(yield* flipTag(invitations.accept(input)), "InvitationNotFound");
-        assert.strictEqual(yield* flipTag(invitations.reject(input)), "InvitationNotFound");
+        yield* directory.suspend(
+          OrganizationActor.platformAdmin(Users.UserId("admin")),
+          {
+            organizationId: org.id,
+          },
+        );
+        const input = {
+          invitationId: invitation.id,
+          token,
+          userId: invitee.id,
+        };
+        assert.strictEqual(
+          yield* flipTag(invitations.accept(input)),
+          "InvitationNotFound",
+        );
+        assert.strictEqual(
+          yield* flipTag(invitations.reject(input)),
+          "InvitationNotFound",
+        );
         assert.strictEqual(
           Option.getOrThrow(yield* invitations.find(invitation.id)).status,
           "pending",
@@ -521,30 +616,43 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
       }).pipe(Effect.provide(buildLayer())),
   );
 
-  it.effect("reject needs the token and the invitee's address, and creates no membership", () =>
-    Effect.gen(function* () {
-      const { org, invitations, invite } = yield* arrange;
-      const invitee = yield* verifiedUser("invitee@example.com");
-      const stranger = yield* verifiedUser("stranger@example.com");
-      const invitation = yield* invite("invitee@example.com");
-      const token = yield* mailedToken(invitation.id);
-      assert.strictEqual(
-        yield* flipTag(
-          invitations.reject({ invitationId: invitation.id, token, userId: stranger.id }),
-        ),
-        "InvitationEmailMismatch",
-      );
-      yield* invitations.reject({ invitationId: invitation.id, token, userId: invitee.id });
-      assert.strictEqual(
-        Option.getOrThrow(yield* invitations.find(invitation.id)).status,
-        "rejected",
-      );
-      assert.isTrue(
-        Option.isNone(
-          yield* (yield* MembershipRecords.MembershipRecords).findByUserAndOrg(invitee.id, org.id),
-        ),
-      );
-    }).pipe(Effect.provide(buildLayer())),
+  it.effect(
+    "reject needs the token and the invitee's address, and creates no membership",
+    () =>
+      Effect.gen(function* () {
+        const { org, invitations, invite } = yield* arrange;
+        const invitee = yield* verifiedUser("invitee@example.com");
+        const stranger = yield* verifiedUser("stranger@example.com");
+        const invitation = yield* invite("invitee@example.com");
+        const token = yield* mailedToken(invitation.id);
+        assert.strictEqual(
+          yield* flipTag(
+            invitations.reject({
+              invitationId: invitation.id,
+              token,
+              userId: stranger.id,
+            }),
+          ),
+          "InvitationEmailMismatch",
+        );
+        yield* invitations.reject({
+          invitationId: invitation.id,
+          token,
+          userId: invitee.id,
+        });
+        assert.strictEqual(
+          Option.getOrThrow(yield* invitations.find(invitation.id)).status,
+          "rejected",
+        );
+        assert.isTrue(
+          Option.isNone(
+            yield* (yield* MembershipRecords.MembershipRecords).findByUserAndOrg(
+              invitee.id,
+              org.id,
+            ),
+          ),
+        );
+      }).pipe(Effect.provide(buildLayer())),
   );
 
   it.effect(
@@ -560,11 +668,15 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
           "canceled",
         );
         assert.strictEqual(
-          yield* flipTag(invitations.cancel(application, { invitationId: invitation.id })),
+          yield* flipTag(
+            invitations.cancel(application, { invitationId: invitation.id }),
+          ),
           "InvitationNotPending",
         );
         assert.strictEqual(
-          yield* flipTag(invitations.cancel(application, { invitationId: "nope" })),
+          yield* flipTag(
+            invitations.cancel(application, { invitationId: "nope" }),
+          ),
           "InvitationNotFound",
         );
         assert.deepStrictEqual(seen, ["canceled:Application"]);
@@ -591,11 +703,16 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
         const { org, invitations, invite } = yield* arrange;
         const directory = yield* OrganizationDirectory.OrganizationDirectory;
         const invitation = yield* invite("invitee@example.com");
-        yield* directory.suspend(OrganizationActor.platformAdmin(Users.UserId("admin")), {
-          organizationId: org.id,
-        });
+        yield* directory.suspend(
+          OrganizationActor.platformAdmin(Users.UserId("admin")),
+          {
+            organizationId: org.id,
+          },
+        );
         assert.strictEqual(
-          yield* flipTag(invitations.cancel(application, { invitationId: invitation.id })),
+          yield* flipTag(
+            invitations.cancel(application, { invitationId: invitation.id }),
+          ),
           "InvitationNotFound",
         );
         assert.strictEqual(
@@ -623,15 +740,20 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
     },
   );
 
-  it.effect("listForUser is the invitee's own address (FAMS-002), nothing for another user", () =>
-    Effect.gen(function* () {
-      const { invitations, invite } = yield* arrange;
-      const invitee = yield* verifiedUser("invitee@example.com");
-      const other = yield* verifiedUser("other@example.com");
-      yield* invite("invitee@example.com");
-      assert.strictEqual((yield* invitations.listForUser(invitee.id)).length, 1);
-      assert.deepStrictEqual(yield* invitations.listForUser(other.id), []);
-    }).pipe(Effect.provide(buildLayer())),
+  it.effect(
+    "listForUser is the invitee's own address (FAMS-002), nothing for another user",
+    () =>
+      Effect.gen(function* () {
+        const { invitations, invite } = yield* arrange;
+        const invitee = yield* verifiedUser("invitee@example.com");
+        const other = yield* verifiedUser("other@example.com");
+        yield* invite("invitee@example.com");
+        assert.strictEqual(
+          (yield* invitations.listForUser(invitee.id)).length,
+          1,
+        );
+        assert.deepStrictEqual(yield* invitations.listForUser(other.id), []);
+      }).pipe(Effect.provide(buildLayer())),
   );
 });
 
@@ -647,36 +769,49 @@ const countRows = (sql: SqlClient.SqlClient, table: string) =>
   sql.unsafe(`SELECT COUNT(*) AS n FROM ${table}`).pipe(
     Effect.map((rows) => {
       const first = rows[0];
-      return typeof first === "object" && first !== null && "n" in first ? Number(first.n) : -1;
+      return typeof first === "object" && first !== null && "n" in first
+        ? Number(first.n)
+        : -1;
     }),
   );
 
 describe("OrganizationInvitations over SQL", () => {
-  it.effect("a failing team insert leaves the invitation pending and no membership (D3)", () =>
-    Effect.gen(function* () {
-      const { org, invitations, invite } = yield* arrange;
-      const teams = yield* TeamRecords.TeamRecords;
-      const sql = yield* SqlClient.SqlClient;
-      const team = yield* teams.createTeam({ organizationId: org.id, name: "Eng" });
-      const invitee = yield* verifiedUser("invitee@example.com");
-      const invitation = yield* invite("invitee@example.com", { teamId: team.id });
-      const token = yield* mailedToken(invitation.id);
-      yield* TestSql.injectFailure({
-        name: "fail_team_membership_insert",
-        table: "organization_team_membership",
-        event: "INSERT",
-      });
-      const exit = yield* Effect.exit(
-        invitations.accept({ invitationId: invitation.id, token, userId: invitee.id }),
-      );
-      assert.isTrue(Exit.isFailure(exit));
-      assert.strictEqual(
-        Option.getOrThrow(yield* invitations.find(invitation.id)).status,
-        "pending",
-      );
-      // Only the creator's membership: the invitee's was rolled back with the failed team insert.
-      assert.strictEqual(yield* countRows(sql, "organization_membership"), 1);
-    }).pipe(Effect.provide(SqlSystemLive)),
+  it.effect(
+    "a failing team insert leaves the invitation pending and no membership (D3)",
+    () =>
+      Effect.gen(function* () {
+        const { org, invitations, invite } = yield* arrange;
+        const teams = yield* TeamRecords.TeamRecords;
+        const sql = yield* SqlClient.SqlClient;
+        const team = yield* teams.createTeam({
+          organizationId: org.id,
+          name: "Eng",
+        });
+        const invitee = yield* verifiedUser("invitee@example.com");
+        const invitation = yield* invite("invitee@example.com", {
+          teamId: team.id,
+        });
+        const token = yield* mailedToken(invitation.id);
+        yield* TestSql.injectFailure({
+          name: "fail_team_membership_insert",
+          table: "organization_team_membership",
+          event: "INSERT",
+        });
+        const exit = yield* Effect.exit(
+          invitations.accept({
+            invitationId: invitation.id,
+            token,
+            userId: invitee.id,
+          }),
+        );
+        assert.isTrue(Exit.isFailure(exit));
+        assert.strictEqual(
+          Option.getOrThrow(yield* invitations.find(invitation.id)).status,
+          "pending",
+        );
+        // Only the creator's membership: the invitee's was rolled back with the failed team insert.
+        assert.strictEqual(yield* countRows(sql, "organization_membership"), 1);
+      }).pipe(Effect.provide(SqlSystemLive)),
   );
 });
 
@@ -693,10 +828,7 @@ for (const mode of TestAuth.recordModes) {
       >,
     ) => {
       const options = {
-        services: Layer.mergeAll(
-          Organization.config({ teams: teamsOn, ...config }),
-          Mailer.layerMemory,
-        ),
+        services: Organization.config({ teams: teamsOn, ...config }),
         taps,
       };
       return mode === "sql"
@@ -719,7 +851,9 @@ for (const mode of TestAuth.recordModes) {
           const invitee = yield* verifiedUser("invitee@example.com");
           const invitation = yield* invite("invitee@example.com");
           const cancelling = yield* Effect.forkChild(
-            Effect.exit(invitations.cancel(application, { invitationId: invitation.id })),
+            Effect.exit(
+              invitations.cancel(application, { invitationId: invitation.id }),
+            ),
           );
           yield* invitations.accept({
             invitationId: invitation.id,
@@ -740,7 +874,9 @@ for (const mode of TestAuth.recordModes) {
             Option.getOrThrow(yield* invitations.find(invitation.id)).status,
             "accepted",
           );
-          assert.isTrue(Option.isSome(yield* members.findByUserAndOrg(invitee.id, org.id)));
+          assert.isTrue(
+            Option.isSome(yield* members.findByUserAndOrg(invitee.id, org.id)),
+          );
         }).pipe(
           Effect.provide(
             raceLayer(
@@ -753,43 +889,54 @@ for (const mode of TestAuth.recordModes) {
         ),
     );
 
-    it.effect("8 invitations racing at invitationLimit - 1 store exactly one", () =>
-      Effect.gen(function* () {
-        const { org, invite } = yield* arrange;
-        const records = yield* InvitationRecords.InvitationRecords;
-        // One pending invitation, arranged through the store so it does not meet the barrier.
-        yield* records.create({
-          email: "first@example.com",
-          inviterId: owner,
-          organizationId: org.id,
-          role: ["member"],
-          expiresAt: DateTime.makeUnsafe(Date.now() + 86_400_000),
-          tokenHash: "arranged",
-        });
-        const outcomes = yield* Effect.all(
-          Array.from({ length: 8 }, (_, n) =>
-            Effect.map(Effect.exit(invite(`racer-${n}@example.com`)), (exit) =>
-              Exit.isSuccess(exit)
-                ? "ok"
-                : Option.match(Exit.findErrorOption(exit), {
-                    onNone: () => "defect",
-                    onSome: (e) => e._tag,
-                  }),
+    it.effect(
+      "8 invitations racing at invitationLimit - 1 store exactly one",
+      () =>
+        Effect.gen(function* () {
+          const { org, invite } = yield* arrange;
+          const records = yield* InvitationRecords.InvitationRecords;
+          // One pending invitation, arranged through the store so it does not meet the barrier.
+          yield* records.create({
+            email: "first@example.com",
+            inviterId: owner,
+            organizationId: org.id,
+            role: ["member"],
+            expiresAt: DateTime.makeUnsafe(Date.now() + 86_400_000),
+            tokenHash: "arranged",
+          });
+          const outcomes = yield* Effect.all(
+            Array.from({ length: 8 }, (_, n) =>
+              Effect.map(
+                Effect.exit(invite(`racer-${n}@example.com`)),
+                (exit) =>
+                  Exit.isSuccess(exit)
+                    ? "ok"
+                    : Option.match(Exit.findErrorOption(exit), {
+                        onNone: () => "defect",
+                        onSome: (e) => e._tag,
+                      }),
+              ),
+            ),
+            { concurrency: "unbounded" },
+          );
+          assert.strictEqual(outcomes.filter((tag) => tag === "ok").length, 1);
+          assert.isTrue(
+            outcomes.every(
+              (tag) => tag === "ok" || tag === "InvitationLimitReached",
+            ),
+          );
+          assert.strictEqual(
+            yield* records.countPendingByInviter(grant, owner),
+            2,
+          );
+        }).pipe(
+          Effect.provide(
+            raceLayer(
+              { invitationLimit: 2 },
+              OrganizationHooks.BeforeCreateInvitation.tap(Rendezvous.held(8)),
             ),
           ),
-          { concurrency: "unbounded" },
-        );
-        assert.strictEqual(outcomes.filter((tag) => tag === "ok").length, 1);
-        assert.isTrue(outcomes.every((tag) => tag === "ok" || tag === "InvitationLimitReached"));
-        assert.strictEqual(yield* records.countPendingByInviter(grant, owner), 2);
-      }).pipe(
-        Effect.provide(
-          raceLayer(
-            { invitationLimit: 2 },
-            OrganizationHooks.BeforeCreateInvitation.tap(Rendezvous.held(8)),
-          ),
         ),
-      ),
     );
   });
 }

@@ -13,12 +13,33 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Scope from "effect/Scope";
 import * as TestAuth from "../src/TestAuth.ts";
+import * as TestMailbox from "../src/TestMailbox.ts";
+import { Password } from "@awthaq/password";
 import { Pins } from "./support/Pins.ts";
 
 describe("TestAuth.app (BEH-EA-T3)", () => {
+  it("BEH-EA-359: a mail the handler's request fiber sends is waited for through `run`", async () => {
+    await TestAuth.withApp(
+      TestAuth.layer(Auth.make([Password.Password]), { services: TestAuth.httpClient.noBreach }),
+      undefined,
+      async (app) => {
+        const to = "mailbox@example.com";
+        const response = await app.request("POST", "/password/sign-up", {
+          json: { email: to, password: "a sufficiently long test password" },
+        });
+        assert.strictEqual(response.status, 200);
+        const mail = await app.run(
+          Effect.flatMap(TestMailbox.Mailbox, (box) =>
+            box.mail.waitFor({ to, template: "verify-email" }),
+          ),
+        );
+        assert.isAbove(TestMailbox.secret(mail).length, 0);
+      },
+    );
+  });
+
   it("ADR-EA-047: a request's audit row carries its correlation id with no extra wiring", async () => {
-    const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])));
-    try {
+    await TestAuth.withApp(TestAuth.layer(Auth.make([Pins])), undefined, async (app) => {
       const alice = await app.signIn("correlated@example.com");
       const out = await alice.request("POST", "/session/sign-out", {
         headers: { "x-request-id": "harness-1", "user-agent": "harness/1" },
@@ -31,14 +52,11 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
       );
       assert.deepStrictEqual(rows[0]?.correlationId, Option.some("harness-1"));
       assert.deepStrictEqual(rows[0]?.userAgent, Option.some("harness/1"));
-    } finally {
-      await app.dispose();
-    }
+    });
   });
 
   it("a session minted through `run` authenticates a request through `handler`", async () => {
-    const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])));
-    try {
+    await TestAuth.withApp(TestAuth.layer(Auth.make([Pins])), undefined, async (app) => {
       const signedIn = await app.run(TestAuth.signInAs({ email: "shared@example.com" }));
       const browser = await app.agent();
       assert.strictEqual(browser.cookies.receive(signedIn.setCookie)._tag, "Stored");
@@ -49,19 +67,18 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
         Effect.flatMap(Sessions.Sessions, (sessions) => sessions.verify(signedIn.token)),
       );
       assert.strictEqual(verified.session.userId, signedIn.userId);
-    } finally {
-      await app.dispose();
-    }
+    });
   });
 
   it("an agent's unsafe request passes CSRF with the seeded cookie, computed independently of `Csrf.ts`", async () => {
-    const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])));
-    try {
+    await TestAuth.withApp(TestAuth.layer(Auth.make([Pins])), undefined, async (app) => {
       const poster = await app.signIn("poster@example.com");
       const csrf = poster.cookies.get(Api.CSRF_COOKIE_NAME);
       assert.isDefined(csrf);
       assert.isFalse(csrf?.httpOnly);
-      const posted = await poster.request("POST", "/pins", { json: { label: "csrf-ok" } });
+      const posted = await poster.request("POST", "/pins", {
+        json: { label: "csrf-ok" },
+      });
       assert.strictEqual(posted.status, 200);
       assert.strictEqual(poster.sent[0]?.headers.get(Api.CSRF_HEADER_NAME), csrf?.value);
       // The same call without the echo carries the cookies but no header, and is refused.
@@ -70,65 +87,59 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
         headers: { [Api.CSRF_HEADER_NAME]: "" },
       });
       assert.strictEqual(bare.status, 403);
-    } finally {
-      await app.dispose();
-    }
+    });
   });
 
   it("`signIn` returns an agent that is signed in, with the `amr` the test asked for", async () => {
-    const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])));
-    try {
+    await TestAuth.withApp(TestAuth.layer(Auth.make([Pins])), undefined, async (app) => {
       const alice = await app.signIn("amr@example.com", { amr: ["pwd"] });
       const session = await alice.request("GET", "/session");
       assert.strictEqual(session.status, 200);
       const body = await session.json();
       assert.deepStrictEqual(body.amr, ["pwd"]);
       assert.strictEqual(alice.cookies.get(Api.SESSION_COOKIE_NAME)?.httpOnly, true);
-    } finally {
-      await app.dispose();
-    }
+    });
   });
 
   it("`signIn` under `SecureDomain` holds `__Secure-session; Domain=…` and authenticates `GET /session`", async () => {
-    const app = TestAuth.app(
+    await TestAuth.withApp(
       TestAuth.layer(Auth.make([Pins]), {
         services: SessionCookie.config({
-          mode: SessionCookie.SecureDomain({ domain: "example.com", sameSite: "lax" }),
+          mode: SessionCookie.SecureDomain({
+            domain: "example.com",
+            sameSite: "lax",
+          }),
         }),
       }),
       { baseUrl: "https://app.example.com" },
+      async (app) => {
+        const alice = await app.signIn("secure-domain@example.com");
+        const cookie = alice.cookies.get("__Secure-session");
+        assert.strictEqual(cookie?.domain, "example.com");
+        assert.isFalse(cookie?.hostOnly);
+        assert.isUndefined(alice.cookies.get(Api.SESSION_COOKIE_NAME));
+        const session = await alice.request("GET", "/session");
+        assert.strictEqual(session.status, 200);
+      },
     );
-    try {
-      const alice = await app.signIn("secure-domain@example.com");
-      const cookie = alice.cookies.get("__Secure-session");
-      assert.strictEqual(cookie?.domain, "example.com");
-      assert.isFalse(cookie?.hostOnly);
-      assert.isUndefined(alice.cookies.get(Api.SESSION_COOKIE_NAME));
-      const session = await alice.request("GET", "/session");
-      assert.strictEqual(session.status, 200);
-    } finally {
-      await app.dispose();
-    }
   });
 
   it('`signIn({ delivery: "bearer" })` authenticates with Authorization and sends no cookie', async () => {
-    const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])));
-    try {
-      const native = await app.signIn("native@example.com", { delivery: "bearer" });
+    await TestAuth.withApp(TestAuth.layer(Auth.make([Pins])), undefined, async (app) => {
+      const native = await app.signIn("native@example.com", {
+        delivery: "bearer",
+      });
       assert.strictEqual(native.bearer.current(), Redacted.value(native.token));
       const session = await native.request("GET", "/session");
       assert.strictEqual(session.status, 200);
       assert.isFalse(native.sent[0]?.headers.has("cookie"));
       assert.strictEqual(native.sent[0]?.headers.get(Api.TOKEN_DELIVERY_HEADER), "bearer");
       assert.isTrue(native.sent[0]?.headers.get("authorization")?.startsWith("Bearer "));
-    } finally {
-      await app.dispose();
-    }
+    });
   });
 
   it("two agents of one app do not share cookies, and `request` is a fresh anonymous agent each call", async () => {
-    const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])));
-    try {
+    await TestAuth.withApp(TestAuth.layer(Auth.make([Pins])), undefined, async (app) => {
       const alice = await app.signIn("alice@example.com");
       const bob = await app.agent();
       assert.strictEqual((await alice.request("GET", "/session")).status, 200);
@@ -139,15 +150,12 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
         extraCookies: { [Api.SESSION_COOKIE_NAME]: "forged" },
       });
       assert.strictEqual(forged.status, 401);
-    } finally {
-      await app.dispose();
-    }
+    });
   });
 
   it("`runtime` and `memoMap` share the composition's instances with `handler` and `run`", async () => {
     const layer = TestAuth.layer(Auth.make([Pins]));
-    const app = TestAuth.app(layer);
-    try {
+    await TestAuth.withApp(layer, undefined, async (app) => {
       const signedIn = await app.runtime.runPromise(TestAuth.signInAs({ email: "rt@example.com" }));
       const browser = await app.agent();
       browser.cookies.receive(signedIn.setCookie);
@@ -164,14 +172,11 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
       );
       assert.strictEqual(viaMemoMap, await app.run(Sessions.Sessions));
       assert.strictEqual(viaMemoMap, await app.runtime.runPromise(Sessions.Sessions));
-    } finally {
-      await app.dispose();
-    }
+    });
   });
 
   it("`testClock` serves the composition over one TestClock that `advance` moves for the handler and for `run`", async () => {
-    const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])), { testClock: true });
-    try {
+    await TestAuth.withApp(TestAuth.layer(Auth.make([Pins])), { testClock: true }, async (app) => {
       const alice = await app.signIn("clock@example.com");
       const before = await alice.request("GET", "/session");
       assert.strictEqual(before.status, 200);
@@ -187,40 +192,34 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
       const after = await alice.request("GET", "/session");
       assert.strictEqual(after.status, 401);
       const later = await app.signIn("later@example.com");
-      const posted = await later.request("POST", "/pins", { json: { label: "after-advance" } });
+      const posted = await later.request("POST", "/pins", {
+        json: { label: "after-advance" },
+      });
       assert.strictEqual(posted.status, 200);
-    } finally {
-      await app.dispose();
-    }
+    });
   });
 
   it("`advance` without the `testClock` option rejects instead of silently doing nothing", async () => {
-    const app = TestAuth.app(TestAuth.layer(Auth.make([Pins])));
-    try {
+    await TestAuth.withApp(TestAuth.layer(Auth.make([Pins])), undefined, async (app) => {
       await app.advance(Duration.seconds(1)).then(
         () => assert.fail("expected a rejection"),
         (error) => assert.include(String(error), "testClock"),
       );
-    } finally {
-      await app.dispose();
-    }
+    });
   });
 
   it("`memoMap` lets two apps share the instances they have in common", async () => {
     const memoMap = Layer.makeMemoMapUnsafe();
     const layer = TestAuth.layer(Auth.make([Pins]));
-    const first = TestAuth.app(layer, { memoMap });
-    const second = TestAuth.app(layer, { memoMap });
-    try {
-      const signedIn = await first.run(TestAuth.signInAs({ email: "shared-map@example.com" }));
-      const browser = await second.agent();
-      browser.cookies.receive(signedIn.setCookie);
-      const response = await browser.request("GET", "/pins");
-      assert.strictEqual(response.status, 200);
-    } finally {
-      await second.dispose();
-      await first.dispose();
-    }
+    await TestAuth.withApp(layer, { memoMap }, (first) =>
+      TestAuth.withApp(layer, { memoMap }, async (second) => {
+        const signedIn = await first.run(TestAuth.signInAs({ email: "shared-map@example.com" }));
+        const browser = await second.agent();
+        browser.cookies.receive(signedIn.setCookie);
+        const response = await browser.request("GET", "/pins");
+        assert.strictEqual(response.status, 200);
+      }),
+    );
   });
 
   it("`buildContext` builds on the real clock into a context the caller owns", async () => {
@@ -234,24 +233,5 @@ describe("TestAuth.app (BEH-EA-T3)", () => {
     );
     assert.isDefined(Context.get(context, Sessions.Sessions));
     await Effect.runPromise(Scope.close(scope, Exit.void));
-  });
-
-  it("`dispose` releases the scope: a finalizer of the composition has run after it", async () => {
-    let released = 0;
-    const app = TestAuth.app(
-      TestAuth.layer(Auth.make([Pins]), {
-        services: Layer.effectDiscard(
-          Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              released += 1;
-            }),
-          ),
-        ),
-      }),
-    );
-    await app.run(Effect.void);
-    assert.strictEqual(released, 0);
-    await app.dispose();
-    assert.strictEqual(released, 1);
   });
 });

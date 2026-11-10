@@ -50,6 +50,7 @@ import {
   Migrations,
   RateLimits,
   SecretHash,
+  Tenant,
   Users,
 } from "@awthaq/core";
 import { Jwt, JwtCodec } from "@awthaq/jwt";
@@ -133,8 +134,10 @@ export const ApiKeyConfig = Context.Reference<ApiKeyConfigShape>("awthaq/api-key
   defaultValue: () => defaultConfig,
 });
 
+export const ApiKeyConfigScoped = Tenant.perDeployment(ApiKeyConfig);
+
 export const config = (partial: Partial<ApiKeyConfigShape>) =>
-  Layer.succeed(ApiKeyConfig, { ...defaultConfig, ...partial });
+  ApiKeyConfigScoped.layer({ ...defaultConfig, ...partial });
 
 /** ADR-EA-022: the JOSE `typ` of a minted service token, distinct from `@awthaq/jwt`'s `at+jwt` principal tokens. */
 export const SERVICE_TOKEN_TYP = "service+jwt";
@@ -597,7 +600,7 @@ const CredentialContributionsLive = Layer.unwrap(
   Effect.gen(function* () {
     const apiKey = yield* ApiKey;
     const jwt = yield* Jwt.Jwt;
-    const settings = yield* ApiKeyConfig;
+    const settings = yield* yield* Tenant.inForce(ApiKeyConfigScoped);
     const limits = yield* RateLimits.budgetOf(ApiKey);
     const registry = yield* Credentials.CredentialResolvers;
 
@@ -763,7 +766,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
   },
   // ECS-008/BEH-EA-229: what `doctor` audits and `config list` prints.
   config: [
-    ConfigDescriptor.make(ApiKeyConfig, {
+    ConfigDescriptor.make(ApiKeyConfigScoped, {
       audit: (value, environment) =>
         environment.production && value.grantableScopes === undefined
           ? [
@@ -789,7 +792,7 @@ export class ApiKey extends AuthPlugin.Service<ApiKey, ApiKeyShape>()("apikey", 
       make: Effect.gen(function* () {
         const records = yield* ApiKeyRecords.ApiKeyRecords;
         const clients = yield* ApiKeyClientRecords.ApiKeyClientRecords;
-        const settings = yield* ApiKeyConfig;
+        const settings = yield* yield* Tenant.inForce(ApiKeyConfigScoped);
         const random = yield* SecureRandom.SecureRandom;
         const hasher = yield* Digest.Digest;
         const events = yield* AuthEvents.AuthEvents;

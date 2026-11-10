@@ -1,9 +1,9 @@
 // P20a: step definitions for 28-tenancy.feature (BEH-EA-230..237). Every assertion reads the
 // state the real services and store adapters produced: the raw `"tenantId"` column, the response
 // a router middleware wrote, the typed refusal an organization operation returned.
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import { Accounts, AuditLog, Sessions, Users, Verification } from "@awthaq/core";
-import { AuditLogStore, Encryption, Mailer, PasswordHasher, Tenant } from "@awthaq/ports";
+import { AuditLogStore, Encryption, PasswordHasher, Tenant } from "@awthaq/ports";
 import {
   Organization,
   OrganizationActor,
@@ -12,7 +12,7 @@ import {
   OrganizationMembers,
 } from "@awthaq/organization";
 import { ConnectionRecords, OrganizationRecords } from "@awthaq/organization/records";
-import { AdminAccounts, AdminTenants } from "@awthaq/admin";
+import { Admin, AdminAccounts, AdminTenants } from "@awthaq/admin";
 import { OAuthConnections } from "@awthaq/oauth";
 import { Models, TenantScope, TenantScoped } from "@awthaq/sql";
 import { defineSteps } from "@effect-cucumber/vitest";
@@ -1159,6 +1159,59 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
+  // ---- BEH-EA-356 (the effective-configuration view, plan 36) ----
+
+  const passwordMinLength = (inTenant: string | null) =>
+    adminAccounts(
+      Effect.flatMap(Admin.Admin, (admin) => admin.effectiveConfig(callerOf("an-administrator"))).pipe(
+        inTenant === null ? (self) => self : Effect.provide(AdminAccountsTenantConfig.get(inTenant)),
+      ),
+    ).pipe(
+      Effect.map((items) => {
+        const item = items.find((found) => found.key.toLowerCase().includes("password"));
+        return [
+          item?.scope,
+          item?.source,
+          item?.entries.find((entry) => entry.path === "minLength")?.value,
+        ].join("|");
+      }),
+    );
+
+  When(
+    "an administrator reads the effective configuration in a request naming the tenant {string}",
+    function* (tenant: string) {
+      const { outcomes } = yield* World;
+      yield* outcomes.set("effective:password", yield* passwordMinLength(tenant));
+    },
+  );
+
+  When(
+    "an administrator reads the effective configuration in a request naming no tenant",
+    function* () {
+      const { outcomes } = yield* World;
+      yield* outcomes.set("effective:password", yield* passwordMinLength(null));
+    },
+  );
+
+  Then(
+    "the Password minimum length is listed as {string}, per tenant, from the tenant",
+    function* (expected: string) {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.get("effective:password"), `tenant|tenant|${expected}`);
+    },
+  );
+
+  Then(
+    "the Password minimum length is listed as the build-time value, per tenant, from no tenant",
+    function* () {
+      const { outcomes } = yield* World;
+      const [scope, source, minLength] = (yield* outcomes.get("effective:password")).split("|");
+      assert.equal(scope, "tenant");
+      assert.notEqual(source, "tenant");
+      assert.notEqual(minLength, "40");
+    },
+  );
+
   When(
     "an administrator sets a password shorter than the tenant's minimum for {string} in a request naming the tenant {string}",
     function* (name: string, tenant: string) {
@@ -1432,13 +1485,11 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
           const plugin = yield* Organization.Organization;
           const invited = yield* plugin.invite(inviter, id, { email, role: ["member"] });
           // MTI-010: the capability only travels by email; read it back as the invitee would.
-          const sent = yield* (yield* Mailer.Mailer).sent;
-          const mailed = sent
-            .toReversed()
-            .map((message) => message.data?.["token"])
-            .find((value) => typeof value === "string");
-          assert.ok(typeof mailed === "string", `no invitation mail was sent to ${email}`);
-          return { userId: created.id, invitation: invited, token: mailed };
+          const mail = yield* (yield* TestMailbox.Mailbox).mail.waitFor({
+            to: email,
+            template: "organization-invite",
+          });
+          return { userId: created.id, invitation: invited, token: TestMailbox.secret(mail) };
         }),
       );
       const { people, invitations } = yield* World;

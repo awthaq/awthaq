@@ -623,6 +623,44 @@ Feature: SCIM Provisioning
       Then the response is 409
       And as seen by "Okta", 1 groups are listed
 
+    @REQ-EA-1530
+    Scenario: A PATCH that renames a group and then adds a user the connection did not provision is 400 and the group keeps its name
+      Given an organization "Acme" with the SCIM connection "Okta"
+      And a user "stranger@elsewhere.example" who signed up independently of any directory
+      And "Okta" has provisioned the group "Eng"
+      When "Okta" patches the group "Eng" renaming it to "Platform" and adding the members "stranger@elsewhere.example"
+      Then the response is 400
+      And the error body has scimType "invalidValue"
+      When "Okta" reads the group "Eng"
+      Then the resource has displayName "Eng"
+
+    @REQ-EA-1531
+    Scenario: A PUT whose rename a veto hook refuses is 403 and the group keeps its externalId
+      Given a beforeUpdateTeam hook that refuses renaming a team to "Vetoed"
+      And an organization "Acme" with the SCIM connection "Okta"
+      And "Okta" has provisioned the group "Eng" with externalId "grp-1"
+      When "Okta" replaces the group "Eng" with displayName "Vetoed" and externalId "grp-2"
+      Then the response is 403
+      When "Okta" reads the group "Eng"
+      Then the resource has externalId "grp-1"
+
+    @REQ-EA-1532
+    Scenario: A path-less PATCH object renames the group and replaces its members together
+      Given an organization "Acme" with the SCIM connection "Okta"
+      And "Okta" has provisioned the user "ada@acme.example"
+      And "Okta" has provisioned the group "Eng"
+      When "Okta" patches the group "Eng" with a path-less object renaming it to "Platform" with the members "ada@acme.example"
+      Then the resource has displayName "Platform"
+      And the team behind the group "Platform" has exactly the members "ada@acme.example"
+
+    @REQ-EA-1533
+    Scenario: A displayName filter lists only the connection's own group, never a same-named team an administrator created
+      Given an organization "Acme" with the SCIM connection "Okta"
+      And "Okta" has provisioned the group "Eng"
+      And a team "Eng" that an organization admin created in the organization of "Okta"
+      When "Okta" lists groups with the filter 'displayName eq "Eng"'
+      Then the list reports totalResults 1, startIndex 1, itemsPerPage 1 and 1 resources
+
   # BEH-EA-252 — spec/behaviors/30-scim.md; see also ADR-EA-028
   @BEH-EA-252
   Rule: The wire format follows RFC 7644: content types, filters, paging, errors and discovery

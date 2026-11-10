@@ -308,6 +308,7 @@ export const AdminHandlers = HttpApiBuilder.group(
             new AdminApi.ConfigItemDto({
               owner: item.owner,
               key: item.key,
+              scope: item.scope,
               source: item.source,
               entries: item.entries.map((entry) => new AdminApi.ConfigEntryDto(entry)),
             }),
@@ -667,7 +668,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
   // The impersonation audit rows are hash-chained (`AuditChain`); the chain's key is this plugin's concern.
   config: [
     AdminGate.descriptor,
-    ConfigDescriptor.make(AuditChain.AuditChainConfig, {
+    ConfigDescriptor.make(AuditChain.AuditChainConfigScoped, {
       audit: (value, environment) =>
         environment.production && Option.isNone(value.key)
           ? [
@@ -691,8 +692,8 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
       // ADR-EA-018 Decision 8 (plan 13): every gate and the impersonation ceiling are read per
       // operation by the one admin gate, so a tenant's `Admin.config(...)` governs its own requests.
       const gate = yield* AdminGate.make;
-      // EP-009: captured at build, like every other configuration read — a request-time read would
-      // see only the router's own context, not the overrides the composed layer was built under.
+      // EP-009: the build context is captured so the view can resolve against it; the request fiber
+      // supplies the tenant's values (BEH-EA-356).
       const builtIn = yield* Effect.context<never>();
       const catalog = Context.getOrElse(
         builtIn,
@@ -720,7 +721,7 @@ export class Admin extends AuthPlugin.Service<Admin, AdminShape>()("admin", {
 
       const effectiveConfig: AdminShape["effectiveConfig"] = Effect.fnUntraced(function* (caller) {
         yield* gate.collection(caller, "effectiveConfig");
-        return EffectiveConfig.read(builtIn, catalog);
+        return yield* EffectiveConfig.snapshot(builtIn, catalog);
       });
 
       const listUsers: AdminShape["listUsers"] = Effect.fnUntraced(function* (caller, input) {

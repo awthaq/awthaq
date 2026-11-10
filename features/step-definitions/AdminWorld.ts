@@ -134,18 +134,29 @@ export interface AppHandle {
 export type AppServices = Layer.Success<ReturnType<typeof buildAppLayer>>;
 
 export interface WorldShape {
-  readonly app: Ref.Ref<AppHandle | undefined>;
+  readonly app: TestAuth.LazyApp<AppOptions, AppHandle>;
   readonly lastResponse: Ref.Ref<Response | undefined>;
   readonly outcomes: Ref.Ref<Record<string, unknown>>;
 }
 
 export class World extends Context.Service<World, WorldShape>()("features/AdminWorld") {}
 
+const buildApp = (options: AppOptions) =>
+  Effect.gen(function* () {
+    const events = Ref.makeUnsafe<ReadonlyArray<WorldEvent>>([]);
+    const app = yield* TestAuth.serve(buildAppLayer(options, events), {
+      baseUrl: ORIGIN,
+    });
+    return { app, events };
+  });
+
 export const WorldLive = Layer.effect(
   World,
   Effect.gen(function* () {
     return World.of({
-      app: yield* Ref.make<AppHandle | undefined>(undefined),
+      app: yield* TestAuth.lazyApp<AppOptions, AppHandle>({}, buildApp, {
+        name: "AdminWorld",
+      }),
       lastResponse: yield* Ref.make<Response | undefined>(undefined),
       outcomes: yield* Ref.make<Record<string, unknown>>({}),
     });
@@ -157,16 +168,12 @@ export const configureApp = Effect.fn("features.admin.configureApp")(function* (
   options: AppOptions,
 ) {
   const world = yield* World;
-  const events = Ref.makeUnsafe<ReadonlyArray<WorldEvent>>([]);
-  const app = TestAuth.app(buildAppLayer(options, events), { baseUrl: ORIGIN });
-  yield* Ref.set(world.app, { app, events });
+  yield* world.app.replace(options);
 });
 
 const appHandle = Effect.fn("features.admin.appHandle")(function* () {
   const world = yield* World;
-  const found = yield* Ref.get(world.app);
-  if (found === undefined) yield* configureApp({});
-  return (yield* Ref.get(world.app))!;
+  return yield* world.app.get;
 });
 
 /**

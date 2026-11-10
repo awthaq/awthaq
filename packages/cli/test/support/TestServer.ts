@@ -1,148 +1,113 @@
-// Hand-wired on purpose: a real HTTP listener the CLI talks to over a socket (plan 08 exemption).
-// A REAL auth server for the session commands: core's own `session` and `account` groups
-// (`AuthCore.AuthCoreApi`) served by the real handlers, real `Authentication` middleware and real CSRF
-// protection over in-memory `Users`/`Sessions`, on a real Node HTTP socket. `whoami` and `login`
-// speak to it exactly as they speak to a deployed server — through the generated `HttpApiClient`
-// with `Authorization: Bearer` — so what the suite proves is the wire, not a stub.
-import { AuthCore } from "@awthaq/api";
-import {
-  Accounts,
-  DataExport,
-  Erasure,
-  Persistence,
-  RateLimits,
-  Sessions,
-  Users,
-  Verification,
-} from "@awthaq/core";
-import {
-  DeviceAuthorization,
-  DeviceAuthorizationApi,
-  DeviceClientRecords,
-  DeviceGrantRecords,
-} from "@awthaq/device-authorization";
-import { ClientAddress, RateLimiter, SqlTransaction } from "@awthaq/ports";
-import {
-  Account,
-  Authentication,
-  Credentials,
-  AuthHttp,
-  Csrf,
-  RequestContext,
-  Session,
-} from "@awthaq/server";
+// BEH-EA-353: a REAL auth server for the CLI on a real socket: `TestAuth.listen` over the composition `Auth.make`
+// derives, so `login` and `whoami` speak through the generated `HttpApiClient` to what a deployed host serves.
+import { Auth, Sessions, Users } from "@awthaq/core";
+import { DeviceAuthorization } from "@awthaq/device-authorization";
+import { Password } from "@awthaq/password";
+import { TestAuth } from "@awthaq/test";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import * as HttpRouter from "effect/http/HttpRouter";
-import * as HttpServer from "effect/http/HttpServer";
-import * as NetAddress from "effect/net/NetAddress";
-import { TestAuth } from "@awthaq/test";
+import * as TestClock from "effect/testing/TestClock";
 
-// The `account` group's handlers call core's erasure and export (CSG-001/CSG-005), over these stores.
-const Base = Layer.mergeAll(Erasure.layer, DataExport.layer).pipe(
-  Layer.provideMerge(
-    Layer.mergeAll(
-      SqlTransaction.layerNoop,
-      RateLimiter.layerPermissive,
-      Sessions.layer.pipe(Layer.provide(Persistence.memory)),
-      Users.layer.pipe(Layer.provide(Persistence.memory)),
-      Accounts.layer.pipe(Layer.provide(Persistence.memory)),
-      Verification.layer.pipe(Layer.provide(Persistence.memory)),
+type Run = <X>(
+  effect: Effect.Effect<X, never, Users.Users | Sessions.Sessions>,
+) => Promise<X>;
+
+/** A fresh user with one live session; `token` is what `AWTHAQ_TOKEN` / `login --token` carries. */
+const scenario = (run: Run) => ({
+  issue: (email: string) =>
+    Effect.promise(() =>
+      run(
+        Effect.gen(function* () {
+          const user = yield* Users.Users.use((users) =>
+            users.create({ identity: { _tag: "Email", email }, name: "Test" }),
+          );
+          const issued = yield* Sessions.Sessions.use((s) =>
+            s.issue({ userId: user.id }),
+          );
+          return {
+            userId: user.id,
+            sessionId: issued.session.id,
+            token: Redacted.value(issued.token),
+          };
+        }).pipe(Effect.orDie, TestAuth.withoutRequest),
+      ),
     ),
-  ),
-  Layer.provideMerge(TestAuth.memoryFoundation),
-);
-
-const Middleware = Layer.mergeAll(
-  // ADR-EA-045: the session-lifecycle markers core's groups (and the device token) declare.
-  AuthHttp.sessionLifecycle,
-  // ADR-EA-047: the request context every group declares outermost.
-  RequestContext.RequestContextLive.pipe(Layer.provide(ClientAddress.layerDirect)),
-  Authentication.AuthenticationLive.pipe(Layer.provide(Credentials.PrincipalResolverLive)),
-  Authentication.OptionalAuthenticationLive.pipe(Layer.provide(Credentials.PrincipalResolverLive)),
-  Csrf.CsrfProtectionLive.pipe(
-    Layer.provide(
-      Layer.succeed(Csrf.CsrfConfig, {
-        secret: Redacted.make("cli-session-suite-csrf-secret-0123456789"),
-        allowedOrigins: [],
-      }),
+  /** Revokes every session of the user server-side, as an admin or another device would. */
+  revokeAll: (userId: Users.UserId) =>
+    Effect.promise(() =>
+      run(
+        Sessions.Sessions.use((s) => s.revokeAll(userId, "userRevoked")).pipe(
+          Effect.orDie,
+        ),
+      ),
     ),
-  ),
-);
+});
 
-const Services = Middleware.pipe(Layer.provideMerge(Base));
-
-/** The device authorization plugin over in-memory records, on top of the same users and sessions. */
-const DeviceServices = DeviceAuthorization.DeviceAuthorization.layer.pipe(
-  Layer.provideMerge(DeviceAuthorization.DeviceAuthorizationHooksLive),
-  Layer.provideMerge(
-    Layer.mergeAll(DeviceGrantRecords.layerMemory, DeviceClientRecords.layerMemory),
-  ),
-  Layer.provideMerge(RateLimits.layer),
-  Layer.provideMerge(ClientAddress.layerDirect),
-  Layer.provideMerge(DeviceAuthorization.config({ verificationUri: "https://app.test/device" })),
-  Layer.provideMerge(Services),
-);
-
-/**
- * Starts the server (in the caller's scope — provide `NodeHttpServer.layerTest` around the whole
- * test, as the body-limit suite does, or the socket closes with the layer) and returns its base URL
- * plus a way to mint a real session token.
- */
 export const serveAuth = (options?: { readonly device?: boolean }) =>
   Effect.gen(function* () {
-    const withDevice = options?.device !== false;
-    const services = yield* Layer.build(DeviceServices);
-    const context = Layer.succeedContext(services);
-    const sessions = yield* Sessions.Sessions.pipe(Effect.provide(context));
-    const users = yield* Users.Users.pipe(Effect.provide(context));
-    const plugin = yield* DeviceAuthorization.DeviceAuthorization.pipe(Effect.provide(context));
-    const core = AuthHttp.routes(AuthCore.AuthCoreApi).pipe(
-      Layer.provide(Session.SessionHandlers),
-      Layer.provide(Account.AccountHandlers),
-    );
-    const device = AuthHttp.routes(DeviceAuthorizationApi.DeviceAuthorizationApi);
-    // One router for both contracts: a server without the plugin answers the device routes with a 404.
-    yield* Layer.mergeAll(core, withDevice ? device : Layer.empty).pipe(
-      Layer.provide(context),
-      HttpRouter.serve,
-      Layer.build,
-    );
-    const server = yield* HttpServer.HttpServer;
-    if (!NetAddress.isInetAddress(server.address)) {
-      return yield* Effect.die("the test server did not bind a TCP port");
+    // The socket runs on the step's TestClock; `app.run` on the wall clock. Align them, as `lazyApp` does.
+    yield* TestClock.setTime(Date.now());
+    if (options?.device === false) {
+      const app = yield* TestAuth.listen(
+        TestAuth.layer(Auth.make([Password.Password]), {
+          services: Layer.mergeAll(
+            Password.config({}),
+            TestAuth.httpClient.noBreach,
+          ),
+        }),
+      );
+      const decide = (
+        _code: string,
+        _email: string,
+        _decision?: "approve" | "deny",
+      ) =>
+        Effect.die(
+          "serveAuth({ device: false }) has no device authorization plugin",
+        );
+      return { baseUrl: app.url, ...scenario(app.run), decide };
     }
-    const baseUrl = `http://127.0.0.1:${server.address.port}`;
-    /** A fresh user with one live session; the returned token is what `AWTHAQ_TOKEN` / `login --token` carries. */
-    const issue = (email: string) =>
-      Effect.gen(function* () {
-        const user = yield* users
-          .create({ identity: { _tag: "Email", email }, name: "Test" })
-          .pipe(Effect.orDie);
-        const issued = yield* sessions.issue({ userId: user.id }).pipe(Effect.orDie);
-        return {
-          userId: user.id,
-          sessionId: issued.session.id,
-          token: Redacted.value(issued.token),
-        };
-      });
-    /** Revokes every session of the user server-side, as an admin or another device would. */
-    const revokeAll = (userId: Users.UserId) => sessions.revokeAll(userId, "userRevoked");
-    /**
-     * The person on the second device: a signed-in user opens the verification page for `userCode` (which
-     * claims it) and approves or denies it — through the plugin's own service, as the wire's handlers do.
-     */
-    const decide = (userCode: string, email: string, decision: "approve" | "deny" = "approve") =>
-      Effect.gen(function* () {
-        const { userId, sessionId } = yield* issue(email);
-        const caller = { userId, sessionId, impersonated: false, amr: ["pwd" as const] };
-        const source = { userCode };
-        yield* plugin.verify(source, Option.some(caller)).pipe(Effect.orDie);
-        return yield* (
-          decision === "approve" ? plugin.approve(source, caller) : plugin.deny(source, caller)
-        ).pipe(Effect.orDie);
-      }).pipe(TestAuth.withRequest({ ip: "198.51.100.20" }));
-    return { baseUrl, issue, revokeAll, decide, plugin };
+    const app = yield* TestAuth.listen(
+      TestAuth.layer(Auth.make([DeviceAuthorization.DeviceAuthorization]), {
+        services: DeviceAuthorization.config({
+          verificationUri: "https://app.test/device",
+        }),
+      }),
+    );
+    const { issue, revokeAll } = scenario(app.run);
+    /** The person on the second device: opens the verification page for `userCode` (claiming it) and decides. */
+    const decide = (
+      userCode: string,
+      email: string,
+      decision: "approve" | "deny" = "approve",
+    ) =>
+      Effect.flatMap(issue(email), ({ userId, sessionId }) =>
+        Effect.promise(() =>
+          app.run(
+            DeviceAuthorization.DeviceAuthorization.use((plugin) => {
+              const caller = {
+                userId,
+                sessionId,
+                impersonated: false,
+                amr: ["pwd" as const],
+              };
+              const source = { userCode };
+              return plugin
+                .verify(source, Option.some(caller))
+                .pipe(
+                  Effect.andThen(
+                    decision === "approve"
+                      ? plugin.approve(source, caller)
+                      : plugin.deny(source, caller),
+                  ),
+                );
+            }).pipe(
+              Effect.orDie,
+              TestAuth.withRequest({ ip: "198.51.100.20" }),
+            ),
+          ),
+        ),
+      );
+    return { baseUrl: app.url, issue, revokeAll, decide };
   });

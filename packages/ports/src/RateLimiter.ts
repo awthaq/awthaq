@@ -39,6 +39,7 @@ import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Tenant from "./Tenant.ts";
 
 /**
  * BEH-EA-106: exceeding a configured limit fails with this, never a generic or untyped error.
@@ -145,8 +146,11 @@ export const RateLimiterConfig = Context.Reference("awthaq/ports/RateLimiterConf
   defaultValue: () => defaultRateLimiterConfig,
 });
 
+/** BEH-EA-355: deployment-scoped. */
+export const RateLimiterConfigScoped = Tenant.perDeployment(RateLimiterConfig);
+
 export const config = (partial: Partial<RateLimiterConfigShape>) =>
-  Layer.succeed(RateLimiterConfig, { ...defaultRateLimiterConfig, ...partial });
+  RateLimiterConfigScoped.layer({ ...defaultRateLimiterConfig, ...partial });
 
 // RBS-009: the strike and block buckets live in the same store as ordinary
 // ones; this namespace keeps a caller-chosen key (an email ending in "#block")
@@ -164,7 +168,7 @@ export const layer: Layer.Layer<RateLimiter, never, RateLimiterStore> = Layer.ef
   RateLimiter,
   Effect.gen(function* () {
     const store = yield* RateLimiterStore;
-    const policy = yield* RateLimiterConfig;
+    const policy = yield* yield* Tenant.inForce(RateLimiterConfigScoped);
     // RBS-004: only the failure cause is logged, never the bucket key (BEH-EA-108).
     const onUnavailable = (error: RateLimiterStoreUnavailable) =>
       Effect.logWarning("awthaq: rate-limit store unavailable", error.cause).pipe(

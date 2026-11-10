@@ -200,7 +200,7 @@ const buildFindings = (config: CliConfig, options: Options) =>
           "build",
           severity,
           "mailer-development",
-          "the Mailer is a development implementation (layerNoop or layerMemory): verification and reset mail is dropped or kept in memory",
+          "the Mailer is a development implementation (layerNoop, layerConsole or a test mailbox): verification and reset mail is dropped, only logged or kept for a test",
         ),
       );
     }

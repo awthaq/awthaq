@@ -23,10 +23,9 @@
 //   handler blocks until released, so "validated, then revoked, then completes" can be driven.
 import { Api } from "@awthaq/api";
 import { Auth, Sessions, Users } from "@awthaq/core";
-import type { Mailer } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import type { Credentials } from "@awthaq/server";
-import { RedactionGuard, TestAuth, type UserAgent } from "@awthaq/test";
+import { RedactionGuard, TestAuth, TestMailbox, type UserAgent } from "@awthaq/test";
 import { parseCookieHeader, type StoredCookie } from "@awthaq/web/cookies";
 import { agentOver } from "./shared/Csrf.ts";
 import * as Context from "effect/Context";
@@ -46,12 +45,7 @@ import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as SqlClient from "effect/sql/SqlClient";
 import { mailedToken } from "./MailedToken.ts";
-import {
-  awaitMail,
-  makeCapturingMailer,
-  makeNamedRegistry,
-  STRONG_PASSWORD,
-} from "./shared/Harness.ts";
+import { makeNamedRegistry, STRONG_PASSWORD } from "./shared/Harness.ts";
 
 const NoBreachHttpClient = Layer.succeed(
   HttpClient.HttpClient,
@@ -108,20 +102,13 @@ const built = Auth.make([Password.Password], { extraGroups: [GateGroup] });
  * wall clock) and `advance` moves it; the double-submit token outlives every scenario's simulated span.
  */
 const buildAppLayer = (settings: Sessions.SessionConfig, gate: Gate) => {
-  const { layer: capturingMailer, sent } = makeCapturingMailer();
-
-  const ClockLive = Layer.effectDiscard(TestClock.setTime(Date.now())).pipe(
-    Layer.provideMerge(TestClock.layer()),
-  );
-
   const appLayer = TestAuth.layer(built, {
     records: "sql",
     suite: "features_SessionWorld",
     csrf: { maxAge: Duration.days(400) },
     services: Layer.mergeAll(
       NoBreachHttpClient,
-      Password.config({}),
-      capturingMailer,
+      Password.config({ signInTimingFloor: "off" }),
       GateHandlers(gate),
     ),
     openapiPath: "/openapi.json",
@@ -129,9 +116,8 @@ const buildAppLayer = (settings: Sessions.SessionConfig, gate: Gate) => {
   }).pipe(
     // The session lifetimes this scenario wants: the base's `Sessions` reads `SessionConfig` when it is built.
     Layer.provide(Layer.succeed(Sessions.SessionConfig, settings)),
-    Layer.provideMerge(ClockLive),
   );
-  return { appLayer, sent };
+  return { appLayer };
 };
 
 /**
@@ -164,13 +150,13 @@ export type AppServices =
 export interface AppHandle {
   readonly handler: (request: Request) => Promise<Response>;
   readonly run: <A>(effect: Effect.Effect<A, never, AppServices>) => Promise<A>;
-  readonly sentMail: Effect.Effect<ReadonlyArray<Mailer.MailMessage>>;
+  /** The mailbox the app's `TestAuth` base records into. */
+  readonly mailbox: TestMailbox.MailboxShape;
   readonly gate: Gate;
 }
 
 export interface WorldShape {
-  readonly app: Ref.Ref<AppHandle | undefined>;
-  readonly settings: Ref.Ref<Sessions.SessionConfig>;
+  readonly app: TestAuth.LazyApp<Sessions.SessionConfig, AppHandle>;
   readonly actors: ReturnType<typeof makeNamedRegistry<ActorState>>;
   readonly responses: ReturnType<typeof makeNamedRegistry<Response>>;
   /** Rows captured at a chosen moment, so a Then can compare against "before". */
@@ -190,9 +176,27 @@ export class World extends Context.Service<World, WorldShape>()("features/Sessio
 export const WorldLive = Layer.effect(
   World,
   Effect.gen(function* () {
+    const app = yield* TestAuth.lazyApp(
+      defaultSettings,
+      (settings) =>
+        Effect.gen(function* () {
+          const gate: Gate = {
+            entered: Deferred.makeUnsafe<void>(),
+            release: Deferred.makeUnsafe<void>(),
+            admitted: Ref.makeUnsafe(0),
+          };
+          const { appLayer } = buildAppLayer(settings, gate);
+          const served = yield* TestAuth.serve(appLayer, { testClock: "now" });
+          const mailbox = Context.get(
+            yield* Effect.promise(() => served.context()),
+            TestMailbox.Mailbox,
+          );
+          return { handler: served.handler, run: served.run, mailbox, gate };
+        }),
+      { name: "SessionWorld" },
+    );
     return World.of({
-      app: yield* Ref.make<AppHandle | undefined>(undefined),
-      settings: yield* Ref.make(defaultSettings),
+      app,
       actors: makeNamedRegistry<ActorState>("actor"),
       responses: makeNamedRegistry<Response>("response"),
       snapshots: makeNamedRegistry<SessionRow>("row snapshot"),
@@ -210,26 +214,11 @@ export const configureSessions = Effect.fn("features.session.configureSessions")
   overrides: Partial<Sessions.SessionConfig>,
 ) {
   const world = yield* World;
-  if ((yield* Ref.get(world.app)) !== undefined) {
-    return yield* Effect.die(new Error("configureSessions must run before the first request"));
-  }
-  yield* Ref.update(world.settings, (existing) => ({ ...existing, ...overrides }));
+  yield* world.app.configure((existing) => ({ ...existing, ...overrides }));
 });
 
 const appHandle = Effect.fn("features.session.appHandle")(function* () {
-  const world = yield* World;
-  const existing = yield* Ref.get(world.app);
-  if (existing !== undefined) return existing;
-  const gate: Gate = {
-    entered: Deferred.makeUnsafe<void>(),
-    release: Deferred.makeUnsafe<void>(),
-    admitted: Ref.makeUnsafe(0),
-  };
-  const { appLayer, sent } = buildAppLayer(yield* Ref.get(world.settings), gate);
-  const app = TestAuth.app(appLayer);
-  const handle: AppHandle = { handler: app.handler, run: app.run, sentMail: sent, gate };
-  yield* Ref.set(world.app, handle);
-  return handle;
+  return yield* (yield* World).app.get;
 });
 
 /**
@@ -365,7 +354,7 @@ let nextEmail = 0;
  * the actor under `name`. Returns the sign-up response.
  */
 export const signUp = Effect.fn("features.session.signUp")(function* (name: string) {
-  const { handler, sentMail } = yield* appHandle();
+  const { handler, mailbox } = yield* appHandle();
   const { actors } = yield* World;
   const email = `${name}-${nextEmail++}@example.com`;
   const actor: ActorState = { email, agent: agentOver(handler) };
@@ -382,14 +371,7 @@ export const signUp = Effect.fn("features.session.signUp")(function* (name: stri
   if (response.status !== 200) throw new Error(`sign-up failed for ${email}: ${response.status}`);
   yield* actors.set(name, actor);
 
-  yield* awaitMail(
-    sentMail,
-    (message) => message.template === "verify-email" && message.to === email,
-  );
-  const verifyMail = (yield* sentMail).findLast(
-    (message) => message.template === "verify-email" && message.to === email,
-  );
-  if (verifyMail === undefined) throw new Error(`expected a verify-email mail for ${email}`);
+  const verifyMail = yield* mailbox.mail.waitFor({ to: email, template: "verify-email" });
   const token = mailedToken(verifyMail);
   const verified = yield* Effect.promise(() =>
     send(handler, "POST", "/verify-email", undefined, { token }),
@@ -405,13 +387,12 @@ export const mailedTo = Effect.fn("features.session.mailedTo")(function* (
   address: string,
   template: string,
 ) {
-  const { sentMail } = yield* appHandle();
-  yield* awaitMail(sentMail, (message) => message.template === template && message.to === address);
-  const found = (yield* sentMail).findLast(
-    (message) => message.template === template && message.to === address,
-  );
-  if (found === undefined) throw new Error(`expected a ${template} mail for ${address}`);
-  return found;
+  const { mailbox } = yield* appHandle();
+  const match = { to: address, template };
+  const before = (yield* mailbox.mail.messages).filter(
+    (message) => message.to === address && message.template === template,
+  ).length;
+  return yield* mailbox.mail.waitFor(match, { nth: Math.max(before, 1) });
 });
 
 /** Signs the actor `existingName` in again (BEH-EA-053: a new session is minted, never reused); the new session is registered under `newName`. */

@@ -230,6 +230,13 @@ Feature: Qadi Bridge — Path A (Decide in Handler)
       And it propagates as a defect
 ```
 
+## World lifetime
+
+- A World that serves an `Auth.make` composition holds exactly one `TestAuth.lazyApp` cell, named after the World.
+- Every option is configured before the first request; a late `configure` is a defect naming the World (`replace` is the one explicit rebuild).
+- No app or SQL client outlives its scenario: `shared/LeakGuard.ts` fails a feature file that leaves one open.
+- A scenario that needs a socket uses `TestAuth.listen`, never a hand-built server.
+
 ## What not to do
 
 - Don't invent a requirement the source `.md` doesn't state, even a plausible one — file it as a gap in your final summary instead, don't quietly add it as a scenario.

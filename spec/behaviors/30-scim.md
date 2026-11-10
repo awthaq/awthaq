@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-30 |
-> | Revision | 1.6 |
-> | Effective Date | 2026-10-13 |
+> | Revision | 1.7 |
+> | Effective Date | 2026-11-09 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release, implementing [MOD-EA-012](../models/12-scim.md) as `@awthaq/scim` (CWM-002, AOMS-009; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-10-13): `DELETE` in `erase` mode runs `AccountErasure.eraseAccount` with a `Directory` initiator (BEH-EA-250), is announced by core's `auth.user.deleted` ahead of `auth.scim.userDeleted` (BEH-EA-253), and `@awthaq/scim` takes part in every erasure and export (architecture plan 03) <br> 1.2 (2026-10-13): a failed `POST` abandons the user through `Users.createWith` (no veto, no event) and leaves invitations to the address alone (BEH-EA-247, architecture plan 03) <br> 1.3 (2026-10-13): provisioning is a sign-up: `BeforeSignUp` (strategy `scim:<organizationId>:<connectionId>`) can veto it with a 403, and `auth.user.created` and `AfterSignUp` follow the commit (BEH-EA-247, BEH-EA-253, ADR-EA-038, architecture plan 01) <br> 1.4 (2026-10-13): BEH-EA-246: `scim_connection` is Keyed and `scim_resource` Derived; the token lookup, erasure and export take a witness; the stores fail with StoreUnavailable (plan 05 phase 9) <br> 1.5 (2026-10-13): BEH-EA-251: Groups are written through `OrganizationTeams` by a `Directory` actor, so `teams.enabled`, the team and roster quotas, the last-team rule and the team veto and observe points apply; a refusal is `403` or `409`; BEH-EA-253 notes the team events and observers (ADR-EA-040, architecture plan 04 phase 2) <br> 1.6 (2026-11-08): BEH-EA-247: linking a resource the connection already links is `ScimLinkConflict` on every adapter (plan 24); `ScimRecords` runs the `RecordsContract` suite (plan 25 ticket 23) |
+> | Change History | 1.0 (2026-09-29): Initial release, implementing [MOD-EA-012](../models/12-scim.md) as `@awthaq/scim` (CWM-002, AOMS-009; [ADR-EA-023](../decisions/023-enterprise-federation-packages.md)) <br> 1.1 (2026-10-13): `DELETE` in `erase` mode runs `AccountErasure.eraseAccount` with a `Directory` initiator (BEH-EA-250), is announced by core's `auth.user.deleted` ahead of `auth.scim.userDeleted` (BEH-EA-253), and `@awthaq/scim` takes part in every erasure and export (architecture plan 03) <br> 1.2 (2026-10-13): a failed `POST` abandons the user through `Users.createWith` (no veto, no event) and leaves invitations to the address alone (BEH-EA-247, architecture plan 03) <br> 1.3 (2026-10-13): provisioning is a sign-up: `BeforeSignUp` (strategy `scim:<organizationId>:<connectionId>`) can veto it with a 403, and `auth.user.created` and `AfterSignUp` follow the commit (BEH-EA-247, BEH-EA-253, ADR-EA-038, architecture plan 01) <br> 1.4 (2026-10-13): BEH-EA-246: `scim_connection` is Keyed and `scim_resource` Derived; the token lookup, erasure and export take a witness; the stores fail with StoreUnavailable (plan 05 phase 9) <br> 1.5 (2026-10-13): BEH-EA-251: Groups are written through `OrganizationTeams` by a `Directory` actor, so `teams.enabled`, the team and roster quotas, the last-team rule and the team veto and observe points apply; a refusal is `403` or `409`; BEH-EA-253 notes the team events and observers (ADR-EA-040, architecture plan 04 phase 2) <br> 1.6 (2026-11-08): BEH-EA-247: linking a resource the connection already links is `ScimLinkConflict` on every adapter (plan 24); `ScimRecords` runs the `RecordsContract` suite (plan 25 ticket 23) <br> 1.7 (2026-11-09): BEH-EA-348 and BEH-EA-349; BEH-EA-248/251/252 point at them; a group PATCH changes the roster by its net effect and a path-less object applies every managed attribute (architecture plan 32) |
 ---
 
 > `@awthaq/scim` composes as `Auth.make([Organization, Scim])` (`Scim` `dependsOn: [Organization]`), serves `/scim/v2` per RFC 7644, and stands on the user status of [BEH-EA-46](06-domain-users-accounts.md) and `Sessions.revokeAll`. Everything below is what a directory service (Okta, Entra ID, OneLogin) relies on, plus the safety rules that keep an organization's directory from reaching accounts it did not create.
@@ -75,6 +75,8 @@ REQUIREMENT: A `PUT` or `PATCH` that would change a provisioned user's
              manage rather than failing the sync. An unknown `op` is `400
              invalidSyntax`.
 ```
+
+A `PUT` or `PATCH` is also applied whole or not at all ([BEH-EA-348](30-scim.md#beh-ea-348-a-scim-put-or-patch-is-applied-whole-or-not-at-all)).
 
 An IdP-driven email change would be an account-takeover path (change the address, then reset the password to it), so identity attributes are fixed at creation; everything else a directory legitimately maintains is writable.
 
@@ -147,6 +149,8 @@ REQUIREMENT: A SCIM Group MUST be an organization team of the connection's
              cache is cleared by a roster change.
 ```
 
+A multi-operation `PATCH` and a `PUT` are atomic: an abort is `403` and nothing is written; a path-less object applies every managed attribute; team events follow the net roster change per user ([BEH-EA-348](30-scim.md#beh-ea-348-a-scim-put-or-patch-is-applied-whole-or-not-at-all)).
+
 Teams also have hierarchy and roles the SCIM model has no words for; the directory sees a flat group of the users it owns, and everything else about the team stays the organization's.
 
 _Previous: [BEH-EA-250](30-scim.md#beh-ea-250-delete-deactivates-by-default-and-erases-when-configured) | Next: [BEH-EA-252](30-scim.md#beh-ea-252-the-wire-format-follows-rfc-7644-content-types-filters-paging-errors-and-discovery)_
@@ -169,6 +173,8 @@ REQUIREMENT: Responses MUST be `application/scim+json`; a request body MUST be
              served behind the same token and truthfully report PATCH and filter
              supported and bulk, sort, ETag and password change not.
 ```
+
+Group filters and paging have no cap ([BEH-EA-349](30-scim.md#beh-ea-349-a-list-filter-or-page-reaches-every-resource-the-connection-provisioned-and-only-those)).
 
 Not supported, and reported as such: `/Bulk`, `sortBy`, `/Me`, ETag concurrency and compound filters.
 
@@ -195,3 +201,40 @@ An erasing `DELETE` is also announced by core's `auth.user.deleted` (`deletedBy:
 The audit actor is the connection, not a user: the connection id rides in the event payload, and no user id is recorded as the actor.
 
 _Previous: [BEH-EA-252](30-scim.md#beh-ea-252-the-wire-format-follows-rfc-7644-content-types-filters-paging-errors-and-discovery)_
+
+## BEH-EA-348: A SCIM `PUT` or `PATCH` is applied whole or not at all
+
+```text
+REQUIREMENT: A `PUT` or `PATCH` to a provisioned user or group MUST be
+             interpreted and checked in full before anything is written: an
+             unknown `op`, an empty or over-long `displayName`, or a member the
+             connection did not provision (in any operation, even one a later
+             operation would undo) MUST be refused with nothing written. The
+             writes MUST then run in one unit of work (ADR-EA-037): a team
+             veto, a team member limit, an `externalId` held by another
+             resource of the connection, or a store outage MUST leave the
+             resource, its roster and its mapping as they were, and publish
+             nothing. A `PATCH` with several member operations MUST change the
+             roster once, by their net effect, so team-member events and
+             observers follow per user actually added or removed. A SCIM
+             deactivation MUST commit the suspension and the session
+             revocation together. A path-less `PATCH` object MUST apply every
+             managed attribute it names.
+```
+
+On the in-memory backend (`SqlTransaction.layerNoop`, development and tests only, DRS-006) a refusal that can only be decided by a write after another write (a rename veto after a roster change) leaves the earlier write; every refusal decided before the first write leaves nothing. RFC 7644 §3.5.2 treats a patch request as atomic whatever the number of operations (wording not re-checked against the RFC text in plan 32 ticket 05).
+
+_Previous: [BEH-EA-253](30-scim.md#beh-ea-253-provisioning-lifecycle-changes-are-published-as-events)_
+
+## BEH-EA-349: A list filter or page reaches every resource the connection provisioned, and only those
+
+```text
+REQUIREMENT: `GET /Groups` MUST page in the store, and `displayName eq` and
+             `externalId eq` MUST find a group however many groups the
+             connection has. A `displayName eq` filter MUST list only teams the
+             connection provisioned, never a same-named team created by an
+             administrator or by another connection. A mapping whose resource
+             was removed elsewhere is skipped on its page.
+```
+
+_Previous: [BEH-EA-348](30-scim.md#beh-ea-348-a-scim-put-or-patch-is-applied-whole-or-not-at-all)_

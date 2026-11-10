@@ -15,7 +15,7 @@ import {
   configureApp,
   direct,
   mailOf,
-  mailsOf,
+  expectMailCount,
   request,
   secretOf,
   SESSION_COOKIE,
@@ -211,8 +211,8 @@ export const magicLinkSteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   Then("only {string} was mailed a magic link", function* (email: string) {
-    assert.equal((yield* mailsOf("magic-link", email)).length, 1);
-    assert.equal((yield* mailsOf("magic-link", "nobody@example.com")).length, 0);
+    yield* expectMailCount("magic-link", email, 1);
+    yield* expectMailCount("magic-link", "nobody@example.com", 0);
   });
 
   Then(
@@ -239,7 +239,7 @@ export const magicLinkSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
 
   Then("{string} was mailed {int} magic link(s)", function* (email: string, count: number) {
-    assert.equal((yield* mailsOf("magic-link", email)).length, count);
+    yield* expectMailCount("magic-link", email, count);
   });
 
   When(

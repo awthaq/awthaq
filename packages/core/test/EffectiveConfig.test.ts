@@ -1,6 +1,7 @@
 // ECS-008/EP-009 (BEH-EA-229, ADR-EA-006 rev 1.2): configuration descriptors are
 // static (part of the manifest, no Layer evaluated), read back through a
 // `Context`, and never unwrap a secret.
+import { Tenant } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -36,7 +37,9 @@ const WidgetConfig = Context.Reference<WidgetConfigShape>("test/WidgetConfig", {
   }),
 });
 
-const widgetDescriptor = ConfigDescriptor.make(WidgetConfig, {
+const WidgetScoped = Tenant.perTenant(WidgetConfig, { boot: ["apiSecret"] });
+
+const widgetDescriptor = ConfigDescriptor.make(WidgetScoped, {
   sensitive: ["apiSecret"],
   audit: (value) =>
     value.minLength < 8
@@ -119,21 +122,64 @@ describe("EffectiveConfig", () => {
     }),
   );
 
-  it.effect("snapshot reads the ambient context of a running application", () =>
+  const widgetValue = (minLength: number, apiSecret: string): WidgetConfigShape => ({
+    minLength,
+    apiSecret,
+    signingKey: Redacted.make("y"),
+    ttl: Duration.hours(2),
+    nested: { enabled: true },
+  });
+
+  it.effect(
+    "snapshot reports a tenant-scoped key's calling value, boot fields from the build value (BEH-EA-355)",
+    () =>
+      Effect.gen(function* () {
+        const built = yield* contextOf(
+          Layer.succeed(WidgetConfig, widgetValue(20, "built-secret")),
+        );
+        const [item] = yield* EffectiveConfig.snapshot(built, owned).pipe(
+          Effect.provideService(WidgetConfig, widgetValue(30, "tenant-secret")),
+        );
+        assert.strictEqual(item?.scope, "tenant");
+        assert.strictEqual(item?.source, "tenant");
+        const entries = new Map(item?.entries.map((e) => [e.path, e.value]));
+        assert.strictEqual(entries.get("minLength"), "30");
+        // `apiSecret` is a boot field and sensitive: redacted either way, and never the tenant's.
+        assert.strictEqual(entries.get("apiSecret"), "<redacted>");
+        assert.ok(!JSON.stringify(item).includes("tenant-secret"));
+      }),
+  );
+
+  it.effect(
+    "plan 36 F2: snapshot reports the value an operation reads, a build-only override included",
+    () =>
+      Effect.gen(function* () {
+        const built = yield* contextOf(Layer.succeed(WidgetConfig, widgetValue(20, "x")));
+        const [item] = yield* EffectiveConfig.snapshot(built, owned);
+        assert.strictEqual(item?.source, "override");
+        assert.strictEqual(
+          new Map(item?.entries.map((e) => [e.path, e.value])).get("minLength"),
+          "20",
+        );
+      }),
+  );
+
+  it.effect("a deployment-scoped key ignores a calling-fiber value (BEH-EA-355)", () =>
     Effect.gen(function* () {
-      const [item] = yield* EffectiveConfig.snapshot(owned);
+      const Fixed = Context.Reference<{ readonly size: number }>("test/FixedConfig", {
+        defaultValue: () => ({ size: 1 }),
+      });
+      const fixed = EffectiveConfig.owned("fixed", [
+        ConfigDescriptor.make(Tenant.perDeployment(Fixed)),
+      ]);
+      const built = yield* contextOf(Layer.succeed(Fixed, { size: 2 }));
+      const [item] = yield* EffectiveConfig.snapshot(built, fixed).pipe(
+        Effect.provideService(Fixed, { size: 99 }),
+      );
+      assert.strictEqual(item?.scope, "deployment");
       assert.strictEqual(item?.source, "override");
-    }).pipe(
-      Effect.provide(
-        Layer.succeed(WidgetConfig, {
-          minLength: 20,
-          apiSecret: "x",
-          signingKey: Redacted.make("y"),
-          ttl: Duration.hours(2),
-          nested: { enabled: true },
-        }),
-      ),
-    ),
+      assert.strictEqual(new Map(item?.entries.map((e) => [e.path, e.value])).get("size"), "2");
+    }),
   );
 
   it.effect(

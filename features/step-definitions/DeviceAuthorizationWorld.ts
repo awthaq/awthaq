@@ -41,7 +41,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
-import * as TestClock from "effect/testing/TestClock";
 import { agentOver } from "./shared/Csrf.ts";
 import { makeNamedRegistry } from "./shared/Harness.ts";
 import { makeOutcomes } from "./shared/Outcomes.ts";
@@ -96,19 +95,18 @@ const buildApp = (options: AppOptions) =>
 interface App {
   readonly handler: (request: Request) => Promise<Response>;
   readonly ctx: Context.Context<DeviceServices>;
-  readonly dispose: () => Promise<void>;
 }
 
-const startApp = (options: AppOptions): Promise<App> => {
-  const appLayer = buildApp(options);
-  const app = TestAuth.app(appLayer);
-  return app.context().then((ctx) => ({ handler: app.handler, ctx, dispose: app.dispose }));
-};
+const startApp = (options: AppOptions) =>
+  Effect.gen(function* () {
+    const app = yield* TestAuth.serve(buildApp(options));
+    const ctx = yield* Effect.promise(() => app.context());
+    return { handler: app.handler, ctx };
+  });
 
 /** The scenario's own scratch pad: typed cells, so a step narrows nothing by assertion. */
 export interface WorldShape {
-  readonly options: Ref.Ref<AppOptions>;
-  readonly app: Ref.Ref<Option.Option<App>>;
+  readonly app: TestAuth.LazyApp<AppOptions, App>;
   /** Every device code the scenario has requested, newest last; a step names one by position from the end. */
   readonly codes: Ref.Ref<ReadonlyArray<DeviceAuthorization.CodeIssued>>;
   /** The people a scenario names: the claiming user (`primary`) and a second, unrelated one (`other`). */
@@ -130,9 +128,13 @@ export class World extends Context.Service<World, WorldShape>()(
 export const WorldLive = Layer.effect(
   World,
   Effect.gen(function* () {
-    const world = World.of({
-      options: yield* Ref.make<AppOptions>({}),
-      app: yield* Ref.make(Option.none<App>()),
+    // The handler runs on the real clock and a direct call on the step's `TestClock`, which starts at the
+    // epoch: `alignStepClock` lines the two up once, so a row minted one way does not read as expired the other.
+    return World.of({
+      app: yield* TestAuth.lazyApp({}, startApp, {
+        name: "DeviceAuthorizationWorld",
+        alignStepClock: true,
+      }),
       codes: yield* Ref.make<ReadonlyArray<DeviceAuthorization.CodeIssued>>([]),
       callers: yield* Ref.make<Readonly<Record<string, DeviceAuthorization.Caller>>>({}),
       last: yield* Ref.make(Option.none<Exit.Exit<unknown, unknown>>()),
@@ -142,29 +144,15 @@ export const WorldLive = Layer.effect(
       responses: makeNamedRegistry<Snapshot>("response"),
       outcomes: yield* makeOutcomes,
     });
-    yield* Effect.addFinalizer(() =>
-      Ref.get(world.app).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.void,
-            onSome: (app) => Effect.promise(() => app.dispose()),
-          }),
-        ),
-      ),
-    );
-    return world;
   }),
 );
 
-/** Merges `options` onto what was configured so far. Nothing may have been requested against the old app: state does not carry over. */
+/** Merges `options` onto what was configured so far, before the first request: state does not carry over a build. */
 export const configureApp = Effect.fn("features.deviceAuthorization.configureApp")(function* (
   options: AppOptions,
 ) {
   const world = yield* World;
-  if (Option.isSome(yield* Ref.get(world.app))) {
-    return yield* Effect.die(new Error("configureApp: the app is already running"));
-  }
-  yield* Ref.update(world.options, (existing) => ({
+  yield* world.app.configure((existing) => ({
     ...existing,
     ...options,
     config: { ...existing.config, ...options.config },
@@ -172,17 +160,7 @@ export const configureApp = Effect.fn("features.deviceAuthorization.configureApp
 });
 
 export const appOf = Effect.fn("features.deviceAuthorization.app")(function* () {
-  const world = yield* World;
-  const existing = yield* Ref.get(world.app);
-  if (Option.isSome(existing)) return existing.value;
-  // The handler runs on the real clock and a direct call on the step's `TestClock`, which starts at the
-  // epoch: line the two up once, so a row minted one way does not read as expired the other.
-  yield* TestClock.setTime(Date.now());
-  const started = yield* Effect.promise(async () =>
-    startApp(await Effect.runPromise(Ref.get(world.options))),
-  );
-  yield* Ref.set(world.app, Option.some(started));
-  return started;
+  return yield* (yield* World).app.get;
 });
 
 /** Runs a service-level effect against the same composition (and rows) the handler serves; a typed failure is a defect here. */

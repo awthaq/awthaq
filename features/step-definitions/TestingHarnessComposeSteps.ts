@@ -1,11 +1,11 @@
 // BEH-EA-331..333 and 336 (25-testing-harness.feature): `TestAuth.layer` derives the host middleware, runs the same
-// composition over memory and over SQL, `TestAuth.app` shares one context between its handler and its runner, and
+// composition over memory and over SQL, `TestAuth.serve` shares one context between its handler and its runner, and
 // `pnpm check:contract-tests` fails a plugin package with no contract-test call. The compile-time claims of
 // BEH-EA-334/335 are `PluginTypeGates.ts`'s.
 import { AuthEvents } from "@awthaq/core";
-import { ClientAddress, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { ClientAddress, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { AuthHost, Csrf } from "@awthaq/server";
-import { RedactionGuard, TestAuth } from "@awthaq/test";
+import { RedactionGuard, TestAuth, TestMailbox } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
@@ -14,7 +14,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
@@ -39,7 +41,7 @@ const adminRequest = (
 
 /** Posts one entry and lists the ledger back, as a signed-in caller would. */
 const roundTrip = (
-  app: Pick<ReturnType<typeof TestAuth.app>, "signIn">,
+  app: Pick<TestAuth.App<TestAuth.AppNeeds>, "signIn">,
   email: string,
   entry: string,
 ) =>
@@ -55,6 +57,15 @@ const isRoundTrip = (value: unknown): value is { added: number; listed: Readonly
   value !== null &&
   isNumber(Reflect.get(value, "added")) &&
   isStringArray(Reflect.get(value, "listed"));
+
+const isNumberArray = (value: unknown): value is ReadonlyArray<number> =>
+  Array.isArray(value) && value.every(isNumber);
+
+/** A World's app cell, as the BEH-EA-352 scenario stores it between steps. */
+const isCell = (value: unknown): value is TestAuth.LazyApp<{ readonly label: string }, unknown> =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof Reflect.get(value, "configure") === "function";
 
 /** The service keys a layer's built context holds. */
 const keysOf = <A, E>(layer: Layer.Layer<A, E>) =>
@@ -73,7 +84,7 @@ const hostedLedger = AuthHost.layer(ledgerBuilt, {
   Layer.provideMerge(
     Layer.mergeAll(
       PasswordHasher.layerArgon2id.pipe(Layer.orDie),
-      Mailer.layerMemory,
+      TestMailbox.layer,
       RateLimiter.layerPermissive,
       ClientAddress.layerDirect,
       TestAuth.encryption,
@@ -100,11 +111,10 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
     "it is served through {string} with no {string}",
     function* (_entry: string, _option: string) {
       const { outcomes } = yield* World;
-      const app = TestAuth.app(TestAuth.layer(operatorBuilt));
+      const app = yield* TestAuth.serve(TestAuth.layer(operatorBuilt));
       const anonymous = yield* Effect.promise(() => adminRequest(app.handler));
       const signedIn = yield* Effect.promise(() => app.signIn("admin@example.com"));
       const authenticated = yield* Effect.promise(() => adminRequest(app.handler, signedIn));
-      yield* Effect.promise(() => app.dispose());
       yield* outcomes.set("anonymousStatus", anonymous.status);
       yield* outcomes.set("authenticatedStatus", authenticated.status);
     },
@@ -123,10 +133,9 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
     "the test supplies its own {string} in {string}",
     function* (_service: string, _option: string) {
       const { outcomes } = yield* World;
-      const app = TestAuth.app(TestAuth.layer(operatorBuilt, { services: fixedOperator }));
+      const app = yield* TestAuth.serve(TestAuth.layer(operatorBuilt, { services: fixedOperator }));
       const anonymous = yield* Effect.promise(() => adminRequest(app.handler));
       const body = yield* Effect.promise(() => anonymous.text());
-      yield* Effect.promise(() => app.dispose());
       yield* outcomes.set("overrideStatus", anonymous.status);
       yield* outcomes.set("overrideBody", body);
     },
@@ -150,9 +159,12 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
     "the same requests run over {string} records and over {string} records",
     function* (_first: string, _second: string) {
       const { outcomes } = yield* World;
-      const memory = TestAuth.app(TestAuth.layer(ledgerBuilt));
-      const sql = TestAuth.app(
-        TestAuth.layer(ledgerBuilt, { records: "sql", suite: "features_testing_harness_compose" }),
+      const memory = yield* TestAuth.serve(TestAuth.layer(ledgerBuilt));
+      const sql = yield* TestAuth.serve(
+        TestAuth.layer(ledgerBuilt, {
+          records: "sql",
+          suite: "features_testing_harness_compose",
+        }),
       );
       const overMemory = yield* roundTrip(memory, "memory@example.com", "first");
       const overSql = yield* roundTrip(sql, "sql@example.com", "first");
@@ -164,8 +176,6 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
           ),
         ),
       );
-      yield* Effect.promise(() => memory.dispose());
-      yield* Effect.promise(() => sql.dispose());
       yield* outcomes.set("overMemory", overMemory);
       yield* outcomes.set("overSql", overSql);
       yield* outcomes.set(
@@ -196,11 +206,10 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
     "a session is minted through the app's context runner and used on its handler",
     function* () {
       const { outcomes } = yield* World;
-      const app = TestAuth.app(TestAuth.layer(ledgerBuilt));
+      const app = yield* TestAuth.serve(TestAuth.layer(ledgerBuilt));
       const signedIn = yield* Effect.promise(() => app.signIn("shared@example.com"));
       // The agent holds the session minted through `run`; its request goes through the app's handler.
       const response = yield* Effect.promise(() => signedIn.request("GET", "/ledger"));
-      yield* Effect.promise(() => app.dispose());
       yield* outcomes.set("handlerStatus", response.status);
     },
   );
@@ -209,6 +218,67 @@ export const testingHarnessComposeSteps = defineSteps<World>(({ Given, When, The
     const { outcomes } = yield* World;
     assert.equal(yield* outcomes.getAs("handlerStatus", isNumber), 200);
   });
+
+  // ---- BEH-EA-351..353 --------------------------------------------------------------------
+
+  When("the scope that served it closes", function* () {
+    const { outcomes } = yield* World;
+    // Relative, never absolute: other Worlds of the run may be mid-scenario.
+    const before = TestAuth.openApps();
+    const during = yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestAuth.serve(TestAuth.layer(ledgerBuilt));
+        return TestAuth.openApps();
+      }),
+    );
+    yield* outcomes.set("appsDelta", [during - before, TestAuth.openApps() - before]);
+  });
+
+  Then("no test app is left open", function* () {
+    const { outcomes } = yield* World;
+    const delta = yield* outcomes.getAs("appsDelta", isNumberArray);
+    assert.deepEqual(delta, [1, 0]);
+  });
+
+  Given("a World's app cell that has served a request", function* () {
+    const { outcomes } = yield* World;
+    const cell = yield* TestAuth.lazyApp(
+      { label: "initial" },
+      () => TestAuth.serve(TestAuth.layer(ledgerBuilt)),
+      { name: "HarnessWorld" },
+    );
+    yield* cell.get;
+    yield* outcomes.set("cell", cell);
+  });
+
+  When("the scenario configures the cell", function* () {
+    const { outcomes } = yield* World;
+    const cell = yield* outcomes.getAs("cell", isCell);
+    const exit = yield* Effect.exit(cell.configure((current) => ({ ...current, label: "late" })));
+    yield* outcomes.set("configureFailure", Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "");
+  });
+
+  Then("the step fails naming the World", function* () {
+    const { outcomes } = yield* World;
+    assert.ok((yield* outcomes.getAs("configureFailure", isString)).includes("HarnessWorld"));
+  });
+
+  When("a client fetches {string} over the socket", function* (route: string) {
+    const { outcomes } = yield* World;
+    const listening = yield* TestAuth.listen(TestAuth.layer(ledgerBuilt));
+    const response = yield* Effect.promise(() => fetch(`${listening.url}${route}`));
+    yield* outcomes.set("socketStatus", response.status);
+    yield* outcomes.set("socketLog", listening.requests().join("\n"));
+  });
+
+  Then(
+    "it is refused with {int} and the app's request log lists {string}",
+    function* (status: number, line: string) {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.getAs("socketStatus", isNumber), status);
+      assert.ok((yield* outcomes.getAs("socketLog", isString)).split("\n").includes(line));
+    },
+  );
 
   // ---- BEH-EA-336 -------------------------------------------------------------------------
 

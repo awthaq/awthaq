@@ -1,4 +1,4 @@
-// BEH-EA-333/BEH-EA-344 (architecture plan 20): the in-process user agent, as `TestAuth.app` hands it out and as
+// BEH-EA-333/BEH-EA-344 (architecture plan 20): the in-process user agent, as `TestAuth.serve` hands it out and as
 // the server-action client is built on it.
 import { SessionCookie } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
@@ -23,25 +23,21 @@ import { World as HarnessWorld } from "./TestingHarnessWorld.ts";
 import { isBoolean, isNumber, isString } from "./shared/Outcomes.ts";
 import { ledgerBuilt } from "./TestingHarnessComposeFixtures.ts";
 
-// ---- BEH-EA-333: TestAuth.app hands out agents ------------------------------------------------
+// ---- BEH-EA-333: TestAuth.serve hands out agents ------------------------------------------------
 
 export const userAgentHarnessSteps = defineSteps<HarnessWorld>(({ Given, When, Then }) => {
   When(
     "one agent of the app is signed in and a second agent of the same app is fresh",
     function* () {
       const { outcomes } = yield* HarnessWorld;
-      const app = TestAuth.app(TestAuth.layer(ledgerBuilt));
+      const app = yield* TestAuth.serve(TestAuth.layer(ledgerBuilt));
       const statuses = yield* Effect.promise(async () => {
-        try {
-          const alice = await app.signIn("alice@example.com");
-          const bob = await app.agent();
-          return {
-            alice: (await alice.request("GET", "/session")).status,
-            bob: (await bob.request("GET", "/session")).status,
-          };
-        } finally {
-          await app.dispose();
-        }
+        const alice = await app.signIn("alice@example.com");
+        const bob = await app.agent();
+        return {
+          alice: (await alice.request("GET", "/session")).status,
+          bob: (await bob.request("GET", "/session")).status,
+        };
       });
       yield* outcomes.set("signedInStatus", statuses.alice);
       yield* outcomes.set("freshStatus", statuses.bob);
@@ -65,7 +61,7 @@ export const userAgentHarnessSteps = defineSteps<HarnessWorld>(({ Given, When, T
   When("an agent is signed in through the app at {string}", function* (baseUrl: string) {
     const { outcomes } = yield* HarnessWorld;
     const domain = yield* outcomes.getAs("cookieDomain", isString);
-    const app = TestAuth.app(
+    const app = yield* TestAuth.serve(
       TestAuth.layer(ledgerBuilt, {
         services: SessionCookie.config({
           mode: SessionCookie.SecureDomain({ domain, sameSite: "lax" }),
@@ -74,16 +70,12 @@ export const userAgentHarnessSteps = defineSteps<HarnessWorld>(({ Given, When, T
       { baseUrl },
     );
     const seen = yield* Effect.promise(async () => {
-      try {
-        const alice = await app.signIn("alice@example.com");
-        const held = alice.cookies.get("__Secure-session");
-        return {
-          domain: held?.domain ?? "",
-          status: (await alice.request("GET", "/session")).status,
-        };
-      } finally {
-        await app.dispose();
-      }
+      const alice = await app.signIn("alice@example.com");
+      const held = alice.cookies.get("__Secure-session");
+      return {
+        domain: held?.domain ?? "",
+        status: (await alice.request("GET", "/session")).status,
+      };
     });
     yield* outcomes.set("heldDomain", seen.domain);
     yield* outcomes.set("sessionStatus", seen.status);

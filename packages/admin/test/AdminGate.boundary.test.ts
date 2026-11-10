@@ -28,16 +28,23 @@ const filesMatching = (pattern: RegExp) =>
     .sort();
 
 describe("AdminGate boundary (plan 13)", () => {
-  it("the configuration reference's key and configInForce appear only in the gate", () => {
-    assert.deepStrictEqual(filesMatching(/"awthaq\/admin\/Config"/), ["internal/AdminGate.ts"]);
-    assert.deepStrictEqual(filesMatching(/\bconfigInForce\b/), ["internal/AdminGate.ts"]);
+  it("the configuration reference's key and its Tenant.inForce read appear only in the gate", () => {
+    assert.deepStrictEqual(filesMatching(/"awthaq\/admin\/Config"/), [
+      "internal/AdminGate.ts",
+    ]);
+    assert.deepStrictEqual(filesMatching(/Tenant\.inForce\(AdminConfigScoped/), [
+      "internal/AdminGate.ts",
+    ]);
   });
 
   it("the gate is the only denier", () => {
-    assert.deepStrictEqual(filesMatching(/"auth\.admin\.actionDenied"/), ["internal/AdminGate.ts"]);
-    assert.deepStrictEqual(filesMatching(/"auth\.admin\.impersonationDenied"/), [
+    assert.deepStrictEqual(filesMatching(/"auth\.admin\.actionDenied"/), [
       "internal/AdminGate.ts",
     ]);
+    assert.deepStrictEqual(
+      filesMatching(/"auth\.admin\.impersonationDenied"/),
+      ["internal/AdminGate.ts"],
+    );
   });
 
   it("the gate is internal: the package barrel does not mention it", () => {
@@ -46,10 +53,9 @@ describe("AdminGate boundary (plan 13)", () => {
   });
 
   it("each plugin imports the gate, and no other admin source does", () => {
-    assert.deepStrictEqual(filesMatching(/from "\.{1,2}\/(internal\/)?AdminGate\.ts"/), [
-      "Admin.ts",
-      "AdminAccounts.ts",
-      "AdminTenants.ts",
-    ]);
+    assert.deepStrictEqual(
+      filesMatching(/from "\.{1,2}\/(internal\/)?AdminGate\.ts"/),
+      ["Admin.ts", "AdminAccounts.ts", "AdminTenants.ts"],
+    );
   });
 });

@@ -538,48 +538,53 @@ const routes: {
 describe("Authorization matrix over HTTP (MTI-009, BEH-EA-284)", () => {
   // Default configuration: teams and dynamic access control are off, so this is also the feature-off probe.
   it("an outsider gets a byte-identical 404 for an existing and an unknown id, on every scoped route", async () => {
-    const app = TestAuth.app(TestAuth.layer(built), { baseUrl: "http://localhost:3000" });
-    const signInAs = async (userId: string) => {
-      const setCookie = await app.run(
-        Effect.gen(function* () {
-          const sessions = yield* Sessions.Sessions;
-          const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
-          return yield* TestAuth.sessionSetCookie(issued);
-        }),
-      );
-      const browser = await app.agent();
-      browser.cookies.receive(setCookie);
-      return browser;
-    };
-    const send = (browser: UserAgent.UserAgent, route: Route) =>
-      browser.request(
-        route.method,
-        route.path,
-        route.body === undefined ? {} : { json: route.body },
-      );
-    const ownerBrowser = await signInAs("owner");
-    const stranger = await signInAs("outsider");
-    const created = await send(ownerBrowser, {
-      method: "POST",
-      path: "/organization",
-      body: { name: "Acme", slug: "acme" },
-    });
-    const org = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
-    const invited = await send(ownerBrowser, {
-      method: "POST",
-      path: `/organization/${org.id}/invitations`,
-      body: { email: "pending@example.com", role: ["member"] },
-    });
-    const invitation = Schema.decodeUnknownSync(OrganizationApi.InvitationDto)(
-      await invited.json(),
+    await TestAuth.withApp(
+      TestAuth.layer(built),
+      { baseUrl: "http://localhost:3000" },
+      async (app) => {
+        const signInAs = async (userId: string) => {
+          const setCookie = await app.run(
+            Effect.gen(function* () {
+              const sessions = yield* Sessions.Sessions;
+              const issued = yield* sessions.issue({ userId: Users.UserId(userId) });
+              return yield* TestAuth.sessionSetCookie(issued);
+            }),
+          );
+          const browser = await app.agent();
+          browser.cookies.receive(setCookie);
+          return browser;
+        };
+        const send = (browser: UserAgent.UserAgent, route: Route) =>
+          browser.request(
+            route.method,
+            route.path,
+            route.body === undefined ? {} : { json: route.body },
+          );
+        const ownerBrowser = await signInAs("owner");
+        const stranger = await signInAs("outsider");
+        const created = await send(ownerBrowser, {
+          method: "POST",
+          path: "/organization",
+          body: { name: "Acme", slug: "acme" },
+        });
+        const org = Schema.decodeUnknownSync(OrganizationApi.OrganizationDto)(await created.json());
+        const invited = await send(ownerBrowser, {
+          method: "POST",
+          path: `/organization/${org.id}/invitations`,
+          body: { email: "pending@example.com", role: ["member"] },
+        });
+        const invitation = Schema.decodeUnknownSync(OrganizationApi.InvitationDto)(
+          await invited.json(),
+        );
+        for (const { name } of scoped) {
+          const route = routes[name];
+          const existing = await send(stranger, route(org.id, invitation.id));
+          const unknown = await send(stranger, route("no-such-organization", "no-such-invitation"));
+          assert.strictEqual(existing.status, 404, name);
+          assert.strictEqual(unknown.status, 404, name);
+          assert.strictEqual(await existing.text(), await unknown.text(), name);
+        }
+      },
     );
-    for (const { name } of scoped) {
-      const route = routes[name];
-      const existing = await send(stranger, route(org.id, invitation.id));
-      const unknown = await send(stranger, route("no-such-organization", "no-such-invitation"));
-      assert.strictEqual(existing.status, 404, name);
-      assert.strictEqual(unknown.status, 404, name);
-      assert.strictEqual(await existing.text(), await unknown.text(), name);
-    }
   });
 });

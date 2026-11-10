@@ -62,6 +62,20 @@ const auditTags = (prefix: string) =>
     ),
   );
 
+const deniedEvents = Effect.flatMap(AuditLog.AuditLog, (log) =>
+  log.list({ eventTag: "auth.admin.actionDenied" }),
+).pipe(
+  Effect.map((rows) =>
+    rows
+      .flatMap((row) =>
+        row.payload._tag === "auth.admin.actionDenied"
+          ? [{ action: row.payload.action, organizationId: row.payload.organizationId }]
+          : [],
+      )
+      .reverse(),
+  ),
+);
+
 const handBuilt = (
   organizationId: string,
   extra: Partial<Parameters<Saml.Saml["Service"]["admin"]["createConnection"]>[1]> = {},
@@ -123,7 +137,7 @@ describe("the gate is fail-closed", () => {
   );
 
   it.effect(
-    "the gate sees the action and the organization, so a host can let one administrator manage one tenant",
+    "create and list ask the gate with the organization the request names, and the denial event names it",
     () => {
       let permitted = "";
       return Effect.gen(function* () {
@@ -141,31 +155,20 @@ describe("the gate is fail-closed", () => {
         const refusedList = yield* ops.listConnections(admin, globex.id).pipe(Effect.flip);
         assert.strictEqual(refusedList._tag, "SamlActionDenied");
         assert.strictEqual(mine.organizationId, acme.id);
+        assert.deepStrictEqual(yield* deniedEvents, [
+          { action: "saml.createConnection", organizationId: globex.id },
+          { action: "saml.listConnections", organizationId: globex.id },
+        ]);
       }).pipe(
         TestAuth.withoutRequest,
         Effect.provide(
           SamlLive({
-            // The gate is asked with the organization for create/list; by-id operations are gated on the action alone.
             canManageSaml: ({ organizationId }) =>
               Effect.succeed(organizationId === undefined || organizationId === permitted),
           }),
         ),
       );
     },
-  );
-
-  it.effect(
-    "a caller who fails the gate learns nothing about which ids exist; one who passes gets 404 for an unknown id",
-    () =>
-      Effect.gen(function* () {
-        yield* atNow;
-        const { admin: ops } = yield* Saml.Saml;
-        const { connection } = yield* seedConnection();
-        const real = yield* ops.getConnection(admin, connection.id).pipe(Effect.flip);
-        const fake = yield* ops.getConnection(admin, "nope").pipe(Effect.flip);
-        assert.strictEqual(real._tag, "SamlActionDenied");
-        assert.strictEqual(fake._tag, "SamlActionDenied");
-      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive())),
   );
 
   it.effect("past the gate each administrator is limited per window", () =>
@@ -193,6 +196,147 @@ describe("the gate is fail-closed", () => {
       ),
     ),
   );
+});
+
+// BEH-EA-347: a by-id operation reads the connection first and asks the gate with ITS organization.
+describe("by-id operations ask the gate with the connection's organization (BEH-EA-347)", () => {
+  type Outcome = "denied" | "absent" | "reached";
+  const outcome = <A>(call: Effect.Effect<A, { readonly _tag: string }, never>) =>
+    call.pipe(
+      Effect.match({
+        onSuccess: (): Outcome => "reached",
+        onFailure: (error): Outcome =>
+          error._tag === "SamlActionDenied"
+            ? "denied"
+            : error._tag === "SamlConnectionNotFound"
+              ? "absent"
+              : "reached",
+      }),
+    );
+
+  const rows: ReadonlyArray<{
+    readonly name: string;
+    readonly predicate: (permitted: () => string) => Parameters<typeof SamlLive>[0];
+    readonly own: Outcome;
+    readonly other: Outcome;
+    readonly unknown: Outcome;
+  }> = [
+    {
+      name: "no predicate",
+      predicate: () => ({}),
+      own: "denied",
+      other: "denied",
+      unknown: "denied",
+    },
+    {
+      name: "allow-all",
+      predicate: () => ({ canManageSaml: allow }),
+      own: "reached",
+      other: "reached",
+      unknown: "absent",
+    },
+    {
+      name: "delegated (organization or the action in general)",
+      predicate: (permitted) => ({
+        canManageSaml: ({ organizationId }) =>
+          Effect.succeed(organizationId === undefined || organizationId === permitted()),
+      }),
+      own: "reached",
+      other: "absent",
+      unknown: "absent",
+    },
+    {
+      name: "strict (only the organization)",
+      predicate: (permitted) => ({
+        canManageSaml: ({ organizationId }) => Effect.succeed(organizationId === permitted()),
+      }),
+      own: "reached",
+      other: "denied",
+      unknown: "denied",
+    },
+  ];
+
+  for (const row of rows) {
+    it.effect(`${row.name}: own / other organization / unknown id`, () => {
+      let permitted = "";
+      return Effect.gen(function* () {
+        yield* atNow;
+        const { admin: ops } = yield* Saml.Saml;
+        const a = yield* seedConnection({ slug: "acme", emailDomains: ["acme.example"] });
+        const b = yield* seedConnection({
+          slug: "globex",
+          emailDomains: ["globex.example"],
+          entityId: "https://idp.globex.example/metadata",
+        });
+        permitted = a.organizationId;
+        const calls = (id: string) =>
+          [
+            ["getConnection", outcome(ops.getConnection(admin, id))],
+            ["listSigningKeys", outcome(ops.listSigningKeys(admin, id))],
+            ["updateConnection", outcome(ops.updateConnection(admin, id, { name: "renamed" }))],
+            ["rotateSigningKey", outcome(ops.rotateSigningKey(admin, id, {}))],
+            ["refreshMetadata", outcome(ops.refreshMetadata(admin, id))],
+            ["deleteConnection", outcome(ops.deleteConnection(admin, id))],
+          ] as const;
+        const targets = [
+          ["own", a.connection.id, a.organizationId, row.own],
+          ["other", b.connection.id, b.organizationId, row.other],
+          ["unknown", "nope", undefined, row.unknown],
+        ] as const;
+        for (const [label, id, organizationId, expected] of targets) {
+          for (const [operation, run] of calls(id)) {
+            assert.strictEqual(yield* run, expected, `${label} ${operation}`);
+            const events = yield* deniedEvents;
+            if (expected === "denied" || (expected === "absent" && organizationId !== undefined)) {
+              const last = events[events.length - 1];
+              assert.strictEqual(last?.action, `saml.${operation}`);
+              assert.strictEqual(
+                last?.organizationId,
+                organizationId,
+                `${label} ${operation} event`,
+              );
+            }
+          }
+        }
+        // Whatever the answer, the connection of the other organization is untouched unless the predicate reached it.
+        const store = yield* SamlRecords.SamlRecords;
+        const stillThere = yield* store.findById(grant, b.connection.id);
+        assert.strictEqual(Option.isSome(stillThere), row.other === "reached" ? false : true);
+        if (Option.isSome(stillThere)) assert.strictEqual(stillThere.value.name, "Acme Okta");
+      }).pipe(TestAuth.withoutRequest, Effect.provide(SamlLive(row.predicate(() => permitted))));
+    });
+  }
+
+  it.effect("a probe that ends in not-found spends the administrator's budget", () => {
+    let permitted = "";
+    return Effect.gen(function* () {
+      yield* atNow;
+      const { admin: ops } = yield* Saml.Saml;
+      const a = yield* seedConnection({ slug: "acme" });
+      const b = yield* seedConnection({
+        slug: "globex",
+        emailDomains: ["globex.example"],
+        entityId: "https://idp.globex.example/metadata",
+      });
+      permitted = a.organizationId;
+      assert.strictEqual(yield* outcome(ops.getConnection(admin, b.connection.id)), "absent");
+      assert.strictEqual(yield* outcome(ops.getConnection(admin, "nope")), "absent");
+      const limited = yield* ops.getConnection(admin, b.connection.id).pipe(Effect.flip);
+      assert.strictEqual(limited._tag, "RateLimited");
+    }).pipe(
+      TestAuth.withoutRequest,
+      Effect.provide(
+        SamlLive(
+          {
+            canManageSaml: ({ organizationId }) =>
+              Effect.succeed(organizationId === undefined || organizationId === permitted),
+            adminRate: { limit: 2, window: Duration.minutes(1) },
+          },
+          MemoryLimiter,
+        ),
+      ),
+    );
+  });
 });
 
 describe("registering a connection", () => {

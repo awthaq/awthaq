@@ -24,7 +24,7 @@
 
 import type { Api } from "@awthaq/api";
 import { DomainClaims, OrganizationAuthority, OrganizationDirectory } from "@awthaq/organization";
-import { OutboundUrl, SqlTransaction } from "@awthaq/ports";
+import { OutboundUrl, SqlTransaction, Tenant } from "@awthaq/ports";
 import { StoreFailure, TenantScoped } from "@awthaq/sql";
 import type { XmlSignature } from "@awthaq/ports";
 import { X509Certificate } from "node:crypto";
@@ -214,7 +214,7 @@ export const layerStore = Layer.effect(
     const authority = yield* OrganizationAuthority.OrganizationAuthority;
     const spKeys = yield* SamlSpKeys.SamlSpKeys;
     const random = yield* SecureRandom.SecureRandom;
-    const settings = yield* SamlConfig.SamlConfig;
+    const settings = yield* yield* Tenant.inForce(SamlConfig.SamlConfigScoped);
 
     /** BEH-EA-317: a domain another organization owns, over any protocol, is a taken domain; the claim and the row are one unit. */
     const claimed = <A, E, R>(

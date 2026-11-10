@@ -23,7 +23,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as OrganizationActor from "../OrganizationActor.ts";
 import * as OrganizationAuthority from "../OrganizationAuthority.ts";
-import { OrganizationConfig } from "../OrganizationConfig.ts";
+import { OrganizationConfigScoped } from "../OrganizationConfig.ts";
 import * as OrganizationDirectory from "../OrganizationDirectory.ts";
 import * as OrganizationErrors from "../OrganizationErrors.ts";
 import * as OrganizationEvents from "../OrganizationEvents.ts";
@@ -88,7 +88,7 @@ export const make = Effect.gen(function* () {
   const events = yield* AuthEvents.AuthEvents;
   const users = yield* Users.Users;
   // EP-007: the configuration in force is decided per operation (the tenant middleware may override it).
-  const configNow = Tenant.configInForce(OrganizationConfig, yield* OrganizationConfig);
+  const configNow = yield* Tenant.inForce(OrganizationConfigScoped);
 
   const callerId = (caller: Api.UserPrincipal) => Users.UserId(caller.ref.id);
   const actorOf = (caller: Api.UserPrincipal) =>

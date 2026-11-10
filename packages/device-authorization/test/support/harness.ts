@@ -3,7 +3,7 @@
 // client records either in memory or on a real migrated database (`records: "sql"`: `:memory:` SQLite by default, a
 // real per-suite Postgres schema under `AWTHAQ_POSTGRES_URL`), the real `@awthaq/two-factor` gates (so the MFA divert
 // is a real divert), and the contract served behind the derived CSRF and authentication middleware, so a test can go
-// through the wire (`makeApp`) or call the service directly (`buildLayer`), over the very same rows.
+// through the wire (`withHarnessApp`) or call the service directly (`buildLayer`), over the very same rows.
 import { Api } from "@awthaq/api";
 import { Auth, type Sessions } from "@awthaq/core";
 import type { Hooks } from "@awthaq/core";
@@ -65,9 +65,7 @@ export const buildLayer = (options: HarnessOptions, taps: Taps = Layer.empty) =>
 export type HarnessServices = Layer.Success<ReturnType<typeof buildLayer>>;
 
 /** A running app: the real web handler, and a way to reach the very services it runs against. */
-export const makeApp = (options: HarnessOptions, taps?: Taps) => {
-  const layer = buildLayer(options, taps);
-  const app = TestAuth.app(layer, { baseUrl: ORIGIN });
+const harnessOf = (app: TestAuth.App<HarnessServices>, layer: ReturnType<typeof buildLayer>) => {
   const withContext = <A, E>(effect: Effect.Effect<A, E, HarnessServices>): Promise<A> =>
     app.run(effect);
 
@@ -89,7 +87,25 @@ export const makeApp = (options: HarnessOptions, taps?: Taps) => {
     };
   };
 
-  return { handler: app.handler, withContext, signedInUser, request: app.request, layer };
+  return {
+    handler: app.handler,
+    withContext,
+    signedInUser,
+    request: app.request,
+    layer,
+  };
+};
+
+export type HarnessApp = ReturnType<typeof harnessOf>;
+
+/** Serves the harness composition for the length of `use`; the app is released when it settles. */
+export const withHarnessApp = <T>(
+  options: HarnessOptions,
+  use: (app: HarnessApp) => Promise<T>,
+  taps?: Taps,
+) => {
+  const layer = buildLayer(options, taps);
+  return TestAuth.withApp(layer, { baseUrl: ORIGIN }, (app) => use(harnessOf(app, layer)));
 };
 
 export const CLI_CLIENT_ID = DeviceAuthorization.CLI_CLIENT.clientId;

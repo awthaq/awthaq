@@ -19,7 +19,7 @@
 //
 // The tenant middleware (BEH-EA-234/236) is exercised as what it is, a global router
 // middleware, behind `HttpRouter.toWebHandler`.
-import { TestEncryption } from "@awthaq/test";
+import { TestEncryption, TestMailbox } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import { Admin, AdminAccounts, AdminTenants } from "@awthaq/admin";
 import {
@@ -27,6 +27,7 @@ import {
   AuditLog,
   AuthEvents,
   Auth,
+  EffectiveConfig,
   HookPoint,
   Hooks,
   Persistence,
@@ -51,7 +52,6 @@ import {
   AuditLogStore,
   Encryption,
   KeyProvider,
-  Mailer,
   PasswordHasher,
   SqlTransaction,
   Tenant,
@@ -169,7 +169,7 @@ export type OrganizationServices =
   | OrganizationInvitations.OrganizationInvitations
   | OrganizationMembers.OrganizationMembers
   | Users.Users
-  | Mailer.Mailer
+  | TestMailbox.Mailbox
   | OrganizationRecords.OrganizationRecords
   | AdminTenants.AdminTenants
   | AuditLog.AuditLog
@@ -215,7 +215,10 @@ export class AdminAccountsTenantConfig extends LayerMap.Service<AdminAccountsTen
   {
     lookup: (tenantId: string) =>
       Layer.mergeAll(
-        Admin.config({ canManageCredentials: () => Effect.succeed(true) }),
+        Admin.config({
+          canManageCredentials: () => Effect.succeed(true),
+          canManageUsers: () => Effect.succeed(true), // the effective-configuration view's gate (BEH-EA-356)
+        }),
         // ADR-EA-048: an administrator-set password obeys the tenant's Password.config.
         Password.config({ minLength: 40 }),
         Tenant.configApplied(tenantId),
@@ -225,21 +228,26 @@ export class AdminAccountsTenantConfig extends LayerMap.Service<AdminAccountsTen
 ) {}
 
 export type AdminAccountsServices =
+  | Admin.Admin
   | AdminAccounts.AdminAccounts
   | Users.Users
   | Accounts.Accounts
   | PasswordHasher.PasswordHasher
   | AdminAccountsTenantConfig;
 
+const adminAccountsAuth = Auth.make([Admin.Admin, Password.Password, AdminAccounts.AdminAccounts]);
+
 /** Build-time: every administrator may delete users and manage credentials; tenants decide for themselves. */
 const buildAdminAccountsStack = () =>
   AdminAccountsTenantConfig.layer.pipe(
     Layer.provideMerge(
-      TestAuth.layer(Auth.make([Admin.Admin, Password.Password, AdminAccounts.AdminAccounts]), {
-        services: Layer.merge(
+      TestAuth.layer(adminAccountsAuth, {
+        services: Layer.mergeAll(
+          EffectiveConfig.layer(adminAccountsAuth.manifest),
           Admin.config({
             canDeleteUsers: () => Effect.succeed(true),
             canManageCredentials: () => Effect.succeed(true),
+            canManageUsers: () => Effect.succeed(true),
           }),
           TestAuth.httpClient.noBreach,
         ),

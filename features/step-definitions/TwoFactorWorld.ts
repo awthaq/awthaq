@@ -25,10 +25,10 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { Encryption, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { Encryption, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { SecondFactor, Totp, TwoFactor, TwoFactorConfig, TwoFactorStore } from "@awthaq/two-factor";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Context from "effect/Context";
 import * as Mac from "effect/crypto/Mac";
@@ -48,8 +48,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
-import { mailedToken } from "./MailedToken.ts";
-import { awaitMail, makeNamedRegistry, STRONG_PASSWORD } from "./shared/Harness.ts";
+import { makeNamedRegistry, STRONG_PASSWORD } from "./shared/Harness.ts";
 
 type NamedRegistry<A> = ReturnType<typeof makeNamedRegistry<A>>;
 
@@ -167,7 +166,7 @@ export type TwoFactorServices =
   | Verification.Verification
   | AuditLog.AuditLog
   | AuthEvents.AuthEvents
-  | Mailer.Mailer
+  | TestMailbox.Mailbox
   | Erasure.AccountErasure
   | DataExport.AccountExport
   | Hooks.BeforeSessionIssue
@@ -325,17 +324,12 @@ export const register = Effect.fn("features.twoFactor.register")(function* (name
   const { userId, sessionId } = yield* direct(
     Effect.gen(function* () {
       const password = yield* Password.Password;
-      const mailer = yield* Mailer.Mailer;
       const issued = yield* password.signUp({ email, password: PASSWORD });
-      yield* awaitMail(
-        mailer.sent,
-        (message) => message.template === "verify-email" && message.to === email,
-      );
-      const mail = (yield* mailer.sent).findLast(
-        (message) => message.template === "verify-email" && message.to === email,
-      );
-      if (mail === undefined) return yield* Effect.die("no verify-email mail");
-      yield* password.verifyEmail({ token: Redacted.make(mailedToken(mail)) });
+      const mail = yield* (yield* TestMailbox.Mailbox).mail.waitFor({
+        to: email,
+        template: "verify-email",
+      });
+      yield* password.verifyEmail({ token: Redacted.make(TestMailbox.secret(mail)) });
       return { userId: issued.session.userId, sessionId: issued.session.id };
     }),
   );

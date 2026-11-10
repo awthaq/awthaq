@@ -58,6 +58,14 @@ const VetoCreateTeam = OrganizationHooks.BeforeCreateTeam.tap(() =>
   Effect.fail(new HookPoint.HookAbort({ code: "TEAM_POLICY" })),
 );
 
+/** A `BeforeUpdateTeam` tap that refuses a rename to `name` and passes every other input through (BEH-EA-348). */
+const VetoUpdateTeam = (name: string) =>
+  OrganizationHooks.BeforeUpdateTeam.tap((input) =>
+    input.name === name
+      ? Effect.fail(new HookPoint.HookAbort({ code: "TEAM_POLICY" }))
+      : Effect.succeed(input),
+  );
+
 /** A `beforeDelete` tap that refuses every deletion, as a legal hold would (BEH-EA-095). */
 const VetoDelete = Hooks.BeforeUserDelete.tap(() =>
   Effect.fail(new HookPoint.HookAbort({ code: "LEGAL_HOLD" })),
@@ -69,6 +77,8 @@ export interface AppOptions {
   readonly vetoDelete?: boolean;
   /** Plan 04: a `BeforeCreateTeam` tap that refuses every team, as a policy hook would (BEH-EA-251). */
   readonly vetoCreateTeam?: boolean;
+  /** A `BeforeUpdateTeam` tap that refuses renaming a team to exactly this name (BEH-EA-348). */
+  readonly vetoUpdateTeam?: string;
   readonly usersOutage?: boolean;
 }
 
@@ -102,6 +112,7 @@ const buildLive = (options: AppOptions) =>
     taps: Layer.mergeAll(
       options.vetoDelete === true ? VetoDelete : Layer.empty,
       options.vetoCreateTeam === true ? VetoCreateTeam : Layer.empty,
+      options.vetoUpdateTeam === undefined ? Layer.empty : VetoUpdateTeam(options.vetoUpdateTeam),
     ),
   });
 
@@ -124,17 +135,13 @@ export type AppServices =
 export interface AppHandle {
   readonly handler: (request: Request) => Promise<Response>;
   readonly withContext: <A, E>(effect: Effect.Effect<A, E, AppServices>) => Promise<A>;
-  readonly close: Effect.Effect<void>;
 }
 
-const buildApp = (options: AppOptions): AppHandle => {
-  const app = TestAuth.app(buildLive(options), { baseUrl: ORIGIN });
-  return {
-    handler: app.handler,
-    withContext: (effect) => app.run(effect),
-    close: Effect.promise(() => app.dispose()),
-  };
-};
+const buildApp = (options: AppOptions) =>
+  Effect.map(
+    TestAuth.serve(buildLive(options), { baseUrl: ORIGIN }),
+    (app): AppHandle => ({ handler: app.handler, withContext: (effect) => app.run(effect) }),
+  );
 
 // ---- the World ---------------------------------------------------------------------------
 
@@ -146,10 +153,8 @@ export interface ConnectionState {
 }
 
 export interface WorldShape {
-  readonly app: Ref.Ref<AppHandle>;
-  readonly options: Ref.Ref<AppOptions>;
-  /** Set once anything reads or writes, so a late configuration Given is a bug in the scenario. */
-  readonly started: Ref.Ref<boolean>;
+  /** A late configuration Given (after anything read or wrote) is a defect, not a silent reset. */
+  readonly app: TestAuth.LazyApp<AppOptions, AppHandle>;
   readonly connections: ReturnType<typeof makeNamedRegistry<ConnectionState>>;
   /** User ids by the name the scenario gave them (a `userName`, a display name). */
   readonly userIds: ReturnType<typeof makeNamedRegistry<string>>;
@@ -172,12 +177,8 @@ export class World extends Context.Service<World, WorldShape>()("features/ScimWo
 export const WorldLive = Layer.effect(
   World,
   Effect.gen(function* () {
-    const app = yield* Ref.make(buildApp({}));
-    yield* Effect.addFinalizer(() => Ref.get(app).pipe(Effect.flatMap((handle) => handle.close)));
     return World.of({
-      app,
-      options: yield* Ref.make<AppOptions>({}),
-      started: yield* Ref.make(false),
+      app: yield* TestAuth.lazyApp<AppOptions, AppHandle>({}, buildApp, { name: "ScimWorld" }),
       connections: makeNamedRegistry<ConnectionState>("SCIM connection"),
       userIds: makeNamedRegistry<string>("user"),
       groupIds: makeNamedRegistry<string>("group"),
@@ -192,32 +193,21 @@ export const WorldLive = Layer.effect(
 );
 
 export const currentApp = Effect.gen(function* () {
-  const world = yield* World;
-  yield* Ref.set(world.started, true);
-  return yield* Ref.get(world.app);
+  const { app } = yield* World;
+  return yield* app.get;
 });
 
-/** Merges `options` over what earlier Givens chose and rebuilds the app; only before anything has been used. */
+/** Merges `options` over what earlier Givens chose; only before anything has been used. */
 export const configureApp = Effect.fn("features.scim.configureApp")(function* (
   options: AppOptions,
 ) {
   const world = yield* World;
-  if (yield* Ref.get(world.started)) {
-    return yield* Effect.die(
-      new Error("configure the app before any connection or request exists"),
-    );
-  }
-  const previous = yield* Ref.get(world.options);
-  const merged: AppOptions = {
+  yield* world.app.configure((previous) => ({
     ...previous,
     ...options,
     scim: { ...previous.scim, ...options.scim },
     organization: { ...previous.organization, ...options.organization },
-  };
-  yield* Ref.set(world.options, merged);
-  const old = yield* Ref.get(world.app);
-  yield* old.close;
-  yield* Ref.set(world.app, buildApp(merged));
+  }));
 });
 
 export const withContext = <A, E>(effect: Effect.Effect<A, E, AppServices>) =>

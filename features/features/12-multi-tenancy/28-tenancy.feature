@@ -375,6 +375,21 @@ Feature: Multi-Tenancy
       When an administrator sets a password shorter than the tenant's minimum for "victim" in a request naming the tenant "acme"
       Then the password change for "victim" is refused with "AdminWeakPassword"
 
+    @BEH-EA-356
+    @REQ-EA-1563
+    Scenario: A tenant's administrator sees the configuration in force for that tenant
+      Given a user "victim" exists in a composition whose build-time configuration lets every administrator delete users and manage credentials
+      And the tenant "acme" configures credential administration and a Password policy, but no account deletion
+      When an administrator reads the effective configuration in a request naming the tenant "acme"
+      Then the Password minimum length is listed as "40", per tenant, from the tenant
+
+    @BEH-EA-356
+    @REQ-EA-1564
+    Scenario: With no tenant the view shows the build-time configuration
+      Given a user "victim" exists in a composition whose build-time configuration lets every administrator delete users and manage credentials
+      When an administrator reads the effective configuration in a request naming no tenant
+      Then the Password minimum length is listed as the build-time value, per tenant, from no tenant
+
   # BEH-EA-237 — spec/behaviors/28-tenancy.md; see also ADR-EA-018
   @BEH-EA-237
   Rule: A suspended organization refuses organization-scoped access

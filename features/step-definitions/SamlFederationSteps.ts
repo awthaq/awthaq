@@ -1202,6 +1202,89 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
   Given("the administrator gate allows every action", function* () {
     yield* configure({ canManageSaml: () => Effect.succeed(true) });
   });
+  // BEH-EA-347: the gate sees the organization of the connection a by-id call acts on.
+  const gateAdmitting = Effect.fnUntraced(function* (name: string, inGeneral: boolean) {
+    const world = yield* World;
+    yield* configure({
+      canManageSaml: ({ organizationId }) =>
+        Effect.succeed(
+          organizationId === undefined
+            ? inGeneral
+            : organizationId === world.connections.get(name)?.organizationId,
+        ),
+    });
+  });
+  Given(
+    "the administrator gate admits only {string} and the action in general",
+    function* (name: string) {
+      yield* gateAdmitting(name, true);
+    },
+  );
+  Given("the administrator gate admits only {string}", function* (name: string) {
+    yield* gateAdmitting(name, false);
+  });
+  When(
+    "the administrator renames the connection {string} to {string} by its id",
+    function* (name: string, renamed: string) {
+      const world = yield* World;
+      const connection = yield* connectionState(name);
+      const rename = (id: string) =>
+        inAppExit(
+          Effect.flatMap(Saml.Saml, (saml) =>
+            saml.admin.updateConnection(adminPrincipal, id, { name: renamed }),
+          ),
+        );
+      const real = yield* rename(connection.id);
+      const unknown = yield* rename("no-such-connection");
+      const tagOf = (exit: typeof real) =>
+        Exit.isFailure(exit) ? Option.getOrUndefined(Exit.findErrorOption(exit))?._tag : "renamed";
+      yield* world.outcomes.set("byId", { real: tagOf(real), unknown: tagOf(unknown) });
+    },
+  );
+  Then("the rename is refused as {string}, exactly as for an unknown id", function* (tag: string) {
+    const world = yield* World;
+    const result = yield* world.outcomes.getAs(
+      "byId",
+      (value): value is { readonly real: string; readonly unknown: string } =>
+        typeof value === "object" && value !== null && "real" in value,
+    );
+    assert.equal(result.real, tag);
+    assert.equal(result.unknown, tag);
+  });
+  Then(
+    "a refusal published auth.admin.actionDenied naming {string} and the organization {string}",
+    function* (action: string, organization: string) {
+      const connection = yield* connectionState(organization);
+      const rows = yield* inApp(
+        Effect.flatMap(AuditLog.AuditLog, (log) =>
+          log.list({ eventTag: "auth.admin.actionDenied" }),
+        ).pipe(Effect.orDie),
+      );
+      const named = rows.flatMap((row) =>
+        row.payload._tag === "auth.admin.actionDenied" &&
+        row.payload.action === action &&
+        row.payload.organizationId === connection.organizationId
+          ? [row.payload]
+          : [],
+      );
+      assert.ok(named.length >= 1);
+    },
+  );
+  Then("the connection {string} is named {string}", function* (name: string, expected: string) {
+    const connection = yield* connectionState(name);
+    const found = yield* inApp(
+      Effect.flatMap(SamlRecords.SamlRecords, (records) => records.findById(grant, connection.id)),
+    );
+    assert.ok(Option.isSome(found));
+    assert.equal(found.value.name, expected);
+  });
+  Then("reading an unknown connection id is refused as {string}", function* (tag: string) {
+    const exit = yield* inAppExit(
+      Effect.flatMap(Saml.Saml, (saml) => saml.admin.getConnection(adminPrincipal, "no-such-id")),
+    );
+    assert.ok(Exit.isFailure(exit));
+    assert.equal(Option.getOrUndefined(Exit.findErrorOption(exit))?._tag, tag);
+  });
   Given("the connection {string} exists", function* (name: string) {
     yield* connectionState(name);
   });

@@ -56,7 +56,7 @@ describe("SCIM DELETE with erasure configured (BEH-EA-250)", () => {
 describe("SCIM ServiceProviderConfig (BEH-EA-252)", () => {
   it.effect("reports the configured maximum page size as the filter's maxResults", () =>
     Effect.gen(function* () {
-      const app = TestAuth.app(ScimLive({ maxResults: 50 }));
+      const app = yield* TestAuth.serve(ScimLive({ maxResults: 50 }));
       const { handler } = app;
       const { token } = yield* Effect.promise(() => app.run(seedConnection()));
       const response = yield* Effect.promise(() =>
@@ -72,7 +72,6 @@ describe("SCIM ServiceProviderConfig (BEH-EA-252)", () => {
         typeof body === "object" && body !== null && "filter" in body ? body.filter : undefined,
         { supported: true, maxResults: 50 },
       );
-      yield* Effect.promise(() => app.dispose());
     }),
   );
 });

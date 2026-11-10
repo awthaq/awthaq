@@ -1,8 +1,8 @@
 // BDD-007: the wire-level harness every World was copying. One definition here; each World
 // keeps its own Layer composition and actor state, but the plumbing (the no-op HTTP
-// platform services, a capturing mailer, the cheap KDF layers, the named-actor
+// platform services, the cheap KDF layers, the named-actor
 // registry) is shared so a fix lands once.
-import { Mailer, PasswordHasher } from "@awthaq/ports";
+import { PasswordHasher } from "@awthaq/ports";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -47,8 +47,8 @@ const realTick = (ms: number) =>
   Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
 /**
- * A bounded poll for the condition a step is about to read (a mail dispatched by a detached fiber, an event
- * published by a subscriber): cooperative turns first, then a short real tick between checks, so a forked
+ * A bounded poll for the condition a step is about to read (an event published by a subscriber; mail is read through
+ * `TestMailbox`): cooperative turns first, then a short real tick between checks, so a forked
  * dispatch that crosses Postgres socket I/O is outwaited exactly as long as it takes and no longer. Resolves
  * `true` once `check` holds, `false` at the deadline; the caller keeps its own assertion and message.
  */
@@ -65,12 +65,6 @@ export const awaitCondition = <E, R>(
       yield* realTick(2);
     }
   });
-
-/** True once a mail matching `predicate` has been captured. */
-export const awaitMail = <R>(
-  sent: Effect.Effect<ReadonlyArray<Mailer.MailMessage>, never, R>,
-  predicate: (message: Mailer.MailMessage) => boolean,
-) => awaitCondition(Effect.map(sent, (messages) => messages.some(predicate)));
 
 /**
  * For a read with no known expected value (an audit trail, an event count): polls until two consecutive reads
@@ -94,22 +88,6 @@ export const awaitStable = <A, E, R>(
       previous = current;
     }
   });
-
-/**
- * A capture cell built *outside* the layer graph, so a step can read what was sent after the
- * graph is sealed into a handler closure.
- */
-export const makeCapturingMailer = () => {
-  const messages = Effect.runSync(Ref.make<ReadonlyArray<Mailer.MailMessage>>([]));
-  const layer = Layer.succeed(
-    Mailer.Mailer,
-    Mailer.Mailer.of({
-      send: (message) => Ref.update(messages, (existing) => [...existing, message]),
-      sent: Ref.get(messages),
-    }),
-  );
-  return { layer, sent: Ref.get(messages) };
-};
 
 /**
  * A named registry a World keeps per scenario: entities are looked up by the exact name the

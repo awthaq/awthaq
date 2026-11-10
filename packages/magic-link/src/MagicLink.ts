@@ -23,11 +23,13 @@
 import { Api, SessionContract, type SessionLifecycle } from "@awthaq/api";
 import {
   AuthPlugin,
+  ConfigDescriptor,
   HookPoint,
   Hooks,
   MailDispatch,
   RateLimits,
   Sessions,
+  Tenant,
   Users,
   Verification,
   VerificationLink,
@@ -39,7 +41,6 @@ import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
@@ -78,8 +79,10 @@ export const MagicLinkConfig = Context.Reference<MagicLinkConfigShape>("awthaq/m
   defaultValue: () => defaults,
 });
 
+export const MagicLinkConfigScoped = Tenant.perDeployment(MagicLinkConfig);
+
 export const config = (partial: Partial<MagicLinkConfigShape>) =>
-  Layer.succeed(MagicLinkConfig, { ...defaults, ...partial });
+  MagicLinkConfigScoped.layer({ ...defaults, ...partial });
 
 const linkBuilder = (settings: MagicLinkConfigShape): ((token: string) => string) | undefined =>
   settings.link ??
@@ -184,6 +187,8 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
   contract: MagicLinkApi.MagicLinkApi,
   // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
   rateLimitRules: rules,
+  // ECS-008/BEH-EA-229: what `doctor` audits and `config list` prints.
+  config: [ConfigDescriptor.make(MagicLinkConfigScoped)],
   // BEH-EA-270: no table — the links are `Verification` rows (`verification_tokens`, core's).
   tables: {},
 }) {
@@ -195,7 +200,7 @@ export class MagicLink extends AuthPlugin.Service<MagicLink, MagicLinkShape>()("
       const verification = yield* Verification.Verification;
       const mailer = yield* Mailer.Mailer;
       const random = yield* SecureRandom.SecureRandom;
-      const settings = yield* MagicLinkConfig;
+      const settings = yield* yield* Tenant.inForce(MagicLinkConfigScoped);
       const channel = yield* Channel.make;
       // ERS-002: mail is dispatched in the background, owned by this plugin's scope.
       const mailDispatcher = yield* MailDispatch.make;

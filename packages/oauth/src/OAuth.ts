@@ -21,7 +21,7 @@
 // calling the provider's API on the user's behalf never handles a raw
 // token directly.
 
-import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
+import { Api, SessionContract, type SessionLifecycle } from "@awthaq/api";
 import {
   Accounts,
   AuthPlugin,
@@ -31,7 +31,6 @@ import {
   Hooks,
   Observability,
   RateLimits,
-  SessionCookie,
   Sessions,
   SignIn,
   Tenant,
@@ -58,7 +57,7 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as CallbackFailure from "./CallbackFailure.ts";
 import * as IdToken from "./IdToken.ts";
 import * as OAuthApi from "./OAuthApi.ts";
-import { OAuthConfig, type OAuthConfigShape, defaultRateLimits } from "./OAuthConfig.ts";
+import { OAuthConfigScoped, type OAuthConfigShape, defaultRateLimits } from "./OAuthConfig.ts";
 import * as OAuthProvider from "./OAuthProvider.ts";
 import * as OAuthProviders from "./OAuthProviders.ts";
 import * as ProviderHttp from "./ProviderHttp.ts";
@@ -106,29 +105,9 @@ const expireStateCookie = HttpEffect.appendPreResponseHandler((_request, respons
     path: "/",
   }).pipe(Effect.orDie),
 );
-const escapeHtml = (value: string): string =>
-  value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 
-/**
- * PV-016: the same-site interstitial. A `SameSite=Strict` session cookie set on the response of a
- * navigation the provider began cross-site is stored, but the browser withholds it from every
- * request in that redirect chain, so the landing page's first request looks signed out. Answering
- * a `200` page instead ends the chain: the browser follows the meta refresh as a fresh navigation
- * initiated by a document of this site, and that request carries the cookie. A meta refresh, not a
- * script, so a strict `script-src` CSP cannot block it; the anchor is the no-refresh fallback.
- */
-const bouncePage = (location: string) => {
-  const target = escapeHtml(location);
-  return HttpServerResponse.text(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta name="robots" content="noindex"><meta http-equiv="refresh" content="0;url=${target}"><title>Signing you in</title></head><body><p>Signing you in&hellip; <a href="${target}">Continue</a></p></body></html>`,
-    { contentType: "text/html; charset=utf-8" },
-  ).pipe(HttpServerResponse.setHeader("cache-control", "no-store"));
-};
+/** ADR-EA-045: the lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
+export type OAuthLifecycle = SessionLifecycle.Mints;
 
 const FLOW_TTL = Duration.minutes(10);
 // BEH-EA-057/122: codec-only purposes. Flow state and exchange codes are burn-first (`consume`, ADR-EA-039
@@ -434,7 +413,7 @@ const OAuthFlowHandlers = HttpApiBuilder.group(
   "oauth",
   Effect.fnUntraced(function* (handlers) {
     const oauth = yield* OAuth;
-    const configNow = Tenant.configInForce(OAuthConfig, yield* OAuthConfig);
+    const configNow = yield* Tenant.inForce(OAuthConfigScoped);
 
     return handlers.handleAll({
       authorize: Effect.fnUntraced(function* ({
@@ -508,23 +487,11 @@ const OAuthFlowHandlers = HttpApiBuilder.group(
             : { errorDescription: query.error_description }),
           cookieState,
         });
-        // PV-016: a browser landing (never the native deep link) behind a `SameSite=Strict` session
-        // cookie goes through the same-site interstitial so its first request carries the session.
-        const cookieConfig = yield* SessionCookie.SessionCookieConfig;
-        const bounce =
-          (yield* configNow).bounce &&
-          outcome.native !== true &&
-          SessionCookie.isStrict(cookieConfig);
-        const response = bounce
-          ? bouncePage(outcome.callbackURL)
-          : HttpServerResponse.redirect(outcome.callbackURL);
-        // ADR-EA-045: the session cookie rides the navigation through `SessionDelivery.redirect`; a landing
-        // that mints nothing (an account link, a native deep link, a refused callback) declines `Mints`.
-        if (outcome.session !== undefined) {
-          return yield* SessionDelivery.redirect(response, outcome.session);
-        }
-        yield* SessionDelivery.decline(SessionLifecycle.MintGrant);
-        return response;
+        // PV-016: the native deep link never bounces; the interstitial-or-302 choice is `SessionDelivery.land`'s.
+        // ADR-EA-045: a landing that mints nothing (an account link, a native deep link, a refused callback) declines `Mints`.
+        return yield* SessionDelivery.land(outcome.callbackURL, outcome.session, {
+          bounce: (yield* configNow).bounce && outcome.native !== true,
+        });
       }),
     });
   }),
@@ -683,8 +650,8 @@ export class OAuth extends AuthPlugin.Service<OAuth, OAuthShape>()("oauth", {
       // build-time value applies exactly as before. Boot-scoped by nature: `baseUrl` (the
       // redirect_uri registered with each provider), `nativeRedirectURLs` (validated here), the
       // provider registry and the retry policy of the shared read client.
-      const config_ = yield* OAuthConfig;
-      const configNow = Tenant.configInForce(OAuthConfig, config_);
+      const configNow = yield* Tenant.inForce(OAuthConfigScoped);
+      const config_ = yield* configNow;
       const random = yield* SecureRandom.SecureRandom;
       const hasher = yield* Digest.Digest;
       const httpClient = yield* HttpClient.HttpClient;

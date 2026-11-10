@@ -28,6 +28,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Tenant from "./Tenant.ts";
 
 /** The `prevHash` of the first link of every chain. */
 export const GENESIS_HASH = "0".repeat(64);
@@ -44,8 +45,11 @@ export const AuditChainConfig = Context.Reference<AuditChainConfigShape>(
 );
 
 /** Supplies the chain key. */
+/** BEH-EA-355: deployment-scoped. */
+export const AuditChainConfigScoped = Tenant.perDeployment(AuditChainConfig);
+
 export const config = (options: { readonly key: Redacted.Redacted<string> }) =>
-  Layer.succeed(AuditChainConfig, { key: Option.some(options.key) });
+  AuditChainConfigScoped.layer({ key: Option.some(options.key) });
 
 /**
  * An unambiguous encoding of ordered fields: a JSON array, so `["a","bc"]` and
@@ -85,7 +89,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const hasher = yield* Digest.Digest;
     const mac = yield* Mac.Mac;
-    const { key } = yield* AuditChainConfig;
+    const { key } = yield* yield* Tenant.inForce(AuditChainConfigScoped);
     const encoder = new TextEncoder();
 
     const link: AuditChainShape["link"] = (prevHash, payload) => {

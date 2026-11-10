@@ -2,7 +2,7 @@
 // `change-email` token to the NEW address and changes nothing; confirming it replaces the
 // address, marks it verified and tells the old address, all in one transaction with the
 // token's consumption.
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import { AuthEvents, Sessions, Users } from "@awthaq/core";
 import { Mailer, RateLimiter } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
@@ -16,12 +16,11 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Password from "../src/Password.ts";
-import { email, letForkedFibersRun, makeTestLayer, strongPassword, tokenOf } from "./harness.ts";
+import { email, makeTestLayer, strongPassword } from "./harness.ts";
 
 const newEmail = "ada.lovelace@example.org";
 
-const changeEmailMail = (mails: ReadonlyArray<Mailer.MailMessage>) =>
-  mails.filter((mail) => mail.template === "change-email");
+const changeEmail = { template: "change-email" };
 
 /** Starts an email change from a fresh session of `userId`, the way the endpoint does. */
 const requestChange = (userId: Users.UserId, requested: string) =>
@@ -42,7 +41,10 @@ const signedUpUser = (address = email) =>
     const password = yield* Password.Password;
     const users = yield* Users.Users;
     yield* password.signUp({ email: address, password: strongPassword });
-    yield* letForkedFibersRun;
+    yield* (yield* TestMailbox.Mailbox).mail.waitFor({
+      to: address,
+      template: "verify-email",
+    });
     return Option.getOrThrow(yield* users.findByEmail(address));
   });
 
@@ -50,15 +52,15 @@ describe("BAM-009: request", () => {
   it.effect("mails a change-email token to the new address only and changes nothing yet", () =>
     Effect.gen(function* () {
       const users = yield* Users.Users;
-      const mailer = yield* Mailer.Mailer;
+      const box = yield* TestMailbox.Mailbox;
       const user = yield* signedUpUser();
       yield* requestChange(user.id, newEmail);
-      const [mail, ...rest] = changeEmailMail(yield* mailer.sent);
-      assert.strictEqual(rest.length, 0);
-      assert.strictEqual(mail?.to, newEmail);
+      const mail = yield* box.mail.waitFor(changeEmail);
+      yield* box.mail.refute(changeEmail, { beyond: 1 });
+      assert.strictEqual(mail.to, newEmail);
       // The token is a credential: Redacted, and not the user's id.
-      assert.isTrue(Redacted.isRedacted(mail?.data?.["token"]));
-      assert.notInclude(tokenOf(mail), user.id);
+      assert.isTrue(Redacted.isRedacted(mail.data?.["token"]));
+      assert.notInclude(TestMailbox.secret(mail), user.id);
       // The address is still the old one, and the new one is free.
       assert.strictEqual(
         Users.emailOf(yield* users.findById(user.id)).pipe(Option.getOrThrow),
@@ -70,20 +72,21 @@ describe("BAM-009: request", () => {
 
   it.effect("the same address (in any case) is a no-op and sends nothing", () =>
     Effect.gen(function* () {
-      const mailer = yield* Mailer.Mailer;
       const user = yield* signedUpUser();
       yield* requestChange(user.id, email.toUpperCase());
-      assert.strictEqual(changeEmailMail(yield* mailer.sent).length, 0);
+      yield* (yield* TestMailbox.Mailbox).mail.refute(changeEmail);
     }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 
   it.effect("a link builder puts the confirmation URL in the mail", () =>
     Effect.gen(function* () {
-      const mailer = yield* Mailer.Mailer;
       const user = yield* signedUpUser();
       yield* requestChange(user.id, newEmail);
-      const mail = changeEmailMail(yield* mailer.sent)[0];
-      assert.strictEqual(mail?.data?.["url"], `https://app.example/confirm-email#${tokenOf(mail)}`);
+      const mail = yield* (yield* TestMailbox.Mailbox).mail.waitFor(changeEmail);
+      assert.strictEqual(
+        mail.data?.["url"],
+        `https://app.example/confirm-email#${TestMailbox.secret(mail)}`,
+      );
     }).pipe(
       TestAuth.withoutRequest,
       Effect.provide(
@@ -104,7 +107,7 @@ describe("BAM-009: confirm", () => {
       Effect.gen(function* () {
         const password = yield* Password.Password;
         const users = yield* Users.Users;
-        const mailer = yield* Mailer.Mailer;
+        const box = yield* TestMailbox.Mailbox;
         const events = yield* AuthEvents.AuthEvents;
         const seen = yield* Ref.make<ReadonlyArray<string>>([]);
         const subscription = yield* events.subscribe;
@@ -116,23 +119,20 @@ describe("BAM-009: confirm", () => {
         );
         const user = yield* signedUpUser();
         yield* requestChange(user.id, newEmail);
-        const token = Redacted.make(tokenOf(changeEmailMail(yield* mailer.sent)[0]));
+        const token = Redacted.make(TestMailbox.secret(yield* box.mail.waitFor(changeEmail)));
 
         yield* password.confirmEmailChange({ token });
-        yield* letForkedFibersRun;
+        // The previous address is told (template only, no data), the new one is not re-mailed.
+        const notice = yield* box.mail.waitFor({ template: "email-changed" });
+        yield* box.mail.refute({ template: "email-changed" }, { beyond: 1 });
 
         const changed = yield* users.findById(user.id);
         assert.strictEqual(Option.getOrThrow(Users.emailOf(changed)), newEmail);
         assert.isTrue(Users.isEmailVerified(changed));
         assert.isTrue(Option.isNone(yield* users.findByEmail(email)));
         assert.include(yield* Ref.get(seen), "auth.user.emailChanged");
-        // The previous address is told (template only, no data), the new one is not re-mailed.
-        const notice = (yield* mailer.sent).filter((mail) => mail.template === "email-changed");
-        assert.deepStrictEqual(
-          notice.map((mail) => mail.to),
-          [email],
-        );
-        assert.isUndefined(notice[0]?.data);
+        assert.strictEqual(notice.to, email);
+        assert.isUndefined(notice.data);
       }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 
@@ -143,7 +143,7 @@ describe("BAM-009: confirm", () => {
     Effect.gen(function* () {
       const password = yield* Password.Password;
       const sessions = yield* Sessions.Sessions;
-      const mailer = yield* Mailer.Mailer;
+      const box = yield* TestMailbox.Mailbox;
       const events = yield* AuthEvents.AuthEvents;
       const seen = yield* Ref.make<ReadonlyArray<AuthEvents.AuthEvent>>([]);
       const subscription = yield* events.subscribe;
@@ -156,15 +156,17 @@ describe("BAM-009: confirm", () => {
       );
       const users = yield* Users.Users;
       // The sign-up session is the live one (sign-in would need the mailbox verified first).
-      const signedIn = yield* password.signUp({ email, password: strongPassword });
-      yield* letForkedFibersRun;
+      const signedIn = yield* password.signUp({
+        email,
+        password: strongPassword,
+      });
       const user = Option.getOrThrow(yield* users.findByEmail(email));
       assert.isTrue(Exit.isSuccess(yield* Effect.exit(sessions.verify(signedIn.token))));
       yield* requestChange(user.id, newEmail);
-      const token = Redacted.make(tokenOf(changeEmailMail(yield* mailer.sent)[0]));
+      const token = Redacted.make(TestMailbox.secret(yield* box.mail.waitFor(changeEmail)));
 
       yield* password.confirmEmailChange({ token });
-      yield* letForkedFibersRun;
+      yield* box.mail.waitFor({ template: "email-changed" });
 
       const stale = yield* sessions.verify(signedIn.token).pipe(Effect.flip);
       assert.strictEqual(stale._tag, "Sessions/NotFound");
@@ -180,10 +182,11 @@ describe("BAM-009: confirm", () => {
     Effect.gen(function* () {
       const password = yield* Password.Password;
       const users = yield* Users.Users;
-      const mailer = yield* Mailer.Mailer;
       const user = yield* signedUpUser();
       yield* requestChange(user.id, newEmail);
-      const token = Redacted.make(tokenOf(changeEmailMail(yield* mailer.sent)[0]));
+      const token = Redacted.make(
+        TestMailbox.secret(yield* (yield* TestMailbox.Mailbox).mail.waitFor(changeEmail)),
+      );
       yield* signedUpUser(newEmail);
       const failure = yield* password.confirmEmailChange({ token }).pipe(Effect.flip);
       assert.strictEqual(failure._tag, "EmailAlreadyExists");
@@ -193,20 +196,16 @@ describe("BAM-009: confirm", () => {
 });
 
 describe("BAM-009: typed mail failure and rate limits", () => {
-  const failingMailer = Layer.succeed(
-    Mailer.Mailer,
-    Mailer.Mailer.of({
-      send: (message) =>
-        Effect.fail(
-          new Mailer.MailDeliveryFailed({
-            template: message.template,
-            reason: "provider down",
-            retryable: true,
-          }),
-        ),
-      sent: Effect.succeed([]),
-    }),
-  );
+  const failingMailer = Layer.mock(Mailer.Mailer)({
+    send: (message) =>
+      Effect.fail(
+        new Mailer.MailDeliveryFailed({
+          template: message.template,
+          reason: "provider down",
+          retryable: true,
+        }),
+      ),
+  });
 
   it.effect("the authenticated requester sees EmailDeliveryFailed, not a silent success", () =>
     Effect.gen(function* () {
@@ -259,8 +258,11 @@ describe("BEH-EA-320: starting an email change needs a fresh session", () => {
     () =>
       Effect.gen(function* () {
         const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
-        const issued = yield* password.signUp({ email, password: strongPassword });
+        const box = yield* TestMailbox.Mailbox;
+        const issued = yield* password.signUp({
+          email,
+          password: strongPassword,
+        });
         const request = password.requestEmailChange({
           userId: issued.session.userId,
           currentSessionId: issued.session.id,
@@ -273,7 +275,7 @@ describe("BEH-EA-320: starting an email change needs a fresh session", () => {
         if (refused._tag !== "PasswordReauthRequired") return assert.fail(refused._tag);
         assert.strictEqual(refused.maxAgeSeconds, 300);
         // Nothing was mailed and the target inbox's budget was not spent.
-        assert.strictEqual(changeEmailMail(yield* mailer.sent).length, 0);
+        yield* box.mail.refute(changeEmail);
 
         yield* password.reauthenticate({
           userId: issued.session.userId,
@@ -281,7 +283,8 @@ describe("BEH-EA-320: starting an email change needs a fresh session", () => {
           currentPassword: strongPassword,
         });
         yield* request;
-        assert.strictEqual(changeEmailMail(yield* mailer.sent).length, 1);
+        yield* box.mail.waitFor(changeEmail);
+        yield* box.mail.refute(changeEmail, { beyond: 1 });
       }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 
@@ -305,15 +308,19 @@ describe("BEH-EA-320: starting an email change needs a fresh session", () => {
   it.effect("reauthMaxAge: Duration.infinity turns the gate off", () =>
     Effect.gen(function* () {
       const password = yield* Password.Password;
-      const mailer = yield* Mailer.Mailer;
-      const issued = yield* password.signUp({ email, password: strongPassword });
+      const box = yield* TestMailbox.Mailbox;
+      const issued = yield* password.signUp({
+        email,
+        password: strongPassword,
+      });
       yield* TestClock.adjust(Duration.hours(2));
       yield* password.requestEmailChange({
         userId: issued.session.userId,
         currentSessionId: issued.session.id,
         newEmail,
       });
-      assert.strictEqual(changeEmailMail(yield* mailer.sent).length, 1);
+      yield* box.mail.waitFor(changeEmail);
+      yield* box.mail.refute(changeEmail, { beyond: 1 });
     }).pipe(
       TestAuth.withoutRequest,
       Effect.provide(makeTestLayer({ config: { reauthMaxAge: Duration.infinity } })),

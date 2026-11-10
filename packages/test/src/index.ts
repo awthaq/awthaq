@@ -11,6 +11,7 @@
 // See spec/overview.md for the full package map.
 
 export * as TestAuth from "./TestAuth.ts";
+export * as TestMailbox from "./TestMailbox.ts";
 export * as TestEncryption from "./TestEncryption.ts";
 export * as LaggingReplica from "./LaggingReplica.ts";
 export * as CookieAssertions from "./CookieAssertions.ts";

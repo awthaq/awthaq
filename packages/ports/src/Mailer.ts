@@ -1,8 +1,7 @@
 // @awthaq/ports — Mailer
 //
-// spec/overview.md's Ports stratum table ("Mailer (layerNoop, layerMemory)")
-// and archive/PRD.md's own table: "layerNoop (fails loudly in prod),
-// layerMemory (records)". No BEH-EA range is allocated for the Ports
+// spec/overview.md's Ports stratum table ("Mailer (layerNoop, layerConsole)")
+// and archive/PRD.md's own table: "layerNoop (fails loudly in prod)". No BEH-EA range is allocated for the Ports
 // stratum yet (spec/traceability.md); this module is grounded directly in
 // the cited spec/archive sources rather than a numbered behavior.
 //
@@ -16,12 +15,8 @@
 // interpolation data; which provider renders and delivers that template is
 // exactly the concrete `Mailer` implementation the application chooses.
 //
-// `layerMemory`'s recorded messages are read back through the `sent` field
-// on the service shape itself (`archive/design/usage-examples-v4.md` §17:
-// "Mailer.layerMemory // records; Mailer.sent to assert") rather than a
-// second service or a module-level ref, so a test can assert against
-// whichever `Mailer` layer it happened to provide without needing to know
-// which one it was.
+// Observing sent mail is test tooling, not part of this port: `@awthaq/test`'s `TestMailbox` records and
+// waits for it (ADR-EA-054), so a provider adapter implements `send` and nothing else.
 
 import * as Defects from "./Defects.ts";
 import * as Context from "effect/Context";
@@ -29,7 +24,6 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as Ref from "effect/Ref";
 
 /**
  * EOTS-010: a message carries the recipient and, in `data`, credentials
@@ -71,10 +65,9 @@ export interface MailerShape {
    * still dies — an unconfigured `Mailer` is a wiring defect, not an outage.
    */
   readonly send: (message: MailMessage) => Effect.Effect<void, MailDeliveryFailed>;
-  readonly sent: Effect.Effect<ReadonlyArray<MailMessage>>;
   /**
    * ECS-005/BEH-EA-201: set by the implementations that must never reach production
-   * (`layerNoop`, `layerMemory`) so `awthaq doctor --build` can flag one left in a
+   * (`layerNoop`, `layerConsole`) so `awthaq doctor --build` can flag one left in a
    * production composition. A real provider leaves it unset.
    */
   readonly development?: true;
@@ -95,29 +88,14 @@ export const layerNoop: Layer.Layer<Mailer> = Layer.succeed(
       Defects.invalidConfiguration(
         "Mailer", // EOTS-010: the template only — never the recipient.
         `awthaq: no Mailer configured — dropped a "${message.template}" message. ` +
-          "Provide a real Mailer layer (or Mailer.layerMemory for tests).",
+          "Provide a real Mailer layer (or TestMailbox.layer from @awthaq/test for tests).",
       ),
-    sent: Effect.succeed([]),
     development: true,
   }),
 );
 
-/** Records every sent message in memory; `sent` reads them back for assertions. */
-export const layerMemory: Layer.Layer<Mailer> = Layer.effect(
-  Mailer,
-  Effect.gen(function* () {
-    const messages = yield* Ref.make<ReadonlyArray<MailMessage>>([]);
-    return Mailer.of({
-      send: (message) => Ref.update(messages, (existing) => [...existing, message]),
-      sent: Ref.get(messages),
-      development: true,
-    });
-  }),
-);
-
 /**
- * DESS-002: the development stand-in for a real provider. Records every message
- * like `layerMemory`, and also logs it — the recipient, the template and the `data`
+ * DESS-002: the development stand-in for a real provider. Logs every message — the recipient, the template and the `data`
  * with any `Redacted` value unwrapped — so a person running an app locally can copy a
  * verification or reset token straight out of the console and finish the flow
  * without an inbox.
@@ -126,27 +104,22 @@ export const layerMemory: Layer.Layer<Mailer> = Layer.effect(
  * (no recipient, no token in a log line): logging the token is its whole purpose. It
  * sets `development`, so `awthaq doctor --build` flags it in a production composition.
  */
-export const layerConsole: Layer.Layer<Mailer> = Layer.effect(
+export const layerConsole: Layer.Layer<Mailer> = Layer.succeed(
   Mailer,
-  Effect.gen(function* () {
-    const messages = yield* Ref.make<ReadonlyArray<MailMessage>>([]);
-    return Mailer.of({
-      send: (message) =>
-        Effect.logInfo("awthaq mail").pipe(
-          Effect.annotateLogs({
-            to: message.to,
-            template: message.template,
-            ...Object.fromEntries(
-              Object.entries(message.data ?? {}).map(([key, value]) => [
-                key,
-                Redacted.isRedacted(value) ? Redacted.value(value) : value,
-              ]),
-            ),
-          }),
-          Effect.andThen(Ref.update(messages, (existing) => [...existing, message])),
-        ),
-      sent: Ref.get(messages),
-      development: true,
-    });
+  Mailer.of({
+    send: (message) =>
+      Effect.logInfo("awthaq mail").pipe(
+        Effect.annotateLogs({
+          to: message.to,
+          template: message.template,
+          ...Object.fromEntries(
+            Object.entries(message.data ?? {}).map(([key, value]) => [
+              key,
+              Redacted.isRedacted(value) ? Redacted.value(value) : value,
+            ]),
+          ),
+        }),
+      ),
+    development: true,
   }),
 );

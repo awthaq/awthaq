@@ -9,63 +9,59 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as Ref from "effect/Ref";
 import * as TestAuth from "../src/TestAuth.ts";
 
 class Marker extends Context.Service<Marker, { readonly label: string }>()("test/Marker") {}
 
-/** A capturing `Mailer` of the test's own: the instance the plugin must send through and the test must read. */
-const capturing = Layer.effect(
-  Mailer.Mailer,
-  Effect.gen(function* () {
-    const messages = yield* Ref.make<ReadonlyArray<Mailer.MailMessage>>([]);
-    return Mailer.Mailer.of({
-      send: (message) => Ref.update(messages, (all) => [...all, message]),
-      sent: Ref.get(messages),
-    });
-  }),
-);
-
 describe("TestAuth.layer `services` reach the output (BEH-EA-193)", () => {
   it("a service only `services` provides is `yield*`-able", async () => {
-    const app = TestAuth.app(
+    await TestAuth.withApp(
       TestAuth.layer(Auth.make([Password.Password]), {
         services: Layer.merge(
           TestAuth.httpClient.noBreach,
           Layer.succeed(Marker, { label: "mine" }),
         ),
       }),
+      undefined,
+      async (app) => {
+        const marker = await app.run(Effect.service(Marker));
+        assert.strictEqual(marker.label, "mine");
+      },
     );
-    try {
-      const marker = await app.run(Effect.service(Marker));
-      assert.strictEqual(marker.label, "mine");
-    } finally {
-      await app.dispose();
-    }
   });
 
-  it("a capturing Mailer in `services` is the instance the plugin sends through and the test reads", async () => {
-    const app = TestAuth.app(
-      TestAuth.layer(Auth.make([Password.Password]), {
-        services: Layer.merge(TestAuth.httpClient.noBreach, capturing),
-      }),
-    );
-    try {
-      await app.run(
-        Effect.gen(function* () {
-          const password = yield* Password.Password;
-          yield* password.signUp({
-            email: "capture@example.com",
-            password: Redacted.make("a sufficiently long test password"),
-          });
+  it("a Mailer in `services` shadows the mailbox for the plugin, and is the instance it sends through", async () => {
+    const sent: Array<Mailer.MailMessage> = [];
+    let arrived = () => {};
+    const delivered = new Promise<void>((resolve) => {
+      arrived = resolve;
+    });
+    const own = Layer.mock(Mailer.Mailer)({
+      send: (message) =>
+        Effect.sync(() => {
+          sent.push(message);
+          arrived();
         }),
-      );
-      // The sign-up mail is dispatched in the background; give it a moment on the real clock.
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      const sent = await app.run(Effect.flatMap(Mailer.Mailer, (mailer) => mailer.sent));
-      assert.isTrue(sent.some((message) => message.template === "verify-email"));
-    } finally {
-      await app.dispose();
-    }
+    });
+    await TestAuth.withApp(
+      TestAuth.layer(Auth.make([Password.Password]), {
+        services: Layer.merge(TestAuth.httpClient.noBreach, own),
+      }),
+      undefined,
+      async (app) => {
+        await app.run(
+          Effect.gen(function* () {
+            const password = yield* Password.Password;
+            yield* password.signUp({
+              email: "capture@example.com",
+              password: Redacted.make("a sufficiently long test password"),
+            });
+          }),
+        );
+        // The sign-up mail is dispatched in the background; the double resolves `delivered` when it lands.
+        await delivered;
+        assert.isTrue(sent.some((message) => message.template === "verify-email"));
+      },
+    );
   });
 });

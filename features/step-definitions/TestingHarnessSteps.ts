@@ -13,8 +13,9 @@ import {
 } from "@qadi/core";
 import { ChallengeStore } from "@awthaq/passkey";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import { defineSteps } from "@effect-cucumber/vitest";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -51,6 +52,9 @@ import { isBoolean, isNumber, isString, isStringArray } from "./shared/Outcomes.
 
 const strongPassword = Redacted.make("correct horse battery staple");
 
+const isMail = (value: unknown): value is Mailer.MailMessage =>
+  typeof value === "object" && value !== null && isString(Reflect.get(value, "template"));
+
 /** What a composed `TestAuth.layer` context provides, gathered once. */
 interface CompositionFacts {
   readonly hasDatabase: boolean;
@@ -69,7 +73,7 @@ const gatherCompositionFacts = Effect.scoped(
     return yield* Effect.gen(function* () {
       const mailer = yield* Mailer.Mailer;
       yield* mailer.send({ to: "facts@example.com", template: "probe" });
-      const sent = yield* mailer.sent;
+      const sent = yield* (yield* TestMailbox.Mailbox).mail.messages;
       const limiter = yield* RateLimiter.RateLimiter;
       const users = yield* Users.Users;
       const created = yield* users.create({
@@ -448,7 +452,7 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
     "a test that only needs to override {string}'s {string} method",
     function* (port: string, method: string) {
       const { outcomes } = yield* World;
-      assert.equal(port, "Mailer");
+      assert.equal(port, "RateLimiter");
       yield* outcomes.set("method", method);
     },
   );
@@ -456,17 +460,19 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
   When("the test provides its double for {string}", function* (_port: string) {
     const { outcomes } = yield* World;
     const sentTo = yield* Ref.make<ReadonlyArray<string>>([]);
-    const double = Layer.mock(Mailer.Mailer)({
-      send: (message) => Ref.update(sentTo, (seen) => [...seen, message.to]),
+    const double = Layer.mock(RateLimiter.RateLimiter)({
+      consume: (input) => Ref.update(sentTo, (seen) => [...seen, input.key]),
     });
     const observed = yield* Effect.gen(function* () {
-      const mailer = yield* Mailer.Mailer;
-      yield* mailer.send({ to: "mock@example.com", template: "probe" });
+      const limiter = yield* RateLimiter.RateLimiter;
+      yield* limiter.consume({ key: "mock@example.com", limit: 1, window: "1 minute" });
       // Everything not overridden is a typed "unimplemented" defect, not a silent no-op.
-      const unimplemented = yield* Effect.exit(mailer.sent);
+      const unimplemented = yield* Effect.exit(
+        limiter.check({ key: "mock@example.com", limit: 1, window: "1 minute" }),
+      );
       return Exit.isFailure(unimplemented)
         ? String(unimplemented.cause)
-        : "sent unexpectedly succeeded";
+        : "check unexpectedly succeeded";
     }).pipe(Effect.provide(double));
     yield* outcomes.set("recipients", yield* Ref.get(sentTo));
     yield* outcomes.set("unimplemented", observed);
@@ -475,14 +481,14 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
   Then("it uses {string} to override only {string}", function* (_mock: string, _method: string) {
     const { outcomes } = yield* World;
     assert.deepEqual(yield* outcomes.getAs("recipients", isStringArray), ["mock@example.com"]);
-    assert.match(yield* outcomes.getAs("unimplemented", isString), /Unimplemented method "sent"/);
+    assert.match(yield* outcomes.getAs("unimplemented", isString), /Unimplemented method "check"/);
   });
 
   Then(
     "it does not hand-write a full replacement implementation of {string}'s interface",
     function* (_port: string) {
       const { outcomes } = yield* World;
-      // The double answers exactly one method; a full hand-written replacement would have answered `sent` too.
+      // The double answers exactly one method; a full hand-written replacement would have answered `check` too.
       assert.match(
         yield* outcomes.getAs("unimplemented", isString),
         /UnimplementedError|Unimplemented method/,
@@ -522,6 +528,118 @@ export const testingHarnessSteps = defineSteps<World>(({ Given, When, Then }) =>
       assert.deepEqual(yield* outcomes.getAs("calls", isStringArray), ["welcome:ada@example.com"]);
     },
   );
+
+  // ---- BEH-EA-354: the mailbox ----------------------------------------------------------------
+
+  Given("{string} composes {string}", function* (_layer: string, _plugin: string) {
+    const { outcomes } = yield* World;
+    yield* outcomes.set("composition", "TestAuth.layer(Password)");
+  });
+
+  When("an anonymous visitor signs up as {string} through the handler", function* (email: string) {
+    const { outcomes } = yield* World;
+    const app = yield* TestAuth.serve(passwordApp);
+    const agent = yield* Effect.promise(() => app.agent());
+    const response = yield* Effect.promise(() =>
+      agent.request("POST", "/password/sign-up", {
+        json: { email, password: Redacted.value(strongPassword) },
+      }),
+    );
+    assert.equal(response.status, 200);
+    // The mail is sent on a detached fiber (BEH-EA-064): the wait is the test's, inside the served app's runtime.
+    const mail = yield* Effect.promise(() =>
+      app.run(
+        Effect.flatMap(TestMailbox.Mailbox, (mailbox) =>
+          mailbox.mail.waitFor({ to: email, template: "verify-email" }),
+        ),
+      ),
+    );
+    yield* outcomes.set("mail", mail);
+  });
+
+  Then(
+    "the test waits for the {string} mail to {string} through {string}",
+    function* (template: string, email: string, _service: string) {
+      const { outcomes } = yield* World;
+      const mail = yield* outcomes.getAs("mail", isMail);
+      assert.equal(mail.template, template);
+      assert.equal(mail.to, email);
+    },
+  );
+
+  Then("the mailed token is a non-empty secret", function* () {
+    const { outcomes } = yield* World;
+    assert.ok(TestMailbox.secret(yield* outcomes.getAs("mail", isMail)).length > 0);
+  });
+
+  Given("a test running under {string}", function* (_clock: string) {
+    yield* Effect.void;
+  });
+
+  When(
+    "it waits {int} milliseconds for a {string} mail to {string}",
+    function* (millis: number, template: string, email: string) {
+      const { outcomes } = yield* World;
+      const exit = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(TestMailbox.layer);
+          return yield* Effect.exit(
+            Effect.flatMap(TestMailbox.Mailbox, (mailbox) =>
+              mailbox.mail.waitFor({ to: email, template }, { timeout: Duration.millis(millis) }),
+            ).pipe(Effect.provide(context)),
+          );
+        }),
+      );
+      yield* outcomes.set("waitFailure", Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "");
+    },
+  );
+
+  Then("the wait fails", function* () {
+    const { outcomes } = yield* World;
+    assert.notEqual(yield* outcomes.getAs("waitFailure", isString), "");
+  });
+
+  Then(
+    "the failure names {string} and does not contain {string}",
+    function* (template: string, email: string) {
+      const { outcomes } = yield* World;
+      const text = yield* outcomes.getAs("waitFailure", isString);
+      assert.ok(text.includes(template));
+      assert.ok(!text.includes(email));
+    },
+  );
+
+  Given("a mailbox with no mail", function* () {
+    yield* Effect.void;
+  });
+
+  When(
+    "a detached fiber sends a {string} mail {int} milliseconds later while the test refutes {string} mail",
+    function* (template: string, millis: number, refuted: string) {
+      const { outcomes } = yield* World;
+      const exit = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(TestMailbox.layer);
+          return yield* Effect.gen(function* () {
+            const mailer = yield* Mailer.Mailer;
+            const mailbox = yield* TestMailbox.Mailbox;
+            yield* Effect.forkChild(
+              Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis))).pipe(
+                Effect.andThen(mailer.send({ to: "late@example.com", template })),
+              ),
+            );
+            return yield* Effect.exit(mailbox.mail.refute({ template: refuted }));
+          }).pipe(Effect.provide(context));
+        }),
+      );
+      yield* outcomes.set("refutationFailed", Exit.isFailure(exit));
+    },
+  );
+
+  Then("the refutation fails", function* () {
+    const { outcomes } = yield* World;
+    assert.equal(yield* outcomes.getAs("refutationFailed", isBoolean), true);
+  });
 
   // ---- BEH-EA-196 (PV-261): the recommended recipe, run --------------------------------------
   // makeSubject builds the caller, currentSubjectLayer + EvaluationServicesNone are the whole

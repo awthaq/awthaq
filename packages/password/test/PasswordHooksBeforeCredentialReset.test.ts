@@ -3,15 +3,14 @@
 // before the credential is rewritten and the sessions revoked — so mailbox possession alone
 // cannot downgrade an account a second factor protects. `@awthaq/two-factor`'s
 // `credentialResetGate` is the real tap; here a stand-in tap pins the seam itself.
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import { HookPoint, Hooks } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Password from "../src/Password.ts";
-import { letForkedFibersRun, makeTestLayer, tokenOf } from "./harness.ts";
+import { makeTestLayer } from "./harness.ts";
 
 /** What the stand-in tap saw, so a test can assert the veto ran with (or without) a code. */
 const seen = Ref.makeUnsafe<ReadonlyArray<{ readonly userId: string; readonly code?: string }>>([]);
@@ -47,15 +46,24 @@ const newPassword = Redacted.make("a brand new strong password");
 const enrolledUserWithResetToken = (email: string) =>
   Effect.gen(function* () {
     const password = yield* Password.Password;
-    const mailer = yield* Mailer.Mailer;
+    const box = yield* TestMailbox.Mailbox;
     const issued = yield* password.signUp({ email, password: oldPassword });
-    yield* letForkedFibersRun;
-    const verifyMail = (yield* mailer.sent).findLast((mail) => mail.template === "verify-email");
-    yield* password.verifyEmail({ token: Redacted.make(tokenOf(verifyMail)) });
+    const verifyMail = yield* box.mail.waitFor({
+      to: email,
+      template: "verify-email",
+    });
+    yield* password.verifyEmail({
+      token: Redacted.make(TestMailbox.secret(verifyMail)),
+    });
     yield* password.requestReset({ email });
-    yield* letForkedFibersRun;
-    const resetMail = (yield* mailer.sent).findLast((mail) => mail.template === "reset-password");
-    return { userId: issued.session.userId, token: Redacted.make(tokenOf(resetMail)) };
+    const resetMail = yield* box.mail.waitFor({
+      to: email,
+      template: "reset-password",
+    });
+    return {
+      userId: issued.session.userId,
+      token: Redacted.make(TestMailbox.secret(resetMail)),
+    };
   });
 
 describe("Password.confirmReset x BeforeCredentialReset (ARF-005)", () => {

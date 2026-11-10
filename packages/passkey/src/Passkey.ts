@@ -63,14 +63,14 @@ import * as ChallengeStore from "./ChallengeStore.ts";
 import { hmacSha256 } from "./Hmac.ts";
 import * as PasskeyApi from "./PasskeyApi.ts";
 import * as PasskeyCeremony from "./PasskeyCeremony.ts";
-import { PasskeyConfig, type PasskeyConfigShape } from "./PasskeyConfig.ts";
+import { PasskeyConfigScoped, type PasskeyConfigShape } from "./PasskeyConfig.ts";
 import * as PasskeyCredentials from "./PasskeyCredentials.ts";
 import * as PasskeyUserHandles from "./PasskeyUserHandles.ts";
 
 /** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
 export type PasskeyLifecycle = SessionLifecycle.Mints | SessionLifecycle.Refreshes;
 
-export { PasskeyConfig, config } from "./PasskeyConfig.ts";
+export { PasskeyConfig, PasskeyConfigScoped, config } from "./PasskeyConfig.ts";
 export type { AttestationPolicy, PasskeyConfigShape } from "./PasskeyConfig.ts";
 
 /** BEH-EA-044-style reserved provider id, this plugin's own concern (BEH-EA-004: confined to its own scope). */
@@ -738,7 +738,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
   },
   // ECS-008/BEH-EA-229: the dev defaults (`localhost`, an `http` origin) are the classic thing left in production.
   config: [
-    ConfigDescriptor.make(PasskeyConfig, {
+    ConfigDescriptor.make(PasskeyConfigScoped, {
       sensitive: [],
       audit: (value, environment) => [
         ...(environment.production && value.rpId === "localhost"
@@ -780,8 +780,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       // tenant's `Passkey.config(...)` provided in the calling fiber applies to that request; with
       // none, the build-time value applies exactly as before. The boot validations below and the
       // decoy `enumerationSecret` are boot-scoped by nature and read the built value.
-      const builtConfig = yield* PasskeyConfig;
-      const configNow = Tenant.configInForce(PasskeyConfig, builtConfig);
+      const configNow = yield* Tenant.inForce(PasskeyConfigScoped);
+      // read once at build: the build value (BEH-EA-355 boot fields)
+      const builtConfig = yield* configNow;
       const random = yield* SecureRandom.SecureRandom;
       const mac = yield* Mac.Mac;
       // ADR-EA-038: the gate, the sign-in veto, the MFA divert point and the announcement.

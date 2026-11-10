@@ -40,6 +40,7 @@ import { EventRegistry } from "./AuthEventSchemas.ts";
 import { RetentionRegistry } from "./RetentionRegistry.ts";
 import { Sessions } from "./Sessions.ts";
 import { Verification } from "./Verification.ts";
+import * as Tenant from "./Tenant.ts";
 
 export * from "./RetentionRegistry.ts";
 
@@ -87,13 +88,14 @@ export const RetentionConfig = Context.Reference<RetentionConfigShape>(
  * `Retention.config({ auditLog: { default: Option.some(Duration.days(365)), rules: [{ tags: ["auth.user.signInFailed"], keepFor: Duration.days(90) }] } })`
  * keeps failed sign-ins 90 days and every other audit row a year.
  */
+/** BEH-EA-355: deployment-scoped. */
+export const RetentionConfigScoped = Tenant.perDeployment(RetentionConfig);
+
 export const config = (partial: Partial<RetentionConfigShape>) =>
-  Layer.effect(
-    RetentionConfig,
-    Effect.map(Effect.service(RetentionConfig), (defaults): RetentionConfigShape => ({
-      ...defaults,
-      ...partial,
-    })),
+  Layer.unwrap(
+    Effect.map(Effect.service(RetentionConfig), (defaults) =>
+      RetentionConfigScoped.layer({ ...defaults, ...partial }),
+    ),
   );
 
 export interface SweepReport {
@@ -132,6 +134,7 @@ const cutoff = (now: DateTime.Utc, window: Duration.Duration): DateTime.Utc =>
  * idempotent.
  */
 export const sweep = Effect.gen(function* () {
+  // Ambient read: the host's value from the calling fiber (PLAN.md 1.4).
   const settings = yield* RetentionConfig;
   yield* checkRuleTags(settings);
   const sessions = yield* Sessions;
@@ -198,7 +201,7 @@ export const sweep = Effect.gen(function* () {
  */
 export const layerScheduled = Layer.effectDiscard(
   Effect.gen(function* () {
-    const settings = yield* RetentionConfig;
+    const settings = yield* yield* Tenant.inForce(RetentionConfigScoped);
     // Refused at build, loudly: the tick below logs and retries a failed sweep, which would hide a typo.
     yield* checkRuleTags(settings);
     const tick = sweep.pipe(

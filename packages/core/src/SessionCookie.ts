@@ -16,9 +16,9 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import { Api } from "@awthaq/api";
+import * as Tenant from "./Tenant.ts";
 
 /** BEH-EA-055 modes. The default is `Host`; the others are explicit, typed opt-ins. */
 export type Mode =
@@ -79,8 +79,11 @@ export const SessionCookieConfig: Context.Reference<SessionCookieConfigShape> = 
   { defaultValue: () => defaultConfig },
 );
 
-export const config = (partial: Partial<SessionCookieConfigShape>): Layer.Layer<never> =>
-  Layer.succeed(SessionCookieConfig, { ...defaultConfig, ...partial });
+/** BEH-EA-355: deployment-scoped (it decides how every response writes the credential). */
+export const SessionCookieConfigScoped = Tenant.perDeployment(SessionCookieConfig);
+
+export const config = (partial: Partial<SessionCookieConfigShape>) =>
+  SessionCookieConfigScoped.layer({ ...defaultConfig, ...partial });
 
 /**
  * APS-006: impersonation sessions travel under their own cookie (so the admin's
@@ -168,6 +171,7 @@ export const render = (
   kind: CookieKind = "session",
 ) =>
   Effect.gen(function* () {
+    // Ambient read: the host's value from the calling fiber (PLAN.md 1.4).
     const cfg = yield* SessionCookieConfig;
     const now = yield* DateTime.now;
     return renderAt(cfg, Redacted.value(token), session.absoluteExpiresAt, now, kind);

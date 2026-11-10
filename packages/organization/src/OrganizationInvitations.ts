@@ -31,7 +31,7 @@ import * as InvitationRecords from "./InvitationRecords.ts";
 import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
 import * as OrganizationAuthority from "./OrganizationAuthority.ts";
-import { OrganizationConfig } from "./OrganizationConfig.ts";
+import { OrganizationConfigScoped } from "./OrganizationConfig.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationErrors from "./OrganizationErrors.ts";
 import * as OrganizationEvents from "./OrganizationEvents.ts";
@@ -193,8 +193,7 @@ export class OrganizationInvitations extends Context.Service<
       const random = yield* SecureRandom.SecureRandom;
       const hasher = yield* Digest.Digest;
       // EP-007 (ADR-EA-018): the configuration in force is decided per operation.
-      const builtConfig = yield* OrganizationConfig;
-      const configNow = Tenant.configInForce(OrganizationConfig, builtConfig);
+      const configNow = yield* Tenant.inForce(OrganizationConfigScoped);
       const beforeCreate = yield* OrganizationHooks.BeforeCreateInvitation;
       const afterCreate = yield* OrganizationHooks.AfterCreateInvitation;
       const beforeAccept = yield* OrganizationHooks.BeforeAcceptInvitation;

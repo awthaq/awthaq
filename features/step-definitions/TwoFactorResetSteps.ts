@@ -2,14 +2,13 @@
 // `BeforeCredentialReset` before anything is rewritten. Wired over `TwoFactorWorld`'s composition,
 // where `TwoFactor.credentialResetGate` is the tap; Password's own HTTP world has no second factor.
 import { Sessions } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
+import { TestMailbox } from "@awthaq/test";
 import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import { mailedToken } from "./MailedToken.ts";
 import {
   auditRows,
   currentCode,
@@ -25,7 +24,6 @@ import {
   World,
 } from "./TwoFactorWorld.ts";
 import { answer, field, setAnswer, successValue } from "./TwoFactorSupport.ts";
-import { awaitMail } from "./shared/Harness.ts";
 
 const NEW_PASSWORD = "a brand new strong password";
 
@@ -45,17 +43,14 @@ export const twoFactorResetSteps = defineSteps<World>(({ Given, When, Then }) =>
     const token = yield* direct(
       Effect.gen(function* () {
         const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
+        const box = yield* TestMailbox.Mailbox;
+        const match = { to: person.email, template: "reset-password" };
+        const before = (yield* box.mail.messages).filter(
+          (message) => message.to === match.to && message.template === match.template,
+        ).length;
         yield* password.requestReset({ email: person.email });
-        yield* awaitMail(
-          mailer.sent,
-          (message) => message.template === "reset-password" && message.to === person.email,
-        );
-        const mail = (yield* mailer.sent).findLast(
-          (message) => message.template === "reset-password" && message.to === person.email,
-        );
-        if (mail === undefined) return yield* Effect.die("no reset-password mail");
-        return mailedToken(mail);
+        // The nth mail, so a second request reads its own token, not the first (already consumed) one.
+        return TestMailbox.secret(yield* box.mail.waitFor(match, { nth: before + 1 }));
       }),
     );
     yield* strings.set(`reset:${name}`, token);

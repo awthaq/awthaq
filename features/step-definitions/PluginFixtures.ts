@@ -232,12 +232,12 @@ export class NotifierFixture extends AuthPlugin.Service<
   NotifierFixture,
   { readonly notify: () => Effect.Effect<string> }
 >()("notifier", { apiVersion: 1, contract: HttpApi.make("auth") }) {
-  /** The full layer reads the `Mailer` port. */
+  /** The full layer requires the `Mailer` port. */
   static readonly layer = AuthPlugin.layer(NotifierFixture, {
     ports: [Mailer.Mailer],
     make: Effect.gen(function* () {
-      const mailer = yield* Mailer.Mailer;
-      return { notify: () => Effect.map(mailer.sent, (sent) => `mailed:${sent.length}`) };
+      yield* Mailer.Mailer;
+      return { notify: () => Effect.succeed("notified") };
     }),
   });
 

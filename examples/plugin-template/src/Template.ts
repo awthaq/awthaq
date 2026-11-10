@@ -10,6 +10,7 @@ import { Api } from "@awthaq/api";
 import {
   AuthEvents,
   AuthPlugin,
+  ConfigDescriptor,
   CurrentUser,
   HookPoint,
   Migrations,
@@ -51,8 +52,15 @@ export const NotesConfig: Context.Reference<NotesConfigShape> = Context.Referenc
   { defaultValue: () => defaultConfig },
 );
 
+/**
+ * What a plugin author decides here: the scope (`perTenant`: a tenant's own `Template.config(...)` governs its requests;
+ * `perDeployment` for a setting that cannot vary), and any `boot` field no operation reads from the tenant's value.
+ * Both limits are read per operation, so there is no boot field. ADR-EA-018 D8, BEH-EA-355.
+ */
+export const NotesConfigScoped = Tenant.perTenant(NotesConfig);
+
 export const config = (partial: Partial<NotesConfigShape>) =>
-  Layer.succeed(NotesConfig, { ...defaultConfig, ...partial });
+  NotesConfigScoped.layer({ ...defaultConfig, ...partial });
 
 // ---- hook points: one veto (before) + one observe (after) --------------------------
 // A tap can amend or abort the operation (veto) or watch it (observe). The input
@@ -396,6 +404,7 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
   // The events this plugin publishes (ADR-EA-049), defined in `NotesEvents.ts`: `Auth.make` composes them, and
   // `TestAuth.layer` fails a test that emits an event not listed here.
   events: NotesEvents.events,
+  config: [ConfigDescriptor.make(NotesConfigScoped)],
 }) {
   static readonly layer = AuthPlugin.layer(Notes, {
     // The port the budget consumes through: declared, and checked for completeness by the compiler.
@@ -405,9 +414,9 @@ export class Notes extends AuthPlugin.Service<Notes, NotesShape>()("notes", {
       // Dependencies are plain `yield*`s: core services and this plugin's own records
       // are required from the environment, never constructed here (ports-required rule).
       const records = yield* NoteRecords;
-      // ADR-EA-018 Decision 8: the configuration is read per operation, so a tenant's `Template.config(...)` provided
-      // in the calling fiber governs its own requests; with none, this build-time value applies.
-      const settingsNow = Tenant.configInForce(NotesConfig, yield* NotesConfig);
+      // ADR-EA-018 Decision 8: `Tenant.inForce` is yielded once here and its result per operation, so a tenant's
+      // `Template.config(...)` in the calling fiber governs its own requests; with none, this build-time value applies.
+      const settingsNow = yield* Tenant.inForce(NotesConfigScoped);
       const beforeCreate = yield* BeforeCreateNote;
       const afterCreate = yield* AfterCreateNote;
       const events = yield* AuthEvents.AuthEvents;
