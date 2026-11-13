@@ -96,7 +96,9 @@ export const challengeStore = RecordsContract.suite(ChallengeStore.ChallengeStor
             assert.isFalse(yield* store.consume("registration:user-3", "not-the-right-value"));
             const scope = "registration:tamper";
             const issued = Redacted.value(yield* store.issue(scope));
-            assert.isFalse(yield* store.consume(scope, `${issued.slice(0, -2)}xx`));
+            // Always differs from `issued` (a fixed suffix collides when the random value already ends in it).
+            const tampered = `${issued.slice(0, -1)}${issued.endsWith("x") ? "y" : "x"}`;
+            assert.isFalse(yield* store.consume(scope, tampered));
           }),
         },
         {
