@@ -5,10 +5,15 @@
 import { assert, describe, it } from "@effect/vitest";
 
 /**
- * qadi's devtools gate-instrumentation registry (owned by the atom set since qadi 0.11) —
- * import it from `@qadi/react` itself.
+ * qadi's devtools surface (the gate-instrumentation registry, owned by the atom set since qadi 0.11,
+ * and the dock feed, `useDevtoolsFeed`/`runtimeLayer`, since 0.12) — import it from `@qadi/react` itself.
  */
-const withheld = new Set(["makeGateRegistry", "useGateInstances"]);
+const withheld = new Set([
+  "makeGateRegistry",
+  "useGateInstances",
+  "useDevtoolsFeed",
+  "runtimeLayer",
+]);
 
 describe("@awthaq/react's @qadi/react re-exports (BO-007)", () => {
   // Dynamic imports: the lint config forbids static barrel imports in tests,

@@ -27,7 +27,7 @@ import {
   obliged,
   relationshipResolverFromEdges,
 } from "@qadi/core";
-import { NO_RESOURCE, SubjectExtractor, reauthCheck } from "@qadi/http";
+import { SubjectExtractor, authorizeRequest, classifyHttpEnforcementFailure } from "@qadi/http";
 import { Roles } from "@awthaq/roles";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
@@ -759,12 +759,17 @@ export const resolversSteps = defineSteps<World>(({ Given, When, Then }) => {
     return yield* Effect.promise(() =>
       served.run(
         Effect.gen(function* () {
-          const exit = yield* reauthCheck(request, hasPermission(projectAdmin), NO_RESOURCE).pipe(
-            Effect.exit,
-          );
+          // The stream's recheck is `authorizeRequest`; a refusal is labelled with its enforcement class.
+          const exit = yield* authorizeRequest(
+            projectAdmin,
+            hasPermission(projectAdmin),
+          )(request).pipe(Effect.exit);
           return Exit.isSuccess(exit)
             ? "still-allowed"
-            : Cause.findErrorOption(exit.cause).pipe(Option.getOrElse(() => "defect"));
+            : Cause.findErrorOption(exit.cause).pipe(
+                Option.map(classifyHttpEnforcementFailure),
+                Option.getOrElse(() => "defect"),
+              );
         }),
       ),
     );

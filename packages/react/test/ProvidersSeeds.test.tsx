@@ -89,11 +89,8 @@ const serverAllow = (subjectId: string) =>
       policyTag: "HasAttribute",
       allowed: true,
       children: [],
-      visibleFields: undefined,
       obligations: [],
     },
-    visibleFields: undefined,
-    obligations: [],
   });
 
 const Gate = (): ReactElement => (

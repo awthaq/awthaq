@@ -29,9 +29,9 @@ catalog:
   "@effect/sql-libsql": ^4.1.2
   "@effect/vitest": ^4.1.2
   "@effect/atom-react": ^4.1.2
-  "@qadi/core": ^0.11.0
-  "@qadi/http": ^0.11.0
-  "@qadi/react": ^0.11.0
+  "@qadi/core": ^0.12.0
+  "@qadi/http": ^0.12.0
+  "@qadi/react": ^0.12.0
   vitest: 5.0.2
   "@vitest/coverage-v8": 5.0.2
   # Exact, like `@effect/tsgo` below: `effect-tsgo patch` (the root `prepare`) patches the
@@ -60,10 +60,13 @@ catalogs:
     "@effect/sql-sqlite-node": ^4.1.0
     "@effect/sql-pg": ^4.1.0
     "@effect/atom-react": ^4.1.0
-    "@qadi/core": ^0.11.0
-    "@qadi/http": ^0.11.0
-    "@qadi/react": ^0.11.0
+    "@qadi/core": ^0.12.0
+    "@qadi/http": ^0.12.0
+    "@qadi/react": ^0.12.0
 
 minimumReleaseAgeExclude:
   - "@effect-cucumber/gherkin@0.10.1"
   - "@effect-cucumber/vitest@0.10.1"
+  - "@qadi/core@0.12.0"
+  - "@qadi/http@0.12.0"
+  - "@qadi/react@0.12.0"

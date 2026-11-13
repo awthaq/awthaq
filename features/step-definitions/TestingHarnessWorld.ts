@@ -13,7 +13,8 @@ import { parseSetCookie } from "@awthaq/web/cookies";
 import { EvaluationServicesNone, hasPermission, permission, role } from "@qadi/core";
 import {
   RequirePermission,
-  RequirePermissionLive,
+  guardApi,
+  PermissionRegistryLive,
   RequiredPermission,
   requiresPermission,
 } from "@qadi/http";
@@ -118,14 +119,15 @@ class GatedPlugin extends AuthPlugin.Service<GatedPlugin, Record<string, never>>
 }
 
 /**
- * The real Path B pipeline a suite merges next to `TestAuth.layer`: qadi's `RequirePermissionLive`
+ * The real Path B pipeline a suite merges next to `TestAuth.layer`: qadi's `guardApi`
  * over awthaq's `SubjectExtractorLive`, the `Roles` resolver flattening the catalog, and qadi's real
  * evaluator (`EvaluationServicesNone`: no attribute/relationship ports, none needed by a role policy).
  */
 // The guard is built over `Roles.layer` (`SubjectExtractorLive` captures the `SubjectResolver` slot that layer
 // overrides), as `services` of the composition: no ordering option is needed, because `services` sit above the records
 // and the derived `PrincipalResolver`, and `Roles.layer` is the very layer object the composition's `Roles` uses.
-const GatedServices = RequirePermissionLive.pipe(
+const GatedServices = guardApi(GatedApi).pipe(
+  Layer.provide(PermissionRegistryLive),
   Layer.provide(EvaluationServicesNone),
   Layer.provide(SubjectExtractor.SubjectExtractorLive),
   Layer.provideMerge(Roles.Roles.layer),

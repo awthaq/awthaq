@@ -6,7 +6,7 @@ import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import { EvaluationServicesNone, permission, role } from "@qadi/core";
-import { RequirePermissionLive } from "@qadi/http";
+import { guardApi, PermissionRegistryLive } from "@qadi/http";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -30,7 +30,8 @@ const admin = role({
 // `Roles` plugin of the composition uses, which the memo map builds once.
 const RolesConfig = Roles.config([editor, support, admin]);
 
-const GuardLive = RequirePermissionLive.pipe(
+const GuardLive = guardApi(RolesAdminApi.RolesAdminApi).pipe(
+  Layer.provide(PermissionRegistryLive),
   Layer.provide(EvaluationServicesNone),
   Layer.provide(SubjectExtractor.SubjectExtractorLive),
   Layer.provideMerge(Roles.Roles.layer),

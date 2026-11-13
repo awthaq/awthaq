@@ -230,8 +230,9 @@ export type ReauthRequired = Api.ReauthRequired;
 const reauthHandler: ObligationHandler<
   Api.ReauthRequired | Api.StoreUnavailable,
   Api.CurrentPrincipal | Sessions.Sessions
-> = (obligations) =>
+> = ({ decision }) =>
   Effect.gen(function* () {
+    const obligations = decision.obligations;
     for (const duty of obligations) {
       if (duty.id !== REAUTH_OBLIGATION_ID) {
         return yield* Defects.invalidConfiguration(

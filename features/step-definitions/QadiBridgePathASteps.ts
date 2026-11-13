@@ -13,7 +13,7 @@ import {
   currentSubjectLayer,
   decide,
   enforce,
-  enforceProjected,
+  enforceProjectedLoaded,
   eq,
   filter,
   guard,
@@ -111,11 +111,9 @@ const runRecipe = (call: string) => {
         Effect.map((value) => value === "ran"),
       );
     case "enforceProjected":
-      return enforceProjected(hasPermission(recipeRead, { fields: ["id", "name"] }), {
-        resource: recipeProject,
-      })(Effect.succeed(recipeProject)).pipe(
-        Effect.map((view) => "name" in view && !("budget" in view)),
-      );
+      return enforceProjectedLoaded(hasPermission(recipeRead, { fields: ["id", "name"] }))(
+        Effect.succeed(recipeProject),
+      ).pipe(Effect.map((view) => "name" in view && !("budget" in view)));
     case "filter":
       return filter(hasResourceAttribute("tenant", eq(literal("acme"))), [
         { id: "a", tenant: "acme" },

@@ -7,7 +7,7 @@
 // authorization itself: every endpoint carries qadi's `RequiredPermission`
 // annotation behind `RequirePermission` (see `RolesAdminApi.ts`), so the caller must
 // hold `roles:read` / `roles:manage` in the `Roles` catalog. The application provides
-// `RequirePermissionLive` (Path B) as it would for any qadi-guarded group.
+// `guardApi(RolesAdminApi)` (Path B) as it would for any qadi-guarded group.
 //
 // The actor recorded on `auth.roles.assigned` / `auth.roles.revoked` (RRM-005) is
 // the authenticated subject qadi resolved for the request (`CurrentSubject`), never
@@ -26,7 +26,7 @@ import * as RolesAdminApi from "./RolesAdminApi.ts";
 
 /**
  * The middleware services the application provides for this plugin's group: qadi's Path B
- * `RequirePermissionLive` and `Api.CsrfProtection`. (Naming them here also lets the compiler
+ * `guardApi` and `Api.CsrfProtection`. (Naming them here also lets the compiler
  * name them in this module's inferred layer types.)
  */
 export type RolesAdminMiddleware = RequirePermission | Api.CsrfProtection;

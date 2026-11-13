@@ -8,7 +8,16 @@ import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as Schema from "effect/Schema";
-import { AttributeResolver, exists, hasAttribute, makeSubjectId, obligation } from "@qadi/core";
+import {
+  Allow,
+  AttributeResolver,
+  exists,
+  hasAttribute,
+  makeSubject,
+  makeSubjectId,
+  obligation,
+  questionOf,
+} from "@qadi/core";
 import * as Resolvers from "../src/Resolvers.ts";
 import { TestAuth } from "@awthaq/test";
 
@@ -16,6 +25,21 @@ const CoreLive = Layer.mergeAll(
   Users.layer.pipe(Layer.provide(Persistence.memory)),
   Sessions.layer.pipe(Layer.provide(Persistence.memory)),
 ).pipe(Layer.provideMerge(TestAuth.memoryFoundation));
+
+// The `{ question, decision }` an `ObligationHandler` is handed; the reauth handler reads only the duties.
+const discharge = (obligations: ReadonlyArray<ReturnType<typeof obligation>>) => {
+  const subject = makeSubject({ id: "user:discharge" });
+  const policy = hasAttribute(Resolvers.userAttr("name"), exists());
+  return {
+    question: questionOf(subject, policy),
+    decision: new Allow({
+      evaluationId: "eval-discharge",
+      subjectId: subject.id,
+      durationMillis: 0,
+      trace: { policyTag: "HasAttribute", allowed: true, children: [], obligations },
+    }),
+  };
+};
 
 const AttributesLayer = Resolvers.UserAttributes.pipe(Layer.provideMerge(CoreLive));
 
@@ -88,7 +112,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
         sessionId: session.id,
       });
 
-      yield* Resolvers.ObligationHandlers.reauth([Resolvers.reauth(300)]).pipe(
+      yield* Resolvers.ObligationHandlers.reauth(discharge([Resolvers.reauth(300)])).pipe(
         Effect.provideService(Api.CurrentPrincipal, principal),
       );
     }).pipe(TestAuth.withoutRequest, Effect.provide(CoreLive)),
@@ -110,10 +134,9 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
 
       yield* TestClock.adjust(Duration.seconds(301));
 
-      const failure = yield* Resolvers.ObligationHandlers.reauth([Resolvers.reauth(300)]).pipe(
-        Effect.provideService(Api.CurrentPrincipal, principal),
-        Effect.flip,
-      );
+      const failure = yield* Resolvers.ObligationHandlers.reauth(
+        discharge([Resolvers.reauth(300)]),
+      ).pipe(Effect.provideService(Api.CurrentPrincipal, principal), Effect.flip);
       if (failure._tag !== "ReauthRequired") return assert.fail(failure._tag);
       assert.strictEqual(failure.maxAgeSeconds, 300);
     }).pipe(TestAuth.withoutRequest, Effect.provide(CoreLive)),
@@ -145,7 +168,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
         yield* TestClock.adjust(Duration.seconds(301));
         yield* sessions.reauthenticate(user.id, session.id);
 
-        yield* Resolvers.ObligationHandlers.reauth([Resolvers.reauth(300)]).pipe(
+        yield* Resolvers.ObligationHandlers.reauth(discharge([Resolvers.reauth(300)])).pipe(
           Effect.provideService(Api.CurrentPrincipal, principal),
         );
       }).pipe(TestAuth.withoutRequest, Effect.provide(CoreLive)),
@@ -157,10 +180,9 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
         ref: new Api.PrincipalRef({ type: "apikey", id: "key-1" }),
         scopes: [],
       });
-      const failure = yield* Resolvers.ObligationHandlers.reauth([Resolvers.reauth(300)]).pipe(
-        Effect.provideService(Api.CurrentPrincipal, principal),
-        Effect.flip,
-      );
+      const failure = yield* Resolvers.ObligationHandlers.reauth(
+        discharge([Resolvers.reauth(300)]),
+      ).pipe(Effect.provideService(Api.CurrentPrincipal, principal), Effect.flip);
       assert.strictEqual(failure._tag, "ReauthRequired");
     }).pipe(TestAuth.withoutRequest, Effect.provide(CoreLive)),
   );
@@ -171,7 +193,7 @@ describe("ObligationHandlers.reauth (BEH-EA-165)", () => {
         ref: new Api.PrincipalRef({ type: "apikey", id: "key-2" }),
         scopes: [],
       });
-      yield* Resolvers.ObligationHandlers.reauth([]).pipe(
+      yield* Resolvers.ObligationHandlers.reauth(discharge([])).pipe(
         Effect.provideService(Api.CurrentPrincipal, principal),
       );
     }).pipe(TestAuth.withoutRequest, Effect.provide(CoreLive)),
@@ -185,7 +207,7 @@ describe("ObligationHandlers.reauth fails closed on a malformed obligation (TS-0
     scopes: [],
   });
   const run = (duties: ReadonlyArray<ReturnType<typeof obligation>>) =>
-    Resolvers.ObligationHandlers.reauth(duties).pipe(
+    Resolvers.ObligationHandlers.reauth(discharge(duties)).pipe(
       Effect.provideService(Api.CurrentPrincipal, apiKey),
     );
 
@@ -229,7 +251,7 @@ describe("ObligationHandlers.reauth fails closed on a malformed obligation (TS-0
         [Resolvers.reauth(300), Resolvers.reauth(60)],
         [Resolvers.reauth(60), Resolvers.reauth(300)],
       ]) {
-        const failure = yield* Resolvers.ObligationHandlers.reauth(duties).pipe(
+        const failure = yield* Resolvers.ObligationHandlers.reauth(discharge(duties)).pipe(
           Effect.provideService(Api.CurrentPrincipal, principal),
           Effect.flip,
         );
