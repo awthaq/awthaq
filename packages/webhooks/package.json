@@ -1,6 +1,6 @@
 {
   "name": "@awthaq/webhooks",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Opt-in signed outbound webhooks: Standard-Webhooks-style HMAC signatures, per-endpoint secrets sealed with the Encryption port, at-least-once delivery with retry, backoff and dead-letter over the event relay, SSRF-safe endpoints, and a fail-closed admin API.",
   "license": "MIT",

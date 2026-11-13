@@ -1,6 +1,6 @@
 {
   "name": "@awthaq/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "The awthaq command line: doctor, config list, plugin list --graph, routes, migration status|apply, openapi, seed admin, import, login|logout|whoami. Reads the plugin manifest; never serves the application.",
   "license": "MIT",

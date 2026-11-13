@@ -1,6 +1,6 @@
 {
   "name": "@awthaq/example-memory-server",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "Runnable example: Password, Organization and Roles composed over the in-memory persistence bundle (Persistence.memory and each plugin's records.memory), through a real listening HTTP server. Additional to, not a replacement for, the README's own single-plugin Postgres quickstart.",
   "type": "module",

@@ -1,7 +1,0 @@
----
-"@awthaq/core": minor
----
-
-Plugins own their event definitions (ADR-EA-049, now Accepted). This sums up the series announced by the `plugin-owned-events-04` to `-21` notes; it adds no API change of its own. A plugin defines each event it publishes with `EventDefinition.define(tag, fields, { actor, pii, attempt? })` in its own package, lists them in its class's `events`, and publishes with `AuthEvents.emit(definition, input)`. `Auth.make` composes core's events with every composed plugin's into `auth.events` and refuses a tag declared twice (`Auth/EventTagConflict`, BEH-EA-346). The stream carries every event of the composition, typed open and narrowed with `AuthEvents.is(tag | definition)`. A row whose tag core does not define is read as `AuthEvents.ForeignEvent` and decoded by its plugin with `AuditLog.payloadAs(definition)`, and erasure blanks the personal-data fields the row recorded when it was written, even after its plugin is removed. Core now defines 24 events. The 73 that moved, to eleven `<Plugin>Events` modules, keep their tags, payloads, actors, personal-data fields and attempt lanes.
-
-Migration: each moved `AuthEvents.*Event` constant's new home is in the changeset of its plugin's move (`@awthaq/device-authorization`, `roles`, `qadi`, `password`, `api-key`, `two-factor`, `scim`, `saml`, `webhooks`, `admin`, `organization`). A host that composes without `AuthHost.layer` provides `auth.eventsLayer` (see `plugin-owned-events-07`). ADR-EA-049, BEH-EA-101, BEH-EA-346.

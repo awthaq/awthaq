@@ -1,6 +1,6 @@
 {
   "name": "@awthaq/magic-link",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Passwordless sign-in over the Verification substrate: a single-use emailed link (POST-only consumption) and a short emailed code.",
   "license": "MIT",

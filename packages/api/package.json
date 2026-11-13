@@ -1,6 +1,6 @@
 {
   "name": "@awthaq/api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Principal, SessionView, SubjectDto, errors, Authentication and CsrfProtection middleware definitions, core groups — isomorphic, no server code, importable in the browser.",
   "license": "MIT",

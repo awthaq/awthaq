@@ -1,6 +1,6 @@
 {
   "name": "@awthaq/migrate-firebase",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Verify Firebase Authentication's modified-scrypt password hashes on first sign-in, and map an `auth:export` user onto the domain-service import shape, so exported Firebase users keep their passwords and are rehashed to argon2id.",
   "license": "MIT",
