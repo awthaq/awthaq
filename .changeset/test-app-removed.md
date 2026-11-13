@@ -1,5 +1,5 @@
 ---
-"@awthaq/test": major
+"@awthaq/test": minor
 ---
 
 `TestAuth.app` and `App.dispose` are removed. An app is acquired only through `TestAuth.serve`, `withApp`, `lazyApp` or `listen`, so it cannot outlive the scope that served it (BEH-EA-351).
