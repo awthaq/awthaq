@@ -32,7 +32,7 @@
     "@awthaq/server": "workspace:*",
     "@awthaq/sql": "workspace:*",
     "@xmldom/xmldom": "0.8.15",
-    "xml-crypto": "6.3.2"
+    "xml-crypto": "6.4.0"
   },
   "devDependencies": {
     "@awthaq/test": "workspace:*",
