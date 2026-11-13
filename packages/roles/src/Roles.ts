@@ -28,7 +28,8 @@
 // `RevocationStore.layerSql` (`INSERT ... ON CONFLICT ... DO NOTHING`,
 // same plugin-owned-table pattern this plugin now follows).
 import { Api } from "@awthaq/api";
-import { Defects, Errors, Tenant, Users } from "@awthaq/core";
+import { Defects, Errors, Users } from "@awthaq/core";
+import { Tenant } from "@awthaq/ports";
 import {
   AuthEvents,
   AuthPlugin,

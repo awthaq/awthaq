@@ -14,7 +14,8 @@
 // a value the client sends. A non-user subject (an API key, say) leaves it unset.
 
 import type { Api } from "@awthaq/api";
-import { Tenant, Users } from "@awthaq/core";
+import { Users } from "@awthaq/core";
+import { Tenant } from "@awthaq/ports";
 import { AuthPlugin } from "@awthaq/core";
 import type { AuthSubject } from "@qadi/core";
 import { CurrentSubject, permissionKey } from "@qadi/core";
