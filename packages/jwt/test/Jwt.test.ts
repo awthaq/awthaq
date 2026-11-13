@@ -10,7 +10,9 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import * as Jwt from "../src/Jwt.ts";
+import * as JwtCodec from "../src/JwtCodec.ts";
 import * as JwtConfig from "../src/JwtConfig.ts";
+import * as KeyRing from "../src/KeyRing.ts";
 import * as RevocationStore from "../src/RevocationStore.ts";
 
 const built = Auth.make([Jwt.Jwt]);
@@ -360,5 +362,58 @@ describe("Jwt introspect/introspectLive", () => {
         const result = yield* jwt.introspectLive(token);
         assert.isTrue(result.active);
       }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
+  );
+});
+
+describe("Jwt key ring and the served JWKS (plan 38)", () => {
+  // BEH-EA-292: every served key names its kid and alg. A KMS public JWK carries neither.
+  it.effect(
+    "plan 38 B4: a key registered with KeyRing.registerRemoteKey is served by Jwt.jwks with its kid and alg",
+    () =>
+      Effect.gen(function* () {
+        const jwt = yield* Jwt.Jwt;
+        const { publicKeyJwk } = yield* JwtCodec.generateKeyJwks("EdDSA");
+        yield* KeyRing.registerRemoteKey({ kid: "remote-1", alg: "EdDSA", publicKeyJwk });
+        const served = (yield* jwt.jwks).keys.find((key) => key["x"] === publicKeyJwk["x"]);
+        assert.strictEqual(served?.["kid"], "remote-1");
+        assert.strictEqual(served?.["alg"], "EdDSA");
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
+  );
+
+  // KRS-006, JJS-003: a peer's key reaches the shared store while this process's snapshot is
+  // still cached; the first token naming it forces one refresh.
+  const peerKeyVerifies = (algorithm: "EdDSA" | "ES256") =>
+    Effect.gen(function* () {
+      const jwt = yield* Jwt.Jwt;
+      // This process reads its ring once: the snapshot holds only its own EdDSA key.
+      assert.strictEqual((yield* jwt.jwks).keys.length, 1);
+      const { publicKeyJwk, privateKeyJwk } = yield* JwtCodec.generateKeyJwks(algorithm);
+      yield* KeyRing.importKey({ kid: "peer-key", alg: algorithm, publicKeyJwk });
+      const token = yield* JwtCodec.sign({
+        kid: "peer-key",
+        alg: algorithm,
+        typ: "at+jwt",
+        signer: JwtCodec.localSigner(privateKeyJwk),
+        claims: {
+          sub: "user-1",
+          iat: 0,
+          exp: 999_999_999,
+          iss: "https://issuer.test",
+          aud: "https://issuer.test",
+        },
+      });
+      const claims = yield* jwt.verify(token);
+      assert.strictEqual(claims["sub"], "user-1");
+    }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer()));
+
+  it.effect(
+    "a token signed by a peer's freshly added key of the same algorithm verifies after one forced refresh",
+    () => peerKeyVerifies("EdDSA"),
+  );
+
+  // The allowlist is `Jws.algorithms`, not computed from the keys held before the refetch (plan 38 Q6).
+  it.effect(
+    "plan 38 Q6: a token signed by a peer's freshly added key of another algorithm verifies after one forced refresh",
+    () => peerKeyVerifies("ES256"),
   );
 });

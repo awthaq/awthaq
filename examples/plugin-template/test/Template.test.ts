@@ -3,9 +3,17 @@
 // handler with a real session cookie, and aborts an operation with a veto tap, in BOTH record modes: the template's
 // `records` bundle is what makes the same suite run over memory and over a migrated database.
 import { Api } from "@awthaq/api";
-import { AuditLog, Auth, AuthEvents, HookPoint } from "@awthaq/core";
+import {
+  AuditLog,
+  Auth,
+  AuthEvents,
+  ConfigDescriptor,
+  CurrentUser,
+  EffectiveConfig,
+  HookPoint,
+} from "@awthaq/core";
 import { Rendezvous, TestAuth } from "@awthaq/test";
-import { afterAll, assert, describe, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -68,10 +76,12 @@ describe("plugin-template: per-tenant configuration (ADR-EA-018 D8)", () => {
   it.effect("a NotesConfig provided for the request overrides the build-time maxLength", () =>
     Effect.gen(function* () {
       const notes = yield* Template.Notes;
-      const caller = new Api.UserPrincipal({
-        ref: new Api.PrincipalRef({ type: "user", id: "tenant-user" }),
-        sessionId: "tenant-session",
-      });
+      const caller = CurrentUser.of(
+        new Api.UserPrincipal({
+          ref: new Api.PrincipalRef({ type: "user", id: "tenant-user" }),
+          sessionId: "tenant-session",
+        }),
+      );
       const text = "x".repeat(25);
       // Build-time `maxLength: 20` refuses it ...
       const refused = yield* notes.create(caller, text).pipe(Effect.flip);
@@ -85,87 +95,122 @@ describe("plugin-template: per-tenant configuration (ADR-EA-018 D8)", () => {
   );
 });
 
-describe("plugin-template over sql records: the migration", () => {
-  const app = TestAuth.app(
-    TestAuth.layer(built, { ...common, records: "sql", suite: "template_migration" }),
+describe("plugin-template: the descriptor's view agrees with the operation", () => {
+  it.effect("a calling override reports maxLength 30 with tenant scope and source", () =>
+    Effect.gen(function* () {
+      const context = yield* Effect.context<never>();
+      const [item] = yield* EffectiveConfig.snapshot(context, [
+        { owner: "notes", descriptor: ConfigDescriptor.make(Template.NotesConfigScoped) },
+      ]).pipe(Effect.provide(Template.config({ maxLength: 30 })));
+      assert.strictEqual(item?.scope, "tenant");
+      assert.strictEqual(item?.source, "tenant");
+      assert.strictEqual(
+        new Map(item?.entries.map((e) => [e.path, e.value])).get("maxLength"),
+        "30",
+      );
+    }).pipe(Effect.provide(Template.config({ maxLength: 20 }))),
   );
-  afterAll(() => app.dispose());
+});
 
+describe("plugin-template over sql records: the migration", () => {
   it("creates the table the plugin declares", async () => {
-    const rows = await app.run(
-      Effect.flatMap(SqlClient.SqlClient, (sql) => sql`SELECT count(*) AS n FROM notes_note`),
+    await TestAuth.withApp(
+      TestAuth.layer(built, {
+        ...common,
+        records: "sql",
+        suite: "template_migration",
+      }),
+      undefined,
+      async (app) => {
+        const rows = await app.run(
+          Effect.flatMap(SqlClient.SqlClient, (sql) => sql`SELECT count(*) AS n FROM notes_note`),
+        );
+        assert.strictEqual(rows.length, 1);
+      },
     );
-    assert.strictEqual(rows.length, 1);
   });
 });
 
 for (const records of TestAuth.recordModes) {
   describe(`plugin-template over ${records} records`, () => {
-    const app = TestAuth.app(
+    // Each case serves its own app and releases it when the case ends.
+    const layer =
       records === "sql"
         ? TestAuth.layer(built, { ...common, records, suite: "template" })
-        : TestAuth.layer(built, common),
-      { baseUrl: ORIGIN },
-    );
-    afterAll(() => app.dispose());
+        : TestAuth.layer(built, common);
+    type NotesApp = TestAuth.App<Layer.Success<typeof layer>, Layer.Error<typeof layer>>;
+    const withNotes = (use: (app: NotesApp) => Promise<void>) =>
+      TestAuth.withApp(layer, { baseUrl: ORIGIN }, use);
 
     // Each signed-in user is an agent: it keeps its session and CSRF cookies and echoes the token itself.
     type Agent = TestAuth.SignedInAgent;
     const post = (agent: Agent, path: string, body: unknown) =>
       agent.request("POST", path, { json: body });
     const list = (agent: Agent) => agent.request("GET", "/notes");
-    const signIn = (email: string) => app.signIn(email);
 
-    it("create then list round-trips over real HTTP, scoped to the caller", async () => {
-      const user = await signIn("user-1@example.com");
-      assert.strictEqual((await post(user, "/notes", { text: "remember the milk" })).status, 200);
-      const listed = await list(user);
-      assert.strictEqual(listed.status, 200);
-      const notes = (await listed.json()) as ReadonlyArray<{ text: string }>;
-      assert.deepStrictEqual(
-        notes.map((note) => note.text),
-        ["remember the milk"],
-      );
-      const theirs = await list(await signIn("user-2@example.com"));
-      assert.deepStrictEqual(await theirs.json(), []);
-    });
+    it("create then list round-trips over real HTTP, scoped to the caller", () =>
+      withNotes(async (app) => {
+        const signIn = (email: string) => app.signIn(email);
+        const user = await signIn("user-1@example.com");
+        assert.strictEqual((await post(user, "/notes", { text: "remember the milk" })).status, 200);
+        const listed = await list(user);
+        assert.strictEqual(listed.status, 200);
+        const notes = (await listed.json()) as ReadonlyArray<{ text: string }>;
+        assert.deepStrictEqual(
+          notes.map((note) => note.text),
+          ["remember the milk"],
+        );
+        const theirs = await list(await signIn("user-2@example.com"));
+        assert.deepStrictEqual(await theirs.json(), []);
+      }));
 
-    it("a rate-limited rule answers 429 once the budget is spent, and only for that caller", async () => {
-      const user = await signIn("user-4@example.com");
-      // `createByUser` is 5 per minute per signed-in user.
-      for (let i = 0; i < 5; i += 1) {
-        assert.strictEqual((await post(user, "/notes", { text: `note ${i}` })).status, 200);
-      }
-      const sixth = await post(user, "/notes", { text: "one too many" });
-      assert.strictEqual(sixth.status, 429);
-      assert.strictEqual(((await sixth.json()) as { _tag: string })._tag, "RateLimited");
-      const other = await signIn("user-5@example.com");
-      assert.strictEqual((await post(other, "/notes", { text: "mine" })).status, 200);
-    });
+    it("a rate-limited rule answers 429 once the budget is spent, and only for that caller", () =>
+      withNotes(async (app) => {
+        const signIn = (email: string) => app.signIn(email);
+        const user = await signIn("user-4@example.com");
+        // `createByUser` is 5 per minute per signed-in user.
+        for (let i = 0; i < 5; i += 1) {
+          assert.strictEqual((await post(user, "/notes", { text: `note ${i}` })).status, 200);
+        }
+        const sixth = await post(user, "/notes", { text: "one too many" });
+        assert.strictEqual(sixth.status, 429);
+        assert.strictEqual(((await sixth.json()) as { _tag: string })._tag, "RateLimited");
+        const other = await signIn("user-5@example.com");
+        assert.strictEqual((await post(other, "/notes", { text: "mine" })).status, 200);
+      }));
 
-    it("requires a session", async () => {
-      assert.strictEqual((await app.handler(new Request(`${ORIGIN}/notes`))).status, 401);
-    });
+    it("requires a session", () =>
+      withNotes(async (app) => {
+        assert.strictEqual((await app.handler(new Request(`${ORIGIN}/notes`))).status, 401);
+      }));
 
-    it("a domain refusal is a typed error with its own status", async () => {
-      const res = await post(await signIn("user-6@example.com"), "/notes", {
-        text: "x".repeat(21),
-      });
-      assert.strictEqual(res.status, 422);
-      assert.strictEqual(((await res.json()) as { _tag: string })._tag, "NoteTooLong");
-    });
+    it("a domain refusal is a typed error with its own status", () =>
+      withNotes(async (app) => {
+        const signIn = (email: string) => app.signIn(email);
+        const res = await post(await signIn("user-6@example.com"), "/notes", {
+          text: "x".repeat(21),
+        });
+        assert.strictEqual(res.status, 422);
+        assert.strictEqual(((await res.json()) as { _tag: string })._tag, "NoteTooLong");
+      }));
 
-    it("a veto tap aborts the operation with the typed HookAborted, and nothing is stored", async () => {
-      const user = await signIn("user-3@example.com");
-      const res = await post(user, "/notes", { text: "forbidden" });
-      assert.strictEqual(res.status, 403);
-      const body = (await res.json()) as { _tag: string; point: string; code: string };
-      assert.deepStrictEqual(
-        [body._tag, body.point, body.code],
-        ["HookAborted", "notes.create.before", "TEXT_FORBIDDEN"],
-      );
-      assert.deepStrictEqual(await (await list(user)).json(), []);
-    });
+    it("a veto tap aborts the operation with the typed HookAborted, and nothing is stored", () =>
+      withNotes(async (app) => {
+        const signIn = (email: string) => app.signIn(email);
+        const user = await signIn("user-3@example.com");
+        const res = await post(user, "/notes", { text: "forbidden" });
+        assert.strictEqual(res.status, 403);
+        const body = (await res.json()) as {
+          _tag: string;
+          point: string;
+          code: string;
+        };
+        assert.deepStrictEqual(
+          [body._tag, body.point, body.code],
+          ["HookAborted", "notes.create.before", "TEXT_FORBIDDEN"],
+        );
+        assert.deepStrictEqual(await (await list(user)).json(), []);
+      }));
   });
 }
 
@@ -175,14 +220,23 @@ for (const records of TestAuth.recordModes) {
 // `pnpm test:pg`) Postgres.
 for (const records of TestAuth.recordModes) {
   describe(`plugin-template: the per-owner note quota (${records} records)`, () => {
-    const caller = new Api.UserPrincipal({
-      ref: new Api.PrincipalRef({ type: "user", id: "quota-user" }),
-      sessionId: "quota-session",
-    });
+    const caller = CurrentUser.of(
+      new Api.UserPrincipal({
+        ref: new Api.PrincipalRef({ type: "user", id: "quota-user" }),
+        sessionId: "quota-session",
+      }),
+    );
     const quota = (taps: Layer.Layer<never, never, Template.BeforeCreateNote>) => {
-      const options = { taps, services: Template.config({ maxNotesPerOwner: 3 }) };
+      const options = {
+        taps,
+        services: Template.config({ maxNotesPerOwner: 3 }),
+      };
       return records === "sql"
-        ? TestAuth.layer(built, { ...options, records, suite: "template_quota" })
+        ? TestAuth.layer(built, {
+            ...options,
+            records,
+            suite: "template_quota",
+          })
         : TestAuth.layer(built, options);
     };
 
@@ -228,13 +282,19 @@ for (const records of TestAuth.recordModes) {
 // `emit`, recorded in the audit log with its actor, readable with `payloadAs`, and typed for subscribers.
 for (const records of TestAuth.recordModes) {
   describe(`plugin-template: its own event (${records} records)`, () => {
-    const caller = new Api.UserPrincipal({
-      ref: new Api.PrincipalRef({ type: "user", id: "event-user" }),
-      sessionId: "event-session",
-    });
+    const caller = CurrentUser.of(
+      new Api.UserPrincipal({
+        ref: new Api.PrincipalRef({ type: "user", id: "event-user" }),
+        sessionId: "event-session",
+      }),
+    );
     const layer =
       records === "sql"
-        ? TestAuth.layer(built, { ...common, records, suite: "template_events" })
+        ? TestAuth.layer(built, {
+            ...common,
+            records,
+            suite: "template_events",
+          })
         : TestAuth.layer(built, common);
 
     it("is declared in the composition and its manifest", () => {

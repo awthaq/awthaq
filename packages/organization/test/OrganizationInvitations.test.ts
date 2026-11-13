@@ -4,8 +4,9 @@
 // and read.
 import { Auth, AuditLog, HookPoint, Users } from "@awthaq/core";
 import { Mailer } from "@awthaq/ports";
-import { Rendezvous, TestAuth } from "@awthaq/test";
+import { Rendezvous, TestAuth, TestMailbox } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
+import { createHash } from "node:crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -44,8 +45,12 @@ const buildLayer = (
     never,
     Layer.Success<typeof OrganizationHooks.OrganizationHooksLive>
   > = Layer.empty,
-  mailer: Layer.Layer<Mailer.Mailer> = Mailer.layerMemory,
-) => TestAuth.layer(built, { services: Layer.mergeAll(Organization.config(config), mailer), taps });
+  mailer?: Layer.Layer<Mailer.Mailer>,
+) =>
+  TestAuth.layer(built, {
+    services: Layer.mergeAll(Organization.config(config), mailer ?? Layer.empty),
+    taps,
+  });
 
 const application = OrganizationActor.application("OrganizationInvitations.test");
 const unbounded = OrganizationActor.Bound.Unbounded();
@@ -61,7 +66,11 @@ const flipTag = <A, E extends { readonly _tag: string }, R>(effect: Effect.Effec
 const arrange = Effect.gen(function* () {
   const directory = yield* OrganizationDirectory.OrganizationDirectory;
   const invitations = yield* OrganizationInvitations.OrganizationInvitations;
-  const org = yield* directory.create(application, { owner, name: "Acme", slug: "acme" });
+  const org = yield* directory.create(application, {
+    owner,
+    name: "Acme",
+    slug: "acme",
+  });
   const invite = (
     email: string,
     extra: Partial<
@@ -79,19 +88,12 @@ const arrange = Effect.gen(function* () {
   return { org, invitations, invite };
 });
 
-/** The capability only ever travels by email: read it back from the recording mailer, as an invitee would. */
+/** The capability only ever travels by email: read it back from the mailbox, as an invitee would. */
 const mailedToken = (invitationId: string) =>
   Effect.gen(function* () {
-    const mailer = yield* Mailer.Mailer;
-    for (const message of (yield* mailer.sent).toReversed()) {
-      const data = message.data;
-      if (
-        data !== undefined &&
-        data["invitationId"] === invitationId &&
-        typeof data["token"] === "string"
-      ) {
-        return data["token"];
-      }
+    const box = yield* TestMailbox.Mailbox;
+    for (const message of (yield* box.mail.messages).toReversed()) {
+      if (message.data?.["invitationId"] === invitationId) return TestMailbox.secret(message);
     }
     return yield* Effect.die(new Error(`no invitation mail was sent for ${invitationId}`));
   });
@@ -99,7 +101,10 @@ const mailedToken = (invitationId: string) =>
 const verifiedUser = (email: string) =>
   Effect.gen(function* () {
     const users = yield* Users.Users;
-    const created = yield* users.create({ identity: { _tag: "Email", email }, name: email });
+    const created = yield* users.create({
+      identity: { _tag: "Email", email },
+      name: email,
+    });
     yield* users.verifyEmail(created.id);
     return created;
   });
@@ -110,13 +115,20 @@ describe("OrganizationInvitations.create", () => {
       const { org, invite } = yield* arrange;
       const invitation = yield* invite("invitee@example.com");
       assert.strictEqual(invitation.status, "pending");
-      const mailer = yield* Mailer.Mailer;
-      const sent = yield* mailer.sent;
-      assert.strictEqual(sent.length, 1);
-      assert.strictEqual(sent[0]?.template, "organization-invite");
-      assert.strictEqual(sent[0]?.data?.["organizationName"], "Acme");
+      const box = yield* TestMailbox.Mailbox;
+      const mail = yield* box.mail.waitFor({
+        to: "invitee@example.com",
+        template: "organization-invite",
+      });
+      yield* box.mail.refute({}, { beyond: 1 });
+      assert.strictEqual(mail.data?.["organizationName"], "Acme");
       const token = yield* mailedToken(invitation.id);
       assert.notStrictEqual(token, invitation.id);
+      assert.match(token, /^[0-9a-f]{64}$/);
+      assert.deepStrictEqual(
+        invitation.tokenHash,
+        Option.some(createHash("sha256").update(token, "utf8").digest("hex")),
+      );
       assert.isTrue(Option.isSome(invitation.tokenHash));
       assert.notStrictEqual(Option.getOrNull(invitation.tokenHash), token);
       const invitations = yield* OrganizationInvitations.OrganizationInvitations;
@@ -142,20 +154,16 @@ describe("OrganizationInvitations.create", () => {
           buildLayer(
             { teams: teamsOn },
             Layer.empty,
-            Layer.succeed(
-              Mailer.Mailer,
-              Mailer.Mailer.of({
-                send: (message) =>
-                  Effect.fail(
-                    new Mailer.MailDeliveryFailed({
-                      template: message.template,
-                      reason: "down",
-                      retryable: true,
-                    }),
-                  ),
-                sent: Effect.succeed([]),
-              }),
-            ),
+            Layer.mock(Mailer.Mailer)({
+              send: (message) =>
+                Effect.fail(
+                  new Mailer.MailDeliveryFailed({
+                    template: message.template,
+                    reason: "down",
+                    retryable: true,
+                  }),
+                ),
+            }),
           ),
         ),
       ),
@@ -203,7 +211,12 @@ describe("OrganizationInvitations.create", () => {
       });
       assert.strictEqual(canceled.length, 1);
     }).pipe(
-      Effect.provide(buildLayer({ teams: teamsOn, cancelPendingInvitationsOnReInvite: true })),
+      Effect.provide(
+        buildLayer({
+          teams: teamsOn,
+          cancelPendingInvitationsOnReInvite: true,
+        }),
+      ),
     ),
   );
 
@@ -257,7 +270,10 @@ describe("OrganizationInvitations.create", () => {
         yield* flipTag(invite("a@example.com", { role: ["owner"], bound: adminCeiling })),
         "RolePermissionEscalation",
       );
-      yield* invite("a@example.com", { role: ["admin"], bound: adminCeiling });
+      yield* invite("a@example.com", {
+        role: ["admin"],
+        bound: adminCeiling,
+      });
     }).pipe(Effect.provide(buildLayer())),
   );
 
@@ -314,7 +330,11 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
         const userId = invitee.id;
         assert.strictEqual(
           yield* flipTag(
-            invitations.accept({ invitationId: invitation.id, token: "wrong", userId }),
+            invitations.accept({
+              invitationId: invitation.id,
+              token: "wrong",
+              userId,
+            }),
           ),
           "InvitationNotFound",
         );
@@ -389,13 +409,21 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
         const token = yield* mailedToken(invitation.id);
         assert.strictEqual(
           yield* flipTag(
-            invitations.accept({ invitationId: invitation.id, token, userId: stranger.id }),
+            invitations.accept({
+              invitationId: invitation.id,
+              token,
+              userId: stranger.id,
+            }),
           ),
           "InvitationEmailMismatch",
         );
         assert.strictEqual(
           yield* flipTag(
-            invitations.accept({ invitationId: invitation.id, token, userId: unverified.id }),
+            invitations.accept({
+              invitationId: invitation.id,
+              token,
+              userId: unverified.id,
+            }),
           ),
           "EmailVerificationRequired",
         );
@@ -436,9 +464,14 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
       return Effect.gen(function* () {
         const { org, invitations, invite } = yield* arrange;
         const teams = yield* TeamRecords.TeamRecords;
-        const team = yield* teams.createTeam({ organizationId: org.id, name: "Eng" });
+        const team = yield* teams.createTeam({
+          organizationId: org.id,
+          name: "Eng",
+        });
         const invitee = yield* verifiedUser("invitee@example.com");
-        const invitation = yield* invite("invitee@example.com", { teamId: team.id });
+        const invitation = yield* invite("invitee@example.com", {
+          teamId: team.id,
+        });
         seen.length = 0; // the creator's own membership fired first (D7)
         yield* invitations.accept({
           invitationId: invitation.id,
@@ -475,7 +508,11 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
     Effect.gen(function* () {
       const { invitations } = yield* arrange;
       const aborted = yield* invitations
-        .accept({ invitationId: "no-such-invitation", token: "x", userId: Users.UserId("u") })
+        .accept({
+          invitationId: "no-such-invitation",
+          token: "x",
+          userId: Users.UserId("u"),
+        })
         .pipe(Effect.flip);
       assert.strictEqual(aborted._tag, "HookAborted");
     }).pipe(
@@ -503,7 +540,11 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
         yield* directory.suspend(OrganizationActor.platformAdmin(Users.UserId("admin")), {
           organizationId: org.id,
         });
-        const input = { invitationId: invitation.id, token, userId: invitee.id };
+        const input = {
+          invitationId: invitation.id,
+          token,
+          userId: invitee.id,
+        };
         assert.strictEqual(yield* flipTag(invitations.accept(input)), "InvitationNotFound");
         assert.strictEqual(yield* flipTag(invitations.reject(input)), "InvitationNotFound");
         assert.strictEqual(
@@ -530,11 +571,19 @@ describe("OrganizationInvitations.accept, reject and cancel", () => {
       const token = yield* mailedToken(invitation.id);
       assert.strictEqual(
         yield* flipTag(
-          invitations.reject({ invitationId: invitation.id, token, userId: stranger.id }),
+          invitations.reject({
+            invitationId: invitation.id,
+            token,
+            userId: stranger.id,
+          }),
         ),
         "InvitationEmailMismatch",
       );
-      yield* invitations.reject({ invitationId: invitation.id, token, userId: invitee.id });
+      yield* invitations.reject({
+        invitationId: invitation.id,
+        token,
+        userId: invitee.id,
+      });
       assert.strictEqual(
         Option.getOrThrow(yield* invitations.find(invitation.id)).status,
         "rejected",
@@ -657,9 +706,14 @@ describe("OrganizationInvitations over SQL", () => {
       const { org, invitations, invite } = yield* arrange;
       const teams = yield* TeamRecords.TeamRecords;
       const sql = yield* SqlClient.SqlClient;
-      const team = yield* teams.createTeam({ organizationId: org.id, name: "Eng" });
+      const team = yield* teams.createTeam({
+        organizationId: org.id,
+        name: "Eng",
+      });
       const invitee = yield* verifiedUser("invitee@example.com");
-      const invitation = yield* invite("invitee@example.com", { teamId: team.id });
+      const invitation = yield* invite("invitee@example.com", {
+        teamId: team.id,
+      });
       const token = yield* mailedToken(invitation.id);
       yield* TestSql.injectFailure({
         name: "fail_team_membership_insert",
@@ -667,7 +721,11 @@ describe("OrganizationInvitations over SQL", () => {
         event: "INSERT",
       });
       const exit = yield* Effect.exit(
-        invitations.accept({ invitationId: invitation.id, token, userId: invitee.id }),
+        invitations.accept({
+          invitationId: invitation.id,
+          token,
+          userId: invitee.id,
+        }),
       );
       assert.isTrue(Exit.isFailure(exit));
       assert.strictEqual(
@@ -693,10 +751,7 @@ for (const mode of TestAuth.recordModes) {
       >,
     ) => {
       const options = {
-        services: Layer.mergeAll(
-          Organization.config({ teams: teamsOn, ...config }),
-          Mailer.layerMemory,
-        ),
+        services: Organization.config({ teams: teamsOn, ...config }),
         taps,
       };
       return mode === "sql"

@@ -9,6 +9,7 @@ import {
   Accounts,
   Auth,
   AuthEvents,
+  CurrentUser,
   EmailChange,
   HookPoint,
   Hooks,
@@ -35,23 +36,19 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Admin from "../src/Admin.ts";
 import { type AdminTestEvent, adminTestEvents } from "./support/events.ts";
 import * as AdminAccounts from "../src/AdminAccounts.ts";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import { createHash } from "node:crypto";
 
-const failingMailer = Layer.succeed(
-  Mailer.Mailer,
-  Mailer.Mailer.of({
-    send: (message) =>
-      Effect.fail(
-        new Mailer.MailDeliveryFailed({
-          template: message.template,
-          reason: "provider down",
-          retryable: false,
-        }),
-      ),
-    sent: Effect.succeed([]),
-  }),
-);
+const failingMailer = Layer.mock(Mailer.Mailer)({
+  send: (message) =>
+    Effect.fail(
+      new Mailer.MailDeliveryFailed({
+        template: message.template,
+        reason: "provider down",
+        retryable: false,
+      }),
+    ),
+});
 
 /** A legal hold: `BeforeUserDelete` refuses `hold@example.com`. */
 const legalHold = Hooks.BeforeUserDelete.tap((input) =>
@@ -96,11 +93,13 @@ const manageAll = {
   canManageCredentials: () => Effect.succeed(true),
 };
 
-const asCaller = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: "admin-session",
-  });
+const asCaller = (id: string): CurrentUser.Caller =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: "admin-session",
+    }),
+  );
 
 const seed = Effect.gen(function* () {
   const users = yield* Users.Users;
@@ -121,7 +120,14 @@ const seed = Effect.gen(function* () {
     subject: target.id,
     credentialHash: Redacted.make(yield* hasher.hash(oldPassword)),
   });
-  return { adminId: admin.id, targetId: target.id, users, accounts, hasher, oldPassword };
+  return {
+    adminId: admin.id,
+    targetId: target.id,
+    users,
+    accounts,
+    hasher,
+    oldPassword,
+  };
 });
 
 const collectEvents = Effect.gen(function* () {
@@ -209,25 +215,26 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
     Effect.gen(function* () {
       const { adminId, targetId, users } = yield* seed;
       const admin = yield* AdminAccounts.AdminAccounts;
-      const mailer = yield* Mailer.Mailer;
+      const box = yield* TestMailbox.Mailbox;
       const verification = yield* Verification.Verification;
       const seen = yield* collectEvents;
 
-      yield* admin.setUserEmail(asCaller(adminId), targetId, { email: "new@example.com" });
+      yield* admin.setUserEmail(asCaller(adminId), targetId, {
+        email: "new@example.com",
+      });
 
-      const [mail, ...rest] = (yield* mailer.sent).filter(
-        (m) => m.template === EmailChange.TEMPLATE,
-      );
-      assert.strictEqual(rest.length, 0);
-      assert.strictEqual(mail?.to, "new@example.com");
+      const mail = yield* box.mail.waitFor({
+        to: "new@example.com",
+        template: EmailChange.TEMPLATE,
+      });
+      yield* box.mail.refute({ template: EmailChange.TEMPLATE }, { beyond: 1 });
       assert.strictEqual(
         Option.getOrThrow(Users.emailOf(yield* users.findById(targetId))),
         "target@example.com",
       );
       // The token is the shared purpose: consuming it yields the account and the new address.
-      const raw = mail?.data?.["token"];
-      assert.isTrue(Redacted.isRedacted(raw));
-      const token = Redacted.isRedacted(raw) ? String(Redacted.value(raw)) : "";
+      assert.isTrue(Redacted.isRedacted(mail.data?.["token"]));
+      const token = TestMailbox.secret(mail);
       assert.include(token, `${EmailChange.PURPOSE}:`);
       const separator = token.lastIndexOf(".");
       const consumed = yield* verification.consume(
@@ -255,14 +262,18 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
     Effect.gen(function* () {
       const { adminId, targetId } = yield* seed;
       const admin = yield* AdminAccounts.AdminAccounts;
-      const mailer = yield* Mailer.Mailer;
-      yield* admin.setUserEmail(asCaller(adminId), targetId, { email: "TARGET@example.com" });
-      assert.strictEqual((yield* mailer.sent).length, 0);
+      const box = yield* TestMailbox.Mailbox;
+      yield* admin.setUserEmail(asCaller(adminId), targetId, {
+        email: "TARGET@example.com",
+      });
+      yield* box.mail.refute({});
       const taken = yield* admin
-        .setUserEmail(asCaller(adminId), targetId, { email: "admin@example.com" })
+        .setUserEmail(asCaller(adminId), targetId, {
+          email: "admin@example.com",
+        })
         .pipe(Effect.flip);
       assert.strictEqual(taken._tag, "AdminEmailAlreadyExists");
-      assert.strictEqual((yield* mailer.sent).length, 0);
+      yield* box.mail.refute({});
     }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
 
@@ -270,11 +281,13 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
     Effect.gen(function* () {
       const { adminId, targetId } = yield* seed;
       const admin = yield* AdminAccounts.AdminAccounts;
-      const mailer = yield* Mailer.Mailer;
-      yield* admin.setUserEmail(asCaller(adminId), targetId, { email: "new@example.com" });
-      const mail = (yield* mailer.sent)[0];
+      const box = yield* TestMailbox.Mailbox;
+      yield* admin.setUserEmail(asCaller(adminId), targetId, {
+        email: "new@example.com",
+      });
+      const mail = yield* box.mail.waitFor({ template: EmailChange.TEMPLATE });
       assert.match(
-        String(mail?.data?.["url"]),
+        String(mail.data?.["url"]),
         /^https:\/\/app\.example\/confirm-email#change-email:/,
       );
     }).pipe(
@@ -282,7 +295,9 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
       Effect.provide(
         buildLayer({
           ...manageAll,
-          links: { changeEmail: (token) => `https://app.example/confirm-email#${token}` },
+          links: {
+            changeEmail: (token) => `https://app.example/confirm-email#${token}`,
+          },
         }),
       ),
     ),
@@ -296,7 +311,9 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
         const admin = yield* AdminAccounts.AdminAccounts;
         const seen = yield* collectEvents;
         const failure = yield* admin
-          .setUserEmail(asCaller(adminId), targetId, { email: "new@example.com" })
+          .setUserEmail(asCaller(adminId), targetId, {
+            email: "new@example.com",
+          })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "AdminEmailDeliveryFailed");
         yield* TestClock.adjust(Duration.millis(10));
@@ -314,7 +331,10 @@ describe("AdminAccounts: setUserEmail (BAM-005/BAM-009)", () => {
     Effect.gen(function* () {
       const { adminId, users } = yield* seed;
       const admin = yield* AdminAccounts.AdminAccounts;
-      const guest = yield* users.create({ identity: { _tag: "Anonymous" }, name: "Guest" });
+      const guest = yield* users.create({
+        identity: { _tag: "Anonymous" },
+        name: "Guest",
+      });
       const failure = yield* admin
         .setUserEmail(asCaller(adminId), guest.id, { email: "new@example.com" })
         .pipe(Effect.flip);
@@ -346,7 +366,9 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
         const first = yield* sessions.issue({ userId: targetId });
         const second = yield* sessions.issue({ userId: targetId });
 
-        yield* admin.setUserPassword(asCaller(adminId), targetId, { password: newPassword });
+        yield* admin.setUserPassword(asCaller(adminId), targetId, {
+          password: newPassword,
+        });
 
         const stored = yield* storedHash(accounts, targetId);
         assert.isTrue(yield* hasher.verify(newPassword, stored));
@@ -381,7 +403,9 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
         identity: { _tag: "Email", email: "oauth@example.com" },
         name: "OAuth only",
       });
-      yield* admin.setUserPassword(asCaller(adminId), oauthOnly.id, { password: newPassword });
+      yield* admin.setUserPassword(asCaller(adminId), oauthOnly.id, {
+        password: newPassword,
+      });
       assert.isTrue(yield* hasher.verify(newPassword, yield* storedHash(accounts, oauthOnly.id)));
     }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
   );
@@ -391,7 +415,9 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
       const { adminId, targetId, accounts, hasher, oldPassword } = yield* seed;
       const admin = yield* AdminAccounts.AdminAccounts;
       const failure = yield* admin
-        .setUserPassword(asCaller(adminId), targetId, { password: Redacted.make("short") })
+        .setUserPassword(asCaller(adminId), targetId, {
+          password: Redacted.make("short"),
+        })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "AdminWeakPassword");
       if (failure._tag === "AdminWeakPassword") assert.isAbove(failure.hints.length, 0);
@@ -425,7 +451,10 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
       }).pipe(
         TestAuth.withoutRequest,
         Effect.provide(
-          buildLayer(manageAll, { httpClient: breachCorpus, password: { breachCheck: true } }),
+          buildLayer(manageAll, {
+            httpClient: breachCorpus,
+            password: { breachCheck: true },
+          }),
         ),
       ),
   );
@@ -435,7 +464,9 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
       const { adminId, targetId } = yield* seed;
       const admin = yield* AdminAccounts.AdminAccounts;
       const failure = yield* admin
-        .setUserPassword(asCaller(adminId), targetId, { password: Redacted.make("twelve chars") })
+        .setUserPassword(asCaller(adminId), targetId, {
+          password: Redacted.make("twelve chars"),
+        })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "AdminWeakPassword");
       if (failure._tag === "AdminWeakPassword") {
@@ -465,11 +496,15 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
       const { adminId, targetId } = yield* seed;
       const admin = yield* AdminAccounts.AdminAccounts;
       const strict = yield* admin
-        .setUserPassword(asCaller(adminId), targetId, { password: newPassword })
+        .setUserPassword(asCaller(adminId), targetId, {
+          password: newPassword,
+        })
         .pipe(Effect.provide(TenantPasswordConfig.get("strict")), Effect.flip);
       assert.strictEqual(strict._tag, "AdminWeakPassword");
       yield* admin
-        .setUserPassword(asCaller(adminId), targetId, { password: newPassword })
+        .setUserPassword(asCaller(adminId), targetId, {
+          password: newPassword,
+        })
         .pipe(Effect.provide(TenantPasswordConfig.get("lax")));
     }).pipe(
       TestAuth.withoutRequest,
@@ -482,7 +517,9 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
       const { adminId } = yield* seed;
       const admin = yield* AdminAccounts.AdminAccounts;
       const failure = yield* admin
-        .setUserPassword(asCaller(adminId), adminId, { password: newPassword })
+        .setUserPassword(asCaller(adminId), adminId, {
+          password: newPassword,
+        })
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "AdminSelfActionRefused");
     }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer(manageAll))),
@@ -495,7 +532,9 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
         const { adminId, targetId } = yield* seed;
         const admin = yield* AdminAccounts.AdminAccounts;
         const failure = yield* admin
-          .setUserPassword(asCaller(adminId), targetId, { password: newPassword })
+          .setUserPassword(asCaller(adminId), targetId, {
+            password: newPassword,
+          })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "StoreUnavailable");
         if (failure._tag === "StoreUnavailable") {
@@ -510,7 +549,12 @@ describe("AdminAccounts: setUserPassword (BAM-005)", () => {
               SqlTransaction.SqlTransaction.of({
                 withTransaction: () =>
                   Effect.fail(
-                    new SqlError({ reason: new UnknownError({ cause: "down", message: "down" }) }),
+                    new SqlError({
+                      reason: new UnknownError({
+                        cause: "down",
+                        message: "down",
+                      }),
+                    }),
                   ),
               }),
             ),

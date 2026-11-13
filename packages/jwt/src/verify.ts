@@ -8,7 +8,7 @@
 // import is `./JwtCodec.ts` (already, independently, free of every one of
 // those — see that file's own header comment), plus `effect` itself,
 // `effect/http`'s `HttpClient` for JWKS retrieval, and
-// `@awthaq/ports`' `RefreshingCache` (ECF-002; that package is
+// `@awthaq/ports`' `Jws`/`RefreshingCache` (ECF-002; that package is
 // `sideEffects: false`, so a bundler drops everything but the cache). Confirmed by
 // hand: `grep -E "@awthaq/(core|server)|\./Jwt\.ts|\./KeyRing\.ts"
 // packages/jwt/src/verify.ts` prints nothing.
@@ -16,7 +16,7 @@
 // JWKS documents are decoded via `Schema.decodeUnknownEffect`
 // (`HttpIncomingMessage.schemaBodyJson`), never a raw `JSON.parse` + type
 // assertion — this codebase's own established idiom for untrusted wire
-// data (see `JwtCodec.ts`'s own header comment, and
+// data, selection following RFC 7517 (`alg` optional; `use`/`key_ops` honoured) (see `JwtCodec.ts`'s own header comment, and
 // `packages/oauth/src/OAuth.ts`'s older `response.json() as {...}` — that
 // file predates this convention and isn't the pattern to copy). Each
 // fetched JWK's `kid`/`alg` are read off the decoded `Record<string,
@@ -37,10 +37,9 @@
 // in the issuer's JWKS for the grace period, so a removed key is honoured for
 // at most `cacheTtl` past its removal.
 
-import { RefreshingCache } from "@awthaq/ports";
+import { Jws, RefreshingCache } from "@awthaq/ports";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
 import * as JwtCodec from "./JwtCodec.ts";
@@ -87,19 +86,13 @@ export interface Verifier {
   ) => Effect.Effect<Record<string, unknown>, JwtCodec.JwtInvalidError>;
 }
 
-const JwksDocumentSchema = Schema.Struct({
-  keys: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
-});
-
-/** A fetched JWK is only usable for verification once it carries a `kid` and one of this module's supported algorithms — narrowed by a type guard, never a cast. */
-const toVerificationKeys = (
-  jwks: typeof JwksDocumentSchema.Type,
-): ReadonlyArray<JwtCodec.VerificationKey> =>
+/** A fetched JWK is usable once it has a string `kid`; `alg` is kept only when supported (RFC 7517: it is optional), and the whole entry goes to `Jws`' selection (`use`/`key_ops`). */
+const toVerificationKeys = (jwks: Jws.JwkSet): ReadonlyArray<JwtCodec.VerificationKey> =>
   jwks.keys.flatMap((jwk) => {
     const kid = jwk["kid"];
     const alg = jwk["alg"];
-    return typeof kid === "string" && JwtCodec.isAlgorithm(alg)
-      ? [{ kid, alg, publicKeyJwk: jwk }]
+    return typeof kid === "string"
+      ? [{ kid, ...(JwtCodec.isAlgorithm(alg) ? { alg } : {}), publicKeyJwk: jwk }]
       : [];
   });
 
@@ -116,7 +109,7 @@ export const makeVerifier = (options: VerifierOptions) =>
   Effect.gen(function* () {
     const httpClient = yield* HttpClient.HttpClient;
     const fetchKeys = httpClient.get(options.jwksUrl).pipe(
-      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(JwksDocumentSchema)),
+      Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Jws.JwkSet)),
       Effect.map(toVerificationKeys),
       Effect.timeout(options.fetchTimeout ?? "5 seconds"),
       Effect.catch(() =>
@@ -129,29 +122,22 @@ export const makeVerifier = (options: VerifierOptions) =>
       minRefetchInterval: options.minRefetchInterval ?? "30 seconds",
     });
 
-    const verifyAgainst = (token: string, keys: ReadonlyArray<JwtCodec.VerificationKey>) =>
-      JwtCodec.verify({
-        token,
-        keys,
-        algorithms: options.algorithms,
-        issuer: options.issuer,
-        audience: options.audience,
-        expectedTyp: options.expectedTyp ?? "at+jwt",
-        ...(options.requireSubject === undefined ? {} : { requireSubject: options.requireSubject }),
-        ...(options.clockSkew === undefined ? {} : { clockSkew: options.clockSkew }),
-      });
-
     const verify: Verifier["verify"] = (token) =>
-      Effect.gen(function* () {
-        const current = yield* keys.get;
-        return yield* verifyAgainst(token, current).pipe(
-          Effect.catchIf(
-            (error) => error.reason === "unknown kid",
-            () =>
-              Effect.flatMap(keys.refreshOnMiss, (refetched) => verifyAgainst(token, refetched)),
-          ),
-        );
-      });
+      Effect.flatMap(keys.get, (current) =>
+        JwtCodec.verify({
+          token,
+          keys: current,
+          refetch: keys.refreshOnMiss,
+          algorithms: options.algorithms,
+          issuer: options.issuer,
+          audience: options.audience,
+          expectedTyp: options.expectedTyp ?? "at+jwt",
+          ...(options.requireSubject === undefined
+            ? {}
+            : { requireSubject: options.requireSubject }),
+          ...(options.clockSkew === undefined ? {} : { clockSkew: options.clockSkew }),
+        }),
+      );
 
     return { verify };
   });

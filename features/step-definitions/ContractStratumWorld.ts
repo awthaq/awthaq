@@ -2,7 +2,7 @@
 //
 // Hand-wired on purpose: `authProbeApp` re-declares the authentication record and wraps every scheme handler, so the
 // composition of `Authentication` itself is what is under test (plan 08 exemption). The other two apps are
-// `TestAuth.app` compositions.
+// `TestAuth.serve` compositions.
 //
 // Three real apps, each a `HttpRouter.toWebHandler` over memory services:
 //  - `authProbeApp`: probe groups behind the shipped `Authentication`, `OptionalAuthentication` and a
@@ -164,9 +164,9 @@ const NoBreachHttpClient = Layer.succeed(
   ),
 );
 
-const buildPasswordApp = () => {
+const buildPasswordApp = Effect.fnUntraced(function* () {
   // `requireVerifiedEmail: false`: BEH-EA-027 is about credential errors, not the verification gate.
-  const app = TestAuth.app(
+  const app = yield* TestAuth.serve(
     TestAuth.layer(Auth.make([Password.Password]), {
       services: Layer.mergeAll(
         NoBreachHttpClient,
@@ -175,14 +175,14 @@ const buildPasswordApp = () => {
     }),
   );
   return { handler: app.handler };
-};
+});
 
-const buildCoreOnlyApp = () => {
-  const app = TestAuth.app(TestAuth.layer(Auth.make([PasswordFixture])));
+const buildCoreOnlyApp = Effect.fnUntraced(function* () {
+  const app = yield* TestAuth.serve(TestAuth.layer(Auth.make([PasswordFixture])));
   const withServices = <A, E>(effect: Effect.Effect<A, E, Sessions.Sessions | Users.Users>) =>
     Effect.promise(() => app.run(effect));
   return { handler: app.handler, withServices };
-};
+});
 
 export type AppKind = "auth-probe" | "password" | "core-only";
 
@@ -203,8 +203,8 @@ export interface Observed {
 
 export interface WorldShape {
   readonly authProbe: Ref.Ref<ReturnType<typeof buildAuthProbe> | undefined>;
-  readonly password: Ref.Ref<ReturnType<typeof buildPasswordApp> | undefined>;
-  readonly coreOnly: Ref.Ref<ReturnType<typeof buildCoreOnlyApp> | undefined>;
+  readonly password: Ref.Ref<Effect.Success<ReturnType<typeof buildPasswordApp>> | undefined>;
+  readonly coreOnly: Ref.Ref<Effect.Success<ReturnType<typeof buildCoreOnlyApp>> | undefined>;
   readonly actors: Ref.Ref<Readonly<Record<string, Actor>>>;
   readonly observed: Ref.Ref<ReadonlyArray<Observed>>;
 }
@@ -216,8 +216,12 @@ export const WorldLive = Layer.effect(
   Effect.gen(function* () {
     return World.of({
       authProbe: yield* Ref.make<ReturnType<typeof buildAuthProbe> | undefined>(undefined),
-      password: yield* Ref.make<ReturnType<typeof buildPasswordApp> | undefined>(undefined),
-      coreOnly: yield* Ref.make<ReturnType<typeof buildCoreOnlyApp> | undefined>(undefined),
+      password: yield* Ref.make<Effect.Success<ReturnType<typeof buildPasswordApp>> | undefined>(
+        undefined,
+      ),
+      coreOnly: yield* Ref.make<Effect.Success<ReturnType<typeof buildCoreOnlyApp>> | undefined>(
+        undefined,
+      ),
       actors: yield* Ref.make<Readonly<Record<string, Actor>>>({}),
       observed: yield* Ref.make<ReadonlyArray<Observed>>([]),
     });
@@ -225,17 +229,17 @@ export const WorldLive = Layer.effect(
 );
 
 /** Lazily builds this scenario's app of `kind` — every scenario starts from a fresh one. */
-const lazily = <A>(ref: Ref.Ref<A | undefined>, build: () => A) =>
+const lazily = <A, R>(ref: Ref.Ref<A | undefined>, build: () => Effect.Effect<A, never, R>) =>
   Effect.gen(function* () {
     const existing = yield* Ref.get(ref);
     if (existing !== undefined) return existing;
-    const fresh = build();
+    const fresh = yield* build();
     yield* Ref.set(ref, fresh);
     return fresh;
   });
 
 export const authProbeApp = Effect.gen(function* () {
-  return yield* lazily((yield* World).authProbe, buildAuthProbe);
+  return yield* lazily((yield* World).authProbe, () => Effect.sync(buildAuthProbe));
 });
 
 export const passwordApp = Effect.gen(function* () {

@@ -48,7 +48,7 @@ import {
   RelationshipResolver,
   allOf,
   enforce,
-  enforceProjected,
+  enforceProjectedLoaded,
   eq,
   exists,
   check,
@@ -73,14 +73,14 @@ import type { ActedResult, AuthSubject, Authorized, RelatedResult, Role } from "
 import {
   PublicEndpoint,
   RequirePermission,
-  RequirePermissionLive,
+  guardApi,
   decisionStreamRoute,
   RequiredPermission,
+  SubjectExtractor as QadiSubjectExtractor,
   addGuardedRoute,
   permissionRegistryRoute,
   PermissionRegistryLive,
   publicEndpoint,
-  registerApi,
   requiresPermission,
 } from "@qadi/http";
 import * as Context from "effect/Context";
@@ -272,7 +272,6 @@ const whoamiBEndpoint = HttpApiEndpoint.get("whoamiB", "/b/whoami", { success: W
 const healthEndpoint = HttpApiEndpoint.get("health", "/b/health", { success: Ok }).pipe((e) =>
   e.annotate(PublicEndpoint, publicEndpoint("liveness probe, no subject exists yet")),
 );
-const forgottenEndpoint = HttpApiEndpoint.get("forgotten", "/b/forgotten", { success: Ok });
 
 const PathBGroup = HttpApiGroup.make("gated")
   .add(readEndpoint)
@@ -283,10 +282,44 @@ const PathBGroup = HttpApiGroup.make("gated")
   .add(dutyEndpoint)
   .add(whoamiBEndpoint)
   .add(healthEndpoint)
-  .add(forgottenEndpoint)
   .middleware(RequirePermission);
 
 export const FixtureApi = HttpApi.make("bridge-fixture").add(PathAGroup).add(PathBGroup);
+
+// `guardApi` guards one whole API (every endpoint behind `RequirePermission`), so it is given Path B's alone.
+const PathBApi = HttpApi.make("bridge-fixture").add(PathBGroup);
+
+/** BEH-EA-156: a `RequirePermission` group whose one endpoint declares neither `RequiredPermission` nor `PublicEndpoint`. */
+const UndeclaredApi = HttpApi.make("bridge-undeclared").add(
+  HttpApiGroup.make("gated")
+    .add(HttpApiEndpoint.get("forgotten", "/b/forgotten", { success: Ok }))
+    .middleware(RequirePermission),
+);
+
+/**
+ * What a host sees when it builds `guardApi` over {@link UndeclaredApi}: the refusal (`AccessNotDeclared`) or,
+ * were the endpoint ever guarded, the built layer's context. The extractor is a stub that dies if asked, so a
+ * request reaching it would fail the scenario; nothing is served either way.
+ */
+export const buildUndeclaredGuard = Effect.scoped(
+  Layer.build(
+    guardApi(UndeclaredApi).pipe(
+      Layer.provide(PermissionRegistryLive),
+      Layer.provide(EvaluationServicesNone),
+      Layer.provide(
+        Layer.succeed(QadiSubjectExtractor, {
+          extract: () => Effect.die("no request is served: the guard was refused at build time"),
+        }),
+      ),
+    ),
+  ).pipe(
+    Effect.matchEffect({
+      onFailure: Effect.succeed,
+      onSuccess: () =>
+        Effect.die("the guard was built over an endpoint declaring neither annotation"),
+    }),
+  ),
+);
 
 // ---- per-scenario configuration ----
 
@@ -531,15 +564,9 @@ const pathAHandlers = (world: WorldShape) =>
         Effect.gen(function* () {
           const project = projectById(params.id);
           if (project === undefined) return yield* notFound;
-          // `enforceProjected` alone: the gate and the field trim in one call (BEH-EA-149).
-          return yield* enforceProjected(canReadProjectSummary, { resource: project })(
-            Effect.succeed({
-              id: project.id,
-              name: project.name,
-              budget: project.budget,
-              secret: project.secret,
-            }),
-          );
+          // `enforceProjectedLoaded` alone: the gate and the field trim in one call, deciding on the very
+          // record it trims (BEH-EA-149; 0.12 refuses a second `resource` on `enforceProjected`).
+          return yield* enforceProjectedLoaded(canReadProjectSummary)(Effect.succeed(project));
         }).pipe(hideDenied),
       )
       .handle("outage", ({ params }) =>
@@ -625,8 +652,7 @@ const pathBHandlers = (world: WorldShape) =>
           });
         }),
       )
-      .handle("health", () => ok(world, "health"))
-      .handle("forgotten", () => ok(world, "forgotten")),
+      .handle("health", () => ok(world, "health")),
   );
 
 /** BEH-EA-152: a bare `HttpRouter` route outside the `HttpApi` contract, authorized by `addGuardedRoute`. */
@@ -706,11 +732,11 @@ const buildBridge = (world: WorldShape, options: BridgeOptions) => {
 
 /**
  * BEH-EA-160: both bridges' layers merged into the one layer an application provides — Path A's
- * `AuthorizedSubjectLive`, Path B's `RequirePermissionLive` over its `SubjectExtractorLive`.
+ * `AuthorizedSubjectLive`, Path B's `guardApi(PathBApi)` over its `SubjectExtractorLive`.
  */
 const AuthzLive = Layer.mergeAll(
   AuthorizedSubject.AuthorizedSubjectLive,
-  RequirePermissionLive.pipe(Layer.provideMerge(SubjectExtractor.SubjectExtractorLive)),
+  guardApi(PathBApi).pipe(Layer.provideMerge(SubjectExtractor.SubjectExtractorLive)),
 );
 
 /** Builds the served fixture (routes, both bridges, both middleware) over one shared core and resolver stack. */
@@ -720,7 +746,7 @@ const buildApp = (world: WorldShape, options: BridgeOptions) => {
   // One core, one resolver stack: every consumer below sees the very same instances (BEH-EA-160).
   const sharedCore = subjects.pipe(Layer.provideMerge(CoreLive));
   const principals = Credentials.PrincipalResolverLive.pipe(Layer.provideMerge(sharedCore));
-  // What qadi's enforcement (and a bare route's `guardRoute`) needs per request, not at build time.
+  // What qadi's enforcement (and a bare route's `addGuardedRoute`) needs per request, not at build time.
   const requestServices = AuthzLive.pipe(
     Layer.provideMerge(
       Layer.mergeAll(evaluation, PermissionRegistryLive, decisionLog(world)).pipe(
@@ -739,7 +765,6 @@ const buildApp = (world: WorldShape, options: BridgeOptions) => {
     bareExportRoute,
     registryRoute,
     decisionStream,
-    registerApi(FixtureApi),
   );
 
   const appLayer = routes.pipe(

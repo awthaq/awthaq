@@ -3,7 +3,7 @@
 // same layer graph an application builds — plus helpers that play the two other parties: the IdP (a signed
 // response for a given AuthnRequest) and the browser (the state cookie).
 import { Api } from "@awthaq/api";
-import { Auth, type Accounts, type Sessions, type Users } from "@awthaq/core";
+import { Auth, CurrentUser, type Accounts, type Sessions, type Users } from "@awthaq/core";
 import { Organization, type OrganizationHooks } from "@awthaq/organization";
 import { RateLimiter } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
@@ -101,10 +101,12 @@ export const SamlLive = <
     ...(clientAddress === undefined ? {} : { clientAddress }),
   });
 
-export const ownerPrincipal = new Api.UserPrincipal({
-  ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
-  sessionId: "owner-session",
-});
+export const ownerPrincipal = CurrentUser.of(
+  new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
+    sessionId: "owner-session",
+  }),
+);
 
 /** Fixes the clock at the fixtures' `NOW` (test time otherwise starts at the epoch). */
 export const atNow = TestClock.setTime(DateTime.toEpochMillis(NOW));

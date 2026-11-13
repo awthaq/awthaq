@@ -6,8 +6,7 @@
 // reference, not an `Actor`: the session is the identity, and nothing here is an authorization decision
 // beyond the membership witness.
 
-import type { Api } from "@awthaq/api";
-import { Errors, Users } from "@awthaq/core";
+import { type CurrentUser, Errors, Users } from "@awthaq/core";
 import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -30,9 +29,9 @@ export interface SessionRef {
   readonly userId: Users.UserId;
 }
 
-export const sessionOf = (principal: Api.UserPrincipal): SessionRef => ({
-  sessionId: principal.sessionId,
-  userId: Users.UserId(principal.ref.id),
+export const sessionOf = (caller: CurrentUser.Caller): SessionRef => ({
+  sessionId: caller.sessionId,
+  userId: caller.userId,
 });
 
 export interface OrganizationActiveContextShape {

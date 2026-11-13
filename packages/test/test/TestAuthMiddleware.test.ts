@@ -21,18 +21,18 @@ const who = Effect.map(
 const MwApi = HttpApi.make("auth").add(
   HttpApiGroup.make("mw")
     .add(
-      HttpApiEndpoint.get("user", "/mw/user", { success: Schema.String }).middleware(
-        Api.Authentication,
-      ),
-      HttpApiEndpoint.get("optional", "/mw/optional", { success: Schema.String }).middleware(
-        Api.OptionalAuthentication,
-      ),
-      HttpApiEndpoint.get("machine", "/mw/machine", { success: Schema.String }).middleware(
-        Api.MachineAuthentication,
-      ),
-      HttpApiEndpoint.post("write", "/mw/write", { success: Schema.String }).middleware(
-        Api.CsrfProtection,
-      ),
+      HttpApiEndpoint.get("user", "/mw/user", {
+        success: Schema.String,
+      }).middleware(Api.Authentication),
+      HttpApiEndpoint.get("optional", "/mw/optional", {
+        success: Schema.String,
+      }).middleware(Api.OptionalAuthentication),
+      HttpApiEndpoint.get("machine", "/mw/machine", {
+        success: Schema.String,
+      }).middleware(Api.MachineAuthentication),
+      HttpApiEndpoint.post("write", "/mw/write", {
+        success: Schema.String,
+      }).middleware(Api.CsrfProtection),
     )
     .middleware(Api.RequestContext),
 );
@@ -40,9 +40,9 @@ const MwApi = HttpApi.make("auth").add(
 const MwAdminApi = HttpApi.make("auth").add(
   HttpApiGroup.make("mw.admin")
     .add(
-      HttpApiEndpoint.get("admin", "/mw/admin", { success: Schema.String }).middleware(
-        Api.AdminAuthentication,
-      ),
+      HttpApiEndpoint.get("admin", "/mw/admin", {
+        success: Schema.String,
+      }).middleware(Api.AdminAuthentication),
     )
     .middleware(Api.RequestContext),
 );
@@ -59,8 +59,14 @@ const MwAdminHandlers = HttpApiBuilder.group(MwAdminApi, "mw.admin", (handlers) 
   handlers.handle("admin", () => who),
 );
 
-class Mw extends AuthPlugin.Service<Mw, {}>()("mw", { apiVersion: 1, contract: MwApi }) {
-  static readonly layer = AuthPlugin.layer(Mw, { make: Effect.succeed({}), handlers: MwHandlers });
+class Mw extends AuthPlugin.Service<Mw, {}>()("mw", {
+  apiVersion: 1,
+  contract: MwApi,
+}) {
+  static readonly layer = AuthPlugin.layer(Mw, {
+    make: Effect.succeed({}),
+    handlers: MwHandlers,
+  });
 }
 
 class MwAdmin extends AuthPlugin.Service<MwAdmin, {}>()("mw", {
@@ -85,17 +91,10 @@ const machineKey = Credentials.contribute("apiKey", {
     ),
 });
 
-const withApp = async <A>(
-  layer: Parameters<typeof TestAuth.app>[0],
-  use: (app: ReturnType<typeof TestAuth.app>) => Promise<A>,
-) => {
-  const app = TestAuth.app(layer);
-  try {
-    return await use(app);
-  } finally {
-    await app.dispose();
-  }
-};
+const withApp = <A, E, T>(
+  layer: Layer.Layer<A | TestAuth.AppNeeds, E>,
+  use: (app: TestAuth.App<A | TestAuth.AppNeeds, E>) => Promise<T>,
+) => TestAuth.withApp(layer, undefined, use);
 
 describe("TestAuth.layer derives the host middleware (BEH-EA-T1)", () => {
   it("Authentication: 401 without a credential, 200 with a minted session", async () => {
@@ -128,7 +127,9 @@ describe("TestAuth.layer derives the host middleware (BEH-EA-T1)", () => {
   it("MachineAuthentication admits a service principal from a test-contributed resolver", async () => {
     await withApp(TestAuth.layer(Auth.make([Mw]), { services: machineKey }), async (app) => {
       const response = await app.handler(
-        new Request("http://localhost/mw/machine", { headers: { "x-api-key": "tk_anything" } }),
+        new Request("http://localhost/mw/machine", {
+          headers: { "x-api-key": "tk_anything" },
+        }),
       );
       assert.strictEqual(response.status, 200);
       assert.include(await response.json(), "Service:robot");
@@ -139,7 +140,10 @@ describe("TestAuth.layer derives the host middleware (BEH-EA-T1)", () => {
     await withApp(TestAuth.layer(Auth.make([Mw])), async (app) => {
       // A request that carries an ambient credential (any cookie) but no double-submit pair is refused.
       const bare = await app.handler(
-        new Request("http://localhost/mw/write", { method: "POST", headers: { cookie: "a=b" } }),
+        new Request("http://localhost/mw/write", {
+          method: "POST",
+          headers: { cookie: "a=b" },
+        }),
       );
       assert.strictEqual(bare.status, 403);
       const response = await app.request("POST", "/mw/write");
@@ -157,7 +161,10 @@ describe("TestAuth.layer derives the host middleware (BEH-EA-T1)", () => {
         const response = await app.handler(
           new Request("http://localhost/mw/write", {
             method: "POST",
-            headers: { cookie: `${Api.CSRF_COOKIE_NAME}=${token}`, [Api.CSRF_HEADER_NAME]: token },
+            headers: {
+              cookie: `${Api.CSRF_COOKIE_NAME}=${token}`,
+              [Api.CSRF_HEADER_NAME]: token,
+            },
           }),
         );
         assert.strictEqual(response.status, 403);

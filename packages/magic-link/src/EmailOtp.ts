@@ -31,11 +31,13 @@
 import { Api, SessionContract, type SessionLifecycle } from "@awthaq/api";
 import {
   AuthPlugin,
+  ConfigDescriptor,
   HookPoint,
   Hooks,
   MailDispatch,
   RateLimits,
   Sessions,
+  Tenant,
   Users,
   Verification,
 } from "@awthaq/core";
@@ -46,7 +48,6 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
@@ -84,8 +85,10 @@ export const EmailOtpConfig = Context.Reference<EmailOtpConfigShape>("awthaq/ema
   defaultValue: () => defaults,
 });
 
+export const EmailOtpConfigScoped = Tenant.perDeployment(EmailOtpConfig);
+
 export const config = (partial: Partial<EmailOtpConfigShape>) =>
-  Layer.succeed(EmailOtpConfig, { ...defaults, ...partial });
+  EmailOtpConfigScoped.layer({ ...defaults, ...partial });
 
 // ---- rate limits ------------------------------------------------------------------------------------
 
@@ -179,6 +182,8 @@ export class EmailOtp extends AuthPlugin.Service<EmailOtp, EmailOtpShape>()("ema
   contract: EmailOtpApi.EmailOtpApi,
   // PV-241: the typed rule table; the static `rateLimits` listing is derived from it.
   rateLimitRules: rules,
+  // ECS-008/BEH-EA-229: what `doctor` audits and `config list` prints.
+  config: [ConfigDescriptor.make(EmailOtpConfigScoped)],
   // BEH-EA-274: no table — the codes are `Verification` rows (`verification_tokens`, core's).
   tables: {},
 }) {
@@ -189,7 +194,7 @@ export class EmailOtp extends AuthPlugin.Service<EmailOtp, EmailOtpShape>()("ema
       const users = yield* Users.Users;
       const verification = yield* Verification.Verification;
       const mailer = yield* Mailer.Mailer;
-      const settings = yield* EmailOtpConfig;
+      const settings = yield* yield* Tenant.inForce(EmailOtpConfigScoped);
       const channel = yield* Channel.make;
       const mailDispatcher = yield* MailDispatch.make;
 

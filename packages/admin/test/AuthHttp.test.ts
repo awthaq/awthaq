@@ -28,10 +28,10 @@ const ORIGIN = "http://localhost:3000";
 const allow = () => Effect.succeed(true);
 const deny = () => Effect.succeed(false);
 
-const buildHandler = (
+const buildHandler = Effect.fn(function* (
   configOrGate: Partial<Admin.AdminConfigShape> | Admin.AdminConfigShape["canImpersonate"],
-) => {
-  const app = TestAuth.app(
+) {
+  const app = yield* TestAuth.serve(
     buildAppLayer(
       typeof configOrGate === "function" ? { canImpersonate: configOrGate } : configOrGate,
     ),
@@ -79,7 +79,7 @@ const buildHandler = (
     );
 
   return { handler, issueSession, browserWith, signInAs, seedUser };
-};
+});
 
 type Browser = UserAgent.UserAgent;
 
@@ -92,7 +92,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
   // administrator's own request (it recorded nothing before, in any composition).
   it.effect("an impersonation session records the administrator's address and user agent", () =>
     Effect.gen(function* () {
-      const app = TestAuth.app(
+      const app = yield* TestAuth.serve(
         TestAuth.layer(Auth.make([Admin.Admin]), {
           services: Admin.config({ canImpersonate: allow }),
           clientAddress: "198.51.100.77",
@@ -102,7 +102,10 @@ describe("AuthHttp + Admin (real HTTP)", () => {
       const target = yield* Effect.promise(() =>
         app.run(
           Effect.flatMap(Effect.service(Users.Users), (users) =>
-            users.create({ identity: { _tag: "Email", email: "t@example.com" }, name: "T" }),
+            users.create({
+              identity: { _tag: "Email", email: "t@example.com" },
+              name: "T",
+            }),
           ),
         ),
       );
@@ -124,7 +127,6 @@ describe("AuthHttp + Admin (real HTTP)", () => {
       );
       assert.deepStrictEqual(verified.session.ipAddress, Option.some("198.51.100.77"));
       assert.deepStrictEqual(verified.session.userAgent, Option.some("admin-console/1"));
-      yield* Effect.promise(() => app.dispose());
     }),
   );
 
@@ -132,12 +134,14 @@ describe("AuthHttp + Admin (real HTTP)", () => {
     "BEH-EA-213: a full impersonate call answers 200 with a session cookie for the target",
     () =>
       Effect.gen(function* () {
-        const { signInAs, seedUser } = buildHandler(allow);
+        const { signInAs, seedUser } = yield* buildHandler(allow);
         const admin = yield* Effect.promise(() => signInAs("admin-1"));
         const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
         const response = yield* Effect.promise(() =>
-          post(admin, `/admin/impersonate/${targetId}`, { reason: "reproducing a bug" }),
+          post(admin, `/admin/impersonate/${targetId}`, {
+            reason: "reproducing a bug",
+          }),
         );
         assert.strictEqual(response.status, 200);
         CookieAssertions.findSetCookie(response, "__Host-impersonation");
@@ -147,12 +151,14 @@ describe("AuthHttp + Admin (real HTTP)", () => {
 
   it.effect("BEH-EA-212/218: a denied gate answers 403", () =>
     Effect.gen(function* () {
-      const { signInAs, seedUser } = buildHandler(deny);
+      const { signInAs, seedUser } = yield* buildHandler(deny);
       const admin = yield* Effect.promise(() => signInAs("admin-1"));
       const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
       const response = yield* Effect.promise(() =>
-        post(admin, `/admin/impersonate/${targetId}`, { reason: "reproducing a bug" }),
+        post(admin, `/admin/impersonate/${targetId}`, {
+          reason: "reproducing a bug",
+        }),
       );
       assert.strictEqual(response.status, 403);
     }),
@@ -160,7 +166,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
 
   it.effect("BEH-EA-213: an empty reason answers 400", () =>
     Effect.gen(function* () {
-      const { signInAs, seedUser } = buildHandler(allow);
+      const { signInAs, seedUser } = yield* buildHandler(allow);
       const admin = yield* Effect.promise(() => signInAs("admin-1"));
       const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
@@ -173,7 +179,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
 
   it.effect("BEH-EA-214: self-impersonation answers 400", () =>
     Effect.gen(function* () {
-      const { signInAs } = buildHandler(allow);
+      const { signInAs } = yield* buildHandler(allow);
       const admin = yield* Effect.promise(() => signInAs("admin-1"));
 
       const response = yield* Effect.promise(() =>
@@ -185,7 +191,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
 
   it.effect("BEH-EA-214: nested impersonation answers 409", () =>
     Effect.gen(function* () {
-      const { signInAs, seedUser } = buildHandler(allow);
+      const { signInAs, seedUser } = yield* buildHandler(allow);
       const admin = yield* Effect.promise(() => signInAs("admin-1"));
       const targetId = yield* Effect.promise(() => seedUser("target-1"));
 
@@ -206,7 +212,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
     "BEH-EA-216/217: stopImpersonating and forceStop both answer 204; forceStop answers 404 once ended",
     () =>
       Effect.gen(function* () {
-        const { issueSession, browserWith, seedUser } = buildHandler(allow);
+        const { issueSession, browserWith, seedUser } = yield* buildHandler(allow);
         // One admin session in two browsers: `operator` impersonates (and so presents the impersonation
         // cookie afterwards), `admin` stays the admin's own console.
         const adminSession = yield* Effect.promise(() => issueSession("admin-1"));
@@ -251,7 +257,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
     "BEH-EA-219: list answers the audit rows over real HTTP, unfiltered and with ?active=true",
     () =>
       Effect.gen(function* () {
-        const { issueSession, browserWith, seedUser } = buildHandler(allow);
+        const { issueSession, browserWith, seedUser } = yield* buildHandler(allow);
         const adminSession = yield* Effect.promise(() => issueSession("admin-1"));
         const admin = yield* Effect.promise(() => browserWith(adminSession));
         const operator = yield* Effect.promise(() => browserWith(adminSession));
@@ -319,7 +325,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         // `canManageEpisode` is the one place a request's resolved caller is observable
         // over this API — `list` evaluates it once per row as the authenticated caller.
         const callers: Array<string> = [];
-        const { signInAs, seedUser } = buildHandler({
+        const { signInAs, seedUser } = yield* buildHandler({
           canImpersonate: allow,
           canManageEpisode: ({ admin }) => {
             callers.push(admin.id);
@@ -356,12 +362,14 @@ describe("AuthHttp + Admin (real HTTP)", () => {
     "EP-009: GET /admin/config is denied without the gate and lists redacted configuration with it",
     () =>
       Effect.gen(function* () {
-        const denied = buildHandler({});
+        const denied = yield* buildHandler({});
         const deniedAdmin = yield* Effect.promise(() => denied.signInAs("admin-1"));
         const forbidden = yield* Effect.promise(() => deniedAdmin.request("GET", `/admin/config`));
         assert.strictEqual(forbidden.status, 403);
 
-        const allowed = buildHandler({ canManageUsers: () => Effect.succeed(true) });
+        const allowed = yield* buildHandler({
+          canManageUsers: () => Effect.succeed(true),
+        });
         const admin = yield* Effect.promise(() => allowed.signInAs("admin-1"));
         const response = yield* Effect.promise(() => admin.request("GET", `/admin/config`));
         assert.strictEqual(response.status, 200);
@@ -382,12 +390,12 @@ describe("AuthHttp + Admin (real HTTP)", () => {
     "BAM-005: user and session administration over real HTTP — gated, paged, patched, revoked",
     () =>
       Effect.gen(function* () {
-        const denied = buildHandler({});
+        const denied = yield* buildHandler({});
         const deniedAdmin = yield* Effect.promise(() => denied.signInAs("admin-1"));
         const forbidden = yield* Effect.promise(() => deniedAdmin.request("GET", `/admin/users`));
         assert.strictEqual(forbidden.status, 403);
 
-        const { signInAs, seedUser } = buildHandler({
+        const { signInAs, seedUser } = yield* buildHandler({
           canManageUsers: () => Effect.succeed(true),
         });
         const admin = yield* Effect.promise(() => signInAs("admin-1"));
@@ -421,7 +429,9 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         // Read, patch, 404.
         const got = yield* send("GET", `/admin/users/${targetId}`);
         assert.strictEqual(got.status, 200);
-        const patched = yield* send("PATCH", `/admin/users/${targetId}`, { name: "Renamed" });
+        const patched = yield* send("PATCH", `/admin/users/${targetId}`, {
+          name: "Renamed",
+        });
         assert.strictEqual(patched.status, 200);
         assert.strictEqual(
           Schema.decodeUnknownSync(AdminApi.UserDto)(yield* Effect.promise(() => patched.json()))
@@ -454,7 +464,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         // `canManageUsers` alone does not grant banning.
-        const manageOnly = buildHandler({ canManageUsers: allow });
+        const manageOnly = yield* buildHandler({ canManageUsers: allow });
         const manageOnlyAdmin = yield* Effect.promise(() => manageOnly.signInAs("admin-1"));
         const someone = yield* Effect.promise(() => manageOnly.seedUser("someone"));
         const refused = yield* Effect.promise(() =>
@@ -462,7 +472,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
         );
         assert.strictEqual(refused.status, 403);
 
-        const { signInAs, seedUser } = buildHandler({
+        const { signInAs, seedUser } = yield* buildHandler({
           canManageUsers: allow,
           canBanUsers: allow,
         });
@@ -521,17 +531,19 @@ describe("AuthHttp + Admin (real HTTP)", () => {
 
   it.effect("IDS-003: an unknown target answers 404 for a gate-passing admin, 403 otherwise", () =>
     Effect.gen(function* () {
-      const allowed = buildHandler(allow);
+      const allowed = yield* buildHandler(allow);
       const admin = yield* Effect.promise(() => allowed.signInAs("admin-1"));
       const missing = yield* Effect.promise(() =>
         post(admin, "/admin/impersonate/does-not-exist", { reason: "x" }),
       );
       assert.strictEqual(missing.status, 404);
 
-      const denied = buildHandler(deny);
+      const denied = yield* buildHandler(deny);
       const deniedAdmin = yield* Effect.promise(() => denied.signInAs("admin-1"));
       const oracle = yield* Effect.promise(() =>
-        post(deniedAdmin, "/admin/impersonate/does-not-exist", { reason: "x" }),
+        post(deniedAdmin, "/admin/impersonate/does-not-exist", {
+          reason: "x",
+        }),
       );
       assert.strictEqual(oracle.status, 403);
     }),
@@ -542,7 +554,7 @@ describe("AuthHttp + Admin (real HTTP)", () => {
   // never processed".
   it.effect("IDS-003/APS-009: an over-long path id is refused with a 4xx", () =>
     Effect.gen(function* () {
-      const { signInAs } = buildHandler(allow);
+      const { signInAs } = yield* buildHandler(allow);
       const admin = yield* Effect.promise(() => signInAs("admin-1"));
       const response = yield* Effect.promise(() =>
         post(admin, `/admin/impersonate/${"x".repeat(256)}`, { reason: "x" }),
@@ -555,11 +567,13 @@ describe("AuthHttp + Admin (real HTTP)", () => {
     "BEH-EA-084: serves generated OpenAPI JSON and Scalar docs including the admin group",
     () =>
       Effect.gen(function* () {
-        const { handler } = buildHandler(allow);
+        const { handler } = yield* buildHandler(allow);
         const openapi = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/openapi.json`)));
         assert.strictEqual(openapi.status, 200);
         const spec = Schema.decodeUnknownSync(
-          Schema.Struct({ paths: Schema.Record(Schema.String, Schema.Unknown) }),
+          Schema.Struct({
+            paths: Schema.Record(Schema.String, Schema.Unknown),
+          }),
         )(yield* Effect.promise(() => openapi.json()));
         assert.isTrue("/admin/impersonate/{userId}" in spec.paths);
         const docs = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/docs`)));

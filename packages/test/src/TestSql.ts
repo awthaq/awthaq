@@ -120,12 +120,29 @@ export const injectFailure = (options: {
     });
   });
 
+// Measurement for the leak guard (plan 34): SQL clients built by `layer` and not yet released.
+let open = 0;
+export const openClients = () => open;
+
 /** `suite` names the schema on Postgres; use one distinct name per test file. */
 export const layer = (suite: string) =>
   asSqlClient(
-    postgresUrl === undefined
-      ? SqliteClient.layer({ filename: ":memory:" })
-      : postgres(postgresUrl, suite),
+    Layer.merge(
+      postgresUrl === undefined
+        ? SqliteClient.layer({ filename: ":memory:" })
+        : postgres(postgresUrl, suite),
+      Layer.effectDiscard(
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            open++;
+          }),
+          () =>
+            Effect.sync(() => {
+              open--;
+            }),
+        ),
+      ),
+    ),
   );
 
 /**

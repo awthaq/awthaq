@@ -2,7 +2,7 @@
 // `MagicLink` and `EmailOtp` plugins over in-memory `Users`/`Accounts`/`Sessions`/`Verification`,
 // the real `@awthaq/two-factor` gates (so the MFA divert is a real divert, not a stub), both plugin
 // contracts served on one `HttpRouter` behind the real CSRF and authentication middleware, and a
-// capturing `Mailer` so a step plays the recipient.
+// `TestMailbox` so a step plays the recipient.
 //
 // Two ways in over the very same rows: the web `handler` (a scenario about the wire — status
 // codes, GET refusal, the 202 body) and `direct` (a scenario about the service — an expiry under
@@ -24,10 +24,10 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { type Mailer, type PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { type PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { EmailOtp, MagicLink } from "@awthaq/magic-link";
 import { SecondFactor, Totp, TwoFactor } from "@awthaq/two-factor";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Mac from "effect/crypto/Mac";
 import * as Digest from "effect/crypto/Digest";
@@ -39,10 +39,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
-import * as TestClock from "effect/testing/TestClock";
 import { agentOver } from "./shared/Csrf.ts";
-import { mailedToken } from "./MailedToken.ts";
-import { makeCapturingMailer, makeNamedRegistry } from "./shared/Harness.ts";
+import { makeNamedRegistry } from "./shared/Harness.ts";
 import { makeOutcomes } from "./shared/Outcomes.ts";
 import { snapshot, type Snapshot } from "./shared/WireJson.ts";
 
@@ -97,7 +95,6 @@ const realLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreM
 const built = Auth.make([MagicLink.MagicLink, EmailOtp.EmailOtp, TwoFactor.TwoFactor]);
 
 const buildApp = (options: AppOptions) => {
-  const mailer = makeCapturingMailer();
   /** Addresses whose sign-in a `BeforeSignIn` tap refuses (a scenario's own veto, BEH-EA-269). */
   const vetoed = Ref.makeUnsafe<ReadonlyArray<string>>([]);
   const sessionOutage = Ref.makeUnsafe(false);
@@ -121,7 +118,6 @@ const buildApp = (options: AppOptions) => {
       ),
       MagicLink.config(options.magicLink ?? {}),
       EmailOtp.config(options.emailOtp ?? {}),
-      mailer.layer,
     ).pipe(
       Layer.provideMerge(options.realLimits === true ? realLimiter : RateLimiter.layerPermissive),
     ),
@@ -129,36 +125,35 @@ const buildApp = (options: AppOptions) => {
     taps: Veto,
     openapiPath: "/magic-link.json",
   });
-  return { appLayer, sentMail: mailer.sent, vetoed, sessionOutage };
+  return { appLayer, vetoed, sessionOutage };
 };
 
 interface App {
   readonly handler: (request: Request) => Promise<Response>;
   readonly ctx: Context.Context<MagicLinkServices>;
-  readonly sentMail: Effect.Effect<ReadonlyArray<Mailer.MailMessage>>;
+  readonly mailbox: TestMailbox.MailboxShape;
   readonly vetoed: Ref.Ref<ReadonlyArray<string>>;
   readonly sessionOutage: Ref.Ref<boolean>;
-  readonly dispose: () => Promise<void>;
 }
 
-const startApp = (options: AppOptions): Promise<App> => {
-  const { appLayer, sentMail, vetoed, sessionOutage } = buildApp(options);
-  // The context is built on the real clock (see `TestAuth.App.context`), then used directly on a step's fiber.
-  const app = TestAuth.app(appLayer);
-  return app.context().then((ctx) => ({
-    handler: app.handler,
-    ctx,
-    sentMail,
-    vetoed,
-    sessionOutage,
-    dispose: app.dispose,
-  }));
-};
+const startApp = (options: AppOptions) =>
+  Effect.gen(function* () {
+    const { appLayer, vetoed, sessionOutage } = buildApp(options);
+    const app = yield* TestAuth.serve(appLayer);
+    // The context is built on the real clock (see `TestAuth.App.context`), then used directly on a step's fiber.
+    const ctx = yield* Effect.promise(() => app.context());
+    return {
+      handler: app.handler,
+      ctx,
+      mailbox: Context.get(ctx, TestMailbox.Mailbox),
+      vetoed,
+      sessionOutage,
+    };
+  });
 
 /** A person a scenario names: what the app has told the recipient (the mailed secrets) is read from the mail, never from the store. */
 export interface WorldShape {
-  readonly options: Ref.Ref<AppOptions>;
-  readonly app: Ref.Ref<Option.Option<App>>;
+  readonly app: TestAuth.LazyApp<AppOptions, App>;
   readonly responses: NamedRegistry<Snapshot>;
   readonly exits: NamedRegistry<Exit.Exit<unknown, unknown>>;
   readonly strings: NamedRegistry<string>;
@@ -171,38 +166,25 @@ export class World extends Context.Service<World, WorldShape>()("features/MagicL
 export const WorldLive = Layer.effect(
   World,
   Effect.gen(function* () {
-    const world = World.of({
-      options: yield* Ref.make<AppOptions>({}),
-      app: yield* Ref.make(Option.none<App>()),
+    // The handler runs on the real clock and a direct call on the step's `TestClock`, which starts
+    // at the epoch: `alignStepClock` lines the two up once, so a row minted one way does not read as expired the other.
+    return World.of({
+      app: yield* TestAuth.lazyApp({}, startApp, { name: "MagicLinkWorld", alignStepClock: true }),
       responses: makeNamedRegistry<Snapshot>("response"),
       exits: makeNamedRegistry<Exit.Exit<unknown, unknown>>("outcome"),
       strings: makeNamedRegistry<string>("string"),
       numbers: makeNamedRegistry<number>("number"),
       outcomes: yield* makeOutcomes,
     });
-    yield* Effect.addFinalizer(() =>
-      Ref.get(world.app).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.void,
-            onSome: (app) => Effect.promise(() => app.dispose()),
-          }),
-        ),
-      ),
-    );
-    return world;
   }),
 );
 
-/** Merges `options` onto what was configured so far. Nothing may have been requested against the old app: state does not carry over. */
+/** Merges `options` onto what was configured so far, before the first request: state does not carry over a build. */
 export const configureApp = Effect.fn("features.magicLink.configureApp")(function* (
   options: AppOptions,
 ) {
   const world = yield* World;
-  if (Option.isSome(yield* Ref.get(world.app))) {
-    return yield* Effect.die(new Error("configureApp: the app is already running"));
-  }
-  yield* Ref.update(world.options, (existing) => ({
+  yield* world.app.configure((existing) => ({
     ...existing,
     ...options,
     magicLink: { ...existing.magicLink, ...options.magicLink },
@@ -211,17 +193,7 @@ export const configureApp = Effect.fn("features.magicLink.configureApp")(functio
 });
 
 export const appOf = Effect.fn("features.magicLink.app")(function* () {
-  const world = yield* World;
-  const existing = yield* Ref.get(world.app);
-  if (Option.isSome(existing)) return existing.value;
-  // The handler runs on the real clock and a direct call on the step's `TestClock`, which starts
-  // at the epoch: line the two up once, so a row minted one way does not read as expired the other.
-  yield* TestClock.setTime(Date.now());
-  const started = yield* Effect.promise(async () =>
-    startApp(await Effect.runPromise(Ref.get(world.options))),
-  );
-  yield* Ref.set(world.app, Option.some(started));
-  return started;
+  return yield* (yield* World).app.get;
 });
 
 /** Runs a service-level effect against the same composition (and rows) the handler serves; a typed failure is a defect here. */
@@ -243,42 +215,34 @@ export const directExit = <A, E>(
     return yield* Effect.exit(Effect.provide(TestAuth.withoutRequest(effect), ctx));
   });
 
-/** The mail the recipient last received of `template` for `to`, waiting (on the real timer: `TestClock` is frozen) for the background dispatch fiber. */
+const mailTo = (template: string, to: string) => (message: { template: string; to: string }) =>
+  message.template === template && message.to.toLowerCase() === to.toLowerCase();
+
+/** The mail the recipient last received of `template` for `to`, waiting for the background dispatch fiber. */
 export const mailOf = Effect.fn("features.magicLink.mailOf")(function* (
   template: string,
   to: string,
 ) {
-  const { sentMail } = yield* appOf();
-  for (let attempt = 0; attempt < 200; attempt++) {
-    const found = (yield* sentMail).findLast(
-      (message) => message.template === template && message.to.toLowerCase() === to.toLowerCase(),
-    );
-    if (found !== undefined) return found;
-    yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 5)));
-  }
-  return yield* Effect.die(new Error(`no "${template}" mail for ${to} arrived`));
+  const { mailbox } = yield* appOf();
+  const matching = mailTo(template, to);
+  yield* mailbox.mail.waitFor(matching);
+  return (yield* mailbox.mail.messages).findLast(matching)!;
 });
 
-/** The mails of `template` sent so far to `to`, after giving the background dispatch a moment to finish. */
-export const mailsOf = Effect.fn("features.magicLink.mailsOf")(function* (
+/** `to` received exactly `count` mails of `template`: waits for that many, then refutes one more. */
+export const expectMailCount = Effect.fn("features.magicLink.expectMailCount")(function* (
   template: string,
   to: string,
+  count: number,
 ) {
-  const { sentMail } = yield* appOf();
-  // Nothing to wait for when no mail is expected: settle on the real timer, then read.
-  yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 40)));
-  return (yield* sentMail).filter(
-    (message) => message.template === template && message.to.toLowerCase() === to.toLowerCase(),
-  );
+  const { mailbox } = yield* appOf();
+  const matching = mailTo(template, to);
+  if (count > 0) yield* mailbox.mail.waitFor(matching, { nth: count });
+  yield* mailbox.mail.refute(matching, { beyond: count });
 });
 
 /** The secret a mail carries under `field` (`token` for a link, `code` for a code): a step plays the recipient. */
-export const secretOf = (mail: Mailer.MailMessage, field: string): string => {
-  if (field === "token") return mailedToken(mail);
-  const value = mail.data?.[field];
-  if (Redacted.isRedacted(value)) return String(Redacted.value(value));
-  throw new Error(`expected a redacted "${field}" in the "${mail.template}" mail`);
-};
+export const secretOf = TestMailbox.secret;
 
 /** An unsafe JSON `POST` from a browser, which echoes CSRF as a real client would; `query` is appended to the path verbatim. */
 export const request = Effect.fn("features.magicLink.request")(function* (

@@ -21,8 +21,15 @@
 // Outbound messages (our request, our response) are signed with the connection's SP key whenever it has one.
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, Sessions, Tenant, Verification, VerificationLink } from "@awthaq/core";
-import { XmlSignature } from "@awthaq/ports";
+import {
+  AuthEvents,
+  CurrentUser,
+  Sessions,
+  Tenant,
+  Verification,
+  VerificationLink,
+} from "@awthaq/core";
+import { Hmac, XmlSignature } from "@awthaq/ports";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { TenantScoped } from "@awthaq/sql";
@@ -85,9 +92,6 @@ export type LogoutStart =
   | (SloOutcome & { readonly _tag: "redirect" | "postForm" } & {
       readonly state: Redacted.Redacted<string>;
     });
-
-const hexOf = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /** The raw (still URL-encoded) value of a query parameter, first occurrence. */
 const rawParam = (rawQuery: string, name: string): string | undefined => {
@@ -177,11 +181,11 @@ export const makeSlo = (deps: SloDeps) => {
   // ---- SP-initiated -----------------------------------------------------------------------------
 
   const logout = Effect.fnUntraced(function* (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     input: { readonly callbackURL?: string | undefined },
   ) {
     const callbackURL = deps.resolveCallbackURL(input.callbackURL);
-    const sessionId = Sessions.SessionId(caller.sessionId);
+    const sessionId = caller.sessionId;
     const row = yield* records.findSession(sessionId);
     const owner = Option.isNone(row)
       ? Option.none()
@@ -336,7 +340,7 @@ export const makeSlo = (deps: SloDeps) => {
     connection: SamlRecords.ConnectionRecord,
     id: string,
   ) {
-    const digest = hexOf(
+    const digest = Hmac.toHex(
       yield* hasher.digest(
         Digest.sha256,
         new TextEncoder().encode(`${connection.idpEntityId}|${id}`),

@@ -8,34 +8,19 @@
 // verifier can depend on this module alone, with zero footprint from the
 // rest of this plugin or `@awthaq/core`.
 //
-// Compact-JWS *segment splitting* mirrors `@awthaq/oauth`'s own
-// `Jwt.ts` (base64url decode) — not imported from there, since that module
-// solves a narrower, different problem (third-party `id_token`
-// verification) and this codebase's own `.scratch/jwt/spec.md` decided to
-// keep the two independent. Unlike that module, header/payload JSON is
-// decoded via `Schema.fromJsonString` (this codebase's own established
-// "arbitrary/dynamic JSON" idiom — see `packages/sql/src/Models.ts`'s
-// `Model.Field({ select: Schema.fromJsonString(Schema.Unknown), ... })`)
-// rather than a raw `JSON.parse` + type assertion — this repo's standing
-// rule against type assertions in library source applies to untrusted
-// wire data even more than anywhere else.
-//
 // GC-002: the registered claims are one `RegisteredClaims` Schema used on
 // both sides — `sign` encodes through it, `parse` decodes through it — so
 // the contract exists once and a token this module would refuse to accept
 // is a token it refuses to mint. `aud` is a string or a non-empty array
 // (RFC 7519 §4.1.3); `exp` is required.
 //
-// BAM-010: the supported algorithm set is one table (`specs`) over the
-// asymmetric JOSE algorithms WebCrypto implements — EdDSA, ES256, ES384,
-// RS256, PS256. HS* is deliberately unrepresentable: a verifier that holds
-// only public keys can never be tricked into an HMAC check.
+// Verification rules (segments, `crit`, algorithm allowlist, key selection, signature, time) are
+// `Jws` (ADR-EA-057); this module keeps signing and the jwt claim policy (`iss`/`aud`/`typ`/`sub`).
+// The only workspace import is `@awthaq/ports`; nothing from `Jwt.ts`, `KeyRing.ts` or `@awthaq/core`.
 //
-// RFC 8725: `verify` never trusts the token's own `alg`. The header `alg`
-// must be in the caller's allowlist *and* equal the `alg` of the key matched
-// by `kid` (JJS-003), the `typ` header must equal the caller's expected token
-// class (JJS-008/VB-005; case-insensitive per RFC 7515 §4.1.9), and
-// `nbf`/`iat` are honoured within an optional `clockSkew`.
+// RFC 8725: `verify` never trusts the token's own `alg`: it must be in the caller's allowlist and
+// fit the key matched by `kid`; the `typ` header must equal the caller's expected token class
+// (JJS-008/VB-005; case-insensitive per RFC 7515 §4.1.9).
 //
 // Every distinct verification failure collapses to this module's own single
 // `JwtInvalidError` tag (an internal `reason` field is retained for
@@ -43,6 +28,7 @@
 // error) — the spec's own "don't leak which check failed" posture, mirrored
 // from `better-auth/07-session-extensions/03-bearer-and-jwt.md` §B.2.
 
+import { Jws } from "@awthaq/ports";
 import type { webcrypto } from "node:crypto";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -53,15 +39,13 @@ import * as Base64Url from "effect/encoding/Base64Url";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-const AlgorithmSchema = Schema.Literals(["EdDSA", "ES256", "ES384", "RS256", "PS256"]);
+export type Algorithm = Jws.Algorithm;
 
-export type Algorithm = typeof AlgorithmSchema.Type;
-
-/** Narrows an arbitrary string (a JWKS entry's `alg`, say) to a supported algorithm — no cast. */
-export const isAlgorithm: (value: unknown) => value is Algorithm = Schema.is(AlgorithmSchema);
+/** Narrows an arbitrary string (a JWKS entry's `alg`, say) to a supported algorithm, no cast. */
+export const isAlgorithm = Jws.isAlgorithm;
 
 /** The schema for a stored/served algorithm name, for persistence layers that need to decode one. */
-export const AlgorithmLiterals = AlgorithmSchema;
+export const AlgorithmLiterals = Jws.Algorithm;
 
 export class JwtInvalidError extends Data.TaggedError("JwtInvalidError")<{
   readonly reason: string;
@@ -69,7 +53,7 @@ export class JwtInvalidError extends Data.TaggedError("JwtInvalidError")<{
 
 export interface VerificationKey {
   readonly kid: string;
-  readonly alg: Algorithm;
+  readonly alg?: Algorithm;
   readonly publicKeyJwk: Record<string, unknown>;
 }
 
@@ -121,22 +105,6 @@ export const peekTyp = (token: string): Option.Option<string> => {
   );
 };
 
-interface AlgorithmSpec {
-  /** `kty` a JWK for this algorithm must carry. */
-  readonly kty: "OKP" | "EC" | "RSA";
-  readonly importParams:
-    | webcrypto.AlgorithmIdentifier
-    | webcrypto.RsaHashedImportParams
-    | webcrypto.EcKeyImportParams;
-  readonly signParams:
-    | webcrypto.AlgorithmIdentifier
-    | webcrypto.RsaPssParams
-    | webcrypto.EcdsaParams;
-  readonly generateParams: (
-    rsaModulusLength: number,
-  ) => webcrypto.AlgorithmIdentifier | webcrypto.RsaHashedKeyGenParams | webcrypto.EcKeyGenParams;
-}
-
 const rsaGenerate = (name: string, rsaModulusLength: number): webcrypto.RsaHashedKeyGenParams => ({
   name,
   modulusLength: rsaModulusLength,
@@ -144,53 +112,27 @@ const rsaGenerate = (name: string, rsaModulusLength: number): webcrypto.RsaHashe
   hash: "SHA-256",
 });
 
-const specs: Record<Algorithm, AlgorithmSpec> = {
-  EdDSA: {
-    kty: "OKP",
-    importParams: { name: "Ed25519" },
-    signParams: { name: "Ed25519" },
-    generateParams: () => ({ name: "Ed25519" }),
-  },
-  ES256: {
-    kty: "EC",
-    importParams: { name: "ECDSA", namedCurve: "P-256" },
-    signParams: { name: "ECDSA", hash: "SHA-256" },
-    generateParams: () => ({ name: "ECDSA", namedCurve: "P-256" }),
-  },
-  ES384: {
-    kty: "EC",
-    importParams: { name: "ECDSA", namedCurve: "P-384" },
-    signParams: { name: "ECDSA", hash: "SHA-384" },
-    generateParams: () => ({ name: "ECDSA", namedCurve: "P-384" }),
-  },
-  RS256: {
-    kty: "RSA",
-    importParams: { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    signParams: { name: "RSASSA-PKCS1-v1_5" },
-    generateParams: (length) => rsaGenerate("RSASSA-PKCS1-v1_5", length),
-  },
-  PS256: {
-    kty: "RSA",
-    importParams: { name: "RSA-PSS", hash: "SHA-256" },
-    signParams: { name: "RSA-PSS", saltLength: 32 },
-    generateParams: (length) => rsaGenerate("RSA-PSS", length),
-  },
+const generateParams: Record<
+  Algorithm,
+  (
+    rsaModulusLength: number,
+  ) => webcrypto.AlgorithmIdentifier | webcrypto.RsaHashedKeyGenParams | webcrypto.EcKeyGenParams
+> = {
+  EdDSA: () => ({ name: "Ed25519" }),
+  ES256: () => ({ name: "ECDSA", namedCurve: "P-256" }),
+  ES384: () => ({ name: "ECDSA", namedCurve: "P-384" }),
+  RS256: (length) => rsaGenerate("RSASSA-PKCS1-v1_5", length),
+  PS256: (length) => rsaGenerate("RSA-PSS", length),
 };
 
-/** The `kty` a JWK for `algorithm` must carry — lets a key importer reject a JWK of the wrong family. */
-export const keyTypeFor = (algorithm: Algorithm): "OKP" | "EC" | "RSA" => specs[algorithm].kty;
+/** The `kty` a JWK for `algorithm` must carry, lets a key importer reject a JWK of the wrong family. */
+export const keyTypeFor = Jws.keyType;
 
 const base64UrlEncode = (bytes: Uint8Array): string =>
   btoa(String.fromCharCode(...bytes))
     .replaceAll("+", "-")
     .replaceAll("/", "_")
     .replaceAll("=", "");
-
-const base64UrlDecode = (segment: string): Uint8Array<ArrayBuffer> => {
-  const padded = segment.replaceAll("-", "+").replaceAll("_", "/");
-  const withPadding = padded + "=".repeat((4 - (padded.length % 4)) % 4);
-  return Uint8Array.from(atob(withPadding), (char) => char.charCodeAt(0));
-};
 
 const encodeJson = (value: unknown): string =>
   base64UrlEncode(new TextEncoder().encode(JSON.stringify(value)));
@@ -205,9 +147,8 @@ export const generateKeyJwks = (
 ) =>
   Effect.tryPromise({
     try: async () => {
-      const spec = specs[algorithm];
       const pair = await globalThis.crypto.subtle.generateKey(
-        spec.generateParams(options?.rsaModulusLength ?? 2048),
+        generateParams[algorithm](options?.rsaModulusLength ?? 2048),
         true,
         ["sign", "verify"],
       );
@@ -241,15 +182,15 @@ export const localSigner = (privateKeyJwk: Record<string, unknown>): Signer => (
   sign: ({ alg, signingInput }) =>
     Effect.tryPromise({
       try: async () => {
-        const spec = specs[alg];
+        const { importParams, signParams } = Jws.webCryptoParams(alg);
         const key = await globalThis.crypto.subtle.importKey(
           "jwk",
           privateKeyJwk,
-          spec.importParams,
+          importParams,
           false,
           ["sign"],
         );
-        const signature = await globalThis.crypto.subtle.sign(spec.signParams, key, signingInput);
+        const signature = await globalThis.crypto.subtle.sign(signParams, key, signingInput);
         return new Uint8Array(signature);
       },
       catch: (cause) => new JwtInvalidError({ reason: `signing failed: ${cause}` }),
@@ -301,79 +242,29 @@ export const sign = (params: {
     return `${headerSegment}.${payloadSegment}.${signatureSegment}`;
   });
 
-const decodeHeader = (segment: string) =>
-  Effect.gen(function* () {
-    const json = new TextDecoder().decode(base64UrlDecode(segment));
-    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(HeaderSchema))(json);
-  }).pipe(Effect.mapError(() => new JwtInvalidError({ reason: "malformed token" })));
+const decodeClaims = Schema.decodeUnknownEffect(RegisteredClaims);
 
-const decodePayload = (segment: string) =>
-  Effect.gen(function* () {
-    const json = new TextDecoder().decode(base64UrlDecode(segment));
-    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RegisteredClaims))(json);
-  }).pipe(Effect.mapError(() => new JwtInvalidError({ reason: "malformed token" })));
-
-/** Splits and decodes a compact JWS/JWT without verifying its signature. */
-const parse = (token: string) =>
-  Effect.gen(function* () {
-    const parts = token.split(".");
-    const headerSegment = parts[0];
-    const payloadSegment = parts[1];
-    const signatureSegment = parts[2];
-    if (
-      parts.length !== 3 ||
-      headerSegment === undefined ||
-      payloadSegment === undefined ||
-      signatureSegment === undefined
-    ) {
-      return yield* Effect.fail(new JwtInvalidError({ reason: "not a compact JWS" }));
-    }
-    const header = yield* decodeHeader(headerSegment);
-    const payload = yield* decodePayload(payloadSegment);
-    return {
-      header,
-      payload,
-      signingInput: new TextEncoder().encode(`${headerSegment}.${payloadSegment}`),
-      signature: base64UrlDecode(signatureSegment),
-    };
-  });
-
-const verifySignature = (
-  alg: Algorithm,
-  publicKeyJwk: Record<string, unknown>,
-  signingInput: Uint8Array<ArrayBuffer>,
-  signature: Uint8Array<ArrayBuffer>,
-) =>
-  Effect.tryPromise({
-    try: async () => {
-      const spec = specs[alg];
-      const key = await globalThis.crypto.subtle.importKey(
-        "jwk",
-        publicKeyJwk,
-        spec.importParams,
-        false,
-        ["verify"],
-      );
-      return globalThis.crypto.subtle.verify(spec.signParams, key, signature, signingInput);
-    },
-    catch: () => new JwtInvalidError({ reason: "signature verification threw" }),
-  });
+const REASONS: Record<Jws.Reason, string> = {
+  malformed: "malformed token",
+  crit: "critical header not understood",
+  alg: "algorithm not allowed",
+  "key-mismatch": "algorithm not allowed",
+  "missing-kid": "missing kid",
+  "unknown-kid": "unknown kid",
+  signature: "bad signature",
+};
 
 /**
- * Verifies `token` against `keys` (matched by `kid`), then `issuer`/
- * `audience`, `expectedTyp`, and the current time — returns the payload
- * claims on success, one undifferentiated `JwtInvalidError` on any failure.
- *
- * The token's own declared `alg` is never trusted alone: it must be in
- * `algorithms` and equal the matched key's own `alg`, and the signature is
- * checked under that key's algorithm (JJS-003), so keys of an old algorithm
- * keep verifying through their grace period after `JwtConfig.algorithm`
- * changes. `requireSubject` (default true) is for principal tokens;
- * general-purpose tokens may legitimately have no `sub` (JJS-007).
+ * Verifies `token` against `keys` (matched by `kid`) through `Jws`, then `issuer`/`audience`,
+ * `expectedTyp` and the current time; returns the payload claims, or one undifferentiated
+ * `JwtInvalidError`. `algorithms` is the allowlist, never the token's say-so. `refetch`, when given,
+ * is read once if no key carries the token's `kid`; its own failure type `E` passes through.
+ * `requireSubject` (default true) is for principal tokens (JJS-007).
  */
-export const verify = (params: {
+export const verify = <E = never>(params: {
   readonly token: string;
   readonly keys: ReadonlyArray<VerificationKey>;
+  readonly refetch?: Effect.Effect<ReadonlyArray<VerificationKey>, E>;
   readonly algorithms: ReadonlyArray<Algorithm>;
   readonly issuer: string;
   readonly audience: string;
@@ -383,64 +274,55 @@ export const verify = (params: {
   readonly clockSkew?: Duration.Input;
 }) =>
   Effect.gen(function* () {
-    const parsed = yield* parse(params.token);
-    const kid = parsed.header.kid;
-    if (kid === undefined || kid.length === 0) {
-      return yield* Effect.fail(new JwtInvalidError({ reason: "missing kid" }));
-    }
-    const headerAlg = parsed.header.alg;
-    if (
-      headerAlg === undefined ||
-      !isAlgorithm(headerAlg) ||
-      !params.algorithms.includes(headerAlg)
-    ) {
-      return yield* Effect.fail(new JwtInvalidError({ reason: "algorithm not allowed" }));
-    }
-    const typ = parsed.header.typ;
+    const typ = Option.getOrUndefined(peekTyp(params.token));
     const acceptedTyps = (
       typeof params.expectedTyp === "string" ? [params.expectedTyp] : params.expectedTyp
     ).map((accepted) => accepted.toLowerCase());
     if (typ === undefined || !acceptedTyps.includes(typ.toLowerCase())) {
-      return yield* Effect.fail(new JwtInvalidError({ reason: "typ mismatch" }));
+      return yield* new JwtInvalidError({ reason: "typ mismatch" });
     }
-    const key = params.keys.find((candidate) => candidate.kid === kid);
-    if (key === undefined) {
-      return yield* Effect.fail(new JwtInvalidError({ reason: "unknown kid" }));
-    }
-    if (key.alg !== headerAlg || !params.algorithms.includes(key.alg)) {
-      return yield* Effect.fail(new JwtInvalidError({ reason: "algorithm not allowed" }));
-    }
-    const signatureValid = yield* verifySignature(
-      key.alg,
-      key.publicKeyJwk,
-      parsed.signingInput,
-      parsed.signature,
+    const toSet = (keys: ReadonlyArray<VerificationKey>): Jws.JwkSet => ({
+      keys: keys.map((key) => ({
+        ...key.publicKeyJwk,
+        kid: key.kid,
+        ...(key.alg === undefined ? {} : { alg: key.alg }),
+      })),
+    });
+    const verified = yield* Jws.verify({
+      token: params.token,
+      keys: {
+        get: Effect.succeed(toSet(params.keys)),
+        refreshOnMiss:
+          params.refetch === undefined
+            ? Effect.succeed(toSet(params.keys))
+            : Effect.map(params.refetch, toSet),
+      },
+      algorithms: params.algorithms,
+      requireKid: true,
+    }).pipe(
+      Effect.catchIf(
+        (error): error is Jws.JwsRejected => error instanceof Jws.JwsRejected,
+        (rejected) => Effect.fail(new JwtInvalidError({ reason: REASONS[rejected.reason] })),
+      ),
     );
-    if (!signatureValid) {
-      return yield* Effect.fail(new JwtInvalidError({ reason: "bad signature" }));
-    }
-    const { payload } = parsed;
+    const payload = yield* decodeClaims(verified.payload).pipe(
+      Effect.mapError(() => new JwtInvalidError({ reason: "malformed token" })),
+    );
     const audiences = typeof payload.aud === "string" ? [payload.aud] : payload.aud;
     if (payload.iss !== params.issuer || !audiences.includes(params.audience)) {
-      return yield* Effect.fail(new JwtInvalidError({ reason: "iss/aud mismatch" }));
+      return yield* new JwtInvalidError({ reason: "iss/aud mismatch" });
     }
-    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-    const skewMs = Duration.toMillis(params.clockSkew ?? Duration.zero);
-    if (payload.exp * 1000 + skewMs <= nowMs) {
-      return yield* Effect.fail(new JwtInvalidError({ reason: "expired" }));
-    }
-    // RFC 7519 §4.1.5 (`nbf`) and RFC 8725's guidance against future-dated
-    // tokens (`iat`): both are refused until the clock (plus skew) catches up.
-    const notBefore = payload.nbf;
-    const issuedAt = payload.iat;
-    if (
-      (notBefore !== undefined && notBefore * 1000 - skewMs > nowMs) ||
-      (issuedAt !== undefined && issuedAt * 1000 - skewMs > nowMs)
-    ) {
-      return yield* Effect.fail(new JwtInvalidError({ reason: "not yet valid" }));
+    const timeProblem = Jws.timeProblem(payload, {
+      nowMs: DateTime.toEpochMillis(yield* DateTime.now),
+      skewMs: Duration.toMillis(params.clockSkew ?? Duration.zero),
+    });
+    if (timeProblem !== undefined) {
+      return yield* new JwtInvalidError({
+        reason: timeProblem === "exp" ? "expired" : "not yet valid",
+      });
     }
     if ((params.requireSubject ?? true) && payload.sub === undefined) {
-      return yield* Effect.fail(new JwtInvalidError({ reason: "missing sub" }));
+      return yield* new JwtInvalidError({ reason: "missing sub" });
     }
     return payload;
   });

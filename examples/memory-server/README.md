@@ -71,7 +71,7 @@ boots this exact composition in-process and asserts both, plus the walkthrough a
 
 See `app.ts`'s own comments for what each composition step is doing and
 why (`index.ts` only starts it). The production module uses nothing from `@awthaq/test` (the smoke test serves it
-through `TestAuth.app`): `AuthHost.layer` derives the routes, the middleware, each plugin's `records.memory` and hook
+through `TestAuth.serve`): `AuthHost.layer` derives the routes, the middleware, each plugin's `records.memory` and hook
 points, the core services, the user fields, `RequestContext` and `BodyLimit`, and `app.ts` provides only its ports,
 its guard, its sign-up tap and the CSRF secret. The same composition over Postgres is `persistence: { records: "sql",
 client, migrations: "apply" }` (see `examples/sql-server`).

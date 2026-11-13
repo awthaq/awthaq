@@ -39,7 +39,7 @@ export const Crypto = NodeCrypto.layer;
 /** The ports: a cheap real hasher, a capturing mailer, a permissive limiter, the socket peer, a fixed key, crypto. */
 export const Ports = Layer.mergeAll(
   Hasher,
-  Mailer.layerMemory,
+  Mailer.layerNoop,
   RateLimiter.layerPermissive,
   ClientAddress.layerDirect,
   FixedEncryption,

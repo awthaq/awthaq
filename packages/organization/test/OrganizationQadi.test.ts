@@ -5,7 +5,7 @@
 // `RelationshipResolver`/`AttributeResolver` straight, the same way an
 // application's own qadi policy evaluation would reach them.
 import { Api } from "@awthaq/api";
-import { Auth, Users } from "@awthaq/core";
+import { Auth, CurrentUser, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -43,11 +43,13 @@ const buildOrganizationLive = (
 
 const OrganizationLive = buildOrganizationLive();
 
-const asCaller = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: `session-${id}`,
-  });
+const asCaller = (id: string) =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: `session-${id}`,
+    }),
+  );
 
 const buildQadiLive = (
   organizationLive: ReturnType<typeof buildOrganizationLive>,

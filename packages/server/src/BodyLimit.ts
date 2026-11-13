@@ -22,11 +22,10 @@
 // The 413 body uses the same `{ _tag, message }` shape the typed API errors
 // serialize to, so a client's error decoding treats it uniformly.
 
-import { ConfigDescriptor } from "@awthaq/core";
+import { ConfigDescriptor, Tenant } from "@awthaq/core";
 import * as ByteSize from "effect/ByteSize";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
@@ -46,15 +45,18 @@ export const BodyLimitConfig = Context.Reference("awthaq/server/BodyLimitConfig"
   defaultValue: () => defaultBodyLimitConfig,
 });
 
+/** BEH-EA-355: deployment-scoped. */
+export const BodyLimitConfigScoped = Tenant.perDeployment(BodyLimitConfig);
+
 export const config = (partial: Partial<BodyLimitConfigShape>) =>
-  Layer.succeed(BodyLimitConfig, { ...defaultBodyLimitConfig, ...partial });
+  BodyLimitConfigScoped.layer({ ...defaultBodyLimitConfig, ...partial });
 
 /**
  * ECS-008/BEH-EA-201: the body cap as a configuration descriptor, so `doctor` can flag a limit
  * raised far past what an auth API's JSON bodies need. The server is not a plugin, so this is
  * not in `manifest.config`; the CLI lists it next to `EffectiveConfig.core`.
  */
-export const descriptor = ConfigDescriptor.make(BodyLimitConfig, {
+export const descriptor = ConfigDescriptor.make(BodyLimitConfigScoped, {
   audit: (value) =>
     value.maxBytes > ByteSize.mebibytes(10)
       ? [
@@ -79,7 +81,7 @@ const payloadTooLarge = (maxBytes: number) =>
  */
 export const layer = HttpRouter.middleware(
   Effect.gen(function* () {
-    const { maxBytes } = yield* BodyLimitConfig;
+    const { maxBytes } = yield* yield* Tenant.inForce(BodyLimitConfigScoped);
     const limit = ByteSize.toNumberUnsafe(maxBytes);
     return (app) =>
       Effect.gen(function* () {

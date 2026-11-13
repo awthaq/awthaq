@@ -1,5 +1,5 @@
 // BEH-EA-238 through 245 over real HTTP, through `HttpRouter.toWebHandler`: the login redirect and its
-// `__Host-saml-request` cookie (SameSite=None: the IdP's POST is cross-site), the ACS form post that answers 302 with
+// `__Host-saml-request` cookie (SameSite=None: the IdP's POST is cross-site), the ACS form post that answers the same-site interstitial (Strict) or a 302 (Lax/None) with
 // a session cookie, the metadata document, and the uniform 400 for everything the chain refuses.
 import { Auth, Sessions } from "@awthaq/core";
 import { RateLimiter } from "@awthaq/ports";
@@ -31,18 +31,18 @@ const around = () => ({
   notOnOrAfter: new Date(Date.now() + 300_000).toISOString().replace(/\.\d+Z$/, "Z"),
 });
 
-const buildApp = () => {
-  const app = TestAuth.app(SamlLive(), { baseUrl: BASE_URL });
-  /** Runs `effect` against the very same service instances the web handler uses. */
-  const inside = <A, E>(
-    effect: Effect.Effect<
-      A,
-      E,
-      Saml.Saml | SamlConnections.SamlConnectionStore | Organization.Organization
-    >,
-  ) => app.run(effect);
-  return { handler: app.handler, inside, agent: () => app.agent() };
-};
+const buildApp = () =>
+  Effect.map(TestAuth.serve(SamlLive(), { baseUrl: BASE_URL }), (app) => {
+    /** Runs `effect` against the very same service instances the web handler uses. */
+    const inside = <A, E>(
+      effect: Effect.Effect<
+        A,
+        E,
+        Saml.Saml | SamlConnections.SamlConnectionStore | Organization.Organization
+      >,
+    ) => app.run(effect);
+    return { handler: app.handler, inside, agent: () => app.agent() };
+  });
 
 const acsBody = (response: string) => ({ SAMLResponse: response, RelayState: "ignored" });
 
@@ -84,7 +84,7 @@ describe("SAML over HTTP", () => {
     "login redirects to the IdP with the AuthnRequest and sets the SameSite=None request cookie",
     () =>
       Effect.gen(function* () {
-        const { handler, inside } = buildApp();
+        const { handler, inside } = yield* buildApp();
         const { connection } = yield* Effect.promise(() => inside(seedConnection()));
         const response = yield* Effect.promise(() =>
           handler(
@@ -114,7 +114,7 @@ describe("SAML over HTTP", () => {
     "login for an unknown connection is 404, and the metadata document is served as SAML metadata",
     () =>
       Effect.gen(function* () {
-        const { handler, inside } = buildApp();
+        const { handler, inside } = yield* buildApp();
         const { connection } = yield* Effect.promise(() => inside(seedConnection()));
         const missing = yield* Effect.promise(() =>
           handler(new Request(`${BASE_URL}/auth/saml/login?connection=nope`)),
@@ -138,7 +138,7 @@ describe("SAML over HTTP", () => {
     () =>
       Effect.gen(function* () {
         const appAt = (clientAddress: string) =>
-          TestAuth.app(
+          TestAuth.serve(
             SamlLive(
               { rateLimits: { login: { limit: 2, window: Duration.minutes(1) } } },
               RateLimiter.layerMemory,
@@ -149,7 +149,7 @@ describe("SAML over HTTP", () => {
             ),
             { baseUrl: BASE_URL },
           );
-        const app = appAt("198.51.100.16");
+        const app = yield* appAt("198.51.100.16");
         const { connection } = yield* Effect.promise(() => app.run(seedConnection()));
         const browser = yield* Effect.promise(() => app.agent());
         const login = yield* Effect.promise(() =>
@@ -173,7 +173,8 @@ describe("SAML over HTTP", () => {
             headers: { "user-agent": "SamlProbe/1" },
           }),
         );
-        assert.strictEqual(landed.status, 302);
+        // a landing: the same-site interstitial under the default Strict cookie, or the redirect (BEH-EA-353)
+        assert.oneOf(landed.status, [200, 302]);
         const token = browser.cookies.get("__Host-session")?.value ?? "";
         const verified = yield* Effect.promise(() =>
           app.run(
@@ -191,15 +192,14 @@ describe("SAML over HTTP", () => {
           ).pipe(Effect.map((response) => response.status));
         assert.strictEqual(yield* loginStatus(app), 302);
         assert.strictEqual(yield* loginStatus(app), 429);
-        yield* Effect.promise(() => app.dispose());
       }),
   );
 
   it.effect(
-    "the ACS form post signs the browser in: 302 to the callback with a session cookie and the request cookie cleared",
+    "BEH-EA-353: under the default Strict cookie the ACS answers the same-site interstitial to the callback, with the session cookie and the request cookie cleared",
     () =>
       Effect.gen(function* () {
-        const { inside, agent } = buildApp();
+        const { inside, agent } = yield* buildApp();
         const { connection } = yield* Effect.promise(() => inside(seedConnection()));
         const browser = yield* Effect.promise(agent);
         const login = yield* Effect.promise(() =>
@@ -220,8 +220,12 @@ describe("SAML over HTTP", () => {
           ),
         ).toString("base64");
         const response = yield* Effect.promise(() => postToAcs(browser, samlResponse));
-        assert.strictEqual(response.status, 302);
-        assert.strictEqual(response.headers.get("location"), "/dashboard");
+        // A 302 here would be withheld the Strict cookie by the browser: the landing's first request looked signed out.
+        assert.strictEqual(response.status, 200);
+        assert.include(response.headers.get("content-type") ?? "", "text/html");
+        assert.strictEqual(response.headers.get("cache-control"), "no-store");
+        assert.isNull(response.headers.get("location"));
+        assert.include(yield* Effect.promise(() => response.clone().text()), 'url=/dashboard"');
         assert.isTrue(hasSetCookie(response, "__Host-session"));
         assert.isDefined(browser.cookies.get("__Host-session"));
         // Single-use: the request cookie is cleared on the way out.
@@ -236,7 +240,7 @@ describe("SAML over HTTP", () => {
     "every refusal is the same 400 SamlAssertionRejected with no detail, and sets no session cookie",
     () =>
       Effect.gen(function* () {
-        const { handler, inside, agent } = buildApp();
+        const { handler, inside, agent } = yield* buildApp();
         const { connection } = yield* Effect.promise(() => inside(seedConnection()));
         const browser = yield* Effect.promise(agent);
         yield* Effect.promise(() =>
@@ -281,7 +285,7 @@ describe("SAML over HTTP", () => {
 
   it.effect("a GET to the ACS is not a sign-in (the endpoint is POST only)", () =>
     Effect.gen(function* () {
-      const { handler } = buildApp();
+      const { handler } = yield* buildApp();
       const response = yield* Effect.promise(() => handler(new Request(ACS_URL)));
       assert.notStrictEqual(response.status, 200);
       assert.notStrictEqual(response.status, 302);

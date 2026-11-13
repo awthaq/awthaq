@@ -23,7 +23,7 @@
 // contribution instead), so `deleteAllByUser` is what account erasure calls.
 
 import { Migrations, Users } from "@awthaq/core";
-import { Defects, type Encryption, PasswordHasher } from "@awthaq/ports";
+import { type Encryption, PasswordHasher } from "@awthaq/ports";
 import { Models as SqlModels, SealedColumn, SqlStore, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -625,74 +625,30 @@ export const records = {
 // ---- migrations ------------------------------------------------------------------------
 
 /**
- * Append-only (never reorder or edit a shipped entry). `"lastUsedStep"` is an INTEGER: a TOTP
- * step is `floor(epochSeconds / 30)`, ~6e7 today and under 2^31 for another two thousand years,
- * so it decodes as a plain number on both dialects (a Postgres BIGINT would arrive as a string).
- * Every camelCase column is quoted in every statement, so Postgres's case folding cannot split
- * a migration from the queries above.
+ * Append-only: a migration's name and position are its identity (`TwoFactor.ts` names the order), and
+ * what a shipped migration builds never changes. `"lastUsedStep"` is an INTEGER: a TOTP step is
+ * `floor(epochSeconds / 30)`, ~6e7 today and under 2^31 for another two thousand years, so it
+ * decodes as a plain number on both dialects (a Postgres BIGINT would arrive as a string). Every
+ * camelCase column is quoted in every statement, so Postgres's case folding cannot split a
+ * migration from the queries above.
  */
-export const migrations: Migrations.Migrations = [
-  {
-    name: "create_two_factor_secret",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`
-          CREATE TABLE two_factor_secret (
-            "userId" TEXT PRIMARY KEY,
-            secret TEXT NOT NULL,
-            "confirmedAt" TIMESTAMPTZ,
-            "lastUsedStep" INTEGER,
-            "createdAt" TIMESTAMPTZ NOT NULL
-          )`,
-        sqlite: () => sql`
-          CREATE TABLE two_factor_secret (
-            "userId" TEXT PRIMARY KEY,
-            secret TEXT NOT NULL,
-            "confirmedAt" TEXT,
-            "lastUsedStep" INTEGER,
-            "createdAt" TEXT NOT NULL
-          )`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  {
-    name: "create_two_factor_recovery_code",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`
-          CREATE TABLE two_factor_recovery_code (
-            id TEXT PRIMARY KEY,
-            "userId" TEXT NOT NULL,
-            "codeHash" TEXT NOT NULL,
-            "usedAt" TIMESTAMPTZ,
-            "createdAt" TIMESTAMPTZ NOT NULL
-          )`,
-        sqlite: () => sql`
-          CREATE TABLE two_factor_recovery_code (
-            id TEXT PRIMARY KEY,
-            "userId" TEXT NOT NULL,
-            "codeHash" TEXT NOT NULL,
-            "usedAt" TEXT,
-            "createdAt" TEXT NOT NULL
-          )`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  {
-    name: "create_two_factor_recovery_code_user_id_index",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () =>
-          sql`CREATE INDEX two_factor_recovery_code_user_id ON two_factor_recovery_code("userId")`,
-        sqlite: () =>
-          sql`CREATE INDEX two_factor_recovery_code_user_id ON two_factor_recovery_code("userId")`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-];
+export const migrations = Migrations.group({
+  create_two_factor_secret: ({ sql, timestamp }) => sql`
+    CREATE TABLE two_factor_secret (
+      "userId" TEXT PRIMARY KEY,
+      secret TEXT NOT NULL,
+      "confirmedAt" ${timestamp},
+      "lastUsedStep" INTEGER,
+      "createdAt" ${timestamp} NOT NULL
+    )`,
+  create_two_factor_recovery_code: ({ sql, timestamp }) => sql`
+    CREATE TABLE two_factor_recovery_code (
+      id TEXT PRIMARY KEY,
+      "userId" TEXT NOT NULL,
+      "codeHash" TEXT NOT NULL,
+      "usedAt" ${timestamp},
+      "createdAt" ${timestamp} NOT NULL
+    )`,
+  create_two_factor_recovery_code_user_id_index: ({ index }) =>
+    index("two_factor_recovery_code_user_id", "two_factor_recovery_code", ["userId"]),
+});

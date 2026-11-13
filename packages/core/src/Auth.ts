@@ -12,6 +12,7 @@
 import { AuthCore, SessionLifecycle } from "@awthaq/api";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
+import * as Predicate from "effect/Predicate";
 import * as Layer from "effect/Layer";
 import type * as Types from "effect/Types";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -173,6 +174,52 @@ const assertDefined = <A>(value: A | undefined, detail: string): A => {
   }
   return value;
 };
+
+/**
+ * BEH-EA-201: every refusal raised while a configuration module is evaluated: by `Auth.make`, or where a
+ * plugin, a user field or a sealed column is declared. `awthaq doctor` reports each as a link finding.
+ */
+export type LinkError =
+  | CircularPluginDependency
+  | EmptyPluginTuple
+  | GroupIdConflict
+  | RouteConflict
+  | LinkerInvariantViolation
+  | UndeclaredTableDependency
+  | TenancyDeclarationInvalid
+  | SealedColumnDeclarationInvalid
+  | MigrationDeclarationInvalid
+  | EventTagConflict
+  | UserFields.InvalidDeclaration
+  | UserFields.UserFieldConflict
+  | AuthPlugin.ConflictingDependsOn
+  | SealedColumn.InvalidDeclaration
+  | SessionLifecycle.Conflict;
+
+/** One key per `LinkError` tag: `satisfies` rejects a missing or an extra tag at compile time. */
+export const linkErrorTags = {
+  CircularPluginDependency: true,
+  EmptyPluginTuple: true,
+  GroupIdConflict: true,
+  RouteConflict: true,
+  LinkerInvariantViolation: true,
+  UndeclaredTableDependency: true,
+  "Auth/TenancyDeclarationInvalid": true,
+  "Auth/SealedColumnDeclarationInvalid": true,
+  "Auth/MigrationDeclarationInvalid": true,
+  "Auth/EventTagConflict": true,
+  "UserFields/InvalidDeclaration": true,
+  UserFieldConflict: true,
+  ConflictingDependsOn: true,
+  "SealedColumn/InvalidDeclaration": true,
+  "SessionLifecycle/Conflict": true,
+} satisfies Record<LinkError["_tag"], true>;
+
+/** BEH-EA-201: whether `u` is a link error; the CLI loader classifies with this and keeps no list of its own. */
+export const isLinkError = (u: unknown): u is LinkError =>
+  Predicate.hasProperty(u, "_tag") &&
+  typeof u._tag === "string" &&
+  Object.hasOwn(linkErrorTags, u._tag);
 
 // ---------------------------------------------------------------------------
 // Validate<P> — BEH-EA-010, BEH-EA-011

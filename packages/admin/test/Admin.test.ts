@@ -6,7 +6,7 @@
 // `canImpersonate` function (no `Layer.mock` needed — it is a bare config
 // predicate, not a service).
 import { Api } from "@awthaq/api";
-import { Auth, AuthEvents, Sessions, Tenant, Users } from "@awthaq/core";
+import { Auth, AuthEvents, CurrentUser, Sessions, Tenant, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -51,12 +51,14 @@ const asCaller = (input: {
   readonly id: string;
   readonly sessionId: string;
   readonly actingAs?: { readonly type: string; readonly id: string };
-}): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id: input.id }),
-    sessionId: input.sessionId,
-    ...(input.actingAs === undefined ? {} : { actingAs: new Api.PrincipalRef(input.actingAs) }),
-  });
+}): CurrentUser.Caller =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id: input.id }),
+      sessionId: input.sessionId,
+      ...(input.actingAs === undefined ? {} : { actingAs: new Api.PrincipalRef(input.actingAs) }),
+    }),
+  );
 
 describe("Admin", () => {
   it.effect(
@@ -69,7 +71,10 @@ describe("Admin", () => {
         const records = yield* ImpersonationRecords.ImpersonationRecords;
 
         const callerSession = yield* sessions.issue({ userId: adminId });
-        const caller = asCaller({ id: adminId, sessionId: callerSession.session.id });
+        const caller = asCaller({
+          id: adminId,
+          sessionId: callerSession.session.id,
+        });
 
         const issued = yield* admin.impersonate({
           caller,
@@ -152,8 +157,15 @@ describe("Admin", () => {
         const records = yield* ImpersonationRecords.ImpersonationRecords;
 
         const callerSession = yield* sessions.issue({ userId: adminId });
-        const caller = asCaller({ id: adminId, sessionId: callerSession.session.id });
-        const issued = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "test" });
+        const caller = asCaller({
+          id: adminId,
+          sessionId: callerSession.session.id,
+        });
+        const issued = yield* admin.impersonate({
+          caller,
+          targetUserId: targetId,
+          reason: "test",
+        });
 
         const impersonating = asCaller({
           id: targetId,
@@ -197,10 +209,20 @@ describe("Admin", () => {
         const sessions = yield* Sessions.Sessions;
 
         const callerSession = yield* sessions.issue({ userId: adminId });
-        const caller = asCaller({ id: adminId, sessionId: callerSession.session.id });
-        const issued = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "test" });
+        const caller = asCaller({
+          id: adminId,
+          sessionId: callerSession.session.id,
+        });
+        const issued = yield* admin.impersonate({
+          caller,
+          targetUserId: targetId,
+          reason: "test",
+        });
 
-        const anotherAdmin = asCaller({ id: "admin-2", sessionId: "admin-2-session" });
+        const anotherAdmin = asCaller({
+          id: "admin-2",
+          sessionId: "admin-2-session",
+        });
         yield* admin.forceStop(anotherAdmin, issued.session.id);
 
         const revoked = yield* sessions.verify(issued.token).pipe(Effect.flip);
@@ -223,8 +245,15 @@ describe("Admin", () => {
         const sessions = yield* Sessions.Sessions;
 
         const callerSession = yield* sessions.issue({ userId: adminId });
-        const caller = asCaller({ id: adminId, sessionId: callerSession.session.id });
-        const ended = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "first" });
+        const caller = asCaller({
+          id: adminId,
+          sessionId: callerSession.session.id,
+        });
+        const ended = yield* admin.impersonate({
+          caller,
+          targetUserId: targetId,
+          reason: "first",
+        });
         yield* admin.stopImpersonating(
           asCaller({
             id: targetId,
@@ -232,7 +261,11 @@ describe("Admin", () => {
             actingAs: { type: "user", id: adminId },
           }),
         );
-        yield* admin.impersonate({ caller, targetUserId: targetId, reason: "second" });
+        yield* admin.impersonate({
+          caller,
+          targetUserId: targetId,
+          reason: "second",
+        });
 
         const all = (yield* admin.list(caller)).items;
         assert.strictEqual(all.length, 2);
@@ -313,7 +346,11 @@ describe("Admin", () => {
         const admin = yield* Admin.Admin;
         const seen = yield* collectStopped;
         const caller = asCaller({ id: adminId, sessionId: "admin-session" });
-        const issued = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "x" });
+        const issued = yield* admin.impersonate({
+          caller,
+          targetUserId: targetId,
+          reason: "x",
+        });
 
         yield* TestClock.adjust(Duration.sum(Duration.hours(1), Duration.seconds(1)));
         const active = (yield* admin.list(caller, { active: true })).items;
@@ -348,7 +385,11 @@ describe("Admin", () => {
       const records = yield* ImpersonationRecords.ImpersonationRecords;
       const seen = yield* collectStopped;
       const caller = asCaller({ id: adminId, sessionId: "admin-session" });
-      const issued = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "x" });
+      const issued = yield* admin.impersonate({
+        caller,
+        targetUserId: targetId,
+        reason: "x",
+      });
 
       assert.strictEqual(yield* Admin.sweepExpiredEpisodes, 0);
       yield* TestClock.adjust(Duration.sum(Duration.hours(1), Duration.seconds(1)));
@@ -370,7 +411,11 @@ describe("Admin", () => {
       const sessions = yield* Sessions.Sessions;
       const records = yield* ImpersonationRecords.ImpersonationRecords;
       const caller = asCaller({ id: adminId, sessionId: "admin-session" });
-      const issued = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "x" });
+      const issued = yield* admin.impersonate({
+        caller,
+        targetUserId: targetId,
+        reason: "x",
+      });
       yield* records.endEpisode(issued.session.id, "forcedByAdmin");
 
       yield* admin.stopImpersonating(
@@ -392,7 +437,11 @@ describe("Admin", () => {
       const sessions = yield* Sessions.Sessions;
       const records = yield* ImpersonationRecords.ImpersonationRecords;
       const caller = asCaller({ id: adminId, sessionId: "admin-session" });
-      const issued = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "x" });
+      const issued = yield* admin.impersonate({
+        caller,
+        targetUserId: targetId,
+        reason: "x",
+      });
       // e.g. the target's password reset: their own sessions, impersonation included, are gone.
       yield* sessions.revokeAll(targetId, "admin");
 
@@ -429,7 +478,11 @@ describe("Admin", () => {
         const sessions = yield* Sessions.Sessions;
         const records = yield* ImpersonationRecords.ImpersonationRecords;
         const caller = asCaller({ id: adminId, sessionId: "admin-session" });
-        const issued = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "x" });
+        const issued = yield* admin.impersonate({
+          caller,
+          targetUserId: targetId,
+          reason: "x",
+        });
         yield* records.endEpisode(issued.session.id, "self");
 
         const failure = yield* admin.forceStop(caller, issued.session.id).pipe(Effect.flip);
@@ -485,7 +538,10 @@ describe("Admin tenant scoping (IDS-002)", () => {
         assert.strictEqual((yield* sessions.verify(inB.token)).session.id, inB.session.id);
 
         // The superadmin sees every tenant's episodes and can end one across the boundary.
-        const superadmin = asCaller({ id: "superadmin-1", sessionId: "superadmin-session" });
+        const superadmin = asCaller({
+          id: "superadmin-1",
+          sessionId: "superadmin-session",
+        });
         const everything = (yield* admin.list(superadmin).pipe(Tenant.withTenant("org-a"))).items;
         assert.sameMembers(
           everything.map((row) => row.sessionId),
@@ -510,7 +566,11 @@ describe("Admin tenant scoping (IDS-002)", () => {
       const { adminId, targetId } = yield* seedUsers;
       const admin = yield* Admin.Admin;
       const caller = asCaller({ id: adminId, sessionId: "admin-session" });
-      const issued = yield* admin.impersonate({ caller, targetUserId: targetId, reason: "plain" });
+      const issued = yield* admin.impersonate({
+        caller,
+        targetUserId: targetId,
+        reason: "plain",
+      });
       const listed = (yield* admin.list(caller)).items;
       assert.strictEqual(listed.length, 1);
       assert.isTrue(Option.isNone(listed[0]?.tenantId ?? Option.some("x")));
@@ -526,7 +586,11 @@ describe("Admin tenant scoping (IDS-002)", () => {
         const admin = yield* Admin.Admin;
         const caller = asCaller({ id: adminId, sessionId: "admin-session" });
         yield* admin
-          .impersonate({ caller, targetUserId: targetId, reason: "org-a episode" })
+          .impersonate({
+            caller,
+            targetUserId: targetId,
+            reason: "org-a episode",
+          })
           .pipe(Tenant.withTenant("org-a"));
         // Listing the target's sessions from org-b must not expose the org-a impersonation session.
         const listed = yield* admin

@@ -33,6 +33,7 @@
 import {
   AuthEvents,
   AuthPlugin,
+  ConfigDescriptor,
   DataExport,
   Erasure,
   Errors,
@@ -50,9 +51,10 @@ import {
   OrganizationTeams,
 } from "@awthaq/organization";
 import type { Api } from "@awthaq/api";
-import { Defects, SqlTransaction } from "@awthaq/ports";
+import { Defects, SqlTransaction, Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -92,8 +94,10 @@ export const ScimConfig: Context.Reference<ScimConfigShape> = Context.Reference(
   { defaultValue: () => defaultScimConfig },
 );
 
+export const ScimConfigScoped = Tenant.perDeployment(ScimConfig);
+
 export const config = (partial: Partial<ScimConfigShape>) =>
-  Layer.succeed(ScimConfig, { ...defaultScimConfig, ...partial });
+  ScimConfigScoped.layer({ ...defaultScimConfig, ...partial });
 
 // ---- shape -----------------------------------------------------------------------------------
 
@@ -366,6 +370,141 @@ const interpretUserPatch = (
     return changes;
   });
 
+// ---- Group PATCH/PUT interpretation (pure; BEH-EA-251) ---------------------------------------------
+
+/** The longest group name accepted (create, PUT and PATCH alike). */
+const MAX_GROUP_NAME = 255;
+
+/** One roster operation of a request, in order; `settleRoster` folds them over the members provisioned now. */
+type RosterStep = Data.TaggedEnum<{
+  Replace: { readonly ids: ReadonlyArray<string> };
+  Add: { readonly ids: ReadonlyArray<string> };
+  Remove: { readonly ids: ReadonlyArray<string> };
+  Clear: {};
+}>;
+const RosterStep = Data.taggedEnum<RosterStep>();
+
+/** What a PATCH or PUT body asks to change on a group, after normalization and validation. */
+interface GroupChanges {
+  readonly displayName: Option.Option<string>;
+  /** `Some(None)` clears it. */
+  readonly externalId: Option.Option<Option.Option<string>>;
+  readonly roster: ReadonlyArray<RosterStep>;
+}
+
+const invalidGroupName = () =>
+  ScimApi.badRequest(`displayName is required (at most ${MAX_GROUP_NAME} characters)`);
+
+/** Member ids named by an operation's `value` (`[{ value }]`, `{ value }`) or by a `members[value eq "id"]` path. */
+const memberIdsOf = (operation: {
+  readonly path?: string | undefined;
+  readonly value?: unknown;
+}): ReadonlyArray<string> => {
+  const fromPath = /members\[\s*value\s+eq\s+"([^"]+)"\s*\]/i.exec(operation.path ?? "")?.[1];
+  if (fromPath !== undefined) return [fromPath];
+  const values = Array.isArray(operation.value) ? operation.value : [operation.value];
+  return values.flatMap((entry) =>
+    isRecord(entry) && typeof entry["value"] === "string" ? [entry["value"]] : [],
+  );
+};
+
+const interpretGroupPatch = (
+  patch: ScimApi.PatchRequest,
+): Effect.Effect<GroupChanges, ScimApi.ScimBadRequest> =>
+  Effect.gen(function* () {
+    let displayName = Option.none<string>();
+    let externalId = Option.none<Option.Option<string>>();
+    const roster: Array<RosterStep> = [];
+    const apply = Effect.fnUntraced(function* (op: string, path: string, value: unknown) {
+      const attribute = path.toLowerCase();
+      if (attribute === "displayname") {
+        const name = stringOf(value);
+        if (Option.isNone(name) || op === "remove") {
+          return yield* ScimApi.badRequest("displayName cannot be empty");
+        }
+        if (name.value.length > MAX_GROUP_NAME) return yield* invalidGroupName();
+        displayName = name;
+      } else if (attribute === "externalid") {
+        externalId = Option.some(op === "remove" ? Option.none() : stringOf(value));
+      } else if (attribute.startsWith("members")) {
+        const ids = memberIdsOf({ path, value });
+        const filtered = /members\[/i.test(path);
+        if (op === "replace" && !filtered) roster.push(RosterStep.Replace({ ids }));
+        else if (op === "add") roster.push(RosterStep.Add({ ids }));
+        else if (op === "remove") {
+          roster.push(
+            ids.length === 0 && !filtered ? RosterStep.Clear() : RosterStep.Remove({ ids }),
+          );
+        }
+      }
+    });
+    for (const operation of patch.Operations) {
+      const op = operation.op.trim().toLowerCase();
+      if (op !== "add" && op !== "replace" && op !== "remove") {
+        return yield* ScimApi.badRequest(`Unknown patch op "${operation.op}"`, "invalidSyntax");
+      }
+      const path = (operation.path ?? "").trim();
+      if (path !== "") {
+        yield* apply(op, path, operation.value);
+      } else if (isRecord(operation.value)) {
+        // No path: `value` is an object of attributes (each is applied as if it were a path). A pathless
+        // `remove` can only mean the roster.
+        for (const [attribute, value] of Object.entries(operation.value)) {
+          if (op === "remove" && attribute.toLowerCase() !== "members") continue;
+          yield* apply(op, attribute, value);
+        }
+      }
+    }
+    return { displayName, externalId, roster } satisfies GroupChanges;
+  });
+
+/** PUT: the name and the roster are replaced; an absent `externalId` clears it. */
+const groupReplacement = (
+  input: ScimApi.GroupInput,
+): Effect.Effect<GroupChanges, ScimApi.ScimBadRequest> => {
+  const displayName = input.displayName.trim();
+  if (displayName === "" || displayName.length > MAX_GROUP_NAME) return invalidGroupName();
+  return Effect.succeed({
+    displayName: Option.some(displayName),
+    externalId: Option.some(stringOf(input.externalId)),
+    roster: [RosterStep.Replace({ ids: (input.members ?? []).map((member) => member.value) })],
+  });
+};
+
+/** Every id an Add or Replace step names: each must be provisioned and a member before any write. */
+const namedMembers = (changes: GroupChanges): ReadonlyArray<string> => [
+  ...new Set(
+    changes.roster.flatMap((step) =>
+      step._tag === "Replace" || step._tag === "Add" ? step.ids : [],
+    ),
+  ),
+];
+
+/** Folds the steps over the members provisioned now: the net change, so one roster call. */
+const settleRoster = (steps: ReadonlyArray<RosterStep>, current: ReadonlyArray<string>) => {
+  let final = new Set(current);
+  for (const step of steps) {
+    switch (step._tag) {
+      case "Replace":
+        final = new Set(step.ids);
+        break;
+      case "Add":
+        step.ids.forEach((id) => final.add(id));
+        break;
+      case "Remove":
+        step.ids.forEach((id) => final.delete(id));
+        break;
+      case "Clear":
+        final = new Set();
+        break;
+    }
+  }
+  return {
+    add: [...final].filter((id) => !current.includes(id)),
+    remove: current.filter((id) => !final.has(id)),
+  };
+};
+
 // ---- the plugin ------------------------------------------------------------------------------------
 
 const scimMigrations: Migrations.Migrations = [
@@ -512,6 +651,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
   events: ScimEvents.events,
   // Plan 08 (BEH-EA-T4): the connection and resource-link store, memory and SQL, matched.
   records: ScimRecords.records,
+  config: [ConfigDescriptor.make(ScimConfigScoped)],
 }) {
   static readonly layer = AuthPlugin.layer(Scim, {
     ports: [SqlTransaction.SqlTransaction],
@@ -522,7 +662,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
       "scim",
       Effect.fnUntraced(function* (handlers) {
         const scim = yield* Scim;
-        const settings = yield* ScimConfig;
+        const settings = yield* yield* Tenant.inForce(ScimConfigScoped);
         return handlers.handleAll({
           // P20a: the page-size ceiling the document advertises is the one the list handlers enforce.
           serviceProviderConfig: () =>
@@ -629,7 +769,15 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
       const records = yield* ScimRecords.ScimRecords;
       // ADR-EA-040: Groups are organization teams, reached through the exposed system module.
       const teams = yield* OrganizationTeams.OrganizationTeams;
-      const cfg = yield* ScimConfig;
+      const cfg = yield* yield* Tenant.inForce(ScimConfigScoped);
+      // Yielded here, not in an operation: a dependency yielded per call would leak into the HTTP builder's requirements.
+      const sqlTransaction = yield* SqlTransaction.SqlTransaction;
+
+      /** One unit of work: a failure rolls every write back (SQL); a failed COMMIT is a 503 (ADR-EA-028). */
+      const atomically = <A, E, R>(operation: string, effect: Effect.Effect<A, E, R>) =>
+        sqlTransaction
+          .withTransaction(effect)
+          .pipe(Effect.catchTag("SqlError", Errors.storeUnavailable(`Scim.${operation}`)));
 
       const locate = (kind: "Users" | "Groups", id: string): string =>
         `${Option.getOrElse(cfg.baseUrl, () => "")}/scim/v2/${kind}/${id}`;
@@ -711,41 +859,41 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
        * BEH-EA-250: `active` is suspension. Deactivating suspends and ends every session; reactivating
        * lifts only a suspension this connection made. Returns the user as it stands afterwards.
        */
-      const applyActive = Effect.fnUntraced(function* (
-        connection: Connection,
-        user: Users.UserRecord,
-        active: boolean,
-      ) {
-        const marker = suspensionMarker(connection.id);
-        if (!active && user.status === "active") {
-          const suspended = yield* users
-            .setStatus(user.id, "suspended", { reason: marker })
-            .pipe(Effect.catchTag("UserNotFound", userVanished));
-          yield* sessions.revokeAll(user.id, "suspended");
-          yield* events.emit(ScimEvents.ScimUserDeactivatedEvent, {
-            connectionId: connection.id,
-            organizationId: connection.organizationId,
-            userId: user.id,
-          });
-          return suspended;
-        }
-        if (
-          active &&
-          user.status === "suspended" &&
-          Option.getOrNull(user.statusReason) === marker
-        ) {
-          const reactivated = yield* users
-            .setStatus(user.id, "active")
-            .pipe(Effect.catchTag("UserNotFound", userVanished));
-          yield* events.emit(ScimEvents.ScimUserReactivatedEvent, {
-            connectionId: connection.id,
-            organizationId: connection.organizationId,
-            userId: user.id,
-          });
-          return reactivated;
-        }
-        return user;
-      });
+      const applyActive = (connection: Connection, user: Users.UserRecord, active: boolean) =>
+        atomically(
+          "applyActive",
+          Effect.gen(function* () {
+            const marker = suspensionMarker(connection.id);
+            if (!active && user.status === "active") {
+              const suspended = yield* users
+                .setStatus(user.id, "suspended", { reason: marker })
+                .pipe(Effect.catchTag("UserNotFound", userVanished));
+              yield* sessions.revokeAll(user.id, "suspended");
+              yield* events.emit(ScimEvents.ScimUserDeactivatedEvent, {
+                connectionId: connection.id,
+                organizationId: connection.organizationId,
+                userId: user.id,
+              });
+              return suspended;
+            }
+            if (
+              active &&
+              user.status === "suspended" &&
+              Option.getOrNull(user.statusReason) === marker
+            ) {
+              const reactivated = yield* users
+                .setStatus(user.id, "active")
+                .pipe(Effect.catchTag("UserNotFound", userVanished));
+              yield* events.emit(ScimEvents.ScimUserReactivatedEvent, {
+                connectionId: connection.id,
+                organizationId: connection.organizationId,
+                userId: user.id,
+              });
+              return reactivated;
+            }
+            return user;
+          }),
+        );
 
       // ---- Users ------------------------------------------------------------------------------------
 
@@ -973,7 +1121,10 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
             externalId: Option.some(externalId),
             active: Option.fromNullishOr(input.active),
           };
-          const { user, link } = yield* applyUserChanges(connection, owned, changes);
+          const { user, link } = yield* atomically(
+            "replaceUser",
+            applyUserChanges(connection, owned, changes),
+          );
           return userResource(user, link);
         },
       );
@@ -982,7 +1133,10 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
         function* (connection, id, patch) {
           const owned = yield* ownedUser(connection, id);
           const changes = yield* interpretUserPatch(patch);
-          const { user, link } = yield* applyUserChanges(connection, owned, changes);
+          const { user, link } = yield* atomically(
+            "patchUser",
+            applyUserChanges(connection, owned, changes),
+          );
           return userResource(user, link);
         },
       );
@@ -1137,43 +1291,48 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
             Effect.asVoid,
           );
 
-      /** Sets the provisioned members of a team to exactly `wanted`; unprovisioned members are untouched. */
-      const replaceProvisioned = Effect.fnUntraced(function* (
-        connection: Connection,
-        teamId: string,
-        wanted: ReadonlyArray<string>,
-      ) {
-        const current = yield* provisionedMembers(connection, teamId);
-        yield* applyRoster(connection, teamId, {
-          add: wanted,
-          remove: current.filter((userId) => !wanted.includes(userId)),
-        });
-      });
+      /** The team a mapping names, with the mapping; none when the team is gone (skipped, as `listUsers` skips a vanished user). */
+      const withTeam = (connection: Connection, link: ScimRecords.ResourceLink) =>
+        teams
+          .find(connection.organizationId, link.resourceId)
+          .pipe(Effect.map(Option.map((team) => ({ link, team }))));
 
       const listGroups: ScimShape["listGroups"] = Effect.fnUntraced(function* (connection, query) {
         const filter = yield* parseEqFilter(query.filter, ["displayName", "externalId"]);
         const { startIndex, count, offset } = paging(query, cfg.maxResults);
-        const page = yield* records.list(connection.id, "Group", { offset: 0, limit: 10_000 });
-        const owned = yield* Effect.forEach(page.items, (link) =>
-          teams
-            .find(connection.organizationId, link.resourceId)
-            .pipe(Effect.map(Option.map((team) => ({ link, team })))),
-        );
-        const live = owned.flatMap((row) => Option.toArray(row));
-        const matching = Option.match(filter, {
-          onNone: () => live,
+        const { rows, total } = yield* Option.match(filter, {
+          onNone: () =>
+            records
+              .list(connection.id, "Group", { offset, limit: count })
+              .pipe(
+                Effect.flatMap(({ items, total }) =>
+                  Effect.forEach(items, (link) => withTeam(connection, link)).pipe(
+                    Effect.map((found) => ({ rows: found.flatMap(Option.toArray), total })),
+                  ),
+                ),
+              ),
           onSome: ({ attribute, value }) =>
-            live.filter((row) =>
-              attribute === "displayName"
-                ? row.team.name === value
-                : Option.getOrNull(row.link.externalId) === value,
-            ),
+            Effect.gen(function* () {
+              // Only groups this connection mapped: a same-named team of an administrator or of another connection never appears.
+              const links =
+                attribute === "externalId"
+                  ? Option.toArray(yield* records.findByExternalId(connection.id, "Group", value))
+                  : (yield* Effect.forEach(
+                      (yield* teams.list(connection.organizationId)).filter(
+                        (team) => team.name === value,
+                      ),
+                      (team) => records.find(connection.id, "Group", team.id),
+                    )).flatMap(Option.toArray);
+              const found = (yield* Effect.forEach(links, (link) =>
+                withTeam(connection, link),
+              )).flatMap(Option.toArray);
+              return { rows: found.slice(offset, offset + count), total: found.length };
+            }),
         });
-        const slice = matching.slice(offset, offset + count);
-        const resources = yield* Effect.forEach(slice, (row) => groupResource(connection, row));
+        const resources = yield* Effect.forEach(rows, (row) => groupResource(connection, row));
         return {
           schemas: [ScimApi.LIST_SCHEMA],
-          totalResults: matching.length,
+          totalResults: total,
           startIndex,
           itemsPerPage: resources.length,
           Resources: resources,
@@ -1183,7 +1342,7 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
       const createGroup: ScimShape["createGroup"] = Effect.fnUntraced(
         function* (connection, input) {
           const displayName = input.displayName.trim();
-          if (displayName === "" || displayName.length > 255) {
+          if (displayName === "" || displayName.length > MAX_GROUP_NAME) {
             return yield* ScimApi.badRequest("displayName is required (at most 255 characters)");
           }
           const externalId = stringOf(input.externalId);
@@ -1295,115 +1454,78 @@ export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
                 }),
               );
 
+      /**
+       * PUT and PATCH share one vet-then-apply sequence. Every refusal that needs no write comes first (a memory
+       * backend cannot roll back); then, in one unit: the roster (its refusals are the likeliest, and
+       * `applyRoster` vets before it writes), the name, the mapping (its only refusal is pre-read here).
+       */
+      const applyGroupChanges = Effect.fnUntraced(function* (
+        operation: string,
+        connection: Connection,
+        owned: { readonly team: Team; readonly link: ScimRecords.ResourceLink },
+        changes: GroupChanges,
+      ) {
+        yield* requireMembers(connection, namedMembers(changes));
+        const wanted = Option.flatten(changes.externalId);
+        if (Option.isSome(wanted)) {
+          const holder = yield* records.findByExternalId(connection.id, "Group", wanted.value);
+          if (Option.isSome(holder) && holder.value.resourceId !== owned.team.id) {
+            return yield* Effect.fail(ScimApi.conflict("externalId is already provisioned"));
+          }
+        }
+        return yield* atomically(
+          operation,
+          Effect.gen(function* () {
+            const id = owned.team.id;
+            const roster = settleRoster(changes.roster, yield* provisionedMembers(connection, id));
+            if (roster.add.length > 0 || roster.remove.length > 0) {
+              yield* applyRoster(connection, id, roster);
+            }
+            const team = yield* Option.match(changes.displayName, {
+              onNone: () => Effect.succeed(owned.team),
+              onSome: (name) =>
+                name === owned.team.name
+                  ? Effect.succeed(owned.team)
+                  : renameGroup(connection, owned.team, name),
+            });
+            const link = yield* Option.match(changes.externalId, {
+              onNone: () => Effect.succeed(owned.link),
+              onSome: (externalId) =>
+                records
+                  .setExternalId(connection.id, "Group", id, Option.getOrNull(externalId))
+                  .pipe(
+                    Effect.catchTags({
+                      ScimLinkConflict: () =>
+                        Effect.fail(ScimApi.conflict("externalId is already provisioned")),
+                      ScimRecordNotFound: () => Effect.fail(ScimApi.notFound()),
+                    }),
+                  ),
+            });
+            yield* groupChanged(connection, id, "updated");
+            return { link, team };
+          }),
+        );
+      });
+
       const replaceGroup: ScimShape["replaceGroup"] = Effect.fnUntraced(
         function* (connection, id, input) {
           const owned = yield* ownedGroup(connection, id);
-          const displayName = input.displayName.trim();
-          if (displayName === "" || displayName.length > 255) {
-            return yield* ScimApi.badRequest("displayName is required (at most 255 characters)");
-          }
-          const memberIds = (input.members ?? []).map((member) => member.value);
-          yield* requireMembers(connection, memberIds);
-          const link = yield* records
-            .setExternalId(connection.id, "Group", id, Option.getOrNull(stringOf(input.externalId)))
-            .pipe(
-              Effect.catchTags({
-                ScimLinkConflict: () =>
-                  Effect.fail(ScimApi.conflict("externalId is already provisioned")),
-                ScimRecordNotFound: () => Effect.fail(ScimApi.notFound()),
-              }),
-            );
-          const team = yield* renameGroup(connection, owned.team, displayName);
-          yield* replaceProvisioned(connection, id, memberIds);
-          yield* groupChanged(connection, id, "updated");
-          return yield* groupResource(connection, { link, team });
+          const changes = yield* groupReplacement(input);
+          return yield* groupResource(
+            connection,
+            yield* applyGroupChanges("replaceGroup", connection, owned, changes),
+          );
         },
       );
-
-      /** Member ids named by a PATCH operation's `value` (`[{ value }]`, `{ value }`) or by a `members[value eq "id"]` path. */
-      const memberIdsOf = (operation: {
-        readonly path?: string | undefined;
-        readonly value?: unknown;
-      }): ReadonlyArray<string> => {
-        const fromPath = /members\[\s*value\s+eq\s+"([^"]+)"\s*\]/i.exec(operation.path ?? "")?.[1];
-        if (fromPath !== undefined) return [fromPath];
-        const values = Array.isArray(operation.value) ? operation.value : [operation.value];
-        return values.flatMap((entry) =>
-          isRecord(entry) && typeof entry["value"] === "string" ? [entry["value"]] : [],
-        );
-      };
 
       const patchGroup: ScimShape["patchGroup"] = Effect.fnUntraced(
         function* (connection, id, patch) {
           const owned = yield* ownedGroup(connection, id);
-          let team = owned.team;
-          let link = owned.link;
-          for (const operation of patch.Operations) {
-            const op = operation.op.trim().toLowerCase();
-            if (op !== "add" && op !== "replace" && op !== "remove") {
-              return yield* ScimApi.badRequest(
-                `Unknown patch op "${operation.op}"`,
-                "invalidSyntax",
-              );
-            }
-            const path = (operation.path ?? "").trim();
-            const attribute = path.toLowerCase();
-            if (
-              attribute === "displayname" ||
-              (path === "" && isRecord(operation.value) && "displayName" in operation.value)
-            ) {
-              const name = stringOf(
-                isRecord(operation.value) && path === ""
-                  ? operation.value["displayName"]
-                  : operation.value,
-              );
-              if (Option.isNone(name) || op === "remove") {
-                return yield* ScimApi.badRequest("displayName cannot be empty");
-              }
-              team = yield* renameGroup(connection, team, name.value);
-            } else if (attribute === "externalid") {
-              link = yield* records
-                .setExternalId(
-                  connection.id,
-                  "Group",
-                  id,
-                  op === "remove" ? null : Option.getOrNull(stringOf(operation.value)),
-                )
-                .pipe(
-                  Effect.catchTags({
-                    ScimLinkConflict: () =>
-                      Effect.fail(ScimApi.conflict("externalId is already provisioned")),
-                    ScimRecordNotFound: () => Effect.fail(ScimApi.notFound()),
-                  }),
-                );
-            } else if (
-              attribute.startsWith("members") ||
-              (path === "" && isRecord(operation.value) && "members" in operation.value)
-            ) {
-              const target =
-                path === "" && isRecord(operation.value)
-                  ? { path: "members", value: operation.value["members"] }
-                  : { path, value: operation.value };
-              const ids = memberIdsOf(target);
-              if (op === "replace" && !/members\[/i.test(path)) {
-                yield* requireMembers(connection, ids);
-                yield* replaceProvisioned(connection, id, ids);
-              } else if (op === "add") {
-                yield* requireMembers(connection, ids);
-                yield* applyRoster(connection, id, { add: ids, remove: [] });
-              } else if (op === "remove") {
-                // `remove` with no value and a bare `members` path clears the provisioned members.
-                const provisioned = yield* provisionedMembers(connection, id);
-                const toRemove =
-                  ids.length === 0 && !/members\[/i.test(path)
-                    ? provisioned
-                    : ids.filter((userId) => provisioned.includes(userId));
-                yield* applyRoster(connection, id, { add: [], remove: toRemove });
-              }
-            }
-          }
-          yield* groupChanged(connection, id, "updated");
-          return yield* groupResource(connection, { link, team });
+          const changes = yield* interpretGroupPatch(patch);
+          return yield* groupResource(
+            connection,
+            yield* applyGroupChanges("patchGroup", connection, owned, changes),
+          );
         },
       );
 

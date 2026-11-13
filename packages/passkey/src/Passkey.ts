@@ -63,14 +63,14 @@ import * as ChallengeStore from "./ChallengeStore.ts";
 import { hmacSha256 } from "./Hmac.ts";
 import * as PasskeyApi from "./PasskeyApi.ts";
 import * as PasskeyCeremony from "./PasskeyCeremony.ts";
-import { PasskeyConfig, type PasskeyConfigShape } from "./PasskeyConfig.ts";
+import { PasskeyConfigScoped, type PasskeyConfigShape } from "./PasskeyConfig.ts";
 import * as PasskeyCredentials from "./PasskeyCredentials.ts";
 import * as PasskeyUserHandles from "./PasskeyUserHandles.ts";
 
 /** ADR-EA-045: the session lifecycle this module's endpoints declare; named so the inferred handler and layer types can be emitted (TS2883 needs the `SessionLifecycle` namespace in scope). */
 export type PasskeyLifecycle = SessionLifecycle.Mints | SessionLifecycle.Refreshes;
 
-export { PasskeyConfig, config } from "./PasskeyConfig.ts";
+export { PasskeyConfig, PasskeyConfigScoped, config } from "./PasskeyConfig.ts";
 export type { AttestationPolicy, PasskeyConfigShape } from "./PasskeyConfig.ts";
 
 /** BEH-EA-044-style reserved provider id, this plugin's own concern (BEH-EA-004: confined to its own scope). */
@@ -177,14 +177,14 @@ export interface PasskeySignals {
 export interface PasskeyShape {
   readonly registerOptions: (
     userId: Users.UserId,
-    sessionId: string,
+    sessionId: Sessions.SessionId,
   ) => Effect.Effect<
     PasskeyApi.PublicKeyCredentialCreationOptions,
     PasskeyApi.PasskeyReauthRequired | Errors.StoreUnavailable
   >;
   readonly registerOptionsConditional: (
     userId: Users.UserId,
-    sessionId: string,
+    sessionId: Sessions.SessionId,
   ) => Effect.Effect<
     PasskeyApi.PublicKeyCredentialCreationOptions,
     | PasskeyApi.PasskeyConditionalCreateDisabled
@@ -193,7 +193,7 @@ export interface PasskeyShape {
   >;
   readonly registerVerify: (
     userId: Users.UserId,
-    sessionId: string,
+    sessionId: Sessions.SessionId,
     input: PasskeyApi.RegisterVerifyPayload,
   ) => Effect.Effect<
     PasskeyCredentials.PasskeyCredentialRecord,
@@ -215,11 +215,11 @@ export interface PasskeyShape {
    */
   readonly reauthenticateOptions: (
     userId: Users.UserId,
-    sessionId: string,
+    sessionId: Sessions.SessionId,
   ) => Effect.Effect<PasskeyApi.PublicKeyCredentialRequestOptions, Errors.StoreUnavailable>;
   readonly reauthenticateVerify: (
     userId: Users.UserId,
-    sessionId: string,
+    sessionId: Sessions.SessionId,
     input: PasskeyApi.ReauthenticateVerifyPayload,
   ) => Effect.Effect<
     void,
@@ -297,30 +297,20 @@ export const PasskeyHandlers = Layer.mergeAll(
       const passkey = yield* Passkey;
       return handlers.handleAll({
         registerOptions: Effect.fnUntraced(function* () {
-          const { principal } = yield* CurrentUser.current;
-          return yield* passkey.registerOptions(
-            Users.UserId(principal.ref.id),
-            principal.sessionId,
-          );
+          const { userId, sessionId } = yield* CurrentUser.current;
+          return yield* passkey.registerOptions(userId, sessionId);
         }),
         registerOptionsConditional: Effect.fnUntraced(function* () {
-          const { principal } = yield* CurrentUser.current;
-          return yield* passkey.registerOptionsConditional(
-            Users.UserId(principal.ref.id),
-            principal.sessionId,
-          );
+          const { userId, sessionId } = yield* CurrentUser.current;
+          return yield* passkey.registerOptionsConditional(userId, sessionId);
         }),
         registerVerify: Effect.fnUntraced(function* ({
           payload,
         }: {
           payload: PasskeyApi.RegisterVerifyPayload;
         }) {
-          const { principal } = yield* CurrentUser.current;
-          const record = yield* passkey.registerVerify(
-            Users.UserId(principal.ref.id),
-            principal.sessionId,
-            payload,
-          );
+          const { userId, sessionId } = yield* CurrentUser.current;
+          const record = yield* passkey.registerVerify(userId, sessionId, payload);
           return toCredentialDto(record);
         }),
       });
@@ -356,13 +346,13 @@ export const PasskeyHandlers = Layer.mergeAll(
       const passkey = yield* Passkey;
       return handlers.handleAll({
         listCredentials: Effect.fnUntraced(function* () {
-          const { principal } = yield* CurrentUser.current;
-          const records = yield* passkey.listCredentials(Users.UserId(principal.ref.id));
+          const { userId } = yield* CurrentUser.current;
+          const records = yield* passkey.listCredentials(userId);
           return records.map(toCredentialDto);
         }),
         signals: Effect.fnUntraced(function* () {
-          const { principal } = yield* CurrentUser.current;
-          const signals = yield* passkey.signals(Users.UserId(principal.ref.id));
+          const { userId } = yield* CurrentUser.current;
+          const signals = yield* passkey.signals(userId);
           return new PasskeyApi.PasskeySignalsDto(signals);
         }),
         renameCredential: Effect.fnUntraced(function* ({
@@ -372,12 +362,8 @@ export const PasskeyHandlers = Layer.mergeAll(
           params: PasskeyApi.CredentialIdParams;
           payload: PasskeyApi.RenamePayload;
         }) {
-          const { principal } = yield* CurrentUser.current;
-          const record = yield* passkey.renameCredential(
-            Users.UserId(principal.ref.id),
-            params.id,
-            payload.name,
-          );
+          const { userId } = yield* CurrentUser.current;
+          const record = yield* passkey.renameCredential(userId, params.id, payload.name);
           return toCredentialDto(record);
         }),
         removeCredential: Effect.fnUntraced(function* ({
@@ -385,8 +371,8 @@ export const PasskeyHandlers = Layer.mergeAll(
         }: {
           params: PasskeyApi.CredentialIdParams;
         }) {
-          const { principal } = yield* CurrentUser.current;
-          yield* passkey.removeCredential(Users.UserId(principal.ref.id), params.id);
+          const { userId } = yield* CurrentUser.current;
+          yield* passkey.removeCredential(userId, params.id);
         }),
       });
     }),
@@ -415,23 +401,16 @@ export const PasskeyHandlers = Layer.mergeAll(
       const passkey = yield* Passkey;
       return handlers.handleAll({
         reauthenticateOptions: Effect.fnUntraced(function* () {
-          const { principal } = yield* CurrentUser.current;
-          return yield* passkey.reauthenticateOptions(
-            Users.UserId(principal.ref.id),
-            principal.sessionId,
-          );
+          const { userId, sessionId } = yield* CurrentUser.current;
+          return yield* passkey.reauthenticateOptions(userId, sessionId);
         }),
         reauthenticateVerify: Effect.fnUntraced(function* ({
           payload,
         }: {
           payload: PasskeyApi.ReauthenticateVerifyPayload;
         }) {
-          const { principal } = yield* CurrentUser.current;
-          yield* passkey.reauthenticateVerify(
-            Users.UserId(principal.ref.id),
-            principal.sessionId,
-            payload,
-          );
+          const { userId, sessionId } = yield* CurrentUser.current;
+          yield* passkey.reauthenticateVerify(userId, sessionId, payload);
         }),
       });
     }),
@@ -738,7 +717,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
   },
   // ECS-008/BEH-EA-229: the dev defaults (`localhost`, an `http` origin) are the classic thing left in production.
   config: [
-    ConfigDescriptor.make(PasskeyConfig, {
+    ConfigDescriptor.make(PasskeyConfigScoped, {
       sensitive: [],
       audit: (value, environment) => [
         ...(environment.production && value.rpId === "localhost"
@@ -780,8 +759,9 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
       // tenant's `Passkey.config(...)` provided in the calling fiber applies to that request; with
       // none, the build-time value applies exactly as before. The boot validations below and the
       // decoy `enumerationSecret` are boot-scoped by nature and read the built value.
-      const builtConfig = yield* PasskeyConfig;
-      const configNow = Tenant.configInForce(PasskeyConfig, builtConfig);
+      const configNow = yield* Tenant.inForce(PasskeyConfigScoped);
+      // read once at build: the build value (BEH-EA-355 boot fields)
+      const builtConfig = yield* configNow;
       const random = yield* SecureRandom.SecureRandom;
       const mac = yield* Mac.Mac;
       // ADR-EA-038: the gate, the sign-in veto, the MFA divert point and the announcement.
@@ -846,11 +826,11 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
        * live for its owner fails closed the same as a stale one. This maps it to the
        * plugin's own wire error.
        */
-      const requireFreshSession = (userId: Users.UserId, sessionId: string) =>
+      const requireFreshSession = (userId: Users.UserId, sessionId: Sessions.SessionId) =>
         Effect.gen(function* () {
           const config = yield* configNow;
           yield* sessions
-            .requireFresh(userId, Sessions.SessionId(sessionId), config.reauthMaxAgeSeconds)
+            .requireFresh(userId, sessionId, config.reauthMaxAgeSeconds)
             .pipe(
               Effect.catchTag("Sessions/Stale", (stale) =>
                 Effect.fail(
@@ -1229,7 +1209,7 @@ export class Passkey extends AuthPlugin.Service<Passkey, PasskeyShape>()("passke
           // BEH-EA-319: ended since the middleware's verify (revoked, superseded,
           // expired) is "no longer authenticated": 401, not a defect.
           yield* sessions
-            .reauthenticate(userId, Sessions.SessionId(sessionId), amr)
+            .reauthenticate(userId, sessionId, amr)
             .pipe(
               Effect.catchTag("Sessions/NotFound", () => Effect.fail(new Api.Unauthenticated())),
             );

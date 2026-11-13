@@ -2,7 +2,16 @@
 // secret shown once and stored sealed, the SSRF floor and filter validation at registration, rotation,
 // the delivery log and manual redrive, and the per-administrator rate limit.
 import { Api } from "@awthaq/api";
-import { AuthEvents, Auth, AuthPlugin, Erasure, DataExport, RateLimits, Users } from "@awthaq/core";
+import {
+  AuthEvents,
+  Auth,
+  AuthPlugin,
+  CurrentUser,
+  Erasure,
+  DataExport,
+  RateLimits,
+  Users,
+} from "@awthaq/core";
 import { HostResolver, RateLimiter } from "@awthaq/ports";
 import { SealedColumn } from "@awthaq/sql";
 import { Rendezvous } from "@awthaq/test";
@@ -43,10 +52,12 @@ const buildLayer = (
   limiter: Layer.Layer<RateLimiter.RateLimiter> = RateLimiter.layerPermissive,
 ) => deliveryLayer({ config, limiter });
 
-const admin = new Api.UserPrincipal({
-  ref: new Api.PrincipalRef({ type: "user", id: "admin-1" }),
-  sessionId: "admin-session",
-});
+const admin = CurrentUser.of(
+  new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id: "admin-1" }),
+    sessionId: "admin-session",
+  }),
+);
 
 const create = (
   overrides: Partial<{ url: string; eventTags: ReadonlyArray<string>; description: string }> = {},
@@ -384,10 +395,12 @@ describe("rate limits", () => {
       const limited = yield* webhooks.listEndpoints(admin).pipe(Effect.flip);
       assert.strictEqual(limited._tag, "RateLimited");
       // Another administrator has their own budget.
-      const other = new Api.UserPrincipal({
-        ref: new Api.PrincipalRef({ type: "user", id: "admin-2" }),
-        sessionId: "s2",
-      });
+      const other = CurrentUser.of(
+        new Api.UserPrincipal({
+          ref: new Api.PrincipalRef({ type: "user", id: "admin-2" }),
+          sessionId: "s2",
+        }),
+      );
       yield* webhooks.listEndpoints(other);
       // The window rolls.
       yield* TestClock.adjust(Duration.minutes(1));

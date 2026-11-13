@@ -2,7 +2,8 @@
 //
 // BEH-EA-318: the administrator's operations over SAML connections (and BEH-EA-316's role mapping), behind the `saml.admin` group (admin tier). Fail-closed:
 // `SamlConfig.canManageSaml` DENIES BY DEFAULT and is asked first (a denial publishes `auth.admin.actionDenied`
-// `saml.<action>` and reveals nothing about which ids exist), then each administrator is rate limited, then the operation runs
+// `saml.<action>` and reveals nothing about which ids exist; a by-id operation reads the connection first and asks with ITS
+// organization, answering a refused connection like an absent one when the administrator holds the action in general), then each administrator is rate limited, then the operation runs
 // scoped to the ambient tenant: inside a tenant a connection of another organization is answered exactly like one that does not
 // exist (and registering one for another organization like an organization that does not exist); outside any tenant (the
 // platform's operator) every organization is in reach, which is the point of an onboarding tool.
@@ -13,7 +14,7 @@
 // `refreshMetadata`; the certificates it lists REPLACE the trust set (the IdP's metadata is the source of truth for its keys).
 
 import { Api } from "@awthaq/api";
-import { AuthEvents, Tenant, Users } from "@awthaq/core";
+import { AuthEvents, CurrentUser, Tenant } from "@awthaq/core";
 import { makeSubject } from "@qadi/core";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -31,7 +32,7 @@ type Gate = SamlApi.SamlActionDenied | Api.RateLimited | Api.StoreUnavailable;
 
 export interface SamlAdminShape {
   readonly createConnection: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     input: SamlApi.CreateConnectionPayload,
   ) => Effect.Effect<
     SamlApi.ConnectionDto,
@@ -41,15 +42,15 @@ export interface SamlAdminShape {
     | SamlApi.SamlMetadataUnavailable
   >;
   readonly listConnections: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
   ) => Effect.Effect<ReadonlyArray<SamlApi.ConnectionDto>, Gate>;
   readonly getConnection: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     connectionId: string,
   ) => Effect.Effect<SamlApi.ConnectionDto, Gate | SamlApi.SamlConnectionNotFound>;
   readonly updateConnection: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     connectionId: string,
     input: SamlApi.UpdateConnectionPayload,
   ) => Effect.Effect<
@@ -60,12 +61,12 @@ export interface SamlAdminShape {
     | SamlApi.SamlDomainAlreadyRouted
   >;
   readonly deleteConnection: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     connectionId: string,
   ) => Effect.Effect<void, Gate | SamlApi.SamlConnectionNotFound>;
   /** Re-fetches the metadata from the URL the connection was imported from, and replaces the trust set with what it lists. */
   readonly refreshMetadata: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     connectionId: string,
   ) => Effect.Effect<
     SamlApi.ConnectionDto,
@@ -77,7 +78,7 @@ export interface SamlAdminShape {
   >;
   /** Generates a new SP signing key (or imports the one supplied); it signs from now on and the previous one stays published until it expires. */
   readonly rotateSigningKey: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     connectionId: string,
     input: SamlApi.SigningKeyPayload,
   ) => Effect.Effect<
@@ -85,7 +86,7 @@ export interface SamlAdminShape {
     Gate | SamlApi.SamlConnectionNotFound | SamlApi.InvalidSamlConnectionRequest
   >;
   readonly listSigningKeys: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     connectionId: string,
   ) => Effect.Effect<ReadonlyArray<SamlApi.SigningKeyDto>, Gate | SamlApi.SamlConnectionNotFound>;
 }
@@ -129,30 +130,50 @@ export const makeAdmin = (
     const spKeys = yield* SamlSpKeys.SamlSpKeys;
     const fetcher = yield* SamlMetadataFetcher.SamlMetadataFetcher;
     const events = yield* AuthEvents.AuthEvents;
-    const settings = yield* SamlConfig.SamlConfig;
+    const settings = yield* yield* Tenant.inForce(SamlConfig.SamlConfigScoped);
 
-    const authorize = Effect.fnUntraced(function* (
-      caller: Api.UserPrincipal,
+    const allows = (
+      caller: CurrentUser.Caller,
       action: string,
       organizationId: string | undefined,
-    ) {
-      const allowed = yield* settings.canManageSaml({
-        admin: makeSubject({ id: caller.ref.id }),
+    ) =>
+      settings.canManageSaml({
+        admin: makeSubject({ id: caller.userId }),
         action,
         organizationId,
       });
-      if (!allowed) {
-        yield* events.publish({
-          _tag: "auth.admin.actionDenied",
-          adminUserId: Users.UserId(caller.ref.id),
-          action: `saml.${action}`,
-        });
-        return yield* Effect.fail(new SamlApi.SamlActionDenied());
-      }
-      yield* throttle(caller.ref.id, action);
+
+    const publishDenied = (
+      caller: CurrentUser.Caller,
+      action: string,
+      organizationId: string | undefined,
+    ) =>
+      events.publish({
+        _tag: "auth.admin.actionDenied",
+        adminUserId: caller.userId,
+        action: `saml.${action}`,
+        ...(organizationId === undefined ? {} : { organizationId }),
+      });
+
+    const refuse = Effect.fnUntraced(function* (
+      caller: CurrentUser.Caller,
+      action: string,
+      organizationId: string | undefined,
+    ) {
+      yield* publishDenied(caller, action, organizationId);
+      return yield* Effect.fail(new SamlApi.SamlActionDenied());
     });
 
-    const adminId = (caller: Api.UserPrincipal) => Users.UserId(caller.ref.id);
+    const authorize = Effect.fnUntraced(function* (
+      caller: CurrentUser.Caller,
+      action: string,
+      organizationId: string | undefined,
+    ) {
+      if (!(yield* allows(caller, action, organizationId))) {
+        return yield* refuse(caller, action, organizationId);
+      }
+      yield* throttle(caller.userId, action);
+    });
 
     /** Inside a tenant, only that tenant's organization is in reach; outside any tenant, every organization is. */
     const inScope = (organizationId: string) =>
@@ -217,19 +238,43 @@ export const makeAdmin = (
       Effect.fail(new SamlApi.SamlDomainAlreadyRouted({ domain: error.domain }));
     const fromMissing = () => Effect.fail(new SamlApi.SamlConnectionNotFound());
 
-    /** A connection that exists AND is in the ambient tenant's reach: anything else is `SamlConnectionNotFound`. */
-    const existing = Effect.fnUntraced(function* (connectionId: string) {
-      const found = yield* store
-        .get(connectionId)
-        .pipe(
-          Effect.catchTag("SamlConnections/NotFound", () =>
-            Effect.fail(new SamlApi.SamlConnectionNotFound()),
-          ),
-        );
-      if (!(yield* inScope(found.organizationId))) {
-        return yield* Effect.fail(new SamlApi.SamlConnectionNotFound());
+    /** The connection when it exists AND is in the ambient tenant's reach; anything else is none. */
+    const lookup = Effect.fnUntraced(function* (connectionId: string) {
+      const found = yield* store.get(connectionId).pipe(
+        Effect.map(Option.some),
+        Effect.catchTag("SamlConnections/NotFound", () => Effect.succeed(Option.none())),
+      );
+      if (Option.isSome(found) && !(yield* inScope(found.value.organizationId))) {
+        return Option.none<SamlRecords.ConnectionRecord>();
       }
       return found;
+    });
+
+    /**
+     * By-id gate: read first, ask with the connection's organization. A refused or absent target is answered
+     * `SamlConnectionNotFound` to an administrator who holds the action in general, `SamlActionDenied` to one who does not.
+     */
+    const authorizeFound = Effect.fnUntraced(function* (
+      caller: CurrentUser.Caller,
+      action: string,
+      connectionId: string,
+    ) {
+      const found = yield* lookup(connectionId);
+      if (Option.isSome(found)) {
+        const organizationId = found.value.organizationId;
+        if (yield* allows(caller, action, organizationId)) {
+          yield* throttle(caller.userId, action);
+          return found.value;
+        }
+        if (!(yield* allows(caller, action, undefined))) {
+          return yield* refuse(caller, action, organizationId);
+        }
+        yield* publishDenied(caller, action, organizationId);
+      } else if (!(yield* allows(caller, action, undefined))) {
+        return yield* refuse(caller, action, undefined);
+      }
+      yield* throttle(caller.userId, action);
+      return yield* Effect.fail(new SamlApi.SamlConnectionNotFound());
     });
 
     const fetchMetadata = (url: string) =>
@@ -278,7 +323,7 @@ export const makeAdmin = (
           );
         yield* Effect.logInfo("awthaq/saml: connection created", { connectionId: created.id });
         yield* events.emit(SamlEvents.SamlConnectionCreatedEvent, {
-          adminUserId: adminId(caller),
+          adminUserId: caller.userId,
           connectionId: created.id,
           organizationId: created.organizationId,
         });
@@ -297,15 +342,13 @@ export const makeAdmin = (
 
     const getConnection: SamlAdminShape["getConnection"] = Effect.fnUntraced(
       function* (caller, connectionId) {
-        yield* authorize(caller, "getConnection", undefined);
-        return yield* toDto(yield* existing(connectionId));
+        return yield* toDto(yield* authorizeFound(caller, "getConnection", connectionId));
       },
     );
 
     const updateConnection: SamlAdminShape["updateConnection"] = Effect.fnUntraced(
       function* (caller, connectionId, input) {
-        yield* authorize(caller, "updateConnection", undefined);
-        yield* existing(connectionId);
+        yield* authorizeFound(caller, "updateConnection", connectionId);
         const updated = yield* store
           .update(connectionId, {
             name: input.name,
@@ -329,7 +372,7 @@ export const makeAdmin = (
             }),
           );
         yield* events.emit(SamlEvents.SamlConnectionUpdatedEvent, {
-          adminUserId: adminId(caller),
+          adminUserId: caller.userId,
           connectionId,
           organizationId: updated.organizationId,
           // Names only: what an administrator typed never enters the audit trail.
@@ -341,14 +384,13 @@ export const makeAdmin = (
 
     const deleteConnection: SamlAdminShape["deleteConnection"] = Effect.fnUntraced(
       function* (caller, connectionId) {
-        yield* authorize(caller, "deleteConnection", undefined);
-        const found = yield* existing(connectionId);
+        const found = yield* authorizeFound(caller, "deleteConnection", connectionId);
         yield* store
           .remove(connectionId)
           .pipe(Effect.catchTag("SamlConnections/NotFound", fromMissing));
         yield* Effect.logInfo("awthaq/saml: connection deleted", { connectionId });
         yield* events.emit(SamlEvents.SamlConnectionDeletedEvent, {
-          adminUserId: adminId(caller),
+          adminUserId: caller.userId,
           connectionId,
           organizationId: found.organizationId,
         });
@@ -357,8 +399,7 @@ export const makeAdmin = (
 
     const refreshMetadata: SamlAdminShape["refreshMetadata"] = Effect.fnUntraced(
       function* (caller, connectionId) {
-        yield* authorize(caller, "refreshMetadata", undefined);
-        const found = yield* existing(connectionId);
+        const found = yield* authorizeFound(caller, "refreshMetadata", connectionId);
         if (Option.isNone(found.metadataUrl))
           return yield* Effect.fail(new SamlApi.SamlNoMetadataUrl());
         const xml = yield* fetchMetadata(found.metadataUrl.value);
@@ -369,7 +410,7 @@ export const makeAdmin = (
           }),
         );
         yield* events.emit(SamlEvents.SamlConnectionUpdatedEvent, {
-          adminUserId: adminId(caller),
+          adminUserId: caller.userId,
           connectionId,
           organizationId: refreshed.organizationId,
           fields: ["certificates", "ssoUrl", "sloUrl"],
@@ -390,8 +431,7 @@ export const makeAdmin = (
 
     const rotateSigningKey: SamlAdminShape["rotateSigningKey"] = Effect.fnUntraced(
       function* (caller, connectionId, input) {
-        yield* authorize(caller, "rotateSigningKey", undefined);
-        const found = yield* existing(connectionId);
+        const found = yield* authorizeFound(caller, "rotateSigningKey", connectionId);
         if ((input.privateKeyPem === undefined) !== (input.certificatePem === undefined)) {
           return yield* Effect.fail(
             invalid("supply both a private key and its certificate, or neither to generate one"),
@@ -406,7 +446,7 @@ export const makeAdmin = (
               })
         ).pipe(Effect.catchTag("InvalidSigningKey", (error) => Effect.fail(invalid(error.reason))));
         yield* events.emit(SamlEvents.SamlSigningKeyRotatedEvent, {
-          adminUserId: adminId(caller),
+          adminUserId: caller.userId,
           connectionId,
           organizationId: found.organizationId,
         });
@@ -416,8 +456,7 @@ export const makeAdmin = (
 
     const listSigningKeys: SamlAdminShape["listSigningKeys"] = Effect.fnUntraced(
       function* (caller, connectionId) {
-        yield* authorize(caller, "listSigningKeys", undefined);
-        yield* existing(connectionId);
+        yield* authorizeFound(caller, "listSigningKeys", connectionId);
         return (yield* spKeys.list(connectionId)).map(keyDto);
       },
     );

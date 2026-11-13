@@ -73,6 +73,41 @@ describe("Config.layerFile", () => {
     }),
   );
 
+  // BEH-EA-201: the loader asks core which errors are link errors, so declaration-time refusals count.
+  it.effect(
+    "hands a UserFields/InvalidDeclaration raised where a plugin is defined over as a LinkProblem",
+    () =>
+      Effect.gen(function* () {
+        const error = yield* load("user-field-invalid.config.ts").pipe(Effect.flip);
+        assert.strictEqual(error._tag, "LinkProblem");
+        if (error._tag === "LinkProblem") {
+          assert.strictEqual(error.code, "UserFields/InvalidDeclaration");
+          assert.include(error.message, "bad-name");
+        }
+      }),
+  );
+
+  it.effect(
+    "hands a ConflictingDependsOn raised where a plugin is defined over as a LinkProblem",
+    () =>
+      Effect.gen(function* () {
+        const error = yield* load("conflicting-depends-on.config.ts").pipe(Effect.flip);
+        assert.strictEqual(error._tag, "LinkProblem");
+        if (error._tag === "LinkProblem") assert.strictEqual(error.code, "ConflictingDependsOn");
+      }),
+  );
+
+  it.effect(
+    "hands a SealedColumn/InvalidDeclaration raised where a column is declared over as a LinkProblem",
+    () =>
+      Effect.gen(function* () {
+        const error = yield* load("sealed-column-invalid.config.ts").pipe(Effect.flip);
+        assert.strictEqual(error._tag, "LinkProblem");
+        if (error._tag === "LinkProblem")
+          assert.strictEqual(error.code, "SealedColumn/InvalidDeclaration");
+      }),
+  );
+
   it.effect("fails ConfigUnavailable saying what a module has to export", () =>
     Effect.gen(function* () {
       const error = yield* load("empty.config.ts").pipe(Effect.flip);

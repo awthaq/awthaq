@@ -4,7 +4,7 @@
 //
 // Domain-level like `Admin.test.ts`: real in-memory `Users`/`Sessions`/`AuthEvents`.
 import { Api } from "@awthaq/api";
-import { Auth, AuthEvents, Sessions, Users } from "@awthaq/core";
+import { Auth, AuthEvents, CurrentUser, Sessions, Users } from "@awthaq/core";
 import { AuditLogStore } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -33,11 +33,13 @@ const decodeStored = Schema.decodeUnknownSync(
   ),
 );
 
-const asCaller = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: "admin-session",
-  });
+const asCaller = (id: string): CurrentUser.Caller =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: "admin-session",
+    }),
+  );
 
 const seed = Effect.gen(function* () {
   const users = yield* Users.Users;
@@ -104,7 +106,9 @@ describe("Admin user administration (BAM-005)", () => {
         assert.strictEqual(updated.name, "Renamed");
         assert.deepStrictEqual(updated.metadata, Option.some('{"plan":"pro"}'));
         // metadata left out leaves it untouched
-        const renamed = yield* admin.updateUser(caller, targetId, { name: "Again" });
+        const renamed = yield* admin.updateUser(caller, targetId, {
+          name: "Again",
+        });
         assert.deepStrictEqual(renamed.metadata, Option.some('{"plan":"pro"}'));
 
         const failure = yield* admin
@@ -186,7 +190,12 @@ describe("Admin user administration (BAM-005)", () => {
       }).pipe(
         Effect.scoped,
         TestAuth.withoutRequest,
-        Effect.provide(buildLayer({ ...manageAll, canImpersonate: () => Effect.succeed(true) })),
+        Effect.provide(
+          buildLayer({
+            ...manageAll,
+            canImpersonate: () => Effect.succeed(true),
+          }),
+        ),
       ),
   );
 
@@ -248,7 +257,9 @@ describe("Admin ban / unban (BAM-005 remainder, SCP-001)", () => {
         const b = yield* sessions.issue({ userId: targetId });
         const bystander = yield* sessions.issue({ userId: adminId });
 
-        const banned = yield* admin.banUser(caller, targetId, { reason: "  spam  " });
+        const banned = yield* admin.banUser(caller, targetId, {
+          reason: "  spam  ",
+        });
         assert.strictEqual(banned.status, "suspended");
         assert.deepStrictEqual(banned.statusReason, Option.some("spam"));
         // Every session of the target is gone; other users' are not.
@@ -282,7 +293,11 @@ describe("Admin ban / unban (BAM-005 remainder, SCP-001)", () => {
         assert.deepStrictEqual(
           banEvent === undefined || banEvent._tag !== "auth.admin.userBanned"
             ? undefined
-            : { userId: banEvent.userId, reason: banEvent.reason, until: banEvent.until },
+            : {
+                userId: banEvent.userId,
+                reason: banEvent.reason,
+                until: banEvent.until,
+              },
           { userId: targetId, reason: "spam", until: null },
         );
         assert.isTrue(events.some((e) => e._tag === "auth.admin.userUnbanned"));

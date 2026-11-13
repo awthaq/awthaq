@@ -118,6 +118,9 @@ export const SessionConfig: Context.Reference<SessionConfig> = Context.Reference
   },
 );
 
+/** BEH-EA-355: tenant-scoped; read per operation through `Tenant.inForce`. */
+export const SessionConfigScoped = Tenant.perTenant(SessionConfig);
+
 /**
  * BEH-EA-209: the caller's own identity, immutably attached to a session
  * minted on someone else's behalf (e.g. `@awthaq/admin`'s `impersonate`)
@@ -672,8 +675,7 @@ export const layer = Layer.effect(
     const hasher = yield* Digest.Digest;
     // EP-007 (ADR-EA-018 Decision 8): lifetimes are decided per operation: a tenant's `SessionConfig`
     // provided in the calling fiber wins; with none, the build-time value applies.
-    const builtConfig = yield* SessionConfig;
-    const configNow = Tenant.configInForce(SessionConfig, builtConfig);
+    const configNow = yield* Tenant.inForce(SessionConfigScoped);
     const events = yield* AuthEvents.AuthEvents;
     const bridge = yield* LegacySessionBridge.LegacySessionBridge;
 

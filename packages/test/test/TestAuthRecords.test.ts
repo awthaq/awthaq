@@ -14,65 +14,73 @@ const roundTrip = async (app: {
   readonly signIn: (email: string) => Promise<TestAuth.SignedInAgent>;
 }) => {
   const pinner = await app.signIn("pins@example.com");
-  const added = await pinner.request("POST", "/pins", { json: { label: "first" } });
+  const added = await pinner.request("POST", "/pins", {
+    json: { label: "first" },
+  });
   const listed = await pinner.request("GET", "/pins");
   return { added: added.status, listed: await listed.json() };
 };
 
 describe("TestAuth.layer records modes (BEH-EA-T2)", () => {
   it("memory: the plugin's own records bundle serves the request", async () => {
-    const app = TestAuth.app(TestAuth.layer(built));
-    try {
+    await TestAuth.withApp(TestAuth.layer(built), undefined, async (app) => {
       const seen = await roundTrip(app);
       assert.strictEqual(seen.added, 200);
       assert.deepStrictEqual(seen.listed, ["first"]);
       assert.deepStrictEqual(await app.run(Effect.flatMap(PinRecords, (pins) => pins.list)), [
         "first",
       ]);
-    } finally {
-      await app.dispose();
-    }
+    });
   });
 
   it("sql: the same composition over a migrated database, and the row is really in it", async () => {
-    const app = TestAuth.app(
-      TestAuth.layer(built, { records: "sql", suite: "test_auth_records_roundtrip" }),
+    await TestAuth.withApp(
+      TestAuth.layer(built, {
+        records: "sql",
+        suite: "test_auth_records_roundtrip",
+      }),
+      undefined,
+      async (app) => {
+        const seen = await roundTrip(app);
+        assert.strictEqual(seen.added, 200);
+        assert.deepStrictEqual(seen.listed, ["first"]);
+        const rows = await app.run(
+          Effect.flatMap(
+            SqlClient.SqlClient,
+            (sql) => sql<{ readonly label: string }>`SELECT label FROM pins_pin`,
+          ),
+        );
+        assert.deepStrictEqual(
+          rows.map((row) => row.label),
+          ["first"],
+        );
+      },
     );
-    try {
-      const seen = await roundTrip(app);
-      assert.strictEqual(seen.added, 200);
-      assert.deepStrictEqual(seen.listed, ["first"]);
-      const rows = await app.run(
-        Effect.flatMap(
-          SqlClient.SqlClient,
-          (sql) => sql<{ readonly label: string }>`SELECT label FROM pins_pin`,
-        ),
-      );
-      assert.deepStrictEqual(
-        rows.map((row) => row.label),
-        ["first"],
-      );
-    } finally {
-      await app.dispose();
-    }
   });
 
   it("sql: two suites never share rows", async () => {
-    const first = TestAuth.app(
+    await TestAuth.withApp(
       TestAuth.layer(built, { records: "sql", suite: "test_auth_records_a" }),
+      undefined,
+      (first) =>
+        TestAuth.withApp(
+          TestAuth.layer(built, {
+            records: "sql",
+            suite: "test_auth_records_b",
+          }),
+          undefined,
+          async (second) => {
+            await first.run(Effect.flatMap(PinRecords, (pins) => pins.add("only-in-a")));
+            assert.deepStrictEqual(
+              await second.run(Effect.flatMap(PinRecords, (pins) => pins.list)),
+              [],
+            );
+            assert.deepStrictEqual(
+              await first.run(Effect.flatMap(PinRecords, (pins) => pins.list)),
+              ["only-in-a"],
+            );
+          },
+        ),
     );
-    const second = TestAuth.app(
-      TestAuth.layer(built, { records: "sql", suite: "test_auth_records_b" }),
-    );
-    try {
-      await first.run(Effect.flatMap(PinRecords, (pins) => pins.add("only-in-a")));
-      assert.deepStrictEqual(await second.run(Effect.flatMap(PinRecords, (pins) => pins.list)), []);
-      assert.deepStrictEqual(await first.run(Effect.flatMap(PinRecords, (pins) => pins.list)), [
-        "only-in-a",
-      ]);
-    } finally {
-      await first.dispose();
-      await second.dispose();
-    }
   });
 });

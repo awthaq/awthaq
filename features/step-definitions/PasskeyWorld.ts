@@ -192,20 +192,30 @@ export interface AppHandle {
 }
 
 export interface WorldShape {
-  readonly app: Ref.Ref<AppHandle | undefined>;
-  readonly appOptions: Ref.Ref<AppOptions>;
+  readonly app: TestAuth.LazyApp<AppOptions, AppHandle>;
   readonly lastResponse: Ref.Ref<Response | undefined>;
   readonly outcomes: Ref.Ref<Record<string, unknown>>;
 }
 
 export class World extends Context.Service<World, WorldShape>()("features/PasskeyWorld") {}
 
+const buildApp = (merged: AppOptions) =>
+  Effect.gen(function* () {
+    const webAuthnBehavior = Ref.makeUnsafe<MockWebAuthnOverrides>(merged.webAuthn ?? {});
+    const verifyCalls = Ref.makeUnsafe<ReadonlyArray<VerifyRegistrationCall>>([]);
+    const app = yield* TestAuth.serve(buildAppLayer(merged, webAuthnBehavior, verifyCalls), {
+      baseUrl: ORIGIN,
+    });
+    return { app, webAuthnBehavior, verifyCalls };
+  });
+
 export const WorldLive = Layer.effect(
   World,
   Effect.gen(function* () {
     return World.of({
-      app: yield* Ref.make<AppHandle | undefined>(undefined),
-      appOptions: yield* Ref.make<AppOptions>({}),
+      app: yield* TestAuth.lazyApp<AppOptions, AppHandle>({}, buildApp, {
+        name: "PasskeyWorld",
+      }),
       lastResponse: yield* Ref.make<Response | undefined>(undefined),
       outcomes: yield* Ref.make<Record<string, unknown>>({}),
     });
@@ -218,15 +228,9 @@ export const configureApp = Effect.fn("features.passkey.configureApp")(function*
   mode: "merge" | "replace" = "merge",
 ) {
   const world = yield* World;
-  // `replace` starts from a clean composition — for a step that builds several independent apps in one Scenario.
-  const merged = { ...(mode === "merge" ? yield* Ref.get(world.appOptions) : {}), ...options };
-  yield* Ref.set(world.appOptions, merged);
-  const webAuthnBehavior = Ref.makeUnsafe<MockWebAuthnOverrides>(merged.webAuthn ?? {});
-  const verifyCalls = Ref.makeUnsafe<ReadonlyArray<VerifyRegistrationCall>>([]);
-  const app = TestAuth.app(buildAppLayer(merged, webAuthnBehavior, verifyCalls), {
-    baseUrl: ORIGIN,
-  });
-  yield* Ref.set(world.app, { app, webAuthnBehavior, verifyCalls });
+  // `replace` starts from a clean composition (releasing the previous app) — for a step that builds several independent apps in one Scenario.
+  if (mode === "replace") yield* world.app.replace(options);
+  else yield* world.app.configure((current) => ({ ...current, ...options }));
 });
 
 /**
@@ -245,9 +249,7 @@ export const overrideWebAuthnBehavior = Effect.fn("features.passkey.overrideWebA
 
 const appHandle = Effect.fn("features.passkey.appHandle")(function* () {
   const world = yield* World;
-  const found = yield* Ref.get(world.app);
-  if (found === undefined) yield* configureApp({});
-  return (yield* Ref.get(world.app))!;
+  return yield* world.app.get;
 });
 
 /** The session cookie (`name=value`) the requesting agent held after each response, keyed by that response. */

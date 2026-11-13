@@ -11,9 +11,9 @@
 // without `config({ baseUrl })` fails to type-check instead of silently
 // shipping a `http://localhost:3000` redirect_uri.
 
+import { Tenant } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as OAuthProvider from "./OAuthProvider.ts";
 import type { OAuthRetryPolicy } from "./ProviderHttp.ts";
@@ -149,8 +149,16 @@ export class OAuthConfig extends Context.Service<OAuthConfig, OAuthConfigShape>(
   "awthaq/oauth/Config",
 ) {}
 
+/**
+ * Tenant-scoped (BEH-EA-355). Boot: `baseUrl`, `nativeRedirectURLs`, `providers` and `retry` are read once at
+ * build; `httpTimeouts`, `trustedOrigins`, `defaultCallbackURL`, `linking` and `bounce` are read per operation.
+ */
+export const OAuthConfigScoped = Tenant.perTenant(OAuthConfig, {
+  boot: ["baseUrl", "nativeRedirectURLs", "providers", "retry"],
+});
+
 export const config = (input: OAuthConfigInput) =>
-  Layer.succeed(OAuthConfig, {
+  OAuthConfigScoped.layer({
     ...defaults,
     ...input,
     maxIdTokenAge: Option.fromNullOr(input.maxIdTokenAge ?? null),

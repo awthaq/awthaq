@@ -1,8 +1,7 @@
 // Shipping-gap map (.scratch/shipping-gaps), ticket 20: the Password
 // plugin's real wire-level seam, reused from
 // `packages/password/test/AuthHttp.test.ts` (the same `HttpRouter.toWebHandler`
-// + `Mailer.layerMemory`-alike "readable capture" pattern that file already
-// establishes) rather than a new one invented for this suite. Requests go
+// + the app's own `TestMailbox`) rather than a new one invented for this suite. Requests go
 // through the plugin's real HTTP surface. P20a (AH-004/TIR-005/PHS-005): a
 // few *read handles* reach the same running services the handler uses, so a
 // Given can assert absence ("no user exists"), a Then can observe stored
@@ -12,15 +11,10 @@
 import { Accounts, Auth, AuthEvents, Sessions, Users, Verification } from "@awthaq/core";
 import { Mailer, PasswordHasher } from "@awthaq/ports";
 import { mailedToken } from "./MailedToken.ts";
-import {
-  awaitMail,
-  awaitStable,
-  makeCapturingMailer,
-  makeNamedRegistry,
-} from "./shared/Harness.ts";
+import { awaitStable, makeNamedRegistry } from "./shared/Harness.ts";
 import { Admin, AdminAccounts } from "@awthaq/admin";
 import { Password } from "@awthaq/password";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import { parseCookieHeader } from "@awthaq/web/cookies";
 import { agentOver } from "./shared/Csrf.ts";
@@ -32,8 +26,10 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Exit from "effect/Exit";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -85,10 +81,7 @@ const NoBreachHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succeed(
 );
 
 /** A `Mailer` whose `send` never returns (nothing is recorded): the slowest provider there can be. */
-const neverAnsweringMailer = Layer.succeed(
-  Mailer.Mailer,
-  Mailer.Mailer.of({ send: () => Effect.never, sent: Effect.succeed([]) }),
-);
+const neverAnsweringMailer = Layer.mock(Mailer.Mailer)({ send: () => Effect.never });
 
 export interface AppOptions {
   readonly hasher?: Layer.Layer<
@@ -119,7 +112,8 @@ type ReadHandles =
 
 export interface AppHandle {
   readonly handler: (request: Request) => Promise<Response>;
-  readonly sentMail: Effect.Effect<ReadonlyArray<Mailer.MailMessage>>;
+  /** The mailbox the app's `TestAuth` base records into (nothing under `slowMailer`: its `Mailer` never answers). */
+  readonly mailbox: TestMailbox.MailboxShape;
   readonly publishedEvents: Effect.Effect<ReadonlyArray<AuthEvents.PublishedAny>>;
   readonly fault: Ref.Ref<Fault>;
   /** Runs `effect` against the same running services `handler` uses (real clock, like `AdminWorld`'s reads). */
@@ -136,24 +130,33 @@ const builtWithAdminAccounts = Auth.make([
 ]);
 
 /** Held open: the handler's own (lazy) build then finds these layers in the shared memo map. */
-const openApp = <A, E>(app: TestAuth.App<A | ReadHandles, E>) =>
-  Effect.promise(() => app.run(Effect.void)).pipe(
-    Effect.as({
+const openApp = <A, E>(app: TestAuth.App<A | ReadHandles | TestMailbox.Mailbox, E>) =>
+  Effect.promise(async () => {
+    await app.run(Effect.void);
+    return app.context();
+  }).pipe(
+    Effect.map((ctx) => ({
       handler: app.handler,
+      mailbox: Context.get(ctx, TestMailbox.Mailbox),
       inApp: <X, XE>(effect: Effect.Effect<X, XE, ReadHandles>) => app.run(effect),
-    }),
+    })),
   );
 
 /**
- * Mirrors `AuthHttp.test.ts`'s own `capturingMailer` — a capture cell built
- * *outside* the layer graph so a step can read it after the graph is torn
- * down into the handler closure. Events get the identical treatment,
- * subscribing to `AuthEvents`'s real `PubSub` the same way
- * `AuthEvents.test.ts`'s own `seen` `Ref` does.
+ * Mail is read through the app's own `TestMailbox`. Events are captured in a cell built *outside* the layer graph,
+ * subscribing to `AuthEvents`'s real `PubSub` the same way `AuthEvents.test.ts`'s own `seen` `Ref` does.
  */
 const buildApp = Effect.fn("features.password.buildApp")(function* (options: AppOptions) {
-  const { layer: capturedMailer, sent } = makeCapturingMailer();
-  const capturingMailer = options.slowMailer === true ? neverAnsweringMailer : capturedMailer;
+  // The never-answering mailer: releasing waits for the mail drain timeout with requests still in flight, so that
+  // app is released off the scenario's fiber instead of by it (it would time the scenario out).
+  const served = Scope.makeUnsafe();
+  const serve = <A, E>(layer: Layer.Layer<A | TestAuth.AppNeeds, E>) =>
+    options.slowMailer === true
+      ? TestAuth.serve(layer).pipe(Scope.provide(served))
+      : TestAuth.serve(layer);
+  if (options.slowMailer === true) {
+    yield* Effect.addFinalizer(() => Effect.forkDetach(Scope.close(served, Exit.void)));
+  }
 
   const events = yield* Ref.make<ReadonlyArray<AuthEvents.PublishedAny>>([]);
   const fault = yield* Ref.make<Fault>("none");
@@ -177,7 +180,7 @@ const buildApp = Effect.fn("features.password.buildApp")(function* (options: App
     services: Layer.mergeAll(
       Password.config(options.passwordConfig ?? {}),
       options.breachHttpClient ?? NoBreachHttpClient,
-      capturingMailer,
+      ...(options.slowMailer === true ? [neverAnsweringMailer] : []),
       eventsLayer,
     ),
     decorate: Layer.mergeAll(
@@ -193,10 +196,10 @@ const buildApp = Effect.fn("features.password.buildApp")(function* (options: App
   // Built eagerly and held open: the handler's own (lazy) build then finds these layers in the shared memo map, so
   // a read handle used before the first request neither builds a second copy nor tears the first down. Run on the
   // real clock, like the handler's own runtime (a step's fiber may sit under a `TestClock`).
-  const { handler, inApp } =
+  const { handler, inApp, mailbox } =
     options.adminAccounts === true
       ? yield* openApp(
-          TestAuth.app(
+          yield* serve(
             TestAuth.layer(builtWithAdminAccounts, {
               ...common,
               services: Layer.merge(
@@ -208,12 +211,12 @@ const buildApp = Effect.fn("features.password.buildApp")(function* (options: App
         )
       : options.storage === "sqlite"
         ? yield* openApp(
-            TestAuth.app(
+            yield* serve(
               TestAuth.layer(built, { ...common, records: "sql", suite: "features_PasswordWorld" }),
             ),
           )
-        : yield* openApp(TestAuth.app(TestAuth.layer(built, common)));
-  return { handler, sentMail: sent, publishedEvents: Ref.get(events), fault, inApp };
+        : yield* openApp(yield* serve(TestAuth.layer(built, common)));
+  return { handler, mailbox, publishedEvents: Ref.get(events), fault, inApp };
 });
 
 export interface ActorState {
@@ -226,9 +229,8 @@ export interface ActorState {
 export type BreachFailure = "timeout" | "5xx" | "malformed";
 
 export interface WorldShape {
-  readonly app: Ref.Ref<AppHandle | undefined>;
-  /** The options the current `app` was built from — `configureApp` merges onto this rather than replacing it wholesale, so two Given steps (e.g. "breachCheck: onUnavailable reject" then, separately, "the provider is unreachable") compose instead of the second silently discarding the first's choice. */
-  readonly options: Ref.Ref<AppOptions>;
+  /** `configureApp` merges onto the cell's options rather than replacing them wholesale, so two Given steps (e.g. "breachCheck: onUnavailable reject" then, separately, "the provider is unreachable") compose instead of the second silently discarding the first's choice. */
+  readonly app: TestAuth.LazyApp<AppOptions, AppHandle>;
   /** BDD-008/AH-008: actors and sessions are registered under the exact name the Gherkin uses; `actors.current` is what an implicit-subject step resolves to. */
   readonly actors: ReturnType<typeof makeNamedRegistry<ActorState>>;
   /** Session name ("s1", "s-attacker") to the bare `name=value` cookie that session was issued under. */
@@ -246,9 +248,11 @@ export class World extends Context.Service<World, WorldShape>()("features/Passwo
 export const WorldLive = Layer.effect(
   World,
   Effect.gen(function* () {
+    const app = yield* TestAuth.lazyApp<AppOptions, AppHandle>({}, buildApp, {
+      name: "PasswordWorld",
+    });
     return World.of({
-      app: yield* Ref.make<AppHandle | undefined>(undefined),
-      options: yield* Ref.make<AppOptions>({}),
+      app,
       actors: makeNamedRegistry<ActorState>("actor"),
       sessions: makeNamedRegistry<string>("session"),
       responses: yield* Ref.make<Record<string, Response>>({}),
@@ -259,29 +263,30 @@ export const WorldLive = Layer.effect(
   }),
 );
 
-/** Rebuilds this Scenario's app from `options` merged onto whatever was configured so far — no requests may have been made against the old one yet, since state does not carry over. */
+const mergeOptions = (previous: AppOptions, options: AppOptions): AppOptions => ({
+  ...previous,
+  ...options,
+  passwordConfig: { ...previous.passwordConfig, ...options.passwordConfig },
+});
+
+/** Merges `options` onto what was configured so far — before the first request, since state does not carry over a build. */
 export const configureApp = Effect.fn("features.password.configureApp")(function* (
   options: AppOptions,
 ) {
   const world = yield* World;
-  const previous = yield* Ref.get(world.options);
-  const merged: AppOptions = {
-    ...previous,
-    ...options,
-    passwordConfig: { ...previous.passwordConfig, ...options.passwordConfig },
-  };
-  yield* Ref.set(world.options, merged);
-  yield* Ref.set(world.app, yield* buildApp(merged));
+  yield* world.app.configure((previous) => mergeOptions(previous, options));
+});
+
+/** R3: the explicit rebuild, for a scenario that reconfigures after it has used the app (the old app is released). */
+export const reconfigureApp = Effect.fn("features.password.reconfigureApp")(function* (
+  options: AppOptions,
+) {
+  const world = yield* World;
+  yield* world.app.replace(mergeOptions(yield* world.app.options, options));
 });
 
 const appHandle = Effect.fn("features.password.appHandle")(function* () {
-  const world = yield* World;
-  const existing = yield* Ref.get(world.app);
-  if (existing !== undefined) return existing;
-  yield* configureApp({});
-  const built = yield* Ref.get(world.app);
-  if (built === undefined) return yield* Effect.die(new Error("configureApp did not build an app"));
-  return built;
+  return yield* (yield* World).app.get;
 });
 
 /** The `name=value` pair of the session cookie `agent` holds, as a browser sends it back; `undefined` when none. */
@@ -389,8 +394,20 @@ export const getNote = Effect.fn("features.password.getNote")(function* (key: st
   return found;
 });
 
-export const sentMail = Effect.fn("features.password.sentMail")(function* () {
-  return yield* (yield* appHandle()).sentMail;
+export const mailbox = Effect.fn("features.password.mailbox")(function* () {
+  return (yield* appHandle()).mailbox;
+});
+
+/** The newest `template` mail (to `to`, when given), once the detached dispatch fiber has sent it. */
+export const latestMail = Effect.fn("features.password.latestMail")(function* (
+  template: string,
+  to?: string,
+) {
+  const box = yield* mailbox();
+  const match = (message: Mailer.MailMessage) =>
+    message.template === template && (to === undefined || message.to === to);
+  const recorded = (yield* box.mail.messages).filter(match).length;
+  return yield* box.mail.waitFor(match, { nth: Math.max(recorded, 1) });
 });
 
 export const publishedEvents = Effect.fn("features.password.publishedEvents")(function* () {
@@ -404,7 +421,7 @@ export const publishedEvents = Effect.fn("features.password.publishedEvents")(fu
  */
 export const settle = Effect.gen(function* () {
   const app = yield* appHandle();
-  yield* awaitStable(Effect.zip(app.sentMail, app.publishedEvents));
+  yield* awaitStable(Effect.zip(app.mailbox.mail.messages, app.publishedEvents));
 });
 
 /**
@@ -417,11 +434,7 @@ export const settle = Effect.gen(function* () {
 export const verifyLatestSignUp = Effect.fn("features.password.verifyLatestSignUp")(function* (
   email?: string,
 ) {
-  const verifyMail = (message: Mailer.MailMessage) =>
-    message.template === "verify-email" && (email === undefined || message.to === email);
-  yield* awaitMail(sentMail(), verifyMail);
-  const mail = (yield* sentMail()).findLast(verifyMail);
-  if (mail === undefined) throw new Error("expected a verify-email mail");
+  const mail = yield* latestMail("verify-email", email);
   const token = mailedToken(mail);
   const response = yield* request("/verify-email", { token });
   if (response.status !== 204) {
@@ -603,8 +616,7 @@ export const emailIsVerified = Effect.fn("features.password.emailIsVerified")(fu
 
 /** TIR-005/AH-007: the options the current app was built from. */
 export const currentOptions = Effect.fn("features.password.currentOptions")(function* () {
-  const { options } = yield* World;
-  return yield* Ref.get(options);
+  return yield* (yield* World).app.options;
 });
 
 /**

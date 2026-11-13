@@ -28,9 +28,11 @@ const filesMatching = (pattern: RegExp) =>
     .sort();
 
 describe("AdminGate boundary (plan 13)", () => {
-  it("the configuration reference's key and configInForce appear only in the gate", () => {
+  it("the configuration reference's key and its Tenant.inForce read appear only in the gate", () => {
     assert.deepStrictEqual(filesMatching(/"awthaq\/admin\/Config"/), ["internal/AdminGate.ts"]);
-    assert.deepStrictEqual(filesMatching(/\bconfigInForce\b/), ["internal/AdminGate.ts"]);
+    assert.deepStrictEqual(filesMatching(/Tenant\.inForce\(AdminConfigScoped/), [
+      "internal/AdminGate.ts",
+    ]);
   });
 
   it("the gate is the only denier", () => {

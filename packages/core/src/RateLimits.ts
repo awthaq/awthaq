@@ -272,6 +272,9 @@ export const RateLimitOverrides = Context.Reference<OverridesShape>(
   { defaultValue: () => ({}) },
 );
 
+/** BEH-EA-355: tenant-scoped; read per operation through `Tenant.inForce`. */
+export const RateLimitOverridesScoped = Tenant.perTenant(RateLimitOverrides);
+
 export interface OverrideEntry {
   readonly plugin: string;
   readonly tuning: { readonly [rule: string]: Partial<Sizing> | undefined };
@@ -285,8 +288,7 @@ export const tune = <Limits>(owner: Owner<Limits>, tuning: RateLimitModel.Tuning
 
 /** One Layer for all of an application's overrides (two `Layer.succeed`s of one Reference would shadow, not merge). */
 export const overrides = (...entries: ReadonlyArray<OverrideEntry>) =>
-  Layer.succeed(
-    RateLimitOverrides,
+  RateLimitOverridesScoped.layer(
     entries.reduce<OverridesShape>(
       (acc, entry) => ({ ...acc, [entry.plugin]: { ...acc[entry.plugin], ...entry.tuning } }),
       {},
@@ -375,8 +377,9 @@ export const budget = <Limits extends Table>(
       );
     const tuneNow: Effect.Effect<RateLimitModel.ErasedTuning> =
       options.tune ?? Effect.succeed(noTuning);
-    const builtOverrides = yield* RateLimitOverrides;
-    const overridesNow = Tenant.configInForce(RateLimitOverrides, builtOverrides);
+    // The build value (line below) tunes the registry at open; per-operation reads go through the accessor.
+    const builtOverrides = yield* Effect.service(RateLimitOverridesScoped.reference);
+    const overridesNow = yield* Tenant.inForce(RateLimitOverridesScoped);
 
     const resolve = (
       name: string,

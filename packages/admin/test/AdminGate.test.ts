@@ -6,11 +6,21 @@
 // The operation table below is this test's OWN copy of the action table, deliberately not imported
 // from `internal/AdminGate.ts`, so a wrong row in the gate is caught.
 import { Api } from "@awthaq/api";
-import { Accounts, AuditChain, Auth, AuthEvents, Sessions, Tenant, Users } from "@awthaq/core";
+import {
+  Accounts,
+  AuditChain,
+  Auth,
+  AuthEvents,
+  CurrentUser,
+  EmailChange,
+  Sessions,
+  Tenant,
+  Users,
+} from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
 import { Password } from "@awthaq/password";
-import { Mailer, PasswordHasher } from "@awthaq/ports";
-import { TestAuth } from "@awthaq/test";
+import { PasswordHasher } from "@awthaq/ports";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -44,7 +54,9 @@ const buildLayer = (build: Partial<Admin.AdminConfigShape>) =>
         Admin.config(build),
         TestAuth.httpClient.noBreach,
         Organization.config({}),
-        AuditChain.config({ key: Redacted.make("admin-gate-chain-key-0123456789abcdef") }),
+        AuditChain.config({
+          key: Redacted.make("admin-gate-chain-key-0123456789abcdef"),
+        }),
       ),
     },
   );
@@ -93,11 +105,13 @@ const only = (predicate: Predicate): Partial<Admin.AdminConfigShape> => ({
   canManageEpisode: predicate === "canManageEpisode" ? allow : deny,
 });
 
-const asCaller = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: `${id}-session`,
-  });
+const asCaller = (id: string): CurrentUser.Caller =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: `${id}-session`,
+    }),
+  );
 
 const adminCaller = asCaller("admin-1");
 
@@ -127,14 +141,24 @@ interface Row {
 }
 
 const outcome = <A, E extends { readonly _tag: string }>(effect: Effect.Effect<A, E>) =>
-  Effect.match(effect, { onSuccess: () => "ok", onFailure: (error) => error._tag });
+  Effect.match(effect, {
+    onSuccess: () => "ok",
+    onFailure: (error) => error._tag,
+  });
 
 const userRow = (
   name: string,
   predicate: Predicate,
   run: (env: Env) => Effect.Effect<string, unknown>,
   passed = "AdminTargetNotFound",
-): Row => ({ name, predicate, kind: "user", denial: "AdminActionDenied", passed, run });
+): Row => ({
+  name,
+  predicate,
+  kind: "user",
+  denial: "AdminActionDenied",
+  passed,
+  run,
+});
 
 const rows: ReadonlyArray<Row> = [
   {
@@ -178,7 +202,11 @@ const rows: ReadonlyArray<Row> = [
     outcome(accounts.deleteUser(adminCaller, ghostUser)),
   ),
   userRow("setUserEmail", "canManageCredentials", ({ accounts, ghostUser }) =>
-    outcome(accounts.setUserEmail(adminCaller, ghostUser, { email: "new@example.com" })),
+    outcome(
+      accounts.setUserEmail(adminCaller, ghostUser, {
+        email: "new@example.com",
+      }),
+    ),
   ),
   userRow("setUserPassword", "canManageCredentials", ({ accounts, ghostUser }) =>
     outcome(
@@ -228,7 +256,11 @@ const rows: ReadonlyArray<Row> = [
     run: ({ admin, ghostUser }) =>
       outcome(
         admin
-          .impersonate({ caller: adminCaller, targetUserId: ghostUser, reason: "x" })
+          .impersonate({
+            caller: adminCaller,
+            targetUserId: ghostUser,
+            reason: "x",
+          })
           .pipe(TestAuth.withoutRequest),
       ),
   },
@@ -307,7 +339,14 @@ const scenario = (options: {
         () => sessionId,
       );
     });
-    const env: Env = { admin, accounts, tenants, ghostUser, ghostOrg: "ghost-org", seedEpisode };
+    const env: Env = {
+      admin,
+      accounts,
+      tenants,
+      ghostUser,
+      ghostOrg: "ghost-org",
+      seedEpisode,
+    };
     // `list` needs a row to show, in the scenario's own tenant.
     yield* options.tenant === undefined
       ? seedEpisode
@@ -416,7 +455,11 @@ describe("the admin gate (plan 13)", () => {
           name: "Target",
         });
         const failure = yield* admin
-          .impersonate({ caller: adminCaller, targetUserId: target.id, reason: "x" })
+          .impersonate({
+            caller: adminCaller,
+            targetUserId: target.id,
+            reason: "x",
+          })
           .pipe(Effect.flip);
         assert.strictEqual(failure._tag, "AdminImpersonationDenied");
         assert.strictEqual((yield* sessions.list(target.id)).length, 0);
@@ -514,7 +557,10 @@ describe("the admin gate (plan 13)", () => {
     () =>
       Effect.gen(function* () {
         for (const predicate of predicates) {
-          const opened = yield* scenario({ build: {}, request: only(predicate) });
+          const opened = yield* scenario({
+            build: {},
+            request: only(predicate),
+          });
           const other = yield* scenario({ build: {}, request: {} });
           for (const row of rows) {
             assert.strictEqual(
@@ -538,7 +584,10 @@ describe("the admin gate (plan 13)", () => {
             ...allowAll,
             ...Object.fromEntries([[predicate, deny]]),
           };
-          const tightened = yield* scenario({ build: allowAll, request: keeps });
+          const tightened = yield* scenario({
+            build: allowAll,
+            request: keeps,
+          });
           for (const row of rows) {
             assert.strictEqual(
               tightened.outcomes[row.name],
@@ -581,7 +630,11 @@ describe("the admin gate (plan 13)", () => {
           return found;
         };
         const run = (name: string) =>
-          scenario({ build: capturing(calls), tenant: "org-a", only: (r) => r.name === name });
+          scenario({
+            build: capturing(calls),
+            tenant: "org-a",
+            only: (r) => r.name === name,
+          });
         for (const name of rows.map((r) => r.name)) {
           calls.length = 0;
           yield* run(name);
@@ -698,7 +751,7 @@ describe("the admin gate (plan 13)", () => {
         const users = yield* Users.Users;
         const accounts = yield* AdminAccounts.AdminAccounts;
         const admin = yield* Admin.Admin;
-        const mailer = yield* Mailer.Mailer;
+        const box = yield* TestMailbox.Mailbox;
         const target = yield* users.create({
           identity: { _tag: "Email", email: "target@example.com" },
           name: "Target",
@@ -707,11 +760,17 @@ describe("the admin gate (plan 13)", () => {
           canImpersonate: allow,
           canManageCredentials: allow,
           maxDuration: Duration.minutes(5),
-          links: { changeEmail: (token) => `https://ops.example/confirm?token=${token}` },
+          links: {
+            changeEmail: (token) => `https://ops.example/confirm?token=${token}`,
+          },
         });
         // maxDuration: the impersonation session expires at the tenant's ceiling.
         const issued = yield* admin
-          .impersonate({ caller: adminCaller, targetUserId: target.id, reason: "x" })
+          .impersonate({
+            caller: adminCaller,
+            targetUserId: target.id,
+            reason: "x",
+          })
           .pipe(TestAuth.withoutRequest, Effect.provide(ops));
         const now = yield* DateTime.now;
         assert.strictEqual(
@@ -722,8 +781,10 @@ describe("the admin gate (plan 13)", () => {
         yield* accounts
           .setUserEmail(adminCaller, target.id, { email: "new@example.com" })
           .pipe(TestAuth.withoutRequest, Effect.provide(ops));
-        const mail = (yield* mailer.sent)[0];
-        assert.match(String(mail?.data?.["url"]), /^https:\/\/ops\.example\/confirm\?token=/);
+        const mail = yield* box.mail.waitFor({
+          template: EmailChange.TEMPLATE,
+        });
+        assert.match(String(mail.data?.["url"]), /^https:\/\/ops\.example\/confirm\?token=/);
       }).pipe(Effect.scoped, TestAuth.withoutRequest, Effect.provide(buildLayer({}))),
   );
 
@@ -841,13 +902,34 @@ describe("ADR-EA-018 D8: a LayerMap of per-tenant Admin.config governs all three
 // ---- predicate capture (test "each predicate sees ...") --------------------------------------------
 
 type Call =
-  | { readonly predicate: "canManageUsers"; readonly input: Admin.UserAdminGateInput }
-  | { readonly predicate: "canBanUsers"; readonly input: Admin.UserAdminGateInput }
-  | { readonly predicate: "canDeleteUsers"; readonly input: Admin.UserAdminGateInput }
-  | { readonly predicate: "canManageCredentials"; readonly input: Admin.UserAdminGateInput }
-  | { readonly predicate: "canAdministerTenants"; readonly input: Admin.TenantAdminGateInput }
-  | { readonly predicate: "canImpersonate"; readonly input: Admin.ImpersonationGateInput }
-  | { readonly predicate: "canManageEpisode"; readonly input: Admin.EpisodeGateInput };
+  | {
+      readonly predicate: "canManageUsers";
+      readonly input: Admin.UserAdminGateInput;
+    }
+  | {
+      readonly predicate: "canBanUsers";
+      readonly input: Admin.UserAdminGateInput;
+    }
+  | {
+      readonly predicate: "canDeleteUsers";
+      readonly input: Admin.UserAdminGateInput;
+    }
+  | {
+      readonly predicate: "canManageCredentials";
+      readonly input: Admin.UserAdminGateInput;
+    }
+  | {
+      readonly predicate: "canAdministerTenants";
+      readonly input: Admin.TenantAdminGateInput;
+    }
+  | {
+      readonly predicate: "canImpersonate";
+      readonly input: Admin.ImpersonationGateInput;
+    }
+  | {
+      readonly predicate: "canManageEpisode";
+      readonly input: Admin.EpisodeGateInput;
+    };
 
 /** Every predicate records what it was asked and then allows. */
 const capturing = (calls: Array<Call>): Partial<Admin.AdminConfigShape> => ({

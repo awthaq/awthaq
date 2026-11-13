@@ -3,7 +3,7 @@
 // only run inside the request state `HttpEffect.toHandled` installs), with `AuthHttp.sessionLifecycle` wired by
 // hand. Each endpoint's handler is chosen by the test through a `Ref`, so one server covers every case.
 import { Api, SessionContract, SessionLifecycle } from "@awthaq/api";
-import { Sessions, Users } from "@awthaq/core";
+import { SessionCookie as CoreSessionCookie, Sessions, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -51,8 +51,7 @@ type Behaviour =
   | "nothing"
   | "refuse"
   | "deliverBearer"
-  | "deliverExchanged"
-  | "redirect";
+  | "deliverExchanged";
 
 /** A verify-time rotation registers its `set-auth-token` before the handler; this stands in for it. */
 const rotatedAtVerify = HttpEffect.appendPreResponseHandler((_request, response) =>
@@ -85,6 +84,10 @@ const LifecycleApi = HttpApi.make("auth").add(
 );
 
 let handlerRuns = 0;
+
+const LANDED = "http://localhost/landed";
+const ESCAPED = `http://localhost/landed?a=1&b="2"<x>`;
+let landing: "default" | "noBounce" | "decline" | "escaped" = "default";
 
 const Handlers = HttpApiBuilder.group(LifecycleApi, "g", (handlers) =>
   handlers
@@ -126,9 +129,18 @@ const Handlers = HttpApiBuilder.group(LifecycleApi, "g", (handlers) =>
         return yield* SessionDelivery.respond(Effect.succeed(issued));
       }),
     )
-    .handleRaw("callback", () =>
-      SessionDelivery.redirect(HttpServerResponse.redirect("http://localhost/landed"), issued),
-    )
+    .handleRaw("callback", () => {
+      switch (landing) {
+        case "noBounce":
+          return SessionDelivery.land(LANDED, issued, { bounce: false });
+        case "decline":
+          return SessionDelivery.land(LANDED, undefined);
+        case "escaped":
+          return SessionDelivery.land(ESCAPED, issued);
+        default:
+          return SessionDelivery.land(LANDED, issued);
+      }
+    })
     .handle("end", () =>
       Effect.gen(function* () {
         yield* rotatedAtVerify;
@@ -144,6 +156,16 @@ const { handler } = HttpRouter.toWebHandler(
   HttpApiBuilder.layer(LifecycleApi).pipe(
     Layer.provide(Handlers),
     Layer.provide(AuthHttp.sessionLifecycle),
+    Layer.provide(HttpServer.layerServices),
+  ),
+  { disableLogger: true },
+);
+
+const { handler: laxHandler } = HttpRouter.toWebHandler(
+  HttpApiBuilder.layer(LifecycleApi).pipe(
+    Layer.provide(Handlers),
+    Layer.provide(AuthHttp.sessionLifecycle),
+    Layer.provide(CoreSessionCookie.config({ mode: CoreSessionCookie.HostLax })),
     Layer.provide(HttpServer.layerServices),
   ),
   { disableLogger: true },
@@ -314,15 +336,63 @@ describe("SessionDelivery over the grants (ADR-EA-045, MNA-001)", () => {
       }),
   );
 
-  it.effect("redirect puts the session cookie on the navigation response", () =>
+  const landWith = (mode: typeof landing, send: typeof handler = handler) =>
+    Effect.promise(() => {
+      landing = mode;
+      return send(new Request("http://localhost/callback", { method: "POST" }));
+    });
+  const sessionCookie = (response: Response) =>
+    setCookieNamed(response, Sessions.SESSION_COOKIE_NAME);
+
+  it.effect(
+    "land under a Strict cookie answers the same-site interstitial with the session cookie",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* landWith("default");
+        assert.strictEqual(response.status, 200);
+        assert.include(response.headers.get("content-type") ?? "", "text/html");
+        assert.strictEqual(response.headers.get("cache-control"), "no-store");
+        assert.isNull(response.headers.get("location"));
+        assert.include(sessionCookie(response), `${Sessions.SESSION_COOKIE_NAME}=${TOKEN}`);
+        assert.include(yield* Effect.promise(() => response.text()), `url=${LANDED}`);
+      }),
+  );
+
+  it.effect("land with bounce: false keeps the 302 under a Strict cookie", () =>
     Effect.gen(function* () {
-      const response = yield* post("/callback");
+      const response = yield* landWith("noBounce");
       assert.strictEqual(response.status, 302);
-      assert.strictEqual(response.headers.get("location"), "http://localhost/landed");
-      assert.include(
-        setCookieNamed(response, Sessions.SESSION_COOKIE_NAME),
-        `${Sessions.SESSION_COOKIE_NAME}=${TOKEN}`,
+      assert.strictEqual(response.headers.get("location"), LANDED);
+      assert.include(sessionCookie(response), `${Sessions.SESSION_COOKIE_NAME}=${TOKEN}`);
+    }),
+  );
+
+  it.effect("land under a HostLax cookie is a 302 with the session cookie", () =>
+    Effect.gen(function* () {
+      const response = yield* landWith("default", laxHandler);
+      assert.strictEqual(response.status, 302);
+      assert.strictEqual(response.headers.get("location"), LANDED);
+      assert.include(sessionCookie(response), `${Sessions.SESSION_COOKIE_NAME}=${TOKEN}`);
+    }),
+  );
+
+  it.effect(
+    "land with nothing minted declines: no session cookie, and the marker does not die",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* landWith("decline");
+        assert.notStrictEqual(response.status, 500);
+        assert.notInclude(response.headers.get("set-cookie") ?? "", Sessions.SESSION_COOKIE_NAME);
+      }),
+  );
+
+  it.effect("land HTML-escapes the location in the interstitial", () =>
+    Effect.gen(function* () {
+      const body = yield* landWith("escaped").pipe(
+        Effect.flatMap((response) => Effect.promise(() => response.text())),
       );
+      assert.include(body, "a=1&amp;b=&quot;2&quot;&lt;x&gt;");
+      assert.notInclude(body, "<x>");
     }),
   );
 });

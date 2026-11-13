@@ -117,7 +117,12 @@ export const SamlGroup = HttpApiGroup.make("saml")
   .add(
     HttpApiEndpoint.post("acs", "/auth/saml/acs", {
       payload: AcsPayload,
-      success: HttpApiSchema.Empty(302),
+      // BEH-EA-353: a 302 to the landing URL, or, while the session cookie is SameSite=Strict, a 200 same-site
+      // interstitial that meta-refreshes there.
+      success: [
+        HttpApiSchema.Empty(302),
+        Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/html" })),
+      ],
       error: [
         SamlAssertionRejected,
         // SCP-001: `Users.assertCanSignIn` refused a suspended user.

@@ -3,12 +3,11 @@
 // the real `MagicLink` and `EmailOtp` plugins, and, so the MFA divert can be proven end to end, the real
 // `@awthaq/two-factor` plugin with both gates.
 import { Auth, Errors, Sessions } from "@awthaq/core";
-import { Mailer, RateLimiter } from "@awthaq/ports";
+import { RateLimiter } from "@awthaq/ports";
 import { SecondFactor, TwoFactor } from "@awthaq/two-factor";
 import { TestAuth } from "@awthaq/test";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as EmailOtp from "../../src/EmailOtp.ts";
 import * as MagicLink from "../../src/MagicLink.ts";
@@ -59,37 +58,3 @@ export const buildLayer = (options?: {
       ? {}
       : { decorate: sessionsWithOutage(options.failSessionIssue) }),
   });
-
-/** Lets the fibers the plugins fork (mail dispatch) run before a test reads their result. */
-export const letForkedFibersRun = Effect.gen(function* () {
-  for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
-});
-
-/**
- * Waits, boundedly, until at least `count` mails were captured. The dispatch fiber awaits real async work (the
- * token digest), so a fixed number of `yieldNow`s is a race that a loaded machine loses; this polls the captured
- * mail itself, on the real clock (the tests run under `TestClock`), and fails the test at the deadline.
- */
-export const awaitMails = (
-  sent: Effect.Effect<ReadonlyArray<Mailer.MailMessage>>,
-  count: number,
-  timeoutMs = 5000,
-) =>
-  Effect.gen(function* () {
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      yield* letForkedFibersRun;
-      const mails = yield* sent;
-      if (mails.length >= count) return mails;
-      if (Date.now() >= deadline) {
-        return yield* Effect.die(new Error(`expected ${count} mail(s), captured ${mails.length}`));
-      }
-      yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 2)));
-    }
-  });
-
-/** A mailed value, whether the adapter-facing value is a plain string or `Redacted` (EOTS-010). */
-export const secretOf = (mail: Mailer.MailMessage | undefined, field: string): string => {
-  const value = mail?.data?.[field];
-  return Redacted.isRedacted(value) ? String(Redacted.value(value)) : String(value);
-};

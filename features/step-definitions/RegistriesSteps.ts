@@ -384,7 +384,7 @@ export const registriesSteps = defineSteps<World>(({ Given, When, Then }) => {
     // Runtime shadow with a plugin whose port is cheap to provide: build the layer with the port
     // supplied through `Layer.provide` (not `provideMerge`) and see what the built context holds.
     const context = yield* Effect.scoped(
-      Layer.build(NotifierFixture.layer.pipe(Layer.provide(Mailer.layerMemory))),
+      Layer.build(NotifierFixture.layer.pipe(Layer.provide(Mailer.layerNoop))),
     );
     yield* put(
       gate,

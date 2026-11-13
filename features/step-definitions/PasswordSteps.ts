@@ -18,6 +18,7 @@ import {
   World,
   administratorOver,
   configureApp,
+  reconfigureApp,
   createUserWithoutCredential,
   currentActor,
   currentHasherNeedsRehash,
@@ -29,10 +30,11 @@ import {
   getNote,
   getSessionCookie,
   hashUnderArgon2Params,
+  latestMail,
+  mailbox,
   plantCredentialHash,
   publishedEvents,
   request,
-  sentMail,
   sessionIsLive,
   setActor,
   setFault,
@@ -47,7 +49,7 @@ import {
 } from "./PasswordWorld.ts";
 import type { BreachFailure } from "./PasswordWorld.ts";
 import type { PasswordConfigOptions } from "./PasswordParameterTypes.ts";
-import { cheapArgon2id, cheapScrypt, awaitMail, STRONG_PASSWORD } from "./shared/Harness.ts";
+import { cheapArgon2id, cheapScrypt, STRONG_PASSWORD } from "./shared/Harness.ts";
 
 const NEW_PASSWORD = "a whole new strong password";
 const WRONG_PASSWORD = "not the right password at all";
@@ -114,17 +116,17 @@ const neverRespondingHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.succ
 );
 
 /** CSD-009: arranges the named provider failure on top of whatever `Password.config` is already in force. */
-const arrangeBreachFailure = (failure: BreachFailure) => {
+const arrangeBreachFailure = (failure: BreachFailure, rebuild = configureApp) => {
   switch (failure) {
     case "timeout":
-      return configureApp({
+      return rebuild({
         breachHttpClient: neverRespondingHttpClient,
         passwordConfig: { breachCheckTimeout: Duration.millis(50) },
       });
     case "5xx":
-      return configureApp({ breachHttpClient: serverErrorWithValidBodyHttpClient });
+      return rebuild({ breachHttpClient: serverErrorWithValidBodyHttpClient });
     case "malformed":
-      return configureApp({ breachHttpClient: malformedHttpClient });
+      return rebuild({ breachHttpClient: malformedHttpClient });
   }
 };
 
@@ -155,15 +157,7 @@ export const signInAs = Effect.fn("features.password.signInAs")(function* (
 export const latestResetToken = Effect.fn("features.password.latestResetToken")(function* (
   email: string,
 ) {
-  yield* awaitMail(
-    sentMail(),
-    (message) => message.template === "reset-password" && message.to === email,
-  );
-  const mail = (yield* sentMail()).findLast(
-    (message) => message.template === "reset-password" && message.to === email,
-  );
-  assert.ok(mail !== undefined, `expected a reset-password mail for ${email}`);
-  return mailedToken(mail);
+  return mailedToken(yield* latestMail("reset-password", email));
 });
 
 const responseBodyText = (response: Response) => Effect.promise(() => response.clone().text());
@@ -178,7 +172,8 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
 
   Given("the initial session cannot be issued", function* () {
     // TIR-005: the atomicity claim is only observable over a real transaction.
-    yield* configureApp({ storage: "sqlite" });
+    // The preceding Given has already used the default app, so this is the explicit rebuild.
+    yield* reconfigureApp({ storage: "sqlite" });
     yield* setFault("sessionIssue");
   });
 
@@ -240,12 +235,8 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
   );
 
   Then("the mail is dispatched as a detached, fire-and-forget effect", function* () {
-    yield* awaitMail(sentMail(), (message) => message.template === "verify-email");
-    const messages = yield* sentMail();
-    assert.ok(
-      messages.some((m) => m.template === "verify-email"),
-      "expected a verify-email mail to have been dispatched by the detached fiber",
-    );
+    // The wait is the assertion: the detached fiber sent a verify-email mail.
+    yield* (yield* mailbox()).mail.waitFor({ template: "verify-email" });
   });
 
   // ---- REQ-EA-306: sign-up does not wait on the mail provider, and (conceal) does not tell the two apart ----
@@ -878,15 +869,7 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
   Given("a verification token that has already been consumed", function* () {
     const email = "replay-token@example.com";
     yield* signUpActor("replay", email, STRONG_PASSWORD);
-    yield* awaitMail(
-      sentMail(),
-      (message) => message.template === "verify-email" && message.to === email,
-    );
-    const verifyMail = (yield* sentMail()).findLast(
-      (m) => m.template === "verify-email" && m.to === email,
-    );
-    assert.ok(verifyMail !== undefined, "expected a verify-email mail");
-    const token = mailedToken(verifyMail);
+    const token = mailedToken(yield* latestMail("verify-email", email));
     const firstUse = yield* request("/verify-email", { token });
     assert.equal(firstUse.status, 204, "expected the token's first use to succeed");
     yield* setNote("verificationToken", token);
@@ -995,7 +978,7 @@ export const passwordSteps = defineSteps<World>(({ Given, When, Then }) => {
   When("a user signs up with a password in each case", function* () {
     const { breachFailures } = yield* World;
     for (const failure of yield* Ref.get(breachFailures)) {
-      yield* arrangeBreachFailure(failure);
+      yield* arrangeBreachFailure(failure, reconfigureApp);
       yield* setLastResponse(
         `breach:${failure}`,
         (yield* signUpActor(failure, `breach-${failure}@example.com`, STRONG_PASSWORD)).response,

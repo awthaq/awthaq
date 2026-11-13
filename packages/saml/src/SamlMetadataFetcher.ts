@@ -12,7 +12,7 @@
 // metadata, and the trust it creates is the certificates' FINGERPRINTS, pinned in the connection: importing metadata is trusting
 // the channel it arrived by (TLS from the IdP's own URL), which is exactly why the channel is guarded this hard.
 
-import { HostResolver, OutboundUrl, PinnedHttp } from "@awthaq/ports";
+import { HostResolver, OutboundUrl, PinnedHttp, Tenant } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -42,7 +42,7 @@ export const layerPinned = Layer.effect(
   SamlMetadataFetcher,
   Effect.gen(function* () {
     const resolver = yield* HostResolver.HostResolver;
-    const settings = yield* SamlConfig.SamlConfig;
+    const settings = yield* yield* Tenant.inForce(SamlConfig.SamlConfigScoped);
     return SamlMetadataFetcher.of({
       fetch: (url) =>
         Effect.gen(function* () {

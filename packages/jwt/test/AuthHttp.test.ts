@@ -3,7 +3,7 @@
 // `HttpRouter.toWebHandler`, real HTTP request/response, mirroring every
 // other plugin's own `AuthHttp.test.ts`. `jwks` needs no `Authentication`
 // middleware/session at all — it is public by definition; `token` does,
-// and a signed-in agent (`TestAuth.app(...).signIn`) holds the session
+// and a signed-in agent (`TestAuth.serve(...).signIn`) holds the session
 // cookie that authenticates it.
 import { Auth, Sessions, type Users } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
@@ -37,8 +37,9 @@ const appLayer = (
 
 const ORIGIN = "http://localhost:3000";
 
-const buildHandler = () => {
-  const app = TestAuth.app(appLayer({}, { docs: true }), { baseUrl: ORIGIN });
+const serveHandler = () => TestAuth.serve(appLayer({}, { docs: true }), { baseUrl: ORIGIN });
+
+const handlerOf = (app: Effect.Success<ReturnType<typeof serveHandler>>) => {
   const { handler } = app;
   const withAppContext = app.run;
 
@@ -111,10 +112,17 @@ const buildHandler = () => {
   return { handler, signIn, issueSession, revokeSession, revokeJti, verifyToken };
 };
 
+/** For an `it.effect` test: the test's scope releases the app. */
+const buildHandler = () => Effect.map(serveHandler(), handlerOf);
+
+/** For an async test: the app is released when `use` settles. */
+const withHandler = <T>(use: (handlers: ReturnType<typeof handlerOf>) => Promise<T>) =>
+  TestAuth.withApp(appLayer({}, { docs: true }), { baseUrl: ORIGIN }, (app) => use(handlerOf(app)));
+
 describe("AuthHttp + Jwt (real HTTP)", () => {
   it.effect("GET /jwt/jwks returns the current public key, no private material", () =>
     Effect.gen(function* () {
-      const { handler } = buildHandler();
+      const { handler } = yield* buildHandler();
       const response = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/jwt/jwks`)));
       assert.strictEqual(response.status, 200);
 
@@ -135,79 +143,95 @@ describe("AuthHttp + Jwt (real HTTP)", () => {
     "GET /jwt/jwks carries Cache-Control max-age (JwtConfig.jwksMaxAge, default 10 minutes)",
     () =>
       Effect.gen(function* () {
-        const { handler } = buildHandler();
+        const { handler } = yield* buildHandler();
         const response = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/jwt/jwks`)));
         assert.strictEqual(response.headers.get("cache-control"), "public, max-age=600");
       }),
   );
 
   it("POST /jwt/token requires authentication", async () => {
-    const { handler } = buildHandler();
-    const response = await handler(new Request(`${ORIGIN}/jwt/token`, { method: "POST" }));
-    assert.strictEqual(response.status, 401);
+    await withHandler(async ({ handler }) => {
+      const response = await handler(new Request(`${ORIGIN}/jwt/token`, { method: "POST" }));
+      assert.strictEqual(response.status, 401);
+    });
   });
 
   // AVS-007: minting a credential is an action, so it is POST-only — a GET must not reach it.
   it("GET /jwt/token is not served (minting is POST-only)", async () => {
-    const { signIn } = buildHandler();
-    const alice = await signIn("alice@example.com");
-    const response = await alice.request("GET", "/jwt/token");
-    assert.strictEqual(response.status, 404);
+    await withHandler(async ({ signIn }) => {
+      const alice = await signIn("alice@example.com");
+      const response = await alice.request("GET", "/jwt/token");
+      assert.strictEqual(response.status, 404);
+    });
   });
 
   it("POST /jwt/token mints a token verifiable against /jwt/jwks", async () => {
-    const { signIn, verifyToken } = buildHandler();
-    const alice = await signIn("alice@example.com");
+    await withHandler(async ({ signIn, verifyToken }) => {
+      const alice = await signIn("alice@example.com");
 
-    const minted = await alice.request("POST", "/jwt/token");
-    assert.strictEqual(minted.status, 200);
-    // PDR-003: response mirroring is opt-in now (`mirrorResponses`, default
-    // "off"), so this endpoint's token arrives in the body only.
-    assert.isNull(minted.headers.get("x-jwt-token"));
-    const body = (await minted.json()) as { token: string };
-    assert.isString(body.token);
+      const minted = await alice.request("POST", "/jwt/token");
+      assert.strictEqual(minted.status, 200);
+      // PDR-003: response mirroring is opt-in now (`mirrorResponses`, default
+      // "off"), so this endpoint's token arrives in the body only.
+      assert.isNull(minted.headers.get("x-jwt-token"));
+      const body = (await minted.json()) as { token: string };
+      assert.isString(body.token);
 
-    const claims = await verifyToken(body.token);
-    assert.strictEqual(claims["sub"], alice.userId);
+      const claims = await verifyToken(body.token);
+      assert.strictEqual(claims["sub"], alice.userId);
+    });
   });
 
   it("POST /jwt/introspect requires authentication", async () => {
-    const { handler } = buildHandler();
-    const response = await handler(
-      new Request(`${ORIGIN}/jwt/introspect`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: "whatever" }),
-      }),
-    );
-    assert.strictEqual(response.status, 401);
+    await withHandler(async ({ handler }) => {
+      const response = await handler(
+        new Request(`${ORIGIN}/jwt/introspect`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: "whatever" }),
+        }),
+      );
+      assert.strictEqual(response.status, 401);
+    });
   });
 
   it("POST /jwt/introspect reports active:true for a freshly minted token, active:false once its jti is revoked", async () => {
-    const { signIn, revokeJti, verifyToken } = buildHandler();
-    const alice = await signIn("alice@example.com");
+    await withHandler(async ({ signIn, revokeJti, verifyToken }) => {
+      const alice = await signIn("alice@example.com");
 
-    const mintedResponse = await alice.request("POST", "/jwt/token");
-    const { token } = (await mintedResponse.json()) as { token: string };
+      const mintedResponse = await alice.request("POST", "/jwt/token");
+      const { token } = (await mintedResponse.json()) as { token: string };
 
-    const introspect = (): Promise<Response> =>
-      alice.request("POST", "/jwt/introspect", { json: { token } });
+      const introspect = (): Promise<Response> =>
+        alice.request("POST", "/jwt/introspect", { json: { token } });
 
-    const active = await introspect();
-    assert.strictEqual(active.status, 200);
-    const activeBody = (await active.json()) as { active: boolean; claims?: { sub: string } };
-    assert.isTrue(activeBody.active);
-    assert.strictEqual(activeBody.claims?.sub, alice.userId);
+      const active = await introspect();
+      assert.strictEqual(active.status, 200);
+      const activeBody = (await active.json()) as { active: boolean; claims?: { sub: string } };
+      assert.isTrue(activeBody.active);
+      assert.strictEqual(activeBody.claims?.sub, alice.userId);
 
-    const claims = await verifyToken(token);
-    const jti = claims["jti"] as string;
-    const exp = claims["exp"] as number;
-    await revokeJti(jti, DateTime.fromEpochSeconds(exp));
+      const claims = await verifyToken(token);
+      const jti = claims["jti"] as string;
+      const exp = claims["exp"] as number;
+      await revokeJti(jti, DateTime.fromEpochSeconds(exp));
 
-    const inactive = await introspect();
-    assert.strictEqual(inactive.status, 200);
-    const inactiveBody = (await inactive.json()) as { active: boolean };
-    assert.isFalse(inactiveBody.active);
+      const inactive = await introspect();
+      assert.strictEqual(inactive.status, 200);
+      const inactiveBody = (await inactive.json()) as { active: boolean };
+      assert.isFalse(inactiveBody.active);
+    });
+  });
+
+  it("plan 38 B1: introspection of a token whose header is not base64url answers {active:false}, not a defect", async () => {
+    await withHandler(async ({ signIn }) => {
+      const alice = await signIn("alice@example.com");
+      const response = await alice.request("POST", "/jwt/introspect", {
+        json: { token: "!!.e30.e30" },
+      });
+      assert.strictEqual(response.status, 200);
+      assert.deepStrictEqual(await response.json(), { active: false });
+    });
   });
 });
 
@@ -215,22 +239,23 @@ describe("AuthHttp + Jwt (real HTTP)", () => {
 // `Sessions` is composed (it always is here — `Authentication` needs it).
 describe("POST /jwt/introspect session liveness (TIR-007)", () => {
   it("reports active:false once the minting session is revoked", async () => {
-    const { signIn, issueSession, revokeSession } = buildHandler();
-    const { userId } = await signIn("user-1@example.com");
-    const minting = await issueSession(userId);
-    const caller = await issueSession(userId);
-    const mintedResponse = await minting.browser.request("POST", "/jwt/token");
-    const { token } = (await mintedResponse.json()) as { token: string };
-    const introspect = async (): Promise<boolean> => {
-      const response = await caller.browser.request("POST", "/jwt/introspect", {
-        json: { token },
-      });
-      return ((await response.json()) as { active: boolean }).active;
-    };
+    await withHandler(async ({ signIn, issueSession, revokeSession }) => {
+      const { userId } = await signIn("user-1@example.com");
+      const minting = await issueSession(userId);
+      const caller = await issueSession(userId);
+      const mintedResponse = await minting.browser.request("POST", "/jwt/token");
+      const { token } = (await mintedResponse.json()) as { token: string };
+      const introspect = async (): Promise<boolean> => {
+        const response = await caller.browser.request("POST", "/jwt/introspect", {
+          json: { token },
+        });
+        return ((await response.json()) as { active: boolean }).active;
+      };
 
-    assert.isTrue(await introspect());
-    await revokeSession(minting.sessionId);
-    assert.isFalse(await introspect());
+      assert.isTrue(await introspect());
+      await revokeSession(minting.sessionId);
+      assert.isFalse(await introspect());
+    });
   });
 });
 
@@ -244,23 +269,32 @@ describe("POST /jwt/introspect session liveness (TIR-007)", () => {
 describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
   // A live app for one `mirrorResponses` setting, plus a way to run effects against its context (to issue a real
   // session). `Jwt` and core's `session` group share the one composition, so the mirroring is proven across plugins.
-  const buildApp = (
-    mirrorResponses?: JwtConfig.JwtConfigShape["mirrorResponses"],
-    sessionCookie?: Parameters<typeof JwtConfig.config>[0]["sessionCookie"],
-  ) => {
-    const app = TestAuth.app(
-      appLayer({
-        ...(mirrorResponses === undefined ? {} : { mirrorResponses }),
-        ...(sessionCookie === undefined ? {} : { sessionCookie }),
+  const mirrorLayer = (options: {
+    readonly mirrorResponses?: JwtConfig.JwtConfigShape["mirrorResponses"];
+    readonly sessionCookie?: Parameters<typeof JwtConfig.config>[0]["sessionCookie"];
+  }) =>
+    appLayer({
+      ...(options.mirrorResponses === undefined
+        ? {}
+        : { mirrorResponses: options.mirrorResponses }),
+      ...(options.sessionCookie === undefined ? {} : { sessionCookie: options.sessionCookie }),
+    });
+
+  const withMirror = <T>(
+    options: Parameters<typeof mirrorLayer>[0],
+    use: (handlers: {
+      readonly handler: (request: Request) => Promise<Response>;
+      readonly signIn: (email: string) => Promise<TestAuth.SignedInAgent>;
+      readonly signInBearer: (email: string) => Promise<TestAuth.SignedInAgent>;
+    }) => Promise<T>,
+  ) =>
+    TestAuth.withApp(mirrorLayer(options), { baseUrl: ORIGIN }, (app) =>
+      use({
+        handler: app.handler,
+        signIn: (email: string) => app.signIn(email),
+        signInBearer: (email: string) => app.signIn(email, { delivery: "bearer" }),
       }),
-      { baseUrl: ORIGIN },
     );
-    return {
-      handler: app.handler,
-      signIn: (email: string) => app.signIn(email),
-      signInBearer: (email: string) => app.signIn(email, { delivery: "bearer" }),
-    };
-  };
 
   const verifyMirrored = async (
     handler: (request: Request) => Promise<Response>,
@@ -286,43 +320,46 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
   // header is a log/proxy/APM capture surface, so nothing is mirrored unless
   // the deployment opts in.
   it("default config: GET /session carries no x-jwt-token header", async () => {
-    const { signIn } = buildApp();
-    const alice = await signIn("alice@example.com");
-    const response = await alice.request("GET", "/session");
-    assert.strictEqual(response.status, 200);
-    assert.isNull(response.headers.get("x-jwt-token"));
+    await withMirror({}, async ({ signIn }) => {
+      const alice = await signIn("alice@example.com");
+      const response = await alice.request("GET", "/session");
+      assert.strictEqual(response.status, 200);
+      assert.isNull(response.headers.get("x-jwt-token"));
+    });
   });
 
   it('mirrorResponses: "always": GET /session (not a Jwt endpoint) carries a mirrored, verifiable x-jwt-token header', async () => {
-    const { handler, signIn } = buildApp("always");
-    const alice = await signIn("alice@example.com");
-    const response = await alice.request("GET", "/session");
-    assert.strictEqual(response.status, 200);
-    const mirrored = response.headers.get("x-jwt-token");
-    assert.isString(mirrored);
-    if (mirrored === null) {
-      throw new Error("expected x-jwt-token header");
-    }
-    const claims = await verifyMirrored(handler, mirrored);
-    assert.strictEqual(claims["sub"], alice.userId);
+    await withMirror({ mirrorResponses: "always" }, async ({ handler, signIn }) => {
+      const alice = await signIn("alice@example.com");
+      const response = await alice.request("GET", "/session");
+      assert.strictEqual(response.status, 200);
+      const mirrored = response.headers.get("x-jwt-token");
+      assert.isString(mirrored);
+      if (mirrored === null) {
+        throw new Error("expected x-jwt-token header");
+      }
+      const claims = await verifyMirrored(handler, mirrored);
+      assert.strictEqual(claims["sub"], alice.userId);
+    });
   });
 
   it('mirrorResponses: "bearer": a cookie-authenticated request gets no header, a bearer-authenticated one does', async () => {
-    const { handler, signIn, signInBearer } = buildApp("bearer");
-    const browser = await signIn("browser@example.com");
-    const viaCookie = await browser.request("GET", "/session");
-    assert.strictEqual(viaCookie.status, 200);
-    assert.isNull(viaCookie.headers.get("x-jwt-token"));
+    await withMirror({ mirrorResponses: "bearer" }, async ({ handler, signIn, signInBearer }) => {
+      const browser = await signIn("browser@example.com");
+      const viaCookie = await browser.request("GET", "/session");
+      assert.strictEqual(viaCookie.status, 200);
+      assert.isNull(viaCookie.headers.get("x-jwt-token"));
 
-    const native = await signInBearer("native@example.com");
-    const viaBearer = await native.request("GET", "/session");
-    assert.strictEqual(viaBearer.status, 200);
-    const mirrored = viaBearer.headers.get("x-jwt-token");
-    assert.isString(mirrored);
-    if (mirrored === null) {
-      throw new Error("expected x-jwt-token header");
-    }
-    assert.strictEqual((await verifyMirrored(handler, mirrored))["sub"], native.userId);
+      const native = await signInBearer("native@example.com");
+      const viaBearer = await native.request("GET", "/session");
+      assert.strictEqual(viaBearer.status, 200);
+      const mirrored = viaBearer.headers.get("x-jwt-token");
+      assert.isString(mirrored);
+      if (mirrored === null) {
+        throw new Error("expected x-jwt-token header");
+      }
+      assert.strictEqual((await verifyMirrored(handler, mirrored))["sub"], native.userId);
+    });
   });
 
   // BO-006 (ADR D1 option C): the opt-in, short-lived JWT session-mirror
@@ -337,51 +374,57 @@ describe("AuthHttp + Jwt + Session (cross-plugin response mirroring)", () => {
     };
 
     it("default config mints no mirror cookie", async () => {
-      const { response } = await sessionRequest(buildApp().signIn);
-      assert.strictEqual(response.status, 200);
-      assert.notInclude(response.headers.getSetCookie().join("\n"), MIRROR);
+      await withMirror({}, async ({ signIn }) => {
+        const { response } = await sessionRequest(signIn);
+        assert.strictEqual(response.status, 200);
+        assert.notInclude(response.headers.getSetCookie().join("\n"), MIRROR);
+      });
     });
 
     it("sessionCookie: true sets an HttpOnly/Secure/SameSite=Strict __Host- cookie holding a verifiable JWT that expires with the cookie", async () => {
-      const { handler, signIn } = buildApp(undefined, true);
-      const { alice, response } = await sessionRequest(signIn);
-      assert.strictEqual(response.status, 200);
-      const cookie = response.headers
-        .getSetCookie()
-        .find((header) => header.startsWith(`${MIRROR}=`));
-      assert.isDefined(cookie);
-      if (cookie === undefined) return;
-      assert.include(cookie, "HttpOnly");
-      assert.include(cookie, "Secure");
-      assert.include(cookie, "SameSite=Strict");
-      assert.include(cookie, "Path=/");
-      assert.include(cookie, "Max-Age=300");
-      const token = decodeURIComponent(cookie.slice(MIRROR.length + 1).split(";")[0] ?? "");
-      const claims = await verifyMirrored(handler, token);
-      assert.strictEqual(claims["sub"], alice.userId);
-      assert.strictEqual(Number(claims["exp"]) - Number(claims["iat"]), 300);
-      // A browser stores it: it is a conforming `__Host-` cookie.
-      assert.strictEqual(alice.cookies.get(MIRROR)?.httpOnly, true);
+      await withMirror({ sessionCookie: true }, async ({ handler, signIn }) => {
+        const { alice, response } = await sessionRequest(signIn);
+        assert.strictEqual(response.status, 200);
+        const cookie = response.headers
+          .getSetCookie()
+          .find((header) => header.startsWith(`${MIRROR}=`));
+        assert.isDefined(cookie);
+        if (cookie === undefined) return;
+        assert.include(cookie, "HttpOnly");
+        assert.include(cookie, "Secure");
+        assert.include(cookie, "SameSite=Strict");
+        assert.include(cookie, "Path=/");
+        assert.include(cookie, "Max-Age=300");
+        const token = decodeURIComponent(cookie.slice(MIRROR.length + 1).split(";")[0] ?? "");
+        const claims = await verifyMirrored(handler, token);
+        assert.strictEqual(claims["sub"], alice.userId);
+        assert.strictEqual(Number(claims["exp"]) - Number(claims["iat"]), 300);
+        // A browser stores it: it is a conforming `__Host-` cookie.
+        assert.strictEqual(alice.cookies.get(MIRROR)?.httpOnly, true);
+      });
     });
 
     it("honours a custom name and ttl", async () => {
-      const { signIn } = buildApp(undefined, {
-        name: "__Host-edge",
-        ttl: Duration.minutes(1),
-      });
-      const { response } = await sessionRequest(signIn);
-      const cookie = response.headers
-        .getSetCookie()
-        .find((header) => header.startsWith("__Host-edge="));
-      assert.isDefined(cookie);
-      assert.include(cookie ?? "", "Max-Age=60");
+      await withMirror(
+        { sessionCookie: { name: "__Host-edge", ttl: Duration.minutes(1) } },
+        async ({ signIn }) => {
+          const { response } = await sessionRequest(signIn);
+          const cookie = response.headers
+            .getSetCookie()
+            .find((header) => header.startsWith("__Host-edge="));
+          assert.isDefined(cookie);
+          assert.include(cookie ?? "", "Max-Age=60");
+        },
+      );
     });
 
     it("a bearer-authenticated request gets no mirror cookie", async () => {
-      const native = await buildApp(undefined, true).signInBearer("native@example.com");
-      const response = await native.request("GET", "/session");
-      assert.strictEqual(response.status, 200);
-      assert.notInclude(response.headers.getSetCookie().join("\n"), MIRROR);
+      await withMirror({ sessionCookie: true }, async ({ signInBearer }) => {
+        const native = await signInBearer("native@example.com");
+        const response = await native.request("GET", "/session");
+        assert.strictEqual(response.status, 200);
+        assert.notInclude(response.headers.getSetCookie().join("\n"), MIRROR);
+      });
     });
 
     it("a name without the __Host- prefix fails the layer build", async () => {

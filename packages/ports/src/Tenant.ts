@@ -72,14 +72,96 @@ export const configApplied = (tenantId: string) =>
   Layer.succeed(TenantConfigApplied, TenantConfigApplied.of({ tenantId }));
 
 /**
- * EP-007 (ADR-EA-018 Decision 8): the configuration in force for one operation. A value
- * provided for `key` in the *calling* fiber (the tenant middleware does this from an
- * application's `TenantConfig`) wins; with none, `built` — what the plugin read when its layer
- * was built — applies, so `Layer.provide(Plugin.config(...))` keeps meaning what it always
- * meant. A plain per-operation `yield* Reference` would silently ignore every build-time
- * `config(...)`, because the layer's provision is not visible to the calling fiber.
+ * ADR-EA-018 decision 8, BEH-EA-355: where a configuration key's value comes from. A **tenant**-scoped key is
+ * resolved per operation (the calling fiber's value, else the build value); a **deployment**-scoped key is the build
+ * value, always.
  */
-export const configInForce = <I, A>(key: Context.Key<I, A>, built: A) =>
-  Effect.contextWith((context: Context.Context<never>) =>
-    Effect.succeed(Context.getOrUndefined(context, key) ?? built),
+export type ConfigScope = "tenant" | "deployment";
+
+/**
+ * Provided by every deployment-scoped `config(...)` layer (BEH-EA-355). It carries no information a handler needs; it
+ * exists so the layer has an output type. A tenant's `LayerMap` output is invariant (`LayerMap<K, I, E>`), so a
+ * `TenantConfig` lookup that merges a deployment-scoped layer does not type-check at
+ * `TenantMiddleware.layerWithConfig`: a setting that cannot vary per tenant is refused at the composition.
+ */
+export class DeploymentConfigApplied extends Context.Service<
+  DeploymentConfigApplied,
+  { readonly key: string }
+>()("awthaq/ports/DeploymentConfigApplied") {}
+
+/** A key resolved per operation. `boot` fields are read only from the build value; a tenant's value for them is never read. */
+export interface PerTenant<I, A, K extends Context.Key<I, A> = Context.Key<I, A>> {
+  readonly scope: "tenant";
+  readonly reference: K;
+  readonly boot: ReadonlyArray<Extract<keyof A, string>>;
+  readonly layer: (value: A) => Layer.Layer<I>;
+}
+
+/** A key that is the build value, always. Its layer also provides `DeploymentConfigApplied`. */
+export interface PerDeployment<I, A, K extends Context.Key<I, A> = Context.Key<I, A>> {
+  readonly scope: "deployment";
+  readonly reference: K;
+  readonly layer: (value: A) => Layer.Layer<I | DeploymentConfigApplied>;
+}
+
+export type Declared<I, A, K extends Context.Key<I, A> = Context.Key<I, A>> =
+  | PerTenant<I, A, K>
+  | PerDeployment<I, A, K>;
+
+/** Declares `reference` tenant-scoped (BEH-EA-355). `boot` names the fields no operation reads from the tenant's value. */
+export const perTenant = <K extends Context.Key<unknown, unknown>>(
+  reference: K,
+  options?: { readonly boot?: ReadonlyArray<Extract<keyof K["Service"], string>> },
+) => {
+  const declared: PerTenant<K["Identifier"], K["Service"], K> = {
+    scope: "tenant",
+    reference,
+    boot: options?.boot ?? [],
+    layer: (value) => Layer.succeed(reference, value),
+  };
+  return declared;
+};
+
+/** Declares `reference` deployment-scoped (BEH-EA-355): its `config(...)` layer is not usable in a tenant lookup. */
+export const perDeployment = <K extends Context.Key<unknown, unknown>>(reference: K) => {
+  const declared: PerDeployment<K["Identifier"], K["Service"], K> = {
+    scope: "deployment",
+    reference,
+    layer: (value) =>
+      Layer.merge(
+        Layer.succeed(reference, value),
+        Layer.succeed(DeploymentConfigApplied, DeploymentConfigApplied.of({ key: reference.key })),
+      ),
+  };
+  return declared;
+};
+
+/**
+ * The one rule (ADR-EA-018 decision 8), pure: shared by the accessor and the views. A deployment-scoped key is the
+ * build value. A tenant-scoped key is the calling context's value, with each `boot` field taken from the build
+ * value; with no calling value, the build value.
+ */
+export const resolveConfig = <I, A>(
+  declared: Declared<I, A>,
+  built: A,
+  calling: Context.Context<never>,
+): A => {
+  if (declared.scope === "deployment") return built;
+  const tenant = Context.getOrUndefined(calling, declared.reference);
+  if (tenant === undefined) return built;
+  if (declared.boot.length === 0) return tenant;
+  const fromBuild = Object.fromEntries(declared.boot.map((field) => [field, built[field]]));
+  return { ...tenant, ...fromBuild };
+};
+
+/**
+ * The one accessor: yield it once where the module is built, yield the result per operation. A plain
+ * per-operation `yield* Reference` would silently ignore every build-time `config(...)`, because the layer's
+ * provision is not visible to the calling fiber.
+ */
+export const inForce = <I, A>(declared: Declared<I, A>) =>
+  Effect.map(Effect.service(declared.reference), (built) =>
+    Effect.contextWith((calling: Context.Context<never>) =>
+      Effect.succeed(resolveConfig(declared, built, calling)),
+    ),
   );

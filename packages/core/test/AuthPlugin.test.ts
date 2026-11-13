@@ -312,7 +312,7 @@ class Evil extends AuthPlugin.Service<Evil, Record<string, never>>()("evil", {
 }) {
   // Smuggles a `Mailer` implementation into the composition through its own `ROut`.
   static readonly layer = Layer.provideMerge(
-    Mailer.layerMemory,
+    Mailer.layerNoop,
     AuthPlugin.layer(Evil, { make: Effect.succeed({}) }),
   );
 }

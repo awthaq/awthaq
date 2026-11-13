@@ -40,20 +40,15 @@ export interface AppHandle {
   /** The wire request a browser client would send: with the harness's own double-submit CSRF pair. */
   readonly request: TestAuth.App<AppServices>["request"];
   readonly withContext: <A, E>(effect: Effect.Effect<A, E, AppServices>) => Promise<A>;
-  readonly close: Effect.Effect<void>;
 }
 
-// One `TestAuth.app` owns the built layer, so the key ring and stores are the very instances `handler` runs on for the
+// One served app owns the built layer, so the key ring and stores are the very instances `handler` runs on for the
 // whole scenario.
-const buildApp = (config: JwtConfigInput): AppHandle => {
-  const app = TestAuth.app(buildAppLayer(config), { baseUrl: "http://localhost" });
-  return {
-    handler: app.handler,
-    request: app.request,
-    withContext: app.run,
-    close: Effect.promise(() => app.dispose()),
-  };
-};
+const buildApp = (config: JwtConfigInput) =>
+  Effect.map(
+    TestAuth.serve(buildAppLayer(config), { baseUrl: "http://localhost" }),
+    (app): AppHandle => ({ handler: app.handler, request: app.request, withContext: app.run }),
+  );
 
 /** One signed-in caller: a real user id and a real session, with both its cookie and its raw opaque token. */
 export interface Actor {
@@ -65,8 +60,7 @@ export interface Actor {
 }
 
 export interface WorldShape {
-  readonly app: Ref.Ref<AppHandle>;
-  readonly config: Ref.Ref<JwtConfigInput>;
+  readonly app: TestAuth.LazyApp<JwtConfigInput, AppHandle>;
   readonly users: ReturnType<typeof makeNamedRegistry<Actor>>;
   /** Compact tokens by the label the scenario gave them ("alice", "forged", "tampered"). */
   readonly tokens: ReturnType<typeof makeNamedRegistry<string>>;
@@ -78,8 +72,6 @@ export interface WorldShape {
   readonly jwksFetches: Ref.Ref<number>;
   /** The downstream verifier a scenario built (its own key cache), if any. */
   readonly verifier: Ref.Ref<VerifierHandle | undefined>;
-  /** Set once anyone signs in, so a late configuration change is a bug in the scenario, not a silent reset. */
-  readonly started: Ref.Ref<boolean>;
 }
 
 export interface VerifierHandle {
@@ -93,11 +85,9 @@ const DEFAULT_CONFIG: JwtConfigInput = { issuer: ISSUER };
 export const WorldLive = Layer.effect(
   World,
   Effect.gen(function* () {
-    const app = yield* Ref.make(buildApp(DEFAULT_CONFIG));
-    yield* Effect.addFinalizer(() => Ref.get(app).pipe(Effect.flatMap((handle) => handle.close)));
     return World.of({
-      app,
-      config: yield* Ref.make(DEFAULT_CONFIG),
+      // A late configuration change (after anyone signed in) is a defect, not a silent reset.
+      app: yield* TestAuth.lazyApp(DEFAULT_CONFIG, buildApp, { name: "JwtWorld" }),
       users: makeNamedRegistry<Actor>("user"),
       tokens: makeNamedRegistry<string>("token"),
       minted: new Map(),
@@ -105,33 +95,26 @@ export const WorldLive = Layer.effect(
       last: yield* Ref.make<Snapshot | undefined>(undefined),
       jwksFetches: yield* Ref.make(0),
       verifier: yield* Ref.make<VerifierHandle | undefined>(undefined),
-      started: yield* Ref.make(false),
     });
   }),
 );
 
 export const currentApp = Effect.gen(function* () {
   const { app } = yield* World;
-  return yield* Ref.get(app);
+  return yield* app.get;
 });
 
-/** Merges `config` over what earlier Givens set and rebuilds the app; only before anyone signs in. */
+/** Merges `config` over what earlier Givens set; only before anyone signs in. */
 export const configureApp = Effect.fn("features.jwt.configureApp")(function* (
   config: Partial<JwtConfigInput>,
 ) {
   const world = yield* World;
-  if (yield* Ref.get(world.started)) {
-    return yield* Effect.die(new Error("configure the app before anyone signs in"));
-  }
-  const merged: JwtConfigInput = { ...(yield* Ref.get(world.config)), ...config };
-  yield* Ref.set(world.config, merged);
-  yield* Ref.set(world.app, buildApp(merged));
+  yield* world.app.configure((existing) => ({ ...existing, ...config }));
 });
 
 export const signInUser = Effect.fn("features.jwt.signInUser")(function* (name: string) {
   const world = yield* World;
   const app = yield* currentApp;
-  yield* Ref.set(world.started, true);
   const userId = `user-${name}`;
   const actor = yield* Effect.promise(() =>
     app.withContext(
@@ -265,7 +248,8 @@ export type Defect =
   | "from another issuer"
   | "for another audience"
   | "of an unexpected class"
-  | "not valid yet";
+  | "not valid yet"
+  | "with an unknown critical header";
 
 export const isDefect = (value: string): value is Defect =>
   value === "none" ||
@@ -273,7 +257,8 @@ export const isDefect = (value: string): value is Defect =>
   value === "from another issuer" ||
   value === "for another audience" ||
   value === "of an unexpected class" ||
-  value === "not valid yet";
+  value === "not valid yet" ||
+  value === "with an unknown critical header";
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
@@ -281,6 +266,7 @@ const nowSeconds = () => Math.floor(Date.now() / 1000);
 export const signWithCurrentKey = Effect.fn("features.jwt.signWithCurrentKey")(function* (
   typ: string,
   claims: Readonly<Record<string, unknown>>,
+  extraHeader?: Readonly<Record<string, unknown>>,
 ) {
   const app = yield* currentApp;
   return yield* Effect.promise(() =>
@@ -292,12 +278,34 @@ export const signWithCurrentKey = Effect.fn("features.jwt.signWithCurrentKey")(f
           onNone: () => Effect.die(new Error("the current signing key has no local private key")),
         });
         const iat = nowSeconds();
+        const allClaims = {
+          iss: ISSUER,
+          aud: ISSUER,
+          sub: "user-forged",
+          iat,
+          exp: iat + 900,
+          ...claims,
+        };
+        const signer = JwtCodec.localSigner(material);
+        // JwtCodec.sign fixes the header to alg/kid/typ, so extra header members mean assembling the JWS by hand.
+        if (extraHeader !== undefined) {
+          const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+          const signingInput = `${b64({ alg: key.alg, kid: key.kid, typ, ...extraHeader })}.${b64(allClaims)}`;
+          const signature = yield* signer
+            .sign({
+              kid: key.kid,
+              alg: key.alg,
+              signingInput: new TextEncoder().encode(signingInput),
+            })
+            .pipe(Effect.orDie);
+          return `${signingInput}.${Buffer.from(signature).toString("base64url")}`;
+        }
         return yield* JwtCodec.sign({
           kid: key.kid,
           alg: key.alg,
           typ,
-          signer: JwtCodec.localSigner(material),
-          claims: { iss: ISSUER, aud: ISSUER, sub: "user-forged", iat, exp: iat + 900, ...claims },
+          signer,
+          claims: allClaims,
         }).pipe(Effect.orDie);
       }),
     ),
@@ -321,6 +329,8 @@ export const forgeDefective = Effect.fn("features.jwt.forgeDefective")(function*
       return yield* signWithCurrentKey("application/octet-stream", {});
     case "not valid yet":
       return yield* signWithCurrentKey("at+jwt", { nbf: iat + 3600 });
+    case "with an unknown critical header":
+      return yield* signWithCurrentKey("at+jwt", {}, { crit: ["x-unknown"], "x-unknown": true });
   }
 });
 

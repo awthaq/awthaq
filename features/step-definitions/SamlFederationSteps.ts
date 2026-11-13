@@ -4,7 +4,7 @@
 // XML-signature adapter, sealed SP keys over a real `Encryption`) and play the IdP's side of each protocol message themselves.
 import { Api } from "@awthaq/api";
 import { TestAuth } from "@awthaq/test";
-import { AuditLog, Sessions, Tenant, Users } from "@awthaq/core";
+import { AuditLog, CurrentUser, Sessions, Tenant, Users } from "@awthaq/core";
 import { Organization, OrganizationActor, OrganizationConnections } from "@awthaq/organization";
 import { MembershipRecords } from "@awthaq/organization/records";
 import { Encryption } from "@awthaq/ports";
@@ -59,10 +59,12 @@ const ownerPrincipal = new Api.UserPrincipal({
   ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
   sessionId: "owner-session",
 });
-const adminPrincipal = new Api.UserPrincipal({
-  ref: new Api.PrincipalRef({ type: "user", id: "admin-1" }),
-  sessionId: "admin-session",
-});
+const adminPrincipal = CurrentUser.of(
+  new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id: "admin-1" }),
+    sessionId: "admin-session",
+  }),
+);
 
 // ---- IdP-side messages --------------------------------------------------------------------------
 
@@ -803,10 +805,12 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
     const started = yield* inApp(
       Effect.flatMap(Saml.Saml, (saml) =>
         saml.logout(
-          new Api.UserPrincipal({
-            ref: new Api.PrincipalRef({ type: "user", id: userId }),
-            sessionId: ids.at(-1) ?? "",
-          }),
+          CurrentUser.of(
+            new Api.UserPrincipal({
+              ref: new Api.PrincipalRef({ type: "user", id: userId }),
+              sessionId: ids.at(-1) ?? "",
+            }),
+          ),
           { callbackURL: "/bye" },
         ),
       ),
@@ -1040,7 +1044,9 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
       if (remembered !== undefined) return remembered;
       const created = yield* inApp(
         Effect.flatMap(Organization.Organization, (organization) =>
-          organization.create({ caller: ownerPrincipal, name, slug: name }).pipe(Effect.orDie),
+          organization
+            .create({ caller: CurrentUser.of(ownerPrincipal), name, slug: name })
+            .pipe(Effect.orDie),
         ),
       );
       bookOf(world).organizations.set(name, created.id);
@@ -1202,6 +1208,89 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
   Given("the administrator gate allows every action", function* () {
     yield* configure({ canManageSaml: () => Effect.succeed(true) });
   });
+  // BEH-EA-347: the gate sees the organization of the connection a by-id call acts on.
+  const gateAdmitting = Effect.fnUntraced(function* (name: string, inGeneral: boolean) {
+    const world = yield* World;
+    yield* configure({
+      canManageSaml: ({ organizationId }) =>
+        Effect.succeed(
+          organizationId === undefined
+            ? inGeneral
+            : organizationId === world.connections.get(name)?.organizationId,
+        ),
+    });
+  });
+  Given(
+    "the administrator gate admits only {string} and the action in general",
+    function* (name: string) {
+      yield* gateAdmitting(name, true);
+    },
+  );
+  Given("the administrator gate admits only {string}", function* (name: string) {
+    yield* gateAdmitting(name, false);
+  });
+  When(
+    "the administrator renames the connection {string} to {string} by its id",
+    function* (name: string, renamed: string) {
+      const world = yield* World;
+      const connection = yield* connectionState(name);
+      const rename = (id: string) =>
+        inAppExit(
+          Effect.flatMap(Saml.Saml, (saml) =>
+            saml.admin.updateConnection(adminPrincipal, id, { name: renamed }),
+          ),
+        );
+      const real = yield* rename(connection.id);
+      const unknown = yield* rename("no-such-connection");
+      const tagOf = (exit: typeof real) =>
+        Exit.isFailure(exit) ? Option.getOrUndefined(Exit.findErrorOption(exit))?._tag : "renamed";
+      yield* world.outcomes.set("byId", { real: tagOf(real), unknown: tagOf(unknown) });
+    },
+  );
+  Then("the rename is refused as {string}, exactly as for an unknown id", function* (tag: string) {
+    const world = yield* World;
+    const result = yield* world.outcomes.getAs(
+      "byId",
+      (value): value is { readonly real: string; readonly unknown: string } =>
+        typeof value === "object" && value !== null && "real" in value,
+    );
+    assert.equal(result.real, tag);
+    assert.equal(result.unknown, tag);
+  });
+  Then(
+    "a refusal published auth.admin.actionDenied naming {string} and the organization {string}",
+    function* (action: string, organization: string) {
+      const connection = yield* connectionState(organization);
+      const rows = yield* inApp(
+        Effect.flatMap(AuditLog.AuditLog, (log) =>
+          log.list({ eventTag: "auth.admin.actionDenied" }),
+        ).pipe(Effect.orDie),
+      );
+      const named = rows.flatMap((row) =>
+        row.payload._tag === "auth.admin.actionDenied" &&
+        row.payload.action === action &&
+        row.payload.organizationId === connection.organizationId
+          ? [row.payload]
+          : [],
+      );
+      assert.ok(named.length >= 1);
+    },
+  );
+  Then("the connection {string} is named {string}", function* (name: string, expected: string) {
+    const connection = yield* connectionState(name);
+    const found = yield* inApp(
+      Effect.flatMap(SamlRecords.SamlRecords, (records) => records.findById(grant, connection.id)),
+    );
+    assert.ok(Option.isSome(found));
+    assert.equal(found.value.name, expected);
+  });
+  Then("reading an unknown connection id is refused as {string}", function* (tag: string) {
+    const exit = yield* inAppExit(
+      Effect.flatMap(Saml.Saml, (saml) => saml.admin.getConnection(adminPrincipal, "no-such-id")),
+    );
+    assert.ok(Exit.isFailure(exit));
+    assert.equal(Option.getOrUndefined(Exit.findErrorOption(exit))?._tag, tag);
+  });
   Given("the connection {string} exists", function* (name: string) {
     yield* connectionState(name);
   });
@@ -1349,7 +1438,7 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
       ).pipe(Effect.orDie),
     );
     assert.equal(rows.length, 1);
-    assert.deepEqual(rows[0]?.actorUserId, Option.some(adminPrincipal.ref.id));
+    assert.deepEqual(rows[0]?.actorUserId, Option.some(adminPrincipal.userId));
     // Core stores the plugin's event as a foreign one; the plugin's definition decodes it (ADR-EA-049).
     assert.deepEqual(
       Option.map(

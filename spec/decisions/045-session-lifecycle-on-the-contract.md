@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-ADR-045 |
-> | Revision | 1.0 |
+> | Revision | 1.1 |
 > | Effective Date | 2026-11-08 |
 > | Status | Accepted — implemented |
 > | Author | awthaq Engineering |
 > | Classification | Architectural Decision |
-> | Change History | 1.0 (2026-11-08): Initial release (architecture plan 21) |
+> | Change History | 1.0 (2026-11-08): Initial release (architecture plan 21) <br> 1.1 (2026-11-09): `SessionDelivery.redirect` is replaced by `land`, which owns the PV-016 landing choice for every browser return trip (architecture plan 33) |
 
 ---
 
@@ -27,7 +27,7 @@
 
 **1. Five `HttpApiMiddleware` markers in `@awthaq/api`'s `SessionLifecycle`.** `Mints` (sign-up, sign-in, a second factor, a federated callback, a device or native exchange), `Rotates` (the caller's credential is replaced: `changePassword`), `Ends` (the caller's own session ends), `Swaps` (impersonation, APS-006) and `Refreshes` (the session's view or subject changes, the credential does not). An endpoint declares at most one: `.middleware(SessionLifecycle.Mints)`. `SessionLifecycle.inventory(api)` lists the declared endpoints by `operationId` and throws on a double declaration, which `Auth.make` runs, so a contract mistake fails at composition like a duplicate route. `Mints`, `Rotates` and `Swaps` declare `InvalidTokenDelivery`; no endpoint lists it by hand.
 
-**2. Grants and the type-level gate.** `Mints`/`Rotates` provide `MintGrant`, `Ends` `EndGrant`, `Swaps` `SwapGrant`. Every function of `@awthaq/server`'s `SessionDelivery` requires one: `respond(mint)`, `deliverBearer`, `deliverExchanged` and `redirect` need `MintGrant`; `end` needs `EndGrant`; `swapIn`/`swapOut` need `SwapGrant`; `decline(grant)` needs the grant it names. A handler of an endpoint that did not declare the right kind leaves `HttpRouter.Request<"Requires", Grant>` in the group layer's requirements, so the layer cannot be served (a compile error, pinned by `SessionLifecycle.types.test.ts` and two BDD type gates).
+**2. Grants and the type-level gate.** `Mints`/`Rotates` provide `MintGrant`, `Ends` `EndGrant`, `Swaps` `SwapGrant`. Every function of `@awthaq/server`'s `SessionDelivery` requires one: `respond(mint)`, `deliverBearer`, `deliverExchanged` and `land` need `MintGrant`; `end` needs `EndGrant`; `swapIn`/`swapOut` need `SwapGrant`; `decline(grant)` needs the grant it names. A handler of an endpoint that did not declare the right kind leaves `HttpRouter.Request<"Requires", Grant>` in the group layer's requirements, so the layer cannot be served (a compile error, pinned by `SessionLifecycle.types.test.ts` and two BDD type gates). `land(location, issued, { bounce })` lands a browser return trip (the OAuth callback, the SAML ACS): the same-site interstitial while the session cookie is `SameSite=Strict` and `bounce` holds, a `302` otherwise, declining when nothing was minted (BEH-EA-122, BEH-EA-350).
 
 **3. The marker's server half.** It resolves `X-Awthaq-Token-Delivery` before the handler runs (an unknown value is a 400 that mints nothing; `Swaps` refuses `bearer`; `Ends` reads no header), provides the grant, marks the response `Cache-Control: no-store`, and dies `SessionLifecycleUnsettled` (500) when a successful response neither delivered nor declined. A typed handler error is not a defect. `AuthHttp.middlewareFor` derives the five like the other host middleware; `AuthHttp.sessionLifecycle` is the layer for a hand-wired composition.
 

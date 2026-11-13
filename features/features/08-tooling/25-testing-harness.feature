@@ -14,7 +14,7 @@ Feature: Testing Harness
     Scenario: TestAuth.layer assembles the named plugins over in-memory backends
       Given a plugin tuple containing "Password" and "Session"
       When "TestAuth.layer" composes the tuple
-      Then the composed layer uses memory repositories, "Mailer.layerMemory", a permissive "RateLimiter", and "HttpServer.layerServices"
+      Then the composed layer uses memory repositories, "TestMailbox.layer", a permissive "RateLimiter", and "HttpServer.layerServices"
 
     @REQ-EA-546
     Scenario Outline: A test built on TestAuth.layer needs no real backing <dependency>
@@ -80,16 +80,40 @@ Feature: Testing Harness
 
     @REQ-EA-551
     Scenario: A test overriding one method of a multi-method port uses Layer.mock
-      Given a test that only needs to override "Mailer"'s "send" method
-      When the test provides its double for "Mailer"
-      Then it uses "Layer.mock" to override only "send"
-      And it does not hand-write a full replacement implementation of "Mailer"'s interface
+      Given a test that only needs to override "RateLimiter"'s "consume" method
+      When the test provides its double for "RateLimiter"
+      Then it uses "Layer.mock" to override only "consume"
+      And it does not hand-write a full replacement implementation of "RateLimiter"'s interface
 
     @REQ-EA-552
-    Scenario: Layer.mock is chosen over Mailer.layerMemory when a test needs no recording or inspection behavior
+    Scenario: Layer.mock is chosen over the test mailbox when a test needs no recording or inspection behavior
       Given a test that only asserts "send" was called with the expected arguments
-      When the test does not need "Mailer.layerMemory"'s recording or inspection behavior
+      When the test does not need "TestMailbox"'s recording or inspection behavior
       Then the test uses "Layer.mock" instead of the full memory implementation
+
+  # BEH-EA-354 — spec/behaviors/25-testing-harness.md
+  @BEH-EA-354
+  Rule: TestAuth's base records mail in a mailbox a test awaits
+
+    @REQ-EA-1560
+    Scenario: A mail sent on a detached fiber is awaited, not yielded for
+      Given "TestAuth.layer" composes "Password"
+      When an anonymous visitor signs up as "ada@example.com" through the handler
+      Then the test waits for the "verify-email" mail to "ada@example.com" through "TestMailbox.Mailbox"
+      And the mailed token is a non-empty secret
+
+    @REQ-EA-1561
+    Scenario: An expected mail that never comes fails at a real deadline
+      Given a test running under "TestClock"
+      When it waits 40 milliseconds for a "never-sent" mail to "ghost@example.com"
+      Then the wait fails
+      And the failure names "never-sent" and does not contain "ghost@example.com"
+
+    @REQ-EA-1562
+    Scenario: A refutation fails when a matching mail arrives within its window
+      Given a mailbox with no mail
+      When a detached fiber sends a "late" mail 5 milliseconds later while the test refutes "late" mail
+      Then the refutation fails
 
   # BEH-EA-196 — spec/behaviors/25-testing-harness.md
   @BEH-EA-196
@@ -287,6 +311,28 @@ Feature: Testing Harness
       When an agent is signed in through the app at "https://app.example.com"
       Then it holds "__Secure-session" for "example.com" and its session request is served
 
+  # BEH-EA-351..353 — spec/behaviors/25-testing-harness.md (architecture plan 34)
+  @BEH-EA-351 @BEH-EA-352 @BEH-EA-353
+  Rule: A test app lives as long as the scope that serves it
+
+    @REQ-EA-1550
+    Scenario: An app is released when the scope that served it closes
+      Given a composition served through "TestAuth.serve"
+      When the scope that served it closes
+      Then no test app is left open
+
+    @REQ-EA-1551
+    Scenario: Configuring a World's app cell after its first request fails, naming the World
+      Given a World's app cell that has served a request
+      When the scenario configures the cell
+      Then the step fails naming the World
+
+    @REQ-EA-1552
+    Scenario: A client over a real socket reaches the composition the scenario serves
+      Given a composition served through "TestAuth.listen"
+      When a client fetches "/session" over the socket
+      Then it is refused with 401 and the app's request log lists "GET /session"
+
   # BEH-EA-342 — spec/behaviors/25-testing-harness.md (ADR-EA-044)
   @BEH-EA-342
   Rule: TestAuth.layer is AuthHost.layer over the test ports
@@ -313,14 +359,14 @@ Feature: Testing Harness
       When the package's "test/Contract.test.ts" calls "runPluginContractTests" for the class
       Then it exits zero
 
-    @REQ-EA-1500
-    Scenario: A Contract.test.ts that passes records but is missing from scripts/test-pg.sh fails pnpm check
-      Given a plugin package whose "test/Contract.test.ts" passes "records" to "runPluginContractTests"
+    @REQ-EA-1565
+    Scenario: A scripts/test-pg.sh that names a test file fails pnpm check
+      Given a plugin package whose "test/Contract.test.ts" runs the contract suite and whose "scripts/test-pg.sh" names "packages/demo/test/Contract.test.ts"
       When the script "scripts/check-contract-tests.mjs" runs
       Then it exits non-zero, naming "packages/demo/test/Contract.test.ts" and "scripts/test-pg.sh"
 
-    @REQ-EA-1501
-    Scenario: The same package passes once its Contract.test.ts is listed in scripts/test-pg.sh
-      Given a plugin package whose "test/Contract.test.ts" passes "records" to "runPluginContractTests"
-      When "packages/demo/test/Contract.test.ts" is listed in "scripts/test-pg.sh"
+    @REQ-EA-1566
+    Scenario: The same repository passes once scripts/test-pg.sh names no test file
+      Given a plugin package whose "test/Contract.test.ts" runs the contract suite and whose "scripts/test-pg.sh" names "packages/demo/test/Contract.test.ts"
+      When "scripts/test-pg.sh" names no test file
       Then it exits zero

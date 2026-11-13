@@ -28,7 +28,7 @@
 //   is that an admin cannot silently replace the password of an MFA-protected account; a
 //   deployment that wants an administrative override taps the hook with its own policy.
 
-import { Api } from "@awthaq/api";
+import type { Api } from "@awthaq/api";
 import {
   CurrentUser,
   AuthEvents,
@@ -61,7 +61,7 @@ export interface AdminAccountsShape {
    * `BeforeUserDelete` veto surfaces as `HookAborted`, with nothing touched.
    */
   readonly deleteUser: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     userId: Users.UserId,
   ) => Effect.Effect<
     void,
@@ -73,7 +73,7 @@ export interface AdminAccountsShape {
   >;
   /** Mails a change-email confirmation to `email` (gate -> existence -> identity -> conflict -> mail); the address changes when its owner confirms. */
   readonly setUserEmail: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     userId: Users.UserId,
     input: { readonly email: string },
   ) => Effect.Effect<
@@ -87,7 +87,7 @@ export interface AdminAccountsShape {
   >;
   /** Replaces (or creates) the user's password credential and revokes all their sessions. */
   readonly setUserPassword: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     userId: Users.UserId,
     input: { readonly password: Redacted.Redacted<string> },
   ) => Effect.Effect<
@@ -109,7 +109,7 @@ export const AdminAccountsHandlers = HttpApiBuilder.group(
     const accounts = yield* AdminAccounts;
     return handlers.handleAll({
       deleteUser: Effect.fnUntraced(function* ({ params }: { params: AdminApi.UserIdParams }) {
-        const { principal: caller } = yield* CurrentUser.current;
+        const caller = yield* CurrentUser.current;
         yield* accounts.deleteUser(caller, Users.UserId(params.userId));
       }),
       setUserEmail: Effect.fnUntraced(function* ({
@@ -119,7 +119,7 @@ export const AdminAccountsHandlers = HttpApiBuilder.group(
         params: AdminApi.UserIdParams;
         payload: AdminAccountsApi.SetUserEmailPayload;
       }) {
-        const { principal: caller } = yield* CurrentUser.current;
+        const caller = yield* CurrentUser.current;
         yield* accounts.setUserEmail(caller, Users.UserId(params.userId), payload);
       }),
       setUserPassword: Effect.fnUntraced(function* ({
@@ -129,12 +129,15 @@ export const AdminAccountsHandlers = HttpApiBuilder.group(
         params: AdminApi.UserIdParams;
         payload: AdminAccountsApi.SetUserPasswordPayload;
       }) {
-        const { principal: caller } = yield* CurrentUser.current;
+        const caller = yield* CurrentUser.current;
         yield* accounts.setUserPassword(caller, Users.UserId(params.userId), payload);
       }),
     });
   }),
 );
+
+/** The request-edge services the handler group names; naming them keeps declaration emit portable (TS2883). */
+export type EdgeServices = Api.AdminAuthentication | Api.CsrfProtection | Api.RequestContext;
 
 export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccountsShape>()(
   "admin.accounts",
@@ -166,7 +169,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
       const deleteUser: AdminAccountsShape["deleteUser"] = Effect.fnUntraced(
         function* (caller, userId) {
           const cleared = yield* gate.user(caller, "deleteUser", userId);
-          if (caller.ref.id === userId) {
+          if (caller.userId === userId) {
             return yield* Effect.fail(new AdminAccountsApi.AdminSelfActionRefused());
           }
           yield* cleared.target;
@@ -182,7 +185,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
               ),
             );
           yield* events.emit(AdminEvents.AdminUserDeletedEvent, {
-            adminUserId: Users.UserId(caller.ref.id),
+            adminUserId: caller.userId,
             userId,
           });
         },
@@ -213,7 +216,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
             ),
           );
           yield* events.emit(AdminEvents.AdminUserEmailChangeRequestedEvent, {
-            adminUserId: Users.UserId(caller.ref.id),
+            adminUserId: caller.userId,
             userId,
           });
         },
@@ -222,7 +225,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
       const setUserPassword: AdminAccountsShape["setUserPassword"] = Effect.fnUntraced(
         function* (caller, userId, input) {
           const cleared = yield* gate.user(caller, "setUserPassword", userId);
-          if (caller.ref.id === userId) {
+          if (caller.userId === userId) {
             return yield* Effect.fail(new AdminAccountsApi.AdminSelfActionRefused());
           }
           const user = yield* cleared.target;
@@ -262,7 +265,7 @@ export class AdminAccounts extends AuthPlugin.Service<AdminAccounts, AdminAccoun
           // SIEM) learn of it as for any change; the admin event names who did it.
           yield* events.publish({ _tag: "auth.password.changed", userId });
           yield* events.emit(AdminEvents.AdminUserPasswordSetEvent, {
-            adminUserId: Users.UserId(caller.ref.id),
+            adminUserId: caller.userId,
             userId,
           });
         },

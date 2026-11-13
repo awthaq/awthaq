@@ -50,7 +50,7 @@
 
 import { Api } from "@awthaq/api";
 import { AuthPlugin, Errors, Migrations, Retention, Sessions, Tenant, Users } from "@awthaq/core";
-import { Defects, type Encryption, RefreshingCache, type SqlTransaction } from "@awthaq/ports";
+import { Defects, type Encryption, Jws, RefreshingCache, type SqlTransaction } from "@awthaq/ports";
 import { Authentication, Credentials } from "@awthaq/server";
 import { SealedColumn } from "@awthaq/sql";
 import * as Arr from "effect/Array";
@@ -67,7 +67,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { IntrospectionResponse, JwtApi, TokenResponse } from "./JwtApi.ts";
-import { JwtConfig, type JwtConfigShape } from "./JwtConfig.ts";
+import { JwtConfig, JwtConfigScoped, type JwtConfigShape } from "./JwtConfig.ts";
 import * as JwtCodec from "./JwtCodec.ts";
 import * as KeyRing from "./KeyRing.ts";
 import * as RevocationStore from "./RevocationStore.ts";
@@ -255,8 +255,7 @@ export const JwtHandlers = Layer.mergeAll(
     Effect.fnUntraced(function* (handlers) {
       const jwt = yield* Jwt;
       // EP-007: the cache lifetime advertised is the one in force for the request.
-      const builtConfig = yield* JwtConfig;
-      const configNow = Tenant.configInForce(JwtConfig, builtConfig);
+      const configNow = yield* Tenant.inForce(JwtConfigScoped);
       return handlers.handleAll({
         // ECF-002/KRS-010: a returned `HttpServerResponse` bypasses the
         // success-schema encode, so the body is the plain JWKS document and
@@ -343,8 +342,7 @@ const PostAuthResponseHookLive = Layer.effect(
   Effect.gen(function* () {
     const jwt = yield* Jwt;
     // EP-007: whether and how responses are mirrored is decided per response (see `Jwt.layer`).
-    const builtConfig = yield* JwtConfig;
-    const configNow = Tenant.configInForce(JwtConfig, builtConfig);
+    const configNow = yield* Tenant.inForce(JwtConfigScoped);
     type HookContext = Parameters<Authentication.PostAuthResponseHookShape["decorate"]>[2];
     const mirrorHeader = (
       principal: Api.Principal,
@@ -427,7 +425,7 @@ const PostAuthResponseHookLive = Layer.effect(
  */
 const BearerCredentialContributionLive = Layer.unwrap(
   Effect.gen(function* () {
-    const config = yield* JwtConfig;
+    const config = yield* yield* Tenant.inForce(JwtConfigScoped);
     if (!config.acceptAsBearer) return Layer.empty;
     const jwt = yield* Jwt;
     // Looked up as an optional service so a deployment that leaves the flag off
@@ -598,8 +596,8 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
         // the calling fiber applies to that request; with none, the build-time value applies
         // exactly as before. The signing-key ring (algorithm, rotation, grace, cache) is one
         // deployment-wide store and stays boot-scoped.
-        const config = yield* JwtConfig;
-        const configNow = Tenant.configInForce(JwtConfig, config);
+        const configNow = yield* Tenant.inForce(JwtConfigScoped);
+        const config = yield* configNow;
         const ref = yield* KeyRing.KeyRing;
         const remoteSigner = yield* JwtCodec.RemoteSigner;
         const random = yield* SecureRandom.SecureRandom;
@@ -743,29 +741,35 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
             readonly requireSubject: boolean;
           },
         ) => {
-          const attempt = Effect.gen(function* () {
+          return Effect.gen(function* () {
             const config = yield* configNow;
-            const keys = yield* verifiableKeys;
-            return yield* JwtCodec.verify({
-              token,
-              keys: keys.map((key) => ({
+            const toVerificationKeys = (
+              keys: ReadonlyArray<{
+                readonly kid: string;
+                readonly alg: JwtCodec.Algorithm;
+                readonly publicKeyJwk: Record<string, unknown>;
+              }>,
+            ) =>
+              keys.map((key) => ({
                 kid: key.kid,
                 alg: key.alg,
                 publicKeyJwk: key.publicKeyJwk,
-              })),
-              algorithms: Array.from(new Set(keys.map((key) => key.alg))),
+              }));
+            return yield* JwtCodec.verify({
+              token,
+              keys: toVerificationKeys(yield* verifiableKeys),
+              refetch: Effect.andThen(keyRefresh.refreshOnMiss, verifiableKeys).pipe(
+                Effect.map(toVerificationKeys),
+              ),
+              // every ring key declares its alg and Jws requires equality, so the accepted algorithms are exactly those of the keys present
+              // the allowlist must not be computed before the refetch, or a peer's key of a new algorithm is refused (plan 38 Q6)
+              algorithms: Jws.algorithms,
               issuer: config.issuer,
               audience: expected.audience,
               expectedTyp: expected.typ,
               requireSubject: expected.requireSubject,
             });
           });
-          return attempt.pipe(
-            Effect.catchIf(
-              (error) => error._tag === "JwtInvalidError" && error.reason === "unknown kid",
-              () => Effect.andThen(keyRefresh.refreshOnMiss, attempt),
-            ),
-          );
         };
 
         // Principal tokens only (`typ: "at+jwt"`, a `sub` is mandatory):
@@ -826,8 +830,10 @@ export class Jwt extends AuthPlugin.Service<Jwt, JwtShape>()("jwt", {
             return claims;
           });
 
+        // BEH-EA-292: every served key names its kid and alg from the record, whatever JWK was
+        // registered (plan 38 B4).
         const jwks: JwtShape["jwks"] = Effect.map(verifiableKeys, (keys) => ({
-          keys: keys.map((key) => key.publicKeyJwk),
+          keys: keys.map((key) => ({ ...key.publicKeyJwk, kid: key.kid, alg: key.alg })),
         }));
 
         const introspect: JwtShape["introspect"] = (token) =>

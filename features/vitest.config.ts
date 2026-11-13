@@ -29,6 +29,8 @@ import { defineConfig } from "vitest/config";
 // never needs a NEW file to be created.
 export default defineConfig({
   test: {
+    // Plan 34: reports the apps and SQL clients each feature file leaves open.
+    setupFiles: ["./step-definitions/shared/LeakGuard.ts"],
     include: ["features/**/*.steps.test.ts"],
     // A scenario like "a request every minute for 30 days" is tens of thousands of statements: over a
     // real Postgres (CI sets AWTHAQ_POSTGRES_URL) round trips need more than vitest's 5 s default.

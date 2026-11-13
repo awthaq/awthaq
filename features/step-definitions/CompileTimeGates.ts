@@ -285,7 +285,7 @@ export const hostWithoutMailer = () =>
 export const hostWithEveryPort = () =>
   Effect.runPromise(
     Layer.launch(
-      hostedPassword.pipe(Layer.provide(everyPortButMailer), Layer.provide(Mailer.layerMemory)),
+      hostedPassword.pipe(Layer.provide(everyPortButMailer), Layer.provide(Mailer.layerNoop)),
     ),
   );
 

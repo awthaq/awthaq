@@ -3,8 +3,7 @@
 // The authorized interface: what a signed-in member calls through HTTP. A leaf file (the plugin
 // class, its handlers and its implementation all import it) so the handlers never import the class.
 
-import type { Api } from "@awthaq/api";
-import type { Errors, HookPoint, Users } from "@awthaq/core";
+import type { CurrentUser, Errors, HookPoint, Users } from "@awthaq/core";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
 import type * as ActiveContextRecords from "./ActiveContextRecords.ts";
@@ -20,7 +19,7 @@ import type * as TeamRecords from "./TeamRecords.ts";
 
 export interface OrganizationShape {
   readonly create: (input: {
-    readonly caller: Api.UserPrincipal;
+    readonly caller: CurrentUser.Caller;
     readonly name: string;
     readonly slug: string;
     readonly logo?: string | undefined;
@@ -37,21 +36,21 @@ export interface OrganizationShape {
   >;
   readonly checkSlug: (slug: string) => Effect.Effect<boolean, Errors.StoreUnavailable>;
   readonly list: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
   ) => Effect.Effect<
     ReadonlyArray<OrganizationRecords.OrganizationRecord>,
     Errors.StoreUnavailable
   >;
   /** MTI-008: member-only — a non-member gets the same `OrganizationNotFound` an unknown id gets. */
   readonly get: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
   ) => Effect.Effect<
     OrganizationRecords.OrganizationRecord,
     OrganizationApi.OrganizationNotFound | Errors.StoreUnavailable
   >;
   readonly getFull: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     input?: {
       readonly membersLimit?: number | undefined;
@@ -68,7 +67,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly update: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     input: {
       readonly name?: string | undefined;
@@ -87,7 +86,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly delete: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
   ) => Effect.Effect<
     void,
@@ -98,7 +97,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly listMembers: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     input?: MembershipRecords.ListMembersInput,
   ) => Effect.Effect<
@@ -108,7 +107,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly removeMember: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     targetUserId: Users.UserId,
   ) => Effect.Effect<
@@ -121,7 +120,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly updateMemberRole: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     targetUserId: Users.UserId,
     role: ReadonlyArray<string>,
@@ -137,7 +136,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly leave: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
   ) => Effect.Effect<
     void,
@@ -148,30 +147,30 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly getActiveMember: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
   ) => Effect.Effect<
     MembershipRecords.MembershipRecord,
     OrganizationApi.NoActiveOrganization | Errors.StoreUnavailable
   >;
   readonly getActiveMemberRole: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
   ) => Effect.Effect<
     ReadonlyArray<string>,
     OrganizationApi.NoActiveOrganization | Errors.StoreUnavailable
   >;
   /** Upserts the caller's own session's active organization; `organizationId: null` unsets it. Rejects if the caller isn't a member of the named organization. */
   readonly setActive: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string | null,
   ) => Effect.Effect<
     ActiveContextRecords.ActiveContextRecord,
     OrganizationApi.MembershipNotFound | Errors.StoreUnavailable
   >;
   readonly getActive: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
   ) => Effect.Effect<ActiveContextRecords.ActiveContextRecord, Errors.StoreUnavailable>;
   readonly invite: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     input: {
       readonly email: string;
@@ -196,7 +195,7 @@ export interface OrganizationShape {
   >;
   /** MTI-010: `token` is the emailed capability; the invitation id alone accepts nothing. */
   readonly acceptInvitation: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     invitationId: string,
     token: string,
   ) => Effect.Effect<
@@ -213,7 +212,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly rejectInvitation: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     invitationId: string,
     token: string,
   ) => Effect.Effect<
@@ -225,7 +224,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly cancelInvitation: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     invitationId: string,
   ) => Effect.Effect<
     void,
@@ -240,7 +239,7 @@ export interface OrganizationShape {
    * `invitation:create`; anyone else gets the same `InvitationNotFound` an unknown id gets.
    */
   readonly getInvitation: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     invitationId: string,
   ) => Effect.Effect<
     InvitationRecords.InvitationRecord,
@@ -248,14 +247,14 @@ export interface OrganizationShape {
   >;
   /** MTI-010: the landing-page lookup — resolves the emailed token, for the invitee only. */
   readonly getInvitationByToken: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     token: string,
   ) => Effect.Effect<
     InvitationRecords.InvitationRecord,
     OrganizationApi.InvitationNotFound | Errors.StoreUnavailable
   >;
   readonly listInvitationsForOrganization: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
   ) => Effect.Effect<
     ReadonlyArray<InvitationRecords.InvitationRecord>,
@@ -264,10 +263,10 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly listInvitationsForUser: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
   ) => Effect.Effect<ReadonlyArray<InvitationRecords.InvitationRecord>, Errors.StoreUnavailable>;
   readonly createRole: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     input: { readonly role: string; readonly permission: PermissionEngine.Statements },
   ) => Effect.Effect<
@@ -283,7 +282,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly listRoles: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
   ) => Effect.Effect<
     ReadonlyArray<OrgRoleRecords.OrgRoleRecord>,
@@ -293,7 +292,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly getRole: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     roleId: string,
   ) => Effect.Effect<
@@ -305,7 +304,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly updateRole: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     roleId: string,
     permission: PermissionEngine.Statements,
@@ -320,7 +319,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly deleteRole: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     roleId: string,
   ) => Effect.Effect<
@@ -334,7 +333,7 @@ export interface OrganizationShape {
   >;
   /** OHS-001: with a `parentId`, the team is created under that parent (`TeamNotFound` when it is not in this organization). */
   readonly createTeam: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     name: string,
     parentId?: string | undefined,
@@ -350,7 +349,7 @@ export interface OrganizationShape {
   >;
   /** OHS-001: re-parents a team with its whole subtree; `None` moves it to the root. Needs `team:update`. */
   readonly moveTeam: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     teamId: string,
     parentId: Option.Option<string>,
@@ -366,7 +365,7 @@ export interface OrganizationShape {
   >;
   /** OHS-001: member-only, nearest first. */
   readonly listTeamAncestors: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     teamId: string,
   ) => Effect.Effect<
@@ -379,7 +378,7 @@ export interface OrganizationShape {
   >;
   /** OHS-001: member-only, nearest first. */
   readonly listTeamDescendants: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     teamId: string,
   ) => Effect.Effect<
@@ -392,7 +391,7 @@ export interface OrganizationShape {
   >;
   /** MTI-002: member-only — a full team roster/directory is confidential to the organization, not deployment-public. */
   readonly listTeams: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
   ) => Effect.Effect<
     ReadonlyArray<TeamRecords.TeamRecord>,
@@ -402,14 +401,14 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly listUserTeams: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
   ) => Effect.Effect<
     ReadonlyArray<TeamRecords.TeamRecord>,
     OrganizationApi.OrganizationNotFound | OrganizationApi.TeamsDisabled | Errors.StoreUnavailable
   >;
   readonly updateTeam: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     teamId: string,
     name: string,
@@ -423,7 +422,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly removeTeam: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     teamId: string,
   ) => Effect.Effect<
@@ -439,7 +438,7 @@ export interface OrganizationShape {
   >;
   /** MTI-002: member-only — a team roster is personal data about the organization's own staff, not deployment-public. */
   readonly listTeamMembers: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     teamId: string,
   ) => Effect.Effect<
@@ -451,7 +450,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly addTeamMember: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     teamId: string,
     targetUserId: Users.UserId,
@@ -472,7 +471,7 @@ export interface OrganizationShape {
   >;
   /** OHS-004: needs `team:update` on the team (org-level, or a team role held on it or an ancestor); `canGrant`-guarded like org roles. */
   readonly updateTeamMemberRole: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     teamId: string,
     targetUserId: Users.UserId,
@@ -490,7 +489,7 @@ export interface OrganizationShape {
     | Errors.StoreUnavailable
   >;
   readonly removeTeamMember: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     organizationId: string,
     teamId: string,
     targetUserId: Users.UserId,
@@ -506,7 +505,7 @@ export interface OrganizationShape {
   >;
   /** Upserts the caller's own session's active team; `teamId: null` unsets it. Rejects if the caller isn't a member of the named team. */
   readonly setActiveTeam: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     teamId: string | null,
   ) => Effect.Effect<
     ActiveContextRecords.ActiveContextRecord,

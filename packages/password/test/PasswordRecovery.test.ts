@@ -1,8 +1,8 @@
 // password-recovery-correctness: ARF-002/004/007/008 — the confirmReset and
 // requestReset edges that used to burn tokens, 500, or strand an account.
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import { Accounts, Users, Verification } from "@awthaq/core";
-import { Mailer, PasswordHasher } from "@awthaq/ports";
+import { PasswordHasher } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -10,21 +10,14 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Password from "../src/Password.ts";
-import {
-  email,
-  letForkedFibersRun,
-  makeTestLayer,
-  strongPassword,
-  tokenOf,
-  UnavailableHttpClient,
-} from "./harness.ts";
+import { email, makeTestLayer, strongPassword, UnavailableHttpClient } from "./harness.ts";
 
-const mailedToken = (mailer: Mailer.MailerShape, template: string) =>
+const resetTokenFor = (nth = 1) =>
   Effect.gen(function* () {
-    yield* letForkedFibersRun;
-    const mail = (yield* mailer.sent).findLast((m) => m.template === template);
-    assert.isDefined(mail);
-    return Redacted.make(tokenOf(mail));
+    const box = yield* TestMailbox.Mailbox;
+    return Redacted.make(
+      TestMailbox.secret(yield* box.mail.waitFor({ template: "reset-password" }, { nth })),
+    );
   });
 
 describe("ARF-002: policy before consume", () => {
@@ -33,10 +26,9 @@ describe("ARF-002: policy before consume", () => {
     () =>
       Effect.gen(function* () {
         const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
         yield* password.signUp({ email, password: strongPassword });
         yield* password.requestReset({ email });
-        const token = yield* mailedToken(mailer, "reset-password");
+        const token = yield* resetTokenFor();
 
         const weak = yield* password
           .confirmReset({ token, password: Redacted.make("short") })
@@ -55,7 +47,6 @@ describe("ARF-002: policy before consume", () => {
   it.effect("a breach-check outage under onUnavailable: reject never consumes the token", () =>
     Effect.gen(function* () {
       const password = yield* Password.Password;
-      const mailer = yield* Mailer.Mailer;
       const users = yield* Users.Users;
       const accounts = yield* Accounts.Accounts;
       const hasher = yield* PasswordHasher.PasswordHasher;
@@ -68,7 +59,7 @@ describe("ARF-002: policy before consume", () => {
         credentialHash: Redacted.make(yield* hasher.hash(strongPassword)),
       });
       yield* password.requestReset({ email });
-      const token = yield* mailedToken(mailer, "reset-password");
+      const token = yield* resetTokenFor();
 
       const attempt = { token, password: Redacted.make("a brand new strong password") };
       const first = yield* password.confirmReset(attempt).pipe(Effect.flip);
@@ -122,7 +113,6 @@ describe("ARF-004: credential-less accounts", () => {
         const password = yield* Password.Password;
         const users = yield* Users.Users;
         const accounts = yield* Accounts.Accounts;
-        const mailer = yield* Mailer.Mailer;
         const oauthOnly = yield* users.create({
           identity: { _tag: "Email", email: "oauth@example.com" },
           name: "Oauth",
@@ -130,13 +120,13 @@ describe("ARF-004: credential-less accounts", () => {
         yield* accounts.link({ userId: oauthOnly.id, providerId: "github", subject: "gh-1" });
 
         yield* password.requestReset({ email: "oauth@example.com" });
-        yield* letForkedFibersRun;
-        const sent = yield* mailer.sent;
-        assert.strictEqual(sent.filter((m) => m.template === "reset-password").length, 0);
-        const notice = sent.find((m) => m.template === "reset-password-unavailable");
-        assert.isDefined(notice);
-        assert.strictEqual(notice?.to, "oauth@example.com");
-        assert.isUndefined(notice?.data?.["token"]);
+        const box = yield* TestMailbox.Mailbox;
+        const notice = yield* box.mail.waitFor({
+          template: "reset-password-unavailable",
+        });
+        yield* box.mail.refute({ template: "reset-password" });
+        assert.strictEqual(notice.to, "oauth@example.com");
+        assert.isUndefined(notice.data?.["token"]);
       }).pipe(TestAuth.withoutRequest, Effect.provide(makeTestLayer())),
   );
 
@@ -172,11 +162,10 @@ describe("ARF-008: a reset proves mailbox control", () => {
   it.effect("an unverified user who completes confirmReset can then signIn", () =>
     Effect.gen(function* () {
       const password = yield* Password.Password;
-      const mailer = yield* Mailer.Mailer;
       const users = yield* Users.Users;
       yield* password.signUp({ email, password: strongPassword });
       yield* password.requestReset({ email });
-      const token = yield* mailedToken(mailer, "reset-password");
+      const token = yield* resetTokenFor();
 
       const newPassword = Redacted.make("a brand new strong password");
       yield* password.confirmReset({ token, password: newPassword });

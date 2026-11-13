@@ -24,7 +24,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as PasswordApi from "./PasswordApi.ts";
-import { PasswordConfig, type PasswordConfigShape } from "./PasswordConfig.ts";
+import { PasswordConfigScoped, type PasswordConfigShape } from "./PasswordConfig.ts";
 
 /**
  * A candidate the one policy accepted (BEH-EA-119/120). Only `accept` mints one, and every write
@@ -199,8 +199,9 @@ const make = Effect.gen(function* () {
   // EP-007: the floor and `rehashOnLogin` are decided per operation, so a tenant's
   // `Password.config(...)` in the calling fiber applies; the built value is boot-scoped only for
   // the calibration below.
-  const builtConfig = yield* PasswordConfig;
-  const configNow = Tenant.configInForce(PasswordConfig, builtConfig);
+  const configNow = yield* Tenant.inForce(PasswordConfigScoped);
+  // read once at build: the build value (BEH-EA-355 boot fields)
+  const builtConfig = yield* configNow;
 
   /**
    * EOTS-001: the hash check is its own span (`awthaq.password.verify`), so a trace shows where

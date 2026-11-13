@@ -92,7 +92,7 @@ const ConnectionsLive = Layer.mergeAll(
   Layer.provideMerge(StubDirectoryLive),
   Layer.provideMerge(EncryptionLive),
   Layer.provideMerge(
-    Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerMemory),
+    Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerNoop),
   ),
   Layer.provideMerge(TestAuth.memoryFoundation),
   Layer.provideMerge(NodeCrypto.layer),

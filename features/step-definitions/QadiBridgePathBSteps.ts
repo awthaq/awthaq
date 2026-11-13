@@ -48,6 +48,7 @@ import type { OutageKind } from "./QadiBridgeWorld.ts";
 import {
   FixtureApi,
   World,
+  buildUndeclaredGuard,
   adminRole,
   configure,
   fetchAs,
@@ -120,8 +121,6 @@ const outcomeRoute = (name: string) => {
       return { path: "/b/duty", outage: false };
     case "a resolver outage":
       return { path: "/b/plan", outage: true };
-    case "a missing annotation":
-      return { path: "/b/forgotten", outage: false };
     default:
       throw new Error(`unknown outcome "${name}"`);
   }
@@ -534,43 +533,99 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.deepEqual(yield* Ref.get(world.decisions), []);
   });
 
-  // ---- BEH-EA-156: absence of either annotation is refusal ----
+  // ---- BEH-EA-156: absence of either annotation is refusal, at build time (qadi 0.12) ----
 
   Given(
     "an endpoint in a RequirePermission-middlewared group carrying neither RequiredPermission nor PublicEndpoint",
     function* () {
-      const forgotten = endpointAt("/b/forgotten");
-      assert.equal(forgotten.group, "gated");
-      assert.ok(Option.isNone(forgotten.required));
-      assert.ok(Option.isNone(forgotten.publicReason));
-      yield* setPlan({ path: "/b/forgotten" });
+      yield* configure({ roles: [readerRole, adminRole] });
+      assert.ok(
+        !declared().some((e) => e.path === "/b/forgotten"),
+        "the served fixture mounts no unannotated endpoint",
+      );
     },
   );
 
   Given("an endpoint carrying neither RequiredPermission nor PublicEndpoint", function* () {
-    const forgotten = endpointAt("/b/forgotten");
-    assert.ok(Option.isNone(forgotten.required) && Option.isNone(forgotten.publicReason));
-    yield* setPlan({ path: "/b/forgotten" });
+    yield* configure({ roles: [readerRole, adminRole] });
   });
 
   Given(
     "a signed-in user {string} with a fully valid, unexpired session",
     function* (name: string) {
-      yield* configure({ roles: [readerRole, adminRole] });
       // Even the most privileged caller: an unannotated endpoint is not gated by who you are.
       yield* signIn(name, ["admin"]);
     },
   );
 
-  When("{string} requests that endpoint", function* (name: string) {
-    yield* fetchAs(name, "/b/forgotten");
+  const refuse = Effect.fn("features.pathB.refuse")(function* () {
+    const refusal = yield* buildUndeclaredGuard;
+    yield* setOutcome("refusal", refusal);
+    return refusal;
   });
 
-  When("{int} separate requests reach that endpoint over time", function* (count: number) {
-    const statuses: Array<number> = [];
-    for (let i = 0; i < count; i++)
-      statuses.push((yield* fetchAs(undefined, "/b/forgotten")).status);
-    yield* setOutcome("statuses", statuses);
+  When("the host builds the guard for the API that endpoint belongs to", function* () {
+    yield* refuse();
+  });
+
+  When("{string} requests that endpoint", function* (name: string) {
+    yield* refuse();
+    // The guard was refused, so nothing serves it: the app mounts no such route.
+    yield* setOutcome("served", (yield* fetchAs(name, "/b/forgotten")).status);
+  });
+
+  When("the host builds the guard for that API {int} separate times", function* (count: number) {
+    const tags: Array<string> = [];
+    for (let i = 0; i < count; i++) tags.push((yield* buildUndeclaredGuard)._tag);
+    yield* setOutcome("tags", tags);
+  });
+
+  Then("the build is refused with {string} naming that endpoint", function* (tag: string) {
+    const refusal = yield* outcome("refusal");
+    assert.ok(typeof refusal === "object" && refusal !== null);
+    assert.equal(Reflect.get(refusal, "_tag"), tag);
+    assert.equal(Reflect.get(refusal, "group"), "gated");
+    assert.equal(Reflect.get(refusal, "endpoint"), "forgotten");
+  });
+
+  Then("the endpoint is never served as {string}", function* (label: string) {
+    const world = yield* World;
+    assert.deepEqual(yield* Ref.get(world.executed), []);
+    assert.notEqual(yield* outcome("served"), codeOf(label));
+  });
+
+  Then(
+    "the refusal is produced without qadi's evaluator ever being asked to decide anything",
+    function* () {
+      const world = yield* World;
+      const refusal = yield* outcome("refusal");
+      assert.ok(typeof refusal === "object" && refusal !== null);
+      assert.equal(Reflect.get(refusal, "_tag"), "AccessNotDeclared");
+      assert.deepEqual(yield* Ref.get(world.decisions), []);
+    },
+  );
+
+  Then("the refusal is never an {string} decision", function* (tag: string) {
+    const refusal = yield* outcome("refusal");
+    assert.ok(typeof refusal === "object" && refusal !== null);
+    assert.notEqual(Reflect.get(refusal, "_tag"), tag);
+  });
+
+  Then(
+    "every one of the {int} builds is refused with {string}",
+    function* (count: number, tag: string) {
+      const tags = yield* outcome("tags");
+      assert.ok(Array.isArray(tags));
+      assert.equal(tags.length, count);
+      assert.ok(tags.every((t) => t === tag));
+    },
+  );
+
+  Then("none of them ever yields a guard that serves a request", function* () {
+    const tags = yield* outcome("tags");
+    assert.ok(Array.isArray(tags) && tags.every((t) => t === "AccessNotDeclared"));
+    const world = yield* World;
+    assert.deepEqual(yield* Ref.get(world.executed), []);
   });
 
   Then("the response is {string}", function* (label: string) {
@@ -578,40 +633,9 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
     assert.equal((yield* world.responses.get("last")).status, codeOf(label));
   });
 
-  Then("the log names the endpoint that was reached unannotated", function* () {
-    const world = yield* World;
-    const logs = yield* Ref.get(world.logs);
-    assert.ok(
-      logs.some((line) => line.includes('"forgotten"')),
-      `a log line names the endpoint (saw ${JSON.stringify(logs)})`,
-    );
-  });
-
   Then("the response is never {string}", function* (label: string) {
     const world = yield* World;
     assert.notEqual((yield* world.responses.get("last")).status, codeOf(label));
-  });
-
-  Then(
-    "the 500 response is produced without qadi's evaluator ever being asked to decide anything",
-    function* () {
-      const world = yield* World;
-      assert.equal((yield* world.responses.get("last")).status, 500);
-      assert.deepEqual(yield* Ref.get(world.decisions), []);
-    },
-  );
-
-  Then("every one of the {int} responses is {string}", function* (count: number, label: string) {
-    const statuses = yield* outcome("statuses");
-    assert.ok(Array.isArray(statuses));
-    assert.equal(statuses.length, count);
-    assert.ok(statuses.every((status) => status === codeOf(label)));
-  });
-
-  Then("none of them is ever {string}", function* (label: string) {
-    const statuses = yield* outcome("statuses");
-    assert.ok(Array.isArray(statuses));
-    assert.ok(statuses.every((status) => status !== codeOf(label)));
   });
 
   // ---- BEH-EA-157: status mapping is qadi's, not awthaq's ----
@@ -665,7 +689,6 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
       "an AccessDenied decision",
       "an UndischargedObligation",
       "a resolver outage",
-      "a missing annotation",
     ]) {
       served[name] = (yield* fetchAs("caller", outcomeRoute(name).path)).status;
     }
@@ -696,8 +719,6 @@ export const pathBSteps = defineSteps<World>(({ Given, When, Then }) => {
       Reflect.get(served, "a resolver outage"),
       qadi(new AttributeResolveError({ attribute: "plan", cause: "down" })),
     );
-    // A missing annotation is `RequirePermissionLive`'s own 500 (INV-QD-034): qadi's, not awthaq's.
-    assert.equal(Reflect.get(served, "a missing annotation"), 500);
   });
 
   Then("no additional mapping layer inside awthaq changes it", function* () {

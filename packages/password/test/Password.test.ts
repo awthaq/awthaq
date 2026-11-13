@@ -10,7 +10,7 @@
 // business-logic mock).
 import { Accounts, AuditLog, Auth, AuthEvents, MailDispatch, Sessions, Users } from "@awthaq/core";
 import { Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
-import { SignInProbe, TestAuth } from "@awthaq/test";
+import { SignInProbe, TestAuth, TestMailbox } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -26,16 +26,15 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Password from "../src/Password.ts";
 import * as PasswordEvents from "../src/PasswordEvents.ts";
-import { makeTestLayer, NoBreachHttpClient, tokenOf } from "./harness.ts";
+import { makeTestLayer, NoBreachHttpClient } from "./harness.ts";
 
 /** The composition every test shares: `Auth.make([Password])` through `TestAuth.layer` (`harness.ts`). */
 const TestLayer = makeTestLayer();
 
-/** TSS-001/TSS-002: a `Mailer` whose `send` never resolves: see the tests below that provide this in place of the default recording `Mailer.layerMemory`. */
-const HangingMailerLayer: Layer.Layer<Mailer.Mailer> = Layer.succeed(
-  Mailer.Mailer,
-  Mailer.Mailer.of({ send: () => Effect.never, sent: Effect.succeed([]) }),
-);
+/** TSS-001/TSS-002: a `Mailer` whose `send` never resolves: see the tests below that provide this in place of the base `TestMailbox` recording. */
+const HangingMailerLayer = Layer.mock(Mailer.Mailer)({
+  send: () => Effect.never,
+});
 
 // ERS-002: scope close waits `drainTimeout` for in-flight mail; this mailer never finishes and `TestClock` never
 // advances, so don't wait.
@@ -52,17 +51,6 @@ const email = "ada@example.com";
 const strongPassword = Redacted.make("correct horse battery staple");
 
 /**
- * `signUp`'s verification mail is dispatched via `Effect.forkDetach`
- * (BEH-EA-113: never awaited) — under `it.effect`'s `TestClock`, an
- * `Effect.sleep` wouldn't advance on its own, so a few cooperative
- * scheduler turns are what actually gives that detached fiber a chance to
- * run its two effectful steps to completion.
- */
-const letForkedFibersRun = Effect.gen(function* () {
-  for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
-});
-
-/**
  * Upstream-hardening ticket 04: `signIn` now hard-blocks an unverified
  * account, so every test that needs a real, working sign-in after signUp
  * must consume the verification mail `signUp` already dispatches first —
@@ -70,7 +58,6 @@ const letForkedFibersRun = Effect.gen(function* () {
  */
 const signUpAndVerify = (
   password: Password.PasswordShape,
-  mailer: Mailer.MailerShape,
   input: {
     readonly email: string;
     readonly password: Redacted.Redacted<string>;
@@ -79,11 +66,14 @@ const signUpAndVerify = (
   },
 ) =>
   Effect.gen(function* () {
+    const box = yield* TestMailbox.Mailbox;
+    const match = { to: input.email, template: "verify-email" };
+    const before = (yield* box.mail.messages).filter(
+      (mail) => mail.to === match.to && mail.template === match.template,
+    ).length;
     const issued = yield* password.signUp(input);
-    yield* letForkedFibersRun;
-    const sent = yield* mailer.sent;
-    const verifyMail = sent.findLast((mail) => mail.template === "verify-email");
-    const token = Redacted.make(tokenOf(verifyMail));
+    const verifyMail = yield* box.mail.waitFor(match, { nth: before + 1 });
+    const token = Redacted.make(TestMailbox.secret(verifyMail));
     yield* password.verifyEmail({ token });
     return issued;
   });
@@ -96,7 +86,7 @@ describe("Password", () => {
         const password = yield* Password.Password;
         const users = yield* Users.Users;
         const accounts = yield* Accounts.Accounts;
-        const mailer = yield* Mailer.Mailer;
+        const box = yield* TestMailbox.Mailbox;
 
         const issued = yield* password.signUp({ email, password: strongPassword });
 
@@ -110,11 +100,9 @@ describe("Password", () => {
         );
         assert.isTrue(Option.isSome(account));
 
-        // BEH-EA-113: dispatched via `Effect.forkDetach` — give it a turn to run.
-        yield* letForkedFibersRun;
-        const sent = yield* mailer.sent;
-        assert.strictEqual(sent.length, 1);
-        assert.strictEqual(sent[0]?.template, "verify-email");
+        // BEH-EA-113: dispatched via `Effect.forkDetach` — wait for it, then expect exactly that one mail.
+        yield* box.mail.waitFor({ template: "verify-email" });
+        yield* box.mail.refute({}, { beyond: 1 });
       }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
@@ -144,8 +132,7 @@ describe("Password", () => {
         const password = yield* Password.Password;
         const users = yield* Users.Users;
         const accounts = yield* Accounts.Accounts;
-        const mailer = yield* Mailer.Mailer;
-        const { session } = yield* signUpAndVerify(password, mailer, {
+        const { session } = yield* signUpAndVerify(password, {
           email,
           password: strongPassword,
         });
@@ -183,8 +170,7 @@ describe("Password", () => {
   it.effect("THS-003: signUp, signIn and changePassword sessions carry amr [pwd]", () =>
     Effect.gen(function* () {
       const password = yield* Password.Password;
-      const mailer = yield* Mailer.Mailer;
-      const signedUp = yield* signUpAndVerify(password, mailer, {
+      const signedUp = yield* signUpAndVerify(password, {
         email,
         password: strongPassword,
       });
@@ -257,9 +243,8 @@ describe("Password", () => {
         const password = yield* Password.Password;
         const users = yield* Users.Users;
         const sessions = yield* Sessions.Sessions;
-        const mailer = yield* Mailer.Mailer;
         const events = yield* AuthEvents.AuthEvents;
-        yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+        yield* signUpAndVerify(password, { email, password: strongPassword });
         const user = Option.getOrThrow(yield* users.findByEmail(email));
         const before = (yield* sessions.list(user.id)).length;
 
@@ -394,12 +379,14 @@ describe("Password", () => {
       );
       return Effect.gen(function* () {
         const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
-        const issued = yield* signUpAndVerify(password, mailer, {
+        const issued = yield* signUpAndVerify(password, {
           email,
           password: strongPassword,
         });
-        yield* password.signIn({ email, password: strongPassword });
+        yield* password.signIn({
+          email,
+          password: strongPassword,
+        });
         yield* password
           .signIn({ email, password: Redacted.make("totally wrong password") })
           .pipe(Effect.flip);
@@ -468,9 +455,8 @@ describe("Password", () => {
     () =>
       Effect.gen(function* () {
         const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
         const auditLog = yield* AuditLog.AuditLog;
-        const issued = yield* signUpAndVerify(password, mailer, {
+        const issued = yield* signUpAndVerify(password, {
           email,
           password: strongPassword,
         });
@@ -480,15 +466,19 @@ describe("Password", () => {
         assert.strictEqual(verified[0]?.actorUserId._tag, "Some");
 
         yield* password.requestReset({ email: "nobody@example.com" });
-        yield* letForkedFibersRun;
         assert.strictEqual(
           (yield* auditLog.list({ eventTag: "auth.password.resetRequested" })).length,
           0,
         );
 
         yield* password.requestReset({ email });
-        yield* letForkedFibersRun;
-        const requested = yield* auditLog.list({ eventTag: "auth.password.resetRequested" });
+        yield* (yield* TestMailbox.Mailbox).mail.waitFor({
+          to: email,
+          template: "reset-password",
+        });
+        const requested = yield* auditLog.list({
+          eventTag: "auth.password.resetRequested",
+        });
         assert.strictEqual(requested.length, 1);
         const [row] = requested;
         assert.deepStrictEqual(
@@ -509,7 +499,6 @@ describe("Password", () => {
     () =>
       Effect.gen(function* () {
         const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
         const events = yield* AuthEvents.AuthEvents;
 
         const issuedEvents = yield* Effect.forkChild(
@@ -521,11 +510,14 @@ describe("Password", () => {
           { startImmediately: true },
         );
 
-        const signedUp = yield* signUpAndVerify(password, mailer, {
+        const signedUp = yield* signUpAndVerify(password, {
           email,
           password: strongPassword,
         });
-        const signedIn = yield* password.signIn({ email, password: strongPassword });
+        const signedIn = yield* password.signIn({
+          email,
+          password: strongPassword,
+        });
 
         const collected = yield* Fiber.join(issuedEvents);
         assert.strictEqual(collected.length, 2);
@@ -548,9 +540,11 @@ describe("Password", () => {
     () =>
       Effect.gen(function* () {
         const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
-        yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
-        const issued = yield* password.signIn({ email, password: strongPassword });
+        yield* signUpAndVerify(password, { email, password: strongPassword });
+        const issued = yield* password.signIn({
+          email,
+          password: strongPassword,
+        });
         assert.isDefined(issued.token);
       }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
@@ -560,56 +554,45 @@ describe("Password", () => {
     () =>
       Effect.gen(function* () {
         const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
+        const box = yield* TestMailbox.Mailbox;
+        const verifyMails = { template: "verify-email" };
         yield* password.signUp({ email, password: strongPassword });
-        yield* letForkedFibersRun; // let signUp's own verification mail land first
+        yield* box.mail.waitFor(verifyMails); // signUp's own verification mail lands first
 
         yield* password.resendVerification({ email: "nobody@example.com" });
-        yield* letForkedFibersRun;
-        const afterUnknown = yield* mailer.sent;
-        assert.strictEqual(
-          afterUnknown.filter((mail) => mail.template === "verify-email").length,
-          1, // only signUp's own mail so far
-        );
+        yield* box.mail.refute(verifyMails, { beyond: 1 }); // only signUp's own mail so far
 
         yield* password.resendVerification({ email });
-        yield* letForkedFibersRun;
-        const afterKnown = yield* mailer.sent;
-        assert.strictEqual(afterKnown.filter((mail) => mail.template === "verify-email").length, 2);
+        yield* box.mail.waitFor(verifyMails, { nth: 2 });
 
         // Once verified, a further resend mails nothing new — same
         // enumeration-safe response either way. `resendVerification`
         // reissues against the same identifier, atomically replacing the
         // still-live token signUp minted — the most recently mailed token
         // is the only one still valid, not the first.
-        const verifyMail = afterKnown.findLast((mail) => mail.template === "verify-email");
-        yield* password.verifyEmail({ token: Redacted.make(tokenOf(verifyMail)) });
+        const verifyMail = yield* box.mail.waitFor(verifyMails, { nth: 2 });
+        yield* password.verifyEmail({
+          token: Redacted.make(TestMailbox.secret(verifyMail)),
+        });
         yield* password.resendVerification({ email });
-        yield* letForkedFibersRun;
-        const afterVerified = yield* mailer.sent;
-        assert.strictEqual(
-          afterVerified.filter((mail) => mail.template === "verify-email").length,
-          2,
-        );
+        yield* box.mail.refute(verifyMails, { beyond: 2 });
       }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
   it.effect("BEH-EA-064/117: requestReset always succeeds; only a known email is mailed", () =>
     Effect.gen(function* () {
       const password = yield* Password.Password;
-      const mailer = yield* Mailer.Mailer;
+      const box = yield* TestMailbox.Mailbox;
+      const resetMails = { template: "reset-password" };
       yield* password.signUp({ email, password: strongPassword });
-      yield* letForkedFibersRun; // let signUp's own verification mail land first
+      yield* box.mail.waitFor({ template: "verify-email" }); // signUp's own verification mail lands first
 
       yield* password.requestReset({ email: "nobody@example.com" });
-      yield* letForkedFibersRun;
-      const afterUnknown = yield* mailer.sent;
-      assert.strictEqual(afterUnknown.filter((m) => m.template === "reset-password").length, 0);
+      yield* box.mail.refute(resetMails);
 
       yield* password.requestReset({ email });
-      yield* letForkedFibersRun;
-      const afterKnown = yield* mailer.sent;
-      assert.strictEqual(afterKnown.filter((m) => m.template === "reset-password").length, 1);
+      yield* box.mail.waitFor(resetMails);
+      yield* box.mail.refute(resetMails, { beyond: 1 });
     }).pipe(TestAuth.withoutRequest, Effect.provide(TestLayer)),
   );
 
@@ -643,7 +626,7 @@ describe("Password", () => {
     () =>
       Effect.gen(function* () {
         const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
+        const box = yield* TestMailbox.Mailbox;
         const sessions = yield* Sessions.Sessions;
 
         const { token: firstToken } = yield* password.signUp({ email, password: strongPassword });
@@ -653,19 +636,21 @@ describe("Password", () => {
 
         // Upstream-hardening ticket 04: the final `signIn` below needs a
         // verified account — consume signUp's own dispatched mail first.
-        yield* letForkedFibersRun;
-        const verifyMail = (yield* mailer.sent).find((mail) => mail.template === "verify-email");
-        yield* password.verifyEmail({ token: Redacted.make(tokenOf(verifyMail)) });
+        const verifyMail = yield* box.mail.waitFor({
+          template: "verify-email",
+        });
+        yield* password.verifyEmail({
+          token: Redacted.make(TestMailbox.secret(verifyMail)),
+        });
 
         yield* password.requestReset({ email });
-        yield* letForkedFibersRun;
-        const sent = yield* mailer.sent;
-        const resetMail = sent.find((m) => m.template === "reset-password");
-        assert.isDefined(resetMail);
-        const mailedToken = Redacted.make(tokenOf(resetMail));
+        const resetMail = yield* box.mail.waitFor({
+          template: "reset-password",
+        });
+        const resetToken = Redacted.make(TestMailbox.secret(resetMail));
 
         const newPassword = Redacted.make("a brand new strong password");
-        yield* password.confirmReset({ token: mailedToken, password: newPassword });
+        yield* password.confirmReset({ token: resetToken, password: newPassword });
 
         // BEH-EA-117: every *other* session is gone...
         const secondStillValid = yield* sessions.verify(second.token).pipe(Effect.flip);
@@ -686,17 +671,18 @@ describe("Password", () => {
     () =>
       Effect.gen(function* () {
         const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
         const events = yield* AuthEvents.AuthEvents;
 
-        const issued = yield* signUpAndVerify(password, mailer, {
+        const issued = yield* signUpAndVerify(password, {
           email,
           password: strongPassword,
         });
         yield* password.requestReset({ email });
-        yield* letForkedFibersRun;
-        const resetMail = (yield* mailer.sent).findLast((m) => m.template === "reset-password");
-        const mailedToken = Redacted.make(tokenOf(resetMail));
+        const resetMail = yield* (yield* TestMailbox.Mailbox).mail.waitFor({
+          to: email,
+          template: "reset-password",
+        });
+        const resetToken = Redacted.make(TestMailbox.secret(resetMail));
 
         const captured = yield* Effect.forkChild(
           events.stream.pipe(
@@ -710,7 +696,7 @@ describe("Password", () => {
         );
 
         const newPassword = Redacted.make("a brand new strong password");
-        yield* password.confirmReset({ token: mailedToken, password: newPassword });
+        yield* password.confirmReset({ token: resetToken, password: newPassword });
 
         const collected = yield* Fiber.join(captured);
         assert.strictEqual(collected.length, 2);
@@ -733,8 +719,7 @@ describe("Password", () => {
     () =>
       Effect.gen(function* () {
         const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
-        const issued = yield* signUpAndVerify(password, mailer, {
+        const issued = yield* signUpAndVerify(password, {
           email,
           password: strongPassword,
         });
@@ -780,8 +765,10 @@ describe("Password", () => {
       Effect.gen(function* () {
         const password = yield* Password.Password;
         const sessions = yield* Sessions.Sessions;
-        const mailer = yield* Mailer.Mailer;
-        const first = yield* signUpAndVerify(password, mailer, { email, password: strongPassword });
+        const first = yield* signUpAndVerify(password, {
+          email,
+          password: strongPassword,
+        });
         // A second, independent session for the same user — stands in for
         // an attacker's hijacked session, or simply the user's other
         // device.
@@ -807,9 +794,8 @@ describe("Password", () => {
     () =>
       Effect.gen(function* () {
         const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
         const events = yield* AuthEvents.AuthEvents;
-        const issued = yield* signUpAndVerify(password, mailer, {
+        const issued = yield* signUpAndVerify(password, {
           email,
           password: strongPassword,
         });
@@ -883,8 +869,7 @@ describe("Password", () => {
       Effect.gen(function* () {
         const password = yield* Password.Password;
         const sessions = yield* Sessions.Sessions;
-        const mailer = yield* Mailer.Mailer;
-        const issued = yield* signUpAndVerify(password, mailer, {
+        const issued = yield* signUpAndVerify(password, {
           email,
           password: strongPassword,
         });
@@ -1076,14 +1061,11 @@ describe("Password", () => {
   it.effect("APS-003: verifyEmail is throttled per token identifier", () =>
     Effect.gen(function* () {
       const password = yield* Password.Password;
-      const mailer = yield* Mailer.Mailer;
+      const box = yield* TestMailbox.Mailbox;
 
       yield* password.signUp({ email, password: strongPassword });
-      yield* letForkedFibersRun; // let signUp's own verification mail land
-
-      const sent = yield* mailer.sent;
-      const verifyMail = sent.findLast((mail) => mail.template === "verify-email");
-      const realToken = tokenOf(verifyMail);
+      const verifyMail = yield* box.mail.waitFor({ template: "verify-email" });
+      const realToken = TestMailbox.secret(verifyMail);
       const separator = realToken.lastIndexOf(".");
       const identifier = realToken.slice(0, separator);
 
@@ -1118,7 +1100,7 @@ describe("Password", () => {
     () =>
       Effect.gen(function* () {
         const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
+        const box = yield* TestMailbox.Mailbox;
 
         // `RATE_LIMITS.verifyEmailByIp` is `{ limit: 30, window: 15
         // minutes }` — 31 distinct accounts, one wrong-secret guess each
@@ -1134,13 +1116,12 @@ describe("Password", () => {
             .signUp({ email: `verify-spray-${i}@example.com`, password: strongPassword })
             .pipe(TestAuth.withRequest({ ip: `198.51.100.${100 + i}` }));
         }
-        yield* letForkedFibersRun;
-        const sent = yield* mailer.sent;
         for (let i = 0; i < 31; i++) {
-          const mail = sent.find(
-            (m) => m.template === "verify-email" && m.to === `verify-spray-${i}@example.com`,
-          );
-          const realToken = tokenOf(mail);
+          const mail = yield* box.mail.waitFor({
+            template: "verify-email",
+            to: `verify-spray-${i}@example.com`,
+          });
+          const realToken = TestMailbox.secret(mail);
           identifiers.push(realToken.slice(0, realToken.lastIndexOf(".")));
         }
 

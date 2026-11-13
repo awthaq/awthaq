@@ -4,7 +4,7 @@
 // reads `OrganizationConfig` per operation (ADR-EA-018 decision 8) without importing the plugin.
 
 import { Users } from "@awthaq/core";
-import { Defects } from "@awthaq/ports";
+import { Defects, Tenant } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -127,6 +127,11 @@ export const OrganizationConfig: Context.Reference<OrganizationConfigShape> = Co
   { defaultValue: () => defaultOrganizationConfig },
 );
 
+/** PLAN 36: tenant-scoped; only the retention sweep (no tenant) reads `invitationRetention`, at build. */
+export const OrganizationConfigScoped = Tenant.perTenant(OrganizationConfig, {
+  boot: ["invitationRetention"],
+});
+
 export const config = (partial: Partial<OrganizationConfigShape>) => {
   // RZS-005/N8: a static custom role may not redefine a built-in tier — fail
   // at layer build rather than silently ignoring (or honoring) the override.
@@ -141,5 +146,5 @@ export const config = (partial: Partial<OrganizationConfigShape>) => {
           `awthaq: Organization.config permissionStatements may not redefine the built-in role(s): ${reserved.join(", ")}`,
         ),
       )
-    : Layer.succeed(OrganizationConfig, { ...defaultOrganizationConfig, ...partial });
+    : OrganizationConfigScoped.layer({ ...defaultOrganizationConfig, ...partial });
 };

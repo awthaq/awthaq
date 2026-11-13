@@ -17,7 +17,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as MembershipRecords from "./MembershipRecords.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
-import { OrganizationConfig } from "./OrganizationConfig.ts";
+import { OrganizationConfigScoped } from "./OrganizationConfig.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationErrors from "./OrganizationErrors.ts";
 import * as OrgRoleRecords from "./OrgRoleRecords.ts";
@@ -138,8 +138,7 @@ export class OrganizationAuthority extends Context.Service<
       const orgRoles = yield* OrgRoleRecords.OrgRoleRecords;
       const teams = yield* TeamRecords.TeamRecords;
       // EP-007 (ADR-EA-018): the configuration in force is decided per operation, not frozen at layer build.
-      const builtConfig = yield* OrganizationConfig;
-      const configNow = Tenant.configInForce(OrganizationConfig, builtConfig);
+      const configNow = yield* Tenant.inForce(OrganizationConfigScoped);
 
       const statementsByRole: OrganizationAuthorityShape["statementsByRole"] = (organizationId) =>
         Effect.flatMap(configNow, (orgConfig) =>

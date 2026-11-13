@@ -6,7 +6,8 @@
 // maps it (`Runtime.getErrorExitCode`, BEH-EA-225). Database-backed commands run over a real
 // in-memory SQLite client the *World* owns, so state survives across the separate runtimes each
 // invocation builds, the way a database does (the same seam `packages/cli/test/support/*` uses).
-import { TestEncryption } from "@awthaq/test";
+import { TestAuth, TestEncryption } from "@awthaq/test";
+import { DeviceAuthorization } from "@awthaq/device-authorization";
 import {
   Browser,
   Cli,
@@ -27,10 +28,11 @@ import {
   Hooks,
   Migrations,
   Persistence,
+  Sessions,
   Slots,
   Users,
 } from "@awthaq/core";
-import { SqlTransaction } from "@awthaq/ports";
+import { SqlTransaction, Tenant } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { Roles } from "@awthaq/roles";
 import { CoreMigrations } from "@awthaq/sql";
@@ -51,7 +53,6 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as Runtime from "effect/Runtime";
-import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -62,7 +63,6 @@ import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 import { cheapArgon2id } from "./shared/Harness.ts";
 import { makeOutcomes, type Outcomes } from "./shared/Outcomes.ts";
-import { startSessionServer, type SessionServer } from "./SessionServer.ts";
 
 /** Every SQL store over the ambient `SqlClient` (plan 02): provide it where the composition is built. */
 const SqlStores = Persistence.sql().pipe(Layer.provide(TestEncryption.layer));
@@ -112,7 +112,7 @@ class Widget extends AuthPlugin.Service<Widget, { readonly ok: true }>()("widget
   apiVersion: 1,
   contract: WidgetApi,
   config: [
-    ConfigDescriptor.make(WidgetConfig, {
+    ConfigDescriptor.make(Tenant.perDeployment(WidgetConfig), {
       sensitive: ["clientSecret"],
       audit: (value) =>
         value.minLength < 8
@@ -223,6 +223,109 @@ export const isRunResult = (value: unknown): value is RunResult =>
   typeof Reflect.get(value, "code") === "number" &&
   Array.isArray(Reflect.get(value, "stdout"));
 
+/** The real auth server the CLI scenarios talk to over a socket (`TestAuth.listen`, BEH-EA-353). */
+export interface SessionServer {
+  readonly baseUrl: string;
+  /** A fresh user with one live session; `token` is what `AWTHAQ_TOKEN` / `login --token` carries. */
+  readonly issue: (
+    email: string,
+  ) => Effect.Effect<{ readonly userId: Users.UserId; readonly token: string }>;
+  /** The person on the second device: opens the verification page for `userCode` (which claims it) and decides. */
+  readonly decide: (
+    userCode: string,
+    email: string,
+    decision: "approve" | "deny",
+  ) => Effect.Effect<void>;
+  /** Every request the server has answered, as `METHOD /path`, oldest first. */
+  readonly requests: Effect.Effect<ReadonlyArray<string>>;
+}
+
+type Run = <X>(effect: Effect.Effect<X, never, Users.Users | Sessions.Sessions>) => Promise<X>;
+
+/** A fresh user with one live session, through `run`; `amr` is the sign-in methods the session records. */
+const mint = (run: Run, name: string, amr: ReadonlyArray<"pwd">) => (email: string) =>
+  Effect.promise(() =>
+    run(
+      Effect.gen(function* () {
+        const user = yield* Users.Users.use((users) =>
+          users.create({ identity: { _tag: "Email", email }, name }),
+        );
+        const issued = yield* Sessions.Sessions.use((sessions) =>
+          sessions.issue({ userId: user.id, amr: [...amr] }),
+        );
+        return { user, issued };
+      }).pipe(Effect.orDie, TestAuth.withoutRequest),
+    ),
+  );
+
+/** `device: false` is a server without the plugin: the device routes answer 404. */
+const startSessionServer = (options: { readonly device: boolean }) =>
+  Effect.gen(function* () {
+    if (!options.device) {
+      const app = yield* TestAuth.listen(
+        TestAuth.layer(Auth.make([Password.Password]), {
+          services: Layer.mergeAll(Password.config({}), TestAuth.httpClient.noBreach),
+        }),
+      );
+      const issue = mint(app.run, "Scenario", []);
+      const started: SessionServer = {
+        baseUrl: app.url,
+        issue: (email) =>
+          Effect.map(issue(email), ({ user, issued }) => ({
+            userId: user.id,
+            token: Redacted.value(issued.token),
+          })),
+        decide: () => Effect.die("a server without the device plugin has nobody to decide"),
+        requests: Effect.sync(() => app.requests()),
+      };
+      return started;
+    }
+    const app = yield* TestAuth.listen(
+      TestAuth.layer(Auth.make([DeviceAuthorization.DeviceAuthorization]), {
+        services: DeviceAuthorization.config({
+          verificationUri: "https://app.test/device",
+        }),
+      }),
+    );
+    const issue = mint(app.run, "Scenario", []);
+    const approver = mint(app.run, "Approver", ["pwd"]);
+    const started: SessionServer = {
+      baseUrl: app.url,
+      issue: (email) =>
+        Effect.map(issue(email), ({ user, issued }) => ({
+          userId: user.id,
+          token: Redacted.value(issued.token),
+        })),
+      decide: (userCode, email, decision) =>
+        Effect.flatMap(approver(email), ({ user, issued }) =>
+          Effect.promise(() =>
+            app.run(
+              DeviceAuthorization.DeviceAuthorization.use((plugin) => {
+                const caller = {
+                  userId: user.id,
+                  sessionId: issued.session.id,
+                  impersonated: false,
+                  amr: ["pwd" as const],
+                };
+                const source = { userCode };
+                return plugin
+                  .verify(source, Option.some(caller))
+                  .pipe(
+                    Effect.andThen(
+                      decision === "approve"
+                        ? plugin.approve(source, caller)
+                        : plugin.deny(source, caller),
+                    ),
+                  );
+              }).pipe(TestAuth.withRequest({ ip: "198.51.100.20" }), Effect.orDie, Effect.asVoid),
+            ),
+          ),
+        ),
+      requests: Effect.sync(() => app.requests()),
+    };
+    return started;
+  });
+
 export interface WorldShape {
   readonly outcomes: Outcomes;
   /** The SQLite client database-backed commands run over. */
@@ -242,8 +345,8 @@ export interface WorldShape {
   readonly credentialWrites: Ref.Ref<number>;
   /** The waits the interactive login made between polls, newest run last. */
   readonly sleeps: Ref.Ref<ReadonlyArray<number>>;
-  /** Scopes of the servers a scenario started, closed with the scenario. */
-  readonly scopes: Ref.Ref<ReadonlyArray<Scope.Closeable>>;
+  /** The cell that builds that server on first use, in the scenario's scope (BEH-EA-352). */
+  readonly serverApp: TestAuth.LazyApp<{ readonly device: boolean }, SessionServer>;
 }
 
 export class World extends Context.Service<World, WorldShape>()("features/CliWorld") {}
@@ -259,7 +362,9 @@ export const WorldLive = Layer.effect(
       sql,
       app: sqlApp(sql),
       config: yield* Ref.make(
-        configOf(passwordAndRoles, { sql: Layer.succeed(SqlClient.SqlClient, sql) }),
+        configOf(passwordAndRoles, {
+          sql: Layer.succeed(SqlClient.SqlClient, sql),
+        }),
       ),
       last: yield* Ref.make<RunResult | undefined>(undefined),
       server: yield* Ref.make(Option.none<SessionServer>()),
@@ -267,15 +372,15 @@ export const WorldLive = Layer.effect(
       person: yield* Ref.make<PersonMode>("approve"),
       credentialWrites: yield* Ref.make(0),
       sleeps: yield* Ref.make<ReadonlyArray<number>>([]),
-      scopes: yield* Ref.make<ReadonlyArray<Scope.Closeable>>([]),
-    });
-    yield* Effect.addFinalizer(() =>
-      Ref.get(world.scopes).pipe(
-        Effect.flatMap((scopes) =>
-          Effect.forEach(scopes, (scope) => Scope.close(scope, Exit.void), { discard: true }),
-        ),
+      serverApp: yield* TestAuth.lazyApp(
+        { device: true },
+        (options) => startSessionServer(options).pipe(Effect.orDie),
+        {
+          name: "CliWorld",
+          alignStepClock: true,
+        },
       ),
-    );
+    });
     return world;
   }),
 );
@@ -296,12 +401,11 @@ export const ensureServer = (options?: { readonly device?: boolean }) =>
     const world = yield* World;
     const existing = yield* Ref.get(world.server);
     if (Option.isSome(existing)) return existing.value;
-    const scope = Scope.makeUnsafe();
-    const server = yield* startSessionServer(options).pipe(
-      Effect.provideService(Scope.Scope, scope),
-    );
+    yield* world.serverApp.configure(() => ({
+      device: options?.device !== false,
+    }));
+    const server = yield* world.serverApp.get;
     yield* Ref.set(world.server, Option.some(server));
-    yield* Ref.update(world.scopes, (all) => [...all, scope]);
     yield* setEnv({ AWTHAQ_BASE_URL: server.baseUrl });
     return server;
   });

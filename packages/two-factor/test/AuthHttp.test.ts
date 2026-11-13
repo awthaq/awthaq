@@ -5,9 +5,8 @@
 // second factor.
 import { Api, SessionContract } from "@awthaq/api";
 import { Auth, Sessions } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
-import { CookieAssertions, TestAuth, type UserAgent } from "@awthaq/test";
+import { CookieAssertions, TestAuth, TestMailbox, type UserAgent } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -15,7 +14,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as TwoFactor from "../src/TwoFactor.ts";
-import { Gates, codeFor, letForkedFibersRun, tokenOf } from "./support/harness.ts";
+import { Gates, codeFor } from "./support/harness.ts";
 
 const built = Auth.make([Password.Password, TwoFactor.TwoFactor]);
 
@@ -23,13 +22,19 @@ const AppLayer = TestAuth.layer(built, {
   services: Layer.merge(Gates, TestAuth.httpClient.noBreach),
 });
 
-// One running app, shared by the handler and by the test's own reads of its `Mailer`.
-const testApp = TestAuth.app(AppLayer);
+// Each test serves its own app: the handler and the test's own reads of its mailbox share it.
+const serveApp = TestAuth.serve(AppLayer);
+type Served = Effect.Success<typeof serveApp>;
 
-const sentMail = () => testApp.run(Effect.flatMap(Mailer.Mailer, (mailer) => mailer.sent));
+/** The mail of `template` to `to`, once the handler's detached dispatch has recorded it. */
+const mailed = (app: Pick<Served, "run">, to: string, template: string) =>
+  Effect.promise(() =>
+    app.run(Effect.flatMap(TestMailbox.Mailbox, (box) => box.mail.waitFor({ to, template }))),
+  );
 
 /** One request, from `options.as` (a browser holding its cookies) or a fresh anonymous agent. */
 const call = (
+  testApp: Served,
   method: "GET" | "POST",
   path: string,
   options?: { readonly body?: unknown; readonly as?: UserAgent.UserAgent },
@@ -60,34 +65,33 @@ const Tagged = Schema.Struct({ _tag: Schema.String });
 const password = "correct horse battery staple";
 
 /** Signs up over HTTP and verifies the mailbox; returns the browser now holding the fresh session. */
-const registerOverHttp = (email: string) =>
+const registerOverHttp = (testApp: Served, email: string) =>
   Effect.gen(function* () {
     const browser = yield* Effect.promise(() => testApp.agent());
-    const signUp = yield* call("POST", "/password/sign-up", {
+    const signUp = yield* call(testApp, "POST", "/password/sign-up", {
       as: browser,
       body: { email, password },
     });
     assert.strictEqual(signUp.status, 200);
-    yield* letForkedFibersRun;
-    const verifyMail = (yield* Effect.promise(sentMail)).findLast(
-      (mail) => mail.template === "verify-email",
-    );
+    const verifyMail = yield* mailed(testApp, email, "verify-email");
     assert.strictEqual(
-      (yield* call("POST", "/verify-email", { body: { token: tokenOf(verifyMail) } })).status,
+      (yield* call(testApp, "POST", "/verify-email", {
+        body: { token: TestMailbox.secret(verifyMail) },
+      })).status,
       204,
     );
     return browser;
   });
 
 /** Enrols over HTTP and returns the secret and the recovery codes. */
-const enrolOverHttp = (browser: UserAgent.UserAgent) =>
+const enrolOverHttp = (testApp: Served, browser: UserAgent.UserAgent) =>
   Effect.gen(function* () {
     const enrollment = Schema.decodeUnknownSync(Enrollment)(
-      yield* json(yield* call("POST", "/two-factor/enable", { as: browser })),
+      yield* json(yield* call(testApp, "POST", "/two-factor/enable", { as: browser })),
     );
     const codes = Schema.decodeUnknownSync(Codes)(
       yield* json(
-        yield* call("POST", "/two-factor/confirm", {
+        yield* call(testApp, "POST", "/two-factor/confirm", {
           as: browser,
           body: { code: yield* codeFor(enrollment.secret) },
         }),
@@ -105,14 +109,14 @@ describe("TwoFactor over HTTP", () => {
     () =>
       Effect.gen(function* () {
         const appAt = (clientAddress: string) =>
-          TestAuth.app(
+          TestAuth.serve(
             TestAuth.layer(built, {
               services: Layer.merge(Gates, TestAuth.httpClient.noBreach),
               rateLimiter: "enforcing",
               clientAddress,
             }),
           );
-        const probe = appAt("198.51.100.19");
+        const probe = yield* appAt("198.51.100.19");
         const email = "probe-2fa@example.com";
         const browser = yield* Effect.promise(() => probe.agent());
         const post = (path: string, body: unknown, headers?: Record<string, string>) =>
@@ -128,12 +132,9 @@ describe("TwoFactor over HTTP", () => {
           )).status,
           200,
         );
-        yield* letForkedFibersRun;
-        const verifyMail = (yield* Effect.promise(() =>
-          probe.run(Effect.flatMap(Mailer.Mailer, (mailer) => mailer.sent)),
-        )).findLast((mail) => mail.template === "verify-email");
+        const verifyMail = yield* mailed(probe, email, "verify-email");
         assert.strictEqual(
-          (yield* post("/verify-email", { token: tokenOf(verifyMail) })).status,
+          (yield* post("/verify-email", { token: TestMailbox.secret(verifyMail) })).status,
           204,
         );
         const enrollment = Schema.decodeUnknownSync(Enrollment)(
@@ -178,37 +179,39 @@ describe("TwoFactor over HTTP", () => {
           ).pipe(Effect.map((response) => response.status));
         for (let i = 0; i < 29; i++) assert.notStrictEqual(yield* bogus(probe), 429);
         assert.strictEqual(yield* bogus(probe), 429);
-        const other = appAt("198.51.100.20");
+        const other = yield* appAt("198.51.100.20");
         assert.notStrictEqual(yield* bogus(other), 429);
-        yield* Effect.promise(() => Promise.all([probe.dispose(), other.dispose()]));
       }),
   );
 
   it.live("enrol, then a password sign-in is diverted and /two-factor/verify completes it", () =>
     Effect.gen(function* () {
+      const testApp = yield* serveApp;
       const email = "ada@example.com";
-      const browser = yield* registerOverHttp(email);
+      const browser = yield* registerOverHttp(testApp, email);
       // No session, no enrolment endpoints.
-      assert.strictEqual((yield* call("POST", "/two-factor/enable")).status, 401);
+      assert.strictEqual((yield* call(testApp, "POST", "/two-factor/enable")).status, 401);
 
-      const { enrollment, codes } = yield* enrolOverHttp(browser);
+      const { enrollment, codes } = yield* enrolOverHttp(testApp, browser);
       assert.match(enrollment.otpauthUri, /^otpauth:\/\/totp\//);
       assert.strictEqual(codes.recoveryCodes.length, 10);
       assert.deepStrictEqual(
         Schema.decodeUnknownSync(Status)(
-          yield* json(yield* call("GET", "/two-factor/status", { as: browser })),
+          yield* json(yield* call(testApp, "GET", "/two-factor/status", { as: browser })),
         ),
         { enabled: true, remainingRecoveryCodes: 10 },
       );
 
       // The first factor now answers a divert, and mints no cookie.
-      const diverted = yield* call("POST", "/password/sign-in", { body: { email, password } });
+      const diverted = yield* call(testApp, "POST", "/password/sign-in", {
+        body: { email, password },
+      });
       assert.strictEqual(diverted.status, 401);
       assert.isNull(diverted.headers.get("set-cookie"));
       const divert = Schema.decodeUnknownSync(Divert)(yield* json(diverted));
 
       // A wrong code answers a fresh challenge to retry with.
-      const wrong = yield* call("POST", "/two-factor/verify", {
+      const wrong = yield* call(testApp, "POST", "/two-factor/verify", {
         body: { challengeId: divert.challengeId, code: "000000" },
       });
       assert.strictEqual(wrong.status, 401);
@@ -216,7 +219,7 @@ describe("TwoFactor over HTTP", () => {
       assert.isDefined(retry.challengeId);
 
       // The next step's code (inside the drift window, later than the enrolment's) completes it.
-      const verified = yield* call("POST", "/two-factor/verify", {
+      const verified = yield* call(testApp, "POST", "/two-factor/verify", {
         body: { challengeId: retry.challengeId, code: yield* codeFor(enrollment.secret, 1) },
       });
       assert.strictEqual(verified.status, 200);
@@ -229,16 +232,20 @@ describe("TwoFactor over HTTP", () => {
 
       // A recovery code completes a sign-in too — once.
       const again = Schema.decodeUnknownSync(Divert)(
-        yield* json(yield* call("POST", "/password/sign-in", { body: { email, password } })),
+        yield* json(
+          yield* call(testApp, "POST", "/password/sign-in", { body: { email, password } }),
+        ),
       );
-      const recovered = yield* call("POST", "/two-factor/verify-recovery", {
+      const recovered = yield* call(testApp, "POST", "/two-factor/verify-recovery", {
         body: { challengeId: again.challengeId, recoveryCode: codes.recoveryCodes[0] },
       });
       assert.strictEqual(recovered.status, 200);
       const third = Schema.decodeUnknownSync(Divert)(
-        yield* json(yield* call("POST", "/password/sign-in", { body: { email, password } })),
+        yield* json(
+          yield* call(testApp, "POST", "/password/sign-in", { body: { email, password } }),
+        ),
       );
-      const reused = yield* call("POST", "/two-factor/verify-recovery", {
+      const reused = yield* call(testApp, "POST", "/two-factor/verify-recovery", {
         body: { challengeId: third.challengeId, recoveryCode: codes.recoveryCodes[0] },
       });
       assert.strictEqual(reused.status, 401);
@@ -249,16 +256,14 @@ describe("TwoFactor over HTTP", () => {
     "a password reset of an enrolled account asks for the second factor (SecondFactorRequired, 401)",
     () =>
       Effect.gen(function* () {
+        const testApp = yield* serveApp;
         const email = "reset@example.com";
-        yield* enrolOverHttp(yield* registerOverHttp(email));
+        yield* enrolOverHttp(testApp, yield* registerOverHttp(testApp, email));
 
-        yield* call("POST", "/password/request-reset", { body: { email } });
-        yield* letForkedFibersRun;
-        const resetMail = (yield* Effect.promise(sentMail)).findLast(
-          (mail) => mail.template === "reset-password",
-        );
-        const refused = yield* call("POST", "/password/confirm-reset", {
-          body: { token: tokenOf(resetMail), password: "a brand new strong password" },
+        yield* call(testApp, "POST", "/password/request-reset", { body: { email } });
+        const resetMail = yield* mailed(testApp, email, "reset-password");
+        const refused = yield* call(testApp, "POST", "/password/confirm-reset", {
+          body: { token: TestMailbox.secret(resetMail), password: "a brand new strong password" },
         });
         assert.strictEqual(refused.status, 401);
         assert.strictEqual(
@@ -270,6 +275,7 @@ describe("TwoFactor over HTTP", () => {
 
   it.live("enable, disable and status need a session; only verify is public", () =>
     Effect.gen(function* () {
+      const testApp = yield* serveApp;
       for (const [method, path] of [
         ["POST", "/two-factor/enable"],
         ["POST", "/two-factor/confirm"],
@@ -278,7 +284,7 @@ describe("TwoFactor over HTTP", () => {
         ["GET", "/two-factor/status"],
       ] as const) {
         const options = method === "GET" ? undefined : { body: { code: "000000" } };
-        assert.strictEqual((yield* call(method, path, options)).status, 401);
+        assert.strictEqual((yield* call(testApp, method, path, options)).status, 401);
       }
     }),
   );

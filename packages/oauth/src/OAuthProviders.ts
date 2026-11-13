@@ -19,7 +19,7 @@
 // provider; a connection's discovery is resolved lazily, cached per revision,
 // and never cached when it fails.
 
-import { Defects } from "@awthaq/ports";
+import { Defects, Tenant } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -58,7 +58,7 @@ export const layer = Layer.effect(
   OAuthProviders,
   Effect.gen(function* () {
     const httpClient = yield* HttpClient.HttpClient;
-    const config = yield* OAuthConfig.OAuthConfig;
+    const config = yield* yield* Tenant.inForce(OAuthConfig.OAuthConfigScoped);
     const connections = yield* OAuthConnections.OAuthConnectionResolver;
     const discoveryClient = ProviderHttp.retrying(httpClient, config.retry);
     const resolveOne = (provider: OAuthProvider.OAuthProviderConfig) =>

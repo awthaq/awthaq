@@ -14,7 +14,7 @@
 // all, rather than silently shipping an unconfigured `iss` claim — the
 // spec's own stricter-than-`OAuthConfig.baseUrl` decision.
 
-import { Defects } from "@awthaq/ports";
+import { Defects, Tenant } from "@awthaq/ports";
 import type { Api } from "@awthaq/api";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -98,6 +98,22 @@ export interface JwtConfigShape {
 
 export class JwtConfig extends Context.Service<JwtConfig, JwtConfigShape>()("awthaq/jwt/Config") {}
 
+/**
+ * Tenant-scoped (BEH-EA-355). Boot: the key ring's fields (read once by `KeyRing`/`Jwt.layer` at build);
+ * `jwksMaxAge` is read per request by the JWKS handler, so it is not boot.
+ */
+export const JwtConfigScoped = Tenant.perTenant(JwtConfig, {
+  boot: [
+    "algorithm",
+    "rsaModulusLength",
+    "keyRotationInterval",
+    "keyGracePeriod",
+    "keyCacheMaxAge",
+    "keyMinRefreshInterval",
+    "acceptAsBearer",
+  ],
+});
+
 const emptyPayload: JwtConfigShape["definePayload"] = () => Effect.succeed({});
 
 /**
@@ -116,8 +132,7 @@ export const config = (
       readonly sessionCookie?: boolean | Partial<SessionMirrorCookie>;
     },
 ) =>
-  Layer.effect(
-    JwtConfig,
+  Layer.unwrap(
     Effect.gen(function* () {
       const ttl = options.ttl ?? Duration.minutes(15);
       const keyGracePeriod = options.keyGracePeriod ?? Duration.days(30);
@@ -149,7 +164,7 @@ export const config = (
           "awthaq/jwt: sessionCookie.ttl must be positive",
         );
       }
-      return {
+      return JwtConfigScoped.layer({
         issuer: options.issuer,
         audience: options.audience ?? options.issuer,
         algorithm: options.algorithm ?? "EdDSA",
@@ -164,6 +179,6 @@ export const config = (
         sessionCookie: mirror,
         acceptAsBearer: options.acceptAsBearer ?? false,
         definePayload: options.definePayload ?? emptyPayload,
-      };
+      });
     }),
   );

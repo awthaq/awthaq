@@ -335,11 +335,8 @@ export const usersAccountsSteps = defineSteps<World>(({ Given, When, Then }) => 
     "{string} consumes a valid email-verification token for her own address",
     function* (name: string) {
       const person = yield* getPerson(name);
-      const { sentMail } = yield* World;
-      const mail = (yield* sentMail).findLast(
-        (message) => message.to === person.email && message.template === "verify-email",
-      );
-      assert.ok(mail !== undefined, "the sign-up mailed a verification token");
+      const { mailbox } = yield* World;
+      const mail = yield* mailbox.mail.waitFor({ to: person.email, template: "verify-email" });
       const consumed = yield* request("POST", "/verify-email", {
         body: { token: mailedToken(mail) },
       });

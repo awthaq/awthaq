@@ -32,12 +32,13 @@ import {
   Errors,
   HookPoint,
   Hooks,
+  Migrations,
   RateLimits,
   Sessions,
   SignIn,
   Users,
 } from "@awthaq/core";
-import { Defects, type Encryption, RateLimiter } from "@awthaq/ports";
+import { Defects, type Encryption, RateLimiter, Tenant } from "@awthaq/ports";
 import { SessionDelivery } from "@awthaq/server";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -49,13 +50,13 @@ import * as Redacted from "effect/Redacted";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { type TwoFactorMethodUsed, type VerifiedChallenge, verified } from "./Challenge.ts";
 import { SecondFactor, failureRule, type Purpose } from "./SecondFactor.ts";
-import { TwoFactorConfig } from "./TwoFactorConfig.ts";
+import { TwoFactorConfigScoped } from "./TwoFactorConfig.ts";
 import * as TwoFactorApi from "./TwoFactorApi.ts";
 import * as TwoFactorEvents from "./TwoFactorEvents.ts";
 import {
   TwoFactorRecoveryCodes,
   TwoFactorSecrets,
-  migrations,
+  migrations as twoFactorMigrations,
   records as twoFactorRecords,
   secretColumn,
 } from "./TwoFactorStore.ts";
@@ -97,7 +98,7 @@ export interface TwoFactorShape {
   /** BEH-EA-263: needs a fresh session; stores a pending secret and returns it once. */
   readonly enable: (
     userId: Users.UserId,
-    sessionId: string,
+    sessionId: Sessions.SessionId,
   ) => Effect.Effect<
     Enrollment,
     | TwoFactorApi.TwoFactorAlreadyEnabled
@@ -140,13 +141,13 @@ export interface TwoFactorShape {
   /** BEH-EA-263: needs a fresh session and a valid TOTP or recovery code; removes the factor. */
   readonly disable: (
     userId: Users.UserId,
-    sessionId: string,
+    sessionId: Sessions.SessionId,
     code: Redacted.Redacted<string>,
   ) => Effect.Effect<void, ManageError | Errors.StoreUnavailable>;
   /** BEH-EA-264/BCR-002: replaces the recovery-code set atomically; needs a fresh session and a valid code. */
   readonly regenerateRecoveryCodes: (
     userId: Users.UserId,
-    sessionId: string,
+    sessionId: Sessions.SessionId,
     code: Redacted.Redacted<string>,
   ) => Effect.Effect<ReadonlyArray<string>, ManageError | Errors.StoreUnavailable>;
   readonly status: (userId: Users.UserId) => Effect.Effect<
@@ -185,7 +186,7 @@ type ManageError =
 export const sessionGate = Layer.unwrap(
   Effect.gen(function* () {
     const factor = yield* SecondFactor;
-    const config = yield* TwoFactorConfig;
+    const config = yield* yield* Tenant.inForce(TwoFactorConfigScoped);
     const tap = Hooks.BeforeSessionIssue.tap(
       (input) =>
         Effect.gen(function* () {
@@ -330,11 +331,8 @@ export const TwoFactorHandlers = Layer.mergeAll(
       const twoFactor = yield* TwoFactor;
       return handlers.handleAll({
         enable: Effect.fnUntraced(function* () {
-          const { principal } = yield* CurrentUser.current;
-          const enrollment = yield* twoFactor.enable(
-            Users.UserId(principal.ref.id),
-            principal.sessionId,
-          );
+          const { userId, sessionId } = yield* CurrentUser.current;
+          const enrollment = yield* twoFactor.enable(userId, sessionId);
           return new TwoFactorApi.EnrollmentDto(enrollment);
         }),
         confirm: Effect.fnUntraced(function* ({
@@ -342,39 +340,30 @@ export const TwoFactorHandlers = Layer.mergeAll(
         }: {
           payload: TwoFactorApi.ConfirmPayload;
         }) {
-          const { principal } = yield* CurrentUser.current;
-          const recoveryCodes = yield* twoFactor.confirm(
-            Users.UserId(principal.ref.id),
-            payload.code,
-          );
+          const { userId } = yield* CurrentUser.current;
+          const recoveryCodes = yield* twoFactor.confirm(userId, payload.code);
           return new TwoFactorApi.RecoveryCodesDto({ recoveryCodes });
         }),
         disable: Effect.fnUntraced(function* ({ payload }: { payload: TwoFactorApi.CodePayload }) {
-          const { principal } = yield* CurrentUser.current;
-          yield* twoFactor.disable(
-            Users.UserId(principal.ref.id),
-            principal.sessionId,
-            payload.code,
-          );
+          const { userId, sessionId } = yield* CurrentUser.current;
+          yield* twoFactor.disable(userId, sessionId, payload.code);
         }),
         regenerateRecoveryCodes: Effect.fnUntraced(function* ({
           payload,
         }: {
           payload: TwoFactorApi.CodePayload;
         }) {
-          const { principal } = yield* CurrentUser.current;
+          const { userId, sessionId } = yield* CurrentUser.current;
           const recoveryCodes = yield* twoFactor.regenerateRecoveryCodes(
-            Users.UserId(principal.ref.id),
-            principal.sessionId,
+            userId,
+            sessionId,
             payload.code,
           );
           return new TwoFactorApi.RecoveryCodesDto({ recoveryCodes });
         }),
         status: Effect.fnUntraced(function* () {
-          const { principal } = yield* CurrentUser.current;
-          return new TwoFactorApi.StatusDto(
-            yield* twoFactor.status(Users.UserId(principal.ref.id)),
-          );
+          const { userId } = yield* CurrentUser.current;
+          return new TwoFactorApi.StatusDto(yield* twoFactor.status(userId));
         }),
       });
     }),
@@ -426,14 +415,21 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
   },
   // Plan 17: the sealed TOTP secret, declared beside the records that seal it.
   sealedColumns: [secretColumn],
-  migrations,
+  migrations: Migrations.ledger(
+    [twoFactorMigrations],
+    [
+      "create_two_factor_secret",
+      "create_two_factor_recovery_code",
+      "create_two_factor_recovery_code_user_id_index",
+    ],
+  ),
   // ADR-EA-049: the events this plugin publishes (`SecondFactor` emits them), defined in `TwoFactorEvents.ts`.
   events: TwoFactorEvents.events,
   // Plan 08 (BEH-EA-T4): the secret and recovery-code stores, memory and SQL, matched.
   records: twoFactorRecords,
   // ECS-008/BEH-EA-229: the default issuer is the classic thing left in production — the label users see in their authenticator app.
   config: [
-    ConfigDescriptor.make(TwoFactorConfig, {
+    ConfigDescriptor.make(TwoFactorConfigScoped, {
       sensitive: [],
       audit: (value, environment) =>
         environment.production && value.issuer === "awthaq"
@@ -460,7 +456,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
       const factor = yield* SecondFactor;
       const users = yield* Users.Users;
       const sessions = yield* Sessions.Sessions;
-      const config = yield* TwoFactorConfig;
+      const config = yield* yield* Tenant.inForce(TwoFactorConfigScoped);
       const completion = yield* SignIn.make;
 
       // RBS-006: the table above feeds both the registry and the enforcement calls. EOTS-007: a breach is
@@ -477,9 +473,9 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
        * recently, so a hijacked cookie cannot quietly swap the victim's second factor. The rule is
        * `Sessions.requireFresh` (BEH-EA-320); this maps it to the plugin's own wire error.
        */
-      const requireFreshSession = (userId: Users.UserId, sessionId: string) =>
+      const requireFreshSession = (userId: Users.UserId, sessionId: Sessions.SessionId) =>
         sessions
-          .requireFresh(userId, Sessions.SessionId(sessionId), config.reauthMaxAge)
+          .requireFresh(userId, sessionId, config.reauthMaxAge)
           .pipe(
             Effect.catchTag("Sessions/Stale", (stale) =>
               Effect.fail(
@@ -594,7 +590,7 @@ export class TwoFactor extends AuthPlugin.Service<TwoFactor, TwoFactorShape>()("
       /** Disabling and regenerating share one gate: a fresh session, an enrolled user, a valid code of either kind. */
       const requireFactor = Effect.fnUntraced(function* (
         userId: Users.UserId,
-        sessionId: string,
+        sessionId: Sessions.SessionId,
         code: Redacted.Redacted<string>,
         purpose: Purpose,
       ) {

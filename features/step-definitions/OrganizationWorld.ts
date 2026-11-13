@@ -7,7 +7,6 @@
 // that exist.
 import { Auth, AuthEvents, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Admin } from "@awthaq/admin";
-import type { Mailer } from "@awthaq/ports";
 import {
   DomainClaims,
   Organization,
@@ -35,9 +34,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import { makeCapturingMailer, makeNamedRegistry } from "./shared/Harness.ts";
+import { makeNamedRegistry } from "./shared/Harness.ts";
 import { snapshot, type Snapshot } from "./shared/WireJson.ts";
-import { TestAuth, type UserAgent } from "@awthaq/test";
+import { TestAuth, TestMailbox, type UserAgent } from "@awthaq/test";
 import * as Cookies from "effect/http/Cookies";
 
 /** The record stores the memory layer provides, named so the inferred layer type below can be emitted. */
@@ -69,18 +68,16 @@ const built = Auth.make([Organization.Organization, Admin.Admin]);
  * `Auth.make([Organization, Admin])` through `TestAuth.layer`: the real organization plugin and, beside it, the admin
  * plugin (REQ-EA-723) so an impersonated session can be opened for real, over the real in-memory core, served behind
  * the derived authentication, admin authentication and CSRF middleware. A scenario's hook taps ride `taps`; the
- * capturing mailer and the events subscriber are this world's `services`.
+ * events subscriber is this world's `services`.
  */
 const buildAppLayer = (
   options: AppOptions,
-  mailer: Layer.Layer<Mailer.Mailer>,
   eventsLayer: Layer.Layer<never, never, AuthEvents.AuthEvents>,
 ) =>
   TestAuth.layer(built, {
     services: Layer.mergeAll(
       Organization.config(options.config ?? {}),
       Admin.config({ canImpersonate: () => Effect.succeed(options.canImpersonate === true) }),
-      mailer,
       eventsLayer,
     ),
     taps: options.hooks ?? Layer.empty,
@@ -109,17 +106,14 @@ export interface AppHandle {
   readonly agent: () => Promise<UserAgent.UserAgent>;
   /** Runs `effect` against the exact services `handler` runs on (the same memo map). */
   readonly withContext: <A, E>(effect: Effect.Effect<A, E, Layer.Success<AppLayer>>) => Promise<A>;
-  readonly sentMail: Effect.Effect<ReadonlyArray<Mailer.MailMessage>>;
+  readonly mailbox: Effect.Effect<TestMailbox.MailboxShape>;
   readonly publishedEvents: Effect.Effect<ReadonlyArray<AuthEvents.PublishedAny>>;
-  /** Releases the built layer; the World does this when the scenario ends. */
-  readonly close: Effect.Effect<void>;
 }
 
-const buildApp = (options: AppOptions = {}): AppHandle => {
-  const { layer: mailer, sent } = makeCapturingMailer();
+const buildApp = Effect.fn("features.organization.buildApp")(function* (options: AppOptions) {
   // Subscribing to the real `AuthEvents` stream, as `PasswordWorld` does: the capture cell
   // lives outside the layer graph so a step can read it after the graph is sealed.
-  const events = Effect.runSync(Ref.make<ReadonlyArray<AuthEvents.PublishedAny>>([]));
+  const events = yield* Ref.make<ReadonlyArray<AuthEvents.PublishedAny>>([]);
   const eventsLayer = Layer.effectDiscard(
     Effect.gen(function* () {
       const authEvents = yield* AuthEvents.AuthEvents;
@@ -133,16 +127,15 @@ const buildApp = (options: AppOptions = {}): AppHandle => {
       );
     }),
   );
-  const app = TestAuth.app(buildAppLayer(options, mailer, eventsLayer));
+  const app = yield* TestAuth.serve(buildAppLayer(options, eventsLayer));
   return {
     handler: app.handler,
     agent: () => app.agent(),
     withContext: (effect) => app.run(effect),
-    sentMail: sent,
+    mailbox: Effect.promise(() => app.run(TestMailbox.Mailbox)),
     publishedEvents: Ref.get(events),
-    close: Effect.promise(() => app.dispose()),
-  };
-};
+  } satisfies AppHandle;
+});
 
 /** One signed-in caller: a real user and a browser holding one real session. */
 export interface Actor {
@@ -155,8 +148,8 @@ export interface Actor {
 }
 
 export interface WorldShape {
-  readonly app: Ref.Ref<AppHandle>;
-  readonly options: Ref.Ref<AppOptions>;
+  /** Configure before signing anyone in: the first sign-in builds the app, and a later configure is a defect. */
+  readonly app: TestAuth.LazyApp<AppOptions, AppHandle>;
   /** Signed-in callers by the name the Gherkin text uses ("alice"); a second session of one user ("alice's phone") is its own entry. */
   readonly users: ReturnType<typeof makeNamedRegistry<Actor>>;
   /** Every real user created so far, so a user id on the wire can be turned back into the name the scenario used. */
@@ -186,11 +179,10 @@ export class World extends Context.Service<World, WorldShape>()("features/Organi
 export const WorldLive = Layer.effect(
   World,
   Effect.gen(function* () {
-    const app = yield* Ref.make(buildApp());
-    yield* Effect.addFinalizer(() => Ref.get(app).pipe(Effect.flatMap((handle) => handle.close)));
     return World.of({
-      app,
-      options: yield* Ref.make<AppOptions>({}),
+      app: yield* TestAuth.lazyApp<AppOptions, AppHandle>({}, buildApp, {
+        name: "OrganizationWorld",
+      }),
       users: makeNamedRegistry<Actor>("user"),
       roster: yield* Ref.make<ReadonlyArray<Actor>>([]),
       organizations: makeNamedRegistry<string>("organization"),
@@ -203,20 +195,12 @@ export const WorldLive = Layer.effect(
   }),
 );
 
-/** Merges `config` over what earlier Givens configured. The app is rebuilt, so this must run before anyone signs in. */
+/** Merges `config` over what earlier Givens configured; must run before anyone signs in (the first sign-in builds the app). */
 export const configureApp = Effect.fn("features.organization.configureApp")(function* (
   options: AppOptions,
 ) {
   const world = yield* World;
-  if ((yield* Ref.get(world.roster)).length > 0) {
-    return yield* Effect.die(
-      new Error(
-        "configureApp rebuilds the app and drops every user: configure before signing anyone in",
-      ),
-    );
-  }
-  const before = yield* Ref.get(world.options);
-  const merged: AppOptions = {
+  yield* world.app.configure((before) => ({
     config: { ...before.config, ...options.config },
     ...((options.canImpersonate ?? before.canImpersonate) === undefined
       ? {}
@@ -229,14 +213,12 @@ export const configureApp = Effect.fn("features.organization.configureApp")(func
       : before.hooks === undefined
         ? {}
         : { hooks: before.hooks }),
-  };
-  yield* Ref.set(world.options, merged);
-  yield* Ref.set(world.app, buildApp(merged));
+  }));
 });
 
 export const currentApp = Effect.gen(function* () {
   const { app } = yield* World;
-  return yield* Ref.get(app);
+  return yield* app.get;
 });
 
 /** The `Set-Cookie` a freshly issued session is delivered as, under the composition's cookie config. */
@@ -367,6 +349,6 @@ export const lastResponse = Effect.gen(function* () {
 /** The mail the plugin sent to `email`, newest first — how a step plays the invitee reading their inbox. */
 export const mailTo = Effect.fn("features.organization.mailTo")(function* (email: string) {
   const app = yield* currentApp;
-  const mail = yield* app.sentMail;
+  const mail = yield* (yield* app.mailbox).mail.messages;
   return mail.filter((message) => message.to === email).toReversed();
 });

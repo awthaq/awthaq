@@ -53,7 +53,7 @@ Every preset accepts `id`, `scopes` and `mapProfile` overrides. **Apple is not s
 
 | Checked on every `id_token` | |
 |---|---|
-| Signature | RS256, PS256, ES256, ES384 or EdDSA, whichever the provider's allowlist names (`idTokenSigningAlgs`; default: what discovery advertises that this plugin verifies, else `["RS256"]`; empty dies at boot), against the provider's JWKS (`use` absent or `sig`; `alg` absent or the token's; a key of the right type and curve), one single-flight cache per provider with a 15-minute TTL and at most one forced refetch per 30 seconds on an unknown `kid`. HS256 and `none` are never accepted |
+| Signature | RS256, PS256, ES256, ES384 or EdDSA, whichever the provider's allowlist names (`idTokenSigningAlgs`; default: what discovery advertises that this plugin verifies, else `["RS256"]`; empty dies at boot), against the provider's JWKS (`use` absent or `sig`; `key_ops` absent or including `verify`; `alg` absent or the token's; a key of the right type and curve), one single-flight cache per provider with a 15-minute TTL and at most one forced refetch per 30 seconds on an unknown `kid`. HS256 and `none` are never accepted, and a `crit` header refuses the token |
 | `iss` | exact match with the configured issuer |
 | `aud` / `azp` | string or array containing the client id; `azp` required (and equal) when several audiences are present |
 | `exp` / `nbf` / `iat` | with a configurable clock-skew leeway |
@@ -90,7 +90,7 @@ A native app's system browser (`ASWebAuthenticationSession`, Android Custom Tabs
 ## Known limitations
 
 - **The same-site bounce (PV-016).** The callback sets the `SameSite=Strict` `__Host-session` cookie, but browsers evaluate `SameSite` over the whole redirect chain, and this one began on the provider's site: a plain `302` to your `callbackURL` would store the cookie yet withhold it from the first landing request. So while the session cookie is `Strict`, a browser callback answers a small `200 text/html` interstitial (`Cache-Control: no-store`, `Referrer-Policy: no-referrer`) that meta-refreshes to your `callbackURL`; that navigation starts from a page of your own site, so the landing request carries the session. `OAuth.config({ bounce: true })` is the default; `bounce: false` restores the `302` (then the first landing request looks signed out: land on a route that resolves the session client-side, or use `SessionCookie.config({ mode: SessionCookie.HostLax })`, whose `SameSite=Lax` cookie rides the top-level navigation and needs no bounce, at the cost of `Strict`'s protection against cross-site top-level GETs). The bounce never applies to `mode=native` (its deep-link `302` and exchange code are unchanged) nor to a `Lax`/`None` session cookie (BEH-EA-055, BEH-EA-122).
-- ES256/EdDSA `id_token` signatures and POST (`form_post`) callbacks are not supported.
+- POST (`form_post`) callbacks are not supported.
 
 ## Migrating from Auth.js
 

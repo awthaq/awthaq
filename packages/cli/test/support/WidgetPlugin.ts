@@ -3,7 +3,7 @@
 // `Redacted` one, both declared through a descriptor — so redaction is proved against a shape
 // that could leak, not against a config with nothing to hide.
 import { Api } from "@awthaq/api";
-import { Auth, AuthPlugin, ConfigDescriptor } from "@awthaq/core";
+import { Auth, AuthPlugin, ConfigDescriptor, Tenant } from "@awthaq/core";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
@@ -42,7 +42,7 @@ class Widget extends AuthPlugin.Service<Widget, { readonly ok: true }>()("widget
   apiVersion: 1,
   contract: WidgetApi,
   config: [
-    ConfigDescriptor.make(WidgetConfig, {
+    ConfigDescriptor.make(Tenant.perDeployment(WidgetConfig), {
       sensitive: ["clientSecret"],
       audit: (value) =>
         value.minLength < 8

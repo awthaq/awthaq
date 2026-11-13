@@ -675,3 +675,25 @@ Feature: SAML Service Provider
       And the connection "acme" exists
       When the administrator renames the connection "acme" to "a very private new name" and disables its email linking
       Then the update audit event names the fields "name" and "trustsEmail" and no value
+
+  # BEH-EA-347 — spec/behaviors/29-saml-sp.md
+  @BEH-EA-347
+  Rule: A by-id administrative operation reads the connection first and asks the gate with its organization
+
+    @REQ-EA-1520
+    Scenario: An administrator delegated to one organization cannot reach another organization's connection by id
+      Given the administrator gate admits only "acme" and the action in general
+      And the connection "acme" exists
+      And the connection "globex" exists
+      When the administrator renames the connection "globex" to "hijacked" by its id
+      Then the rename is refused as "SamlConnectionNotFound", exactly as for an unknown id
+      And a refusal published auth.admin.actionDenied naming "saml.updateConnection" and the organization "globex"
+      And the connection "globex" is unchanged
+
+    @REQ-EA-1521
+    Scenario: An administrator delegated strictly to one organization manages that organization's connection by id
+      Given the administrator gate admits only "acme"
+      And the connection "acme" exists
+      When the administrator renames the connection "acme" to "Acme SSO" by its id
+      Then the connection "acme" is named "Acme SSO"
+      And reading an unknown connection id is refused as "SamlActionDenied"

@@ -38,6 +38,7 @@ import * as Ref from "effect/Ref";
 import type { AuthEventTag, Published } from "./AuthEventSchemas.ts";
 import * as AuthEvents from "./AuthEvents.ts";
 import * as Observability from "./Observability.ts";
+import * as Tenant from "./Tenant.ts";
 
 export type Severity = "medium" | "high";
 
@@ -174,8 +175,11 @@ export const SecuritySignalsConfig = Context.Reference<SecuritySignalsConfigShap
   { defaultValue: () => ({ rules: defaultRules, maxBuckets: 10_000 }) },
 );
 
+/** BEH-EA-355: deployment-scoped. */
+export const SecuritySignalsConfigScoped = Tenant.perDeployment(SecuritySignalsConfig);
+
 export const config = (partial: Partial<SecuritySignalsConfigShape>) =>
-  Layer.succeed(SecuritySignalsConfig, { rules: defaultRules, maxBuckets: 10_000, ...partial });
+  SecuritySignalsConfigScoped.layer({ rules: defaultRules, maxBuckets: 10_000, ...partial });
 
 interface Bucket {
   /** Epoch millis of the events still inside the window. */
@@ -208,7 +212,7 @@ const bounded = (
  */
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
-    const settings = yield* SecuritySignalsConfig;
+    const settings = yield* yield* Tenant.inForce(SecuritySignalsConfigScoped);
     const sink = yield* IncidentSink;
     const buckets = yield* Ref.make<ReadonlyMap<string, Bucket>>(new Map());
     const byId = new Map(settings.rules.map((r) => [r.id, r] as const));

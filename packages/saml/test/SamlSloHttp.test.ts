@@ -25,8 +25,8 @@ const around = () => ({
   notOnOrAfter: new Date(Date.now() + 300_000).toISOString().replace(/\.\d+Z$/, "Z"),
 });
 
-const buildApp = (config: Parameters<typeof SamlLive>[0] = {}) => {
-  const app = TestAuth.app(SamlLive(config), { baseUrl: BASE_URL });
+const buildApp = Effect.fn(function* (config: Parameters<typeof SamlLive>[0] = {}) {
+  const app = yield* TestAuth.serve(SamlLive(config), { baseUrl: BASE_URL });
   /** Runs `effect` against the very same service instances the web handler uses. */
   const inside = <A, E>(
     effect: Effect.Effect<
@@ -45,11 +45,11 @@ const buildApp = (config: Parameters<typeof SamlLive>[0] = {}) => {
     agent: () => app.agent(),
     signIn: (email: string) => app.signIn(email),
   };
-};
+});
 
 /** Signs a user in through the ACS over HTTP: the browser agent, now holding the session, and its token. */
 const signInOverHttp = (
-  app: ReturnType<typeof buildApp>,
+  app: Effect.Success<ReturnType<typeof buildApp>>,
   connectionId: string,
   assertionId: string,
 ) =>
@@ -90,7 +90,10 @@ const signInOverHttp = (
   });
 
 /** Is the session behind `token` still valid, judged against the very services the handler uses? */
-const sessionAlive = (inside: ReturnType<typeof buildApp>["inside"], token: string) =>
+const sessionAlive = (
+  inside: Effect.Success<ReturnType<typeof buildApp>>["inside"],
+  token: string,
+) =>
   inside(
     Effect.gen(function* () {
       const sessions = yield* Sessions.Sessions;
@@ -112,7 +115,7 @@ describe("the logout endpoint over HTTP", () => {
     "GET with the IdP's signed redirect ends the session and answers 302 to the IdP with a signed LogoutResponse",
     () =>
       Effect.gen(function* () {
-        const app = buildApp();
+        const app = yield* buildApp();
         const { handler, inside } = app;
         const { connection } = yield* Effect.promise(() =>
           inside(seedConnection({ sloUrl: IDP_SLO, authnRequestsSigned: true })),
@@ -144,7 +147,7 @@ describe("the logout endpoint over HTTP", () => {
 
   it.effect("GET with an unsigned or tampered message is the uniform 400, and ends nothing", () =>
     Effect.gen(function* () {
-      const app = buildApp();
+      const app = yield* buildApp();
       const { handler, inside } = app;
       const { connection } = yield* Effect.promise(() =>
         inside(seedConnection({ sloUrl: IDP_SLO })),
@@ -176,7 +179,7 @@ describe("the logout endpoint over HTTP", () => {
     "POST with the IdP's XML-signed LogoutRequest ends the session and answers 200 with a self-submitting form (IdP takes POST)",
     () =>
       Effect.gen(function* () {
-        const app = buildApp();
+        const app = yield* buildApp();
         const { handler, inside } = app;
         const { connection } = yield* Effect.promise(() =>
           inside(seedConnection({ sloUrl: IDP_SLO, sloBinding: "post" })),
@@ -213,7 +216,7 @@ describe("the signed-in user's own logout over HTTP", () => {
     "requires authentication and the CSRF token, then expires the session cookie and sends the browser to the IdP",
     () =>
       Effect.gen(function* () {
-        const app = buildApp();
+        const app = yield* buildApp();
         const { inside } = app;
         const { connection } = yield* Effect.promise(() =>
           inside(seedConnection({ sloUrl: IDP_SLO, authnRequestsSigned: true })),
@@ -256,8 +259,8 @@ describe("the signed-in user's own logout over HTTP", () => {
 });
 
 describe("the admin group over HTTP", () => {
-  const adminApp = (gate: boolean) => {
-    const app = buildApp({ canManageSaml: () => Effect.succeed(gate) });
+  const adminApp = Effect.fn(function* (gate: boolean) {
+    const app = yield* buildApp({ canManageSaml: () => Effect.succeed(gate) });
     /** An operator's browser, signed in. */
     const operator = () => app.signIn("admin-1@example.com");
     const call = async (
@@ -275,13 +278,13 @@ describe("the admin group over HTTP", () => {
         ...(options.csrf === false ? { headers: { [Api.CSRF_HEADER_NAME]: "" } } : {}),
       });
     return { ...app, operator, call };
-  };
+  });
 
   it.effect(
     "is 401 unauthenticated, 403 with the gate unconfigured, and 403 before the gate without the CSRF token",
     () =>
       Effect.gen(function* () {
-        const closed = adminApp(false);
+        const closed = yield* adminApp(false);
         const anonymous = yield* Effect.promise(() =>
           closed.call("GET", "/admin/saml/connections?organizationId=x"),
         );
@@ -305,7 +308,7 @@ describe("the admin group over HTTP", () => {
     "past the gate: create returns the connection, a bad URL is a typed 422, an unknown id a 404, and delete a 204",
     () =>
       Effect.gen(function* () {
-        const open = adminApp(true);
+        const open = yield* adminApp(true);
         const agent = yield* Effect.promise(open.operator);
         const organizationId = yield* Effect.promise(() =>
           open.inside(

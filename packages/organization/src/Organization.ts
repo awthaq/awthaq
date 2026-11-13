@@ -31,7 +31,7 @@ import * as Option from "effect/Option";
 import * as ConnectionRecords from "./ConnectionRecords.ts";
 import * as OrganizationActiveContext from "./OrganizationActiveContext.ts";
 import * as OrganizationApi from "./OrganizationApi.ts";
-import { OrganizationConfig } from "./OrganizationConfig.ts";
+import { OrganizationConfigScoped } from "./OrganizationConfig.ts";
 import * as OrganizationHandlers from "./OrganizationHandlers.ts";
 import { organizationMigrations } from "./OrganizationMigrations.ts";
 import {
@@ -97,7 +97,7 @@ export type PersonalDataRegistries =
 export type WireTypes = Api.Authentication | Api.CsrfProtection | HookPoint.HookAborted;
 
 /** The core service `OrganizationAccess` publishes its denials through, named for declaration emit like the above. */
-export type AccessServices = AuthEvents.AuthEvents;
+export type AccessServices = AuthEvents.AuthEvents | Users.Users;
 
 // ---- plugin ---------------------------------------------------------------------
 
@@ -115,7 +115,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
     records: OrganizationBundle,
     // Plan 08: the 46 hook points this plugin owns; `TestAuth.layer` provides them once beneath application taps.
     hookPoints: OrganizationHooksLive,
-    config: [ConfigDescriptor.make(OrganizationConfig)],
+    config: [ConfigDescriptor.make(OrganizationConfigScoped)],
     tables: {
       organization_org: AuthPlugin.Table.keyed("id"),
       organization_membership: AuthPlugin.Table.keyed("organizationId"),
@@ -168,8 +168,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
 
       const checkSlug: OrganizationShape["checkSlug"] = directory.isSlugAvailable;
 
-      const list: OrganizationShape["list"] = (caller) =>
-        directory.listForUser(Users.UserId(caller.ref.id));
+      const list: OrganizationShape["list"] = (caller) => directory.listForUser(caller.userId);
 
       // EP-003 (ADR-EA-018): a suspended organization answers exactly like an unknown one, for members
       // and outsiders alike; `list` still returns it, flagged `suspended`, so a member sees why.
@@ -330,13 +329,13 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
         caller,
         invitationId,
         token,
-      ) => invitationSystem.accept({ invitationId, token, userId: Users.UserId(caller.ref.id) });
+      ) => invitationSystem.accept({ invitationId, token, userId: caller.userId });
 
       const rejectInvitation: OrganizationShape["rejectInvitation"] = (
         caller,
         invitationId,
         token,
-      ) => invitationSystem.reject({ invitationId, token, userId: Users.UserId(caller.ref.id) });
+      ) => invitationSystem.reject({ invitationId, token, userId: caller.userId });
 
       const cancelInvitation: OrganizationShape["cancelInvitation"] = Effect.fnUntraced(
         function* (caller, invitationId) {
@@ -369,7 +368,7 @@ export class Organization extends AuthPlugin.Service<Organization, OrganizationS
           );
 
       const listInvitationsForUser: OrganizationShape["listInvitationsForUser"] = (caller) =>
-        invitationSystem.listForUser(Users.UserId(caller.ref.id));
+        invitationSystem.listForUser(caller.userId);
 
       // ---- dynamic access control: authorization on top of `OrganizationRoles` ----------------
       //

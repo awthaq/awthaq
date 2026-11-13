@@ -60,37 +60,24 @@ const sessionPairOf = (agent: ReturnType<typeof agentOver>) => {
   return `${held.name}=${held.value}`;
 };
 
-/** How many `template` mails `email` has received so far — the baseline for `awaitMail`'s `after`. */
-export const mailCount = Effect.fn("features.domain.mailCount")(function* (
-  email: string,
-  template: string,
-) {
-  const { sentMail } = yield* World;
-  return (yield* sentMail).filter(
-    (message) => message.to === email && message.template === template,
-  ).length;
-});
-
 /**
- * The (`after`+1)th mail the app sent `email` under `template`, polled on the real clock:
- * `signUp`/`requestReset` dispatch their mail on a detached fiber (BEH-EA-064) that no
- * `TestClock` step can advance.
+ * The (`after`+1)th mail the app sent `email` under `template`, awaited by subscription: `signUp`/`requestReset`
+ * dispatch their mail on a detached fiber (BEH-EA-064) that no `TestClock` step can advance. Returns the newest match.
  */
 export const awaitMail = Effect.fn("features.domain.awaitMail")(function* (
   email: string,
   template: string,
   after = 0,
 ) {
-  const { sentMail } = yield* World;
-  for (let attempt = 0; attempt < 500; attempt++) {
-    const found = (yield* sentMail).filter(
-      (message) => message.to === email && message.template === template,
-    );
-    const latest = found[found.length - 1];
-    if (found.length > after && latest !== undefined) return latest;
-    yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 2)));
-  }
-  return yield* Effect.die(new Error(`no "${template}" mail was sent to ${email}`));
+  const { mailbox } = yield* World;
+  const match = { to: email, template };
+  yield* mailbox.mail.waitFor(match, { nth: after + 1 });
+  const found = (yield* mailbox.mail.messages).filter(
+    (message) => message.to === email && message.template === template,
+  );
+  return (
+    found[found.length - 1] ?? (yield* Effect.die(new Error("unreachable: a waited mail vanished")))
+  );
 });
 
 /** Splits a mailed `<purpose>:<publicId>.<secret>` token into what `Verification` is keyed by. */

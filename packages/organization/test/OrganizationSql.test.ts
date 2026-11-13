@@ -4,7 +4,7 @@
 // Failures are injected with database triggers, so every assertion is about
 // what the database actually holds afterwards.
 import { Api } from "@awthaq/api";
-import { Auth, Users } from "@awthaq/core";
+import { Auth, CurrentUser, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -27,11 +27,13 @@ const OrganizationSqlLive = TestAuth.layer(Auth.make([Organization.Organization]
   }),
 });
 
-const asCaller = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: `${id}-session`,
-  });
+const asCaller = (id: string) =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: `${id}-session`,
+    }),
+  );
 
 const countRows = (sql: SqlClient.SqlClient, table: string) =>
   sql.unsafe(`SELECT COUNT(*) AS n FROM ${table}`).pipe(

@@ -6,7 +6,7 @@
 // error, never a silent denial.
 import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
-import { Auth, AuthEvents, AuthPlugin, Sessions, Slots, Users } from "@awthaq/core";
+import { Auth, AuthEvents, AuthPlugin, CurrentUser, Sessions, Slots, Users } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
 import { DecisionLogging, Resolvers } from "@awthaq/qadi";
 import { defineSteps } from "@effect-cucumber/vitest";
@@ -27,7 +27,7 @@ import {
   obliged,
   relationshipResolverFromEdges,
 } from "@qadi/core";
-import { NO_RESOURCE, SubjectExtractor, reauthCheck } from "@qadi/http";
+import { SubjectExtractor, authorizeRequest, classifyHttpEnforcementFailure } from "@qadi/http";
 import { Roles } from "@awthaq/roles";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
@@ -263,10 +263,12 @@ export const resolversSteps = defineSteps<World>(({ Given, When, Then }) => {
     return context;
   });
 
-  const owner = new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
-    sessionId: "session-owner-1",
-  });
+  const owner = CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
+      sessionId: "session-owner-1",
+    }),
+  );
 
   Given("a project that belongs to an organization a subject is a member of", function* () {
     const world = yield* World;
@@ -757,12 +759,17 @@ export const resolversSteps = defineSteps<World>(({ Given, When, Then }) => {
     return yield* Effect.promise(() =>
       served.run(
         Effect.gen(function* () {
-          const exit = yield* reauthCheck(request, hasPermission(projectAdmin), NO_RESOURCE).pipe(
-            Effect.exit,
-          );
+          // The stream's recheck is `authorizeRequest`; a refusal is labelled with its enforcement class.
+          const exit = yield* authorizeRequest(
+            projectAdmin,
+            hasPermission(projectAdmin),
+          )(request).pipe(Effect.exit);
           return Exit.isSuccess(exit)
             ? "still-allowed"
-            : Cause.findErrorOption(exit.cause).pipe(Option.getOrElse(() => "defect"));
+            : Cause.findErrorOption(exit.cause).pipe(
+                Option.map(classifyHttpEnforcementFailure),
+                Option.getOrElse(() => "defect"),
+              );
         }),
       ),
     );

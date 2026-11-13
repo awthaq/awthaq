@@ -4,15 +4,15 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-14 |
-> | Revision | 1.5 |
+> | Revision | 1.6 |
 > | Effective Date | 2026-10-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added fail-open/fail-closed guidance for an unreachable `RateLimiter` store, clarified the check-then-increment race under concurrency, and named the default fixed-window algorithm (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Rate-limit budget (plan 06): rules declared once as a typed table and enforced through `RateLimits.budget`; key strategies, one email normaliser, application overrides; SAML/SSO/Webhooks/account-export rules declared (CCR-EA-007) <br> 1.4 (2026-10-18): `@awthaq/password` gains `confirmResetByIp`, the reset confirmation per source (APS-003, plan 18) <br> 1.5 (2026-11-08): request facts are read from `Api.AuthRequestContext` (ADR-EA-047, architecture plan 26) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added fail-open/fail-closed guidance for an unreachable `RateLimiter` store, clarified the check-then-increment race under concurrency, and named the default fixed-window algorithm (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-13): Rate-limit budget (plan 06): rules declared once as a typed table and enforced through `RateLimits.budget`; key strategies, one email normaliser, application overrides; SAML/SSO/Webhooks/account-export rules declared (CCR-EA-007) <br> 1.4 (2026-10-18): `@awthaq/password` gains `confirmResetByIp`, the reset confirmation per source (APS-003, plan 18) <br> 1.5 (2026-11-08): request facts are read from `Api.AuthRequestContext` (ADR-EA-047, architecture plan 26) <br> 1.6 (2026-11-10): the implementation pointer names `StoreContract.rateLimiterStore` instead of the deleted `RateLimiterStoreSql.test.ts`; BEH-EA-109 *As shipped* note (architecture plan 37) |
 ---
 
-> Implemented in `@awthaq/ports` (`RateLimiter.ts`) and `@awthaq/core` (`RateLimits.ts`, with `RateLimitModel.ts` and `RateLimitKey.ts`); tests `packages/ports/test/RateLimiter.test.ts`, `packages/core/test/RateLimitBudget.test.ts`, `packages/core/test/RateLimitKey.test.ts`, `packages/core/test/RateLimitBudget.types.test.ts`, `packages/sql/test/RateLimiterStoreSql.test.ts`; the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
+> Implemented in `@awthaq/ports` (`RateLimiter.ts`) and `@awthaq/core` (`RateLimits.ts`, with `RateLimitModel.ts` and `RateLimitKey.ts`); tests `packages/ports/test/RateLimiter.test.ts`, `packages/core/test/RateLimitBudget.test.ts`, `packages/core/test/RateLimitKey.test.ts`, `packages/core/test/RateLimitBudget.types.test.ts`, `@awthaq/test`'s `StoreContract.rateLimiterStore` (run on the memory store, SQLite, a WAL file, libSQL and Postgres); the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
 
 ## BEH-EA-105: The RateLimiter port
 
@@ -139,6 +139,8 @@ REQUIREMENT: Providing two Layers for the `RateLimiter` port MUST shadow (the
 ```
 
 This is the same rule ADR-EA-010 states for every port: `PasswordHasher`, `Mailer` and `RateLimiter` are all one-implementation-per-application services, and the type checker enforces it by construction — a second `Layer.provide` for the same tag simply replaces the first at that point in the graph. The memory store is adequate for a single process and for tests. `@awthaq/sql` ships `RateLimiterStoreSql.layerStoreSql` (RBS-004), the multi-replica store: one atomic `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` per `increment` over the application's existing Postgres or SQLite `SqlClient`, with its table created by `RateLimiterStoreSql.migrate` (which uses its own tracking table, so its ids never collide with `coreMigrations`). Redis stays bring-your-own (the `layerStoreRedisConfig` line above is illustrative, not shipped); a SQL-backed or Redis store is the production default for multi-instance deployments, exactly as PRD §11 lists `RateLimiter` among the ports whose default implementations are "memory, SQL, Redis stores."
+
+*As shipped (plan 37):* both stores pass `StoreContract.rateLimiterStore` (memory, SQLite, WAL, libSQL, Postgres), the race case included.
 
 _Previous: [BEH-EA-108](14-rate-limiting.md#beh-ea-108-key-strategies) | Next: [BEH-EA-110](14-rate-limiting.md#beh-ea-110-built-in-rules-shipped-by-core-plugins)_
 

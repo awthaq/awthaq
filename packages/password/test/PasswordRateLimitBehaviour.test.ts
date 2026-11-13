@@ -1,16 +1,16 @@
 // password-rate-limit-hardening, behaviour half: RBS-006 (enforcement consumes only registered,
 // secret-free buckets), MLO-003 (per-IP resend), TMS-006 (subaddress-normalized buckets). The key
 // derivation itself is tested once in core (`RateLimitKey.test.ts`, `RateLimitBudget.test.ts`).
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import { RateLimits } from "@awthaq/core";
-import { Mailer, RateLimiter } from "@awthaq/ports";
+import { RateLimiter } from "@awthaq/ports";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Redacted from "effect/Redacted";
 import * as Password from "../src/Password.ts";
-import { letForkedFibersRun, makeTestLayer, strongPassword, tokenOf } from "./harness.ts";
+import { makeTestLayer, strongPassword } from "./harness.ts";
 
 const realLimiter = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory));
 
@@ -30,7 +30,7 @@ describe("RBS-006: enforcement consumes only the buckets the registry reports", 
       const keys = yield* Ref.make<ReadonlyArray<string>>([]);
       return yield* Effect.gen(function* () {
         const password = yield* Password.Password;
-        const mailer = yield* Mailer.Mailer;
+        const box = yield* TestMailbox.Mailbox;
         const registry = yield* RateLimits.RateLimitsRegistry;
         const ip = "203.0.113.9";
 
@@ -45,10 +45,13 @@ describe("RBS-006: enforcement consumes only the buckets the registry reports", 
         yield* password
           .resendVerification({ email: "Alice@X.com" })
           .pipe(TestAuth.withRequest({ ip }));
-        yield* letForkedFibersRun;
-        const sent = yield* mailer.sent;
-        const resetToken = tokenOf(sent.findLast((m) => m.template === "reset-password"));
-        const verifyToken = tokenOf(sent.findLast((m) => m.template === "verify-email"));
+        // The resend replaced signUp's token: the second verification mail is the live one.
+        const resetToken = TestMailbox.secret(
+          yield* box.mail.waitFor({ template: "reset-password" }),
+        );
+        const verifyToken = TestMailbox.secret(
+          yield* box.mail.waitFor({ template: "verify-email" }, { nth: 2 }),
+        );
         yield* password
           .verifyEmail({ token: Redacted.make(verifyToken) })
           .pipe(TestAuth.withRequest({ ip }));

@@ -39,6 +39,7 @@ import {
   Retention,
   Sessions,
   SignIn,
+  Tenant,
   Users,
 } from "@awthaq/core";
 import type { Errors } from "@awthaq/core";
@@ -136,8 +137,10 @@ export const DeviceAuthorizationConfig = Context.Reference<DeviceAuthorizationCo
   { defaultValue: () => defaultConfig },
 );
 
+export const DeviceAuthorizationConfigScoped = Tenant.perDeployment(DeviceAuthorizationConfig);
+
 export const config = (partial: Partial<DeviceAuthorizationConfigShape>) =>
-  Layer.succeed(DeviceAuthorizationConfig, { ...defaultConfig, ...partial });
+  DeviceAuthorizationConfigScoped.layer({ ...defaultConfig, ...partial });
 
 /** RFC 8628 §3.5: a `slow_down` adds this many seconds to the interval. */
 export const SLOW_DOWN_STEP_SECONDS = 5;
@@ -512,7 +515,7 @@ export const DeviceAuthorizationHandlers = Layer.mergeAll(
     "device_authorization",
     Effect.fnUntraced(function* (handlers) {
       const deviceAuthorization = yield* DeviceAuthorization;
-      const settings = yield* DeviceAuthorizationConfig;
+      const settings = yield* yield* Tenant.inForce(DeviceAuthorizationConfigScoped);
       return handlers.handleAll({
         code: Effect.fnUntraced(function* ({
           payload,
@@ -713,7 +716,7 @@ export class DeviceAuthorization extends AuthPlugin.Service<
   rateLimitRules: rules,
   // ECS-008/BEH-EA-229: what `doctor` audits and `config list` prints.
   config: [
-    ConfigDescriptor.make(DeviceAuthorizationConfig, {
+    ConfigDescriptor.make(DeviceAuthorizationConfigScoped, {
       audit: (value, environment) =>
         environment.production && value.verificationUri === undefined
           ? [
@@ -742,7 +745,7 @@ export class DeviceAuthorization extends AuthPlugin.Service<
       const events = yield* AuthEvents.AuthEvents;
       const random = yield* SecureRandom.SecureRandom;
       const hasher = yield* Digest.Digest;
-      const settings = yield* DeviceAuthorizationConfig;
+      const settings = yield* yield* Tenant.inForce(DeviceAuthorizationConfigScoped);
       const beforeApproval = yield* BeforeDeviceApproval;
       const afterApproval = yield* AfterDeviceApproval;
       const signIn = yield* SignIn.make;

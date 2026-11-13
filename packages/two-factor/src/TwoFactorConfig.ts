@@ -5,9 +5,9 @@
 // app assume (six digits, thirty-second steps, one step of drift either side) plus ticket 05's
 // challenge and recovery-code parameters.
 
+import { Tenant } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
-import * as Layer from "effect/Layer";
 
 export interface TwoFactorConfigShape {
   /** The label an authenticator app shows above the account name. Set it to your product's name. */
@@ -58,5 +58,7 @@ export const TwoFactorConfig = Context.Reference<TwoFactorConfigShape>("awthaq/t
   defaultValue: () => defaults,
 });
 
+export const TwoFactorConfigScoped = Tenant.perDeployment(TwoFactorConfig);
+
 export const config = (partial: Partial<TwoFactorConfigShape>) =>
-  Layer.succeed(TwoFactorConfig, { ...defaults, ...partial });
+  TwoFactorConfigScoped.layer({ ...defaults, ...partial });

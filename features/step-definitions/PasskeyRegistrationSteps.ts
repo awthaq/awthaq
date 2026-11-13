@@ -28,7 +28,6 @@ import {
   verifyRegistrationCalls,
   World,
 } from "./PasskeyWorld.ts";
-import * as Ref from "effect/Ref";
 
 // ---- the shapes this suite reads off the wire, decoded rather than asserted ----------------------
 
@@ -83,8 +82,8 @@ const actor = Effect.fn("features.passkeyRegistration.actor")(function* () {
 });
 
 const windowMillis = Effect.fn("features.passkeyRegistration.windowMillis")(function* () {
-  const { appOptions } = yield* World;
-  const options = yield* Ref.get(appOptions);
+  const { app } = yield* World;
+  const options = yield* app.options;
   assert.ok(
     options.reauthMaxAgeMillis !== undefined,
     "the scenario named a reauthentication window",

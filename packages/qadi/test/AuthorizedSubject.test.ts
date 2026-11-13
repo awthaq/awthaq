@@ -84,7 +84,7 @@ const AppLayer = TestAuth.layer(Auth.make([WhoamiPlugin]), {
 describe("AuthorizedSubject (real HTTP)", () => {
   it.effect("BEH-EA-145: with no credential, the handler sees qadi's anonymous subject", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(AppLayer);
+      const { handler } = yield* TestAuth.serve(AppLayer);
       const response = yield* Effect.promise(() => handler(new Request("http://localhost/whoami")));
       assert.strictEqual(response.status, 200);
       const body = (yield* Effect.promise(() => response.json())) as { subjectId: string };
@@ -97,7 +97,8 @@ describe("AuthorizedSubject (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         // A browser signs in through the test's `/login` endpoint and keeps the session cookie itself.
-        const browser = yield* Effect.promise(() => TestAuth.app(AppLayer).agent());
+        const app = yield* TestAuth.serve(AppLayer);
+        const browser = yield* Effect.promise(() => app.agent());
         const loginResponse = yield* Effect.promise(() => browser.request("POST", "/login"));
         assert.strictEqual(loginResponse.status, 200);
         const whoamiResponse = yield* Effect.promise(() => browser.request("GET", "/whoami"));

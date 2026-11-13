@@ -39,7 +39,30 @@ const NoBreachHttpClient = Layer.succeed(
 // The double-submit pair CSRF protection requires on a mutation.
 const csrfToken = TestAuth.csrfToken(CSRF_SECRET);
 
-const boot = (env: Record<string, string>) => {
+const appLayer = (env: Record<string, string>, mail: Layer.Layer<never>) =>
+  makeAppLayer(NoBreachHttpClient).pipe(
+    Layer.provideMerge(
+      ConfigProvider.layer(
+        ConfigProvider.fromEnv({ env: { AWTHAQ_CSRF_SECRET: CSRF_SECRET, ...env } }),
+      ),
+    ),
+    Layer.provideMerge(mail),
+  );
+type BootedApp = TestAuth.App<
+  Layer.Success<ReturnType<typeof appLayer>>,
+  Layer.Error<ReturnType<typeof appLayer>>
+>;
+type Booted = BootedApp & {
+  readonly call: (
+    method: string,
+    requestPath: string,
+    body?: unknown,
+    session?: string,
+  ) => Promise<Response>;
+  readonly printedMail: ReadonlyArray<Record<string, unknown>>;
+};
+
+const boot = <T>(env: Record<string, string>, use: (app: Booted) => Promise<T>) => {
   // Every message the console mailer prints, read back the way a person reads it from the terminal.
   const printedMail: Array<Record<string, unknown>> = [];
   const CaptureMail = Logger.layer([
@@ -49,30 +72,25 @@ const boot = (env: Record<string, string>) => {
     }),
   ]);
   // The production composition, configured from `env` instead of the process environment, served in-process.
-  const layer = makeAppLayer(NoBreachHttpClient).pipe(
-    Layer.provideMerge(
-      ConfigProvider.layer(
-        ConfigProvider.fromEnv({ env: { AWTHAQ_CSRF_SECRET: CSRF_SECRET, ...env } }),
-      ),
-    ),
-    Layer.provideMerge(CaptureMail),
+  const layer = appLayer(env, CaptureMail);
+  const call =
+    (app: BootedApp) => (method: string, requestPath: string, body?: unknown, session?: string) =>
+      app.handler(
+        new Request(`${ORIGIN}${requestPath}`, {
+          method,
+          headers: {
+            "content-type": "application/json",
+            cookie: [session, `${CSRF_COOKIE}=${csrfToken}`]
+              .filter((part) => part !== undefined)
+              .join("; "),
+            [CSRF_HEADER]: csrfToken,
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        }),
+      );
+  return TestAuth.withApp(layer, { baseUrl: ORIGIN }, (app) =>
+    use({ ...app, call: call(app), printedMail }),
   );
-  const app = TestAuth.app(layer, { baseUrl: ORIGIN });
-  const call = (method: string, requestPath: string, body?: unknown, session?: string) =>
-    app.handler(
-      new Request(`${ORIGIN}${requestPath}`, {
-        method,
-        headers: {
-          "content-type": "application/json",
-          cookie: [session, `${CSRF_COOKIE}=${csrfToken}`]
-            .filter((part) => part !== undefined)
-            .join("; "),
-          [CSRF_HEADER]: csrfToken,
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      }),
-    );
-  return { ...app, call, printedMail };
 };
 
 /** How many plugin migrations the file's ledger records (read beside the app, through its own client). */
@@ -86,8 +104,7 @@ const ledgerSize = (filename: string) =>
 
 describe("examples/sql-server (SEA-007)", () => {
   it("sign-up, the mailed token, verification and sign-in all work over SQLite", async () => {
-    const app = boot({ SQLITE_FILE: ":memory:" });
-    try {
+    await boot({ SQLITE_FILE: ":memory:" }, async (app) => {
       const email = "ada@example.com";
       const credentials = { email, password: PASSWORD };
       assert.strictEqual((await app.call("POST", "/password/sign-up", credentials)).status, 200);
@@ -106,16 +123,13 @@ describe("examples/sql-server (SEA-007)", () => {
       assert.isTrue(
         signedIn.headers.getSetCookie().some((cookie) => cookie.startsWith("__Host-session=")),
       );
-    } finally {
-      await app.dispose();
-    }
+    });
   });
 
   // Plan 15: Organization owns tables. Before `AuthHost` this composition ran only core's migrations and the request
   // answered 503 StoreUnavailable ("no such table: organization_membership").
   it("a plugin that owns tables is served over SQL: a signed-in user creates an organization", async () => {
-    const app = boot({ SQLITE_FILE: ":memory:" });
-    try {
+    await boot({ SQLITE_FILE: ":memory:" }, async (app) => {
       const email = "lin@example.com";
       const credentials = { email, password: PASSWORD };
       assert.strictEqual((await app.call("POST", "/password/sign-up", credentials)).status, 200);
@@ -142,9 +156,7 @@ describe("examples/sql-server (SEA-007)", () => {
       assert.strictEqual(created.status, 200);
       const body: unknown = await created.json();
       assert.deepInclude(body, { slug: "acme" });
-    } finally {
-      await app.dispose();
-    }
+    });
   });
 
   it("a SQLite file survives a restart: a second boot on the same file applies nothing and signs the same user in", async () => {
@@ -153,8 +165,7 @@ describe("examples/sql-server (SEA-007)", () => {
     const email = "grace@example.com";
     const credentials = { email, password: PASSWORD };
     try {
-      const first = boot(env);
-      try {
+      await boot(env, async (first) => {
         assert.strictEqual(
           (await first.call("POST", "/password/sign-up", credentials)).status,
           200,
@@ -162,22 +173,21 @@ describe("examples/sql-server (SEA-007)", () => {
         const mail = first.printedMail.find((line) => line["to"] === email);
         assert.isString(mail?.["token"]);
         assert.strictEqual(
-          (await first.call("POST", "/verify-email", { token: mail?.["token"] })).status,
+          (
+            await first.call("POST", "/verify-email", {
+              token: mail?.["token"],
+            })
+          ).status,
           204,
         );
-      } finally {
-        await first.dispose();
-      }
+      });
       const applied = await ledgerSize(env.SQLITE_FILE);
-      const second = boot(env);
-      try {
+      await boot(env, async (second) => {
         assert.strictEqual(
           (await second.call("POST", "/password/sign-in", credentials)).status,
           200,
         );
-      } finally {
-        await second.dispose();
-      }
+      });
       assert.strictEqual(await ledgerSize(env.SQLITE_FILE), applied);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -187,23 +197,23 @@ describe("examples/sql-server (SEA-007)", () => {
   it("with AWTHAQ_MIGRATE_ON_BOOT=false a fresh database refuses to boot and names the pending migrations", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "awthaq-sql-example-"));
     try {
-      const app = boot({
-        SQLITE_FILE: path.join(dir, "fresh.sqlite"),
-        AWTHAQ_MIGRATE_ON_BOOT: "false",
-      });
-      try {
-        const exit = await app.runtime.runPromiseExit(Effect.void);
-        const error = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : undefined;
-        assert.isTrue(error?._tag === "Some" && error.value instanceof Migrations.Pending);
-        assert.include(
-          error?._tag === "Some" && error.value instanceof Migrations.Pending
-            ? error.value.message
-            : "",
-          "plugins 0001_organization_create_organization_org",
-        );
-      } finally {
-        await app.dispose();
-      }
+      await boot(
+        {
+          SQLITE_FILE: path.join(dir, "fresh.sqlite"),
+          AWTHAQ_MIGRATE_ON_BOOT: "false",
+        },
+        async (app) => {
+          const exit = await app.runtime.runPromiseExit(Effect.void);
+          const error = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : undefined;
+          assert.isTrue(error?._tag === "Some" && error.value instanceof Migrations.Pending);
+          assert.include(
+            error?._tag === "Some" && error.value instanceof Migrations.Pending
+              ? error.value.message
+              : "",
+            "plugins 0001_organization_create_organization_org",
+          );
+        },
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

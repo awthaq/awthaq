@@ -388,7 +388,7 @@ describe("a sign-in through a connection with a role mapping", () => {
         });
         yield* users.verifyEmail(founder.id);
         yield* members.create({ userId: founder.id, organizationId, role: ["owner"] });
-        yield* members.remove(Users.UserId(ownerPrincipal.ref.id), organizationId);
+        yield* members.remove(ownerPrincipal.userId, organizationId);
         yield* records.update(connection.organizationId, connection.id, { trustsEmail: true });
         assert.strictEqual(yield* members.countOwners(organizationId), 1);
         // Under an admin ceiling the IdP cannot touch an owner at all (they out-privilege the connection).

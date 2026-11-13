@@ -1,12 +1,24 @@
 // @awthaq/core — SecretHash
 //
 // OCM-002/BEH-EA-050: the one hash-at-rest and constant-time-compare recipe for
-// high-entropy secrets that are looked up by a public id and compared by hash —
-// session secrets (`Sessions.ts`), API keys and client secrets
-// (`@awthaq/api-key`). SHA-256 is deliberately not a password KDF: these secrets
-// are 256 random bits (nothing to brute-force) and an unauthenticated endpoint
-// must not let a caller burn password-grade CPU per request. Never use this for a
-// human-chosen secret; that is `PasswordHasher`'s job.
+// a secret the server mints and shows once, never a human-chosen one (that is
+// `PasswordHasher`'s job). Its guessing is bounded by its entropy (256-bit
+// session secrets, API keys, client secrets, SCIM tokens, invitation tokens,
+// device codes) or by a short lifetime plus an attempt or rate budget (the 34.6-bit
+// device user code, RFC 8628 §6.1 and DAG-004; OTP-format verification values,
+// SOS-004). SHA-256 is deliberately not a KDF: an unauthenticated endpoint must
+// not let a caller burn password-grade CPU per request.
+//
+// Two lookup shapes. By a public id: hash the presented secret, read the row, then
+// `equals` against the stored hash (or `NEVER_MATCHES` when there is no row) before
+// any branch on record state (PIL-007, BEH-EA-050). Or by the hash itself, where
+// no compare is needed.
+//
+// Callers: core Sessions and Verification, api-key keys and clients,
+// device-authorization, organization invitations, SCIM connections.
+//
+// Hashing is for a value the server only recognises. A value it must read again
+// is sealed (`SealedColumn`, ADR-EA-019).
 
 import { Hmac } from "@awthaq/ports";
 import * as Digest from "effect/crypto/Digest";

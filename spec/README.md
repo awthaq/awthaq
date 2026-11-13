@@ -5,12 +5,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-00 |
-> | Revision | 1.14 |
-> | Effective Date | 2026-11-09 |
+> | Revision | 1.22 |
+> | Effective Date | 2026-11-13 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Planning |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Fixed 11 stale filenames in the behaviors table; updated models count/table for MOD-EA-014/015; added decisions-table rows for ADR-EA-013/014/015 (CCR-EA-002) <br> 1.2 (2026-09-12): Added a "`features/` is the acceptance suite" section noting the new Gherkin suite and its REQ-EA allocation (CCR-EA-003) <br> 1.3 (2026-09-29): Replaced the "planned system, no source tree, no CI" banner with the shipped state; refreshed every count and table (decisions, behaviors, models); described the wired BDD suite and the mechanical drift checks in `spec/scripts/` (DTWS-001, DTWS-006, AVS-008, CCR-EA-006) <br> 1.4 (2026-10-13): ADR-EA-038 and BEH-EA-322/323 are listed (architecture plan 01) <br> 1.5 (2026-10-13): ADR-EA-039 is listed (architecture plan 07) <br> 1.6 (2026-10-13): ADR-EA-040 and BEH-EA-329/330 are listed (architecture plan 04) <br> 1.7 (2026-10-14): BEH-EA-331..336 are listed (architecture plan 08) <br> 1.8 (2026-10-18): the behavior catalog runs to BEH-EA-338 (`FederatedIdentity`, architecture plan 14) <br> 1.9 (2026-10-18): BEH-EA-339 (a composition's sealed columns are swept as one list) is listed (architecture plan 17) <br> 1.10 (2026-11-08): BEH-EA-340/341 (`AuthHost`, the SQL host composition's migrations) and BEH-EA-342 (`TestAuth.layer` over `AuthHost`) are listed (architecture plan 15) <br> 1.11 (2026-11-08): behavior catalog through BEH-EA-343; `04-contract-stratum.md` lists it (architecture plan 21) <br> 1.12 (2026-11-08): behavior catalog through BEH-EA-344; `24-nextjs-ssr.md` lists it (architecture plan 20) <br> 1.13 (2026-11-08): behavior catalog through BEH-EA-345; `15-password.md` lists it (architecture plan 27) <br> 1.14 (2026-11-09): behavior catalog through BEH-EA-346; `02-plugin-composition-validate.md` lists it (architecture plan 29) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Fixed 11 stale filenames in the behaviors table; updated models count/table for MOD-EA-014/015; added decisions-table rows for ADR-EA-013/014/015 (CCR-EA-002) <br> 1.2 (2026-09-12): Added a "`features/` is the acceptance suite" section noting the new Gherkin suite and its REQ-EA allocation (CCR-EA-003) <br> 1.3 (2026-09-29): Replaced the "planned system, no source tree, no CI" banner with the shipped state; refreshed every count and table (decisions, behaviors, models); described the wired BDD suite and the mechanical drift checks in `spec/scripts/` (DTWS-001, DTWS-006, AVS-008, CCR-EA-006) <br> 1.4 (2026-10-13): ADR-EA-038 and BEH-EA-322/323 are listed (architecture plan 01) <br> 1.5 (2026-10-13): ADR-EA-039 is listed (architecture plan 07) <br> 1.6 (2026-10-13): ADR-EA-040 and BEH-EA-329/330 are listed (architecture plan 04) <br> 1.7 (2026-10-14): BEH-EA-331..336 are listed (architecture plan 08) <br> 1.8 (2026-10-18): the behavior catalog runs to BEH-EA-338 (`FederatedIdentity`, architecture plan 14) <br> 1.9 (2026-10-18): BEH-EA-339 (a composition's sealed columns are swept as one list) is listed (architecture plan 17) <br> 1.10 (2026-11-08): BEH-EA-340/341 (`AuthHost`, the SQL host composition's migrations) and BEH-EA-342 (`TestAuth.layer` over `AuthHost`) are listed (architecture plan 15) <br> 1.11 (2026-11-08): behavior catalog through BEH-EA-343; `04-contract-stratum.md` lists it (architecture plan 21) <br> 1.12 (2026-11-08): behavior catalog through BEH-EA-344; `24-nextjs-ssr.md` lists it (architecture plan 20) <br> 1.13 (2026-11-08): behavior catalog through BEH-EA-345; `15-password.md` lists it (architecture plan 27) <br> 1.14 (2026-11-09): behavior catalog through BEH-EA-346; `02-plugin-composition-validate.md` lists it (architecture plan 29) <br> 1.15 (2026-11-09): behavior catalog through BEH-EA-347; `29-saml-sp.md` lists it (architecture plan 31) <br> 1.16 (2026-11-09): behavior catalog through BEH-EA-349; `30-scim.md` lists 348–349 (architecture plan 32) <br> 1.17 (2026-11-09): behavior catalog through BEH-EA-350; `29-saml-sp.md` lists it (architecture plan 33) <br> 1.18 (2026-11-10): behavior catalog through BEH-EA-353; `25-testing-harness.md` lists 351–353 (architecture plan 34) <br> 1.19 (2026-11-10): BEH-EA-354 and ADR-EA-054 (architecture plan 35) <br> 1.20 (2026-11-10): BEH-EA-355 and BEH-EA-356 (plan 36) <br> 1.21 (2026-11-10): BEH-EA-357 (architecture plan 37) <br> 1.22 (2026-11-13): `20-qadi-bridge-path-b.md` rev 1.4 and `invariants.md` rev 1.9: the unannotated-endpoint refusal moves to the guard's build (qadi 0.12 upgrade) |
 
 ---
 
@@ -34,7 +34,7 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | [spec/roadmap.md](roadmap.md) | EFAUTH-RMP | The delivery roadmap (milestones M0–M8), derived from `archive/PRD.md` §23, restated against this tree's IDs, with what has shipped against each milestone. |
 | [spec/models/](models/) | `MOD-EA-001`–`015` | Sixteen files. `00-adoption-matrix.md` is an index with no `MOD` id of its own; `01`–`15` each specify one authentication-method or core-plugin domain model (see table below). |
 | [spec/decisions/](decisions/) | `ADR-EA-001`–`040` | Thirty-seven architectural decision records, one per file, each stating a decision, its rationale, and its consequences (see table below). `ADR-EA-020` and `021` are not allocated: they are held for the two-factor decisions. |
-| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`346` | Thirty-seven files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
+| [spec/behaviors/](behaviors/) | `BEH-EA-001`–`357` | Thirty-seven files, grouped by subsystem — the catalog the BDD/acceptance suite traces to (see table below). |
 | [spec/process/](process/) | EFAUTH-PROC-01/02 | Two files: the requirement-ID scheme in full, and the definitions of done applied at each stage of work. |
 | [spec/appendices/](appendices/) | — | Five files of supporting reference material, authored alongside the rest of the tree and cross-referenced from it rather than summarized here. |
 
@@ -132,12 +132,12 @@ The difference from a normal post-hoc specification is temporal, not structural:
 | `22-client-effect.md` | 169–176 | The Effect Client |
 | `23-react.md` | 177–184 | React Bindings |
 | `24-nextjs-ssr.md` | 185–192, 344 | Next.js Server Rendering |
-| `25-testing-harness.md` | 193–200, 331–333, 336, 342 | Testing Harness |
-| `26-cli.md` | 201–208, 225–229, 307 | CLI |
+| `25-testing-harness.md` | 193–200, 331–333, 336, 342, 351–354, 357 | Testing Harness |
+| `26-cli.md` | 201–208, 225–229, 307, 356 | CLI |
 | `27-admin-impersonation.md` | 209–224 | Admin and Impersonation |
-| `28-tenancy.md` | 230–237, 326–328 | Tenancy |
-| `29-saml-sp.md` | 238–245, 314–318 | SAML Service Provider |
-| `30-scim.md` | 246–253 | SCIM (inbound provisioning) |
+| `28-tenancy.md` | 230–237, 326–328, 355 | Tenancy |
+| `29-saml-sp.md` | 238–245, 314–318, 347, 350 | SAML Service Provider |
+| `30-scim.md` | 246–253, 348–349 | SCIM (inbound provisioning) |
 | `31-two-factor.md` | 260–266 | Two-Factor Authentication |
 | `32-magic-link.md` | 267–270 | Magic Link |
 | `33-email-otp.md` | 271–274 | Email OTP |

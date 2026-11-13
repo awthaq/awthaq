@@ -1,4 +1,5 @@
 // Plan 02: the store contract on the `Ref` adapters.
-import { runOnMemory } from "./support/storeContract.ts";
+import * as StoreContract from "../src/StoreContract.ts";
+import { framework } from "./support/storeContract.ts";
 
-runOnMemory();
+StoreContract.run(framework, { mode: "memory" });

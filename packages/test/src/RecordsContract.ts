@@ -31,15 +31,21 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
+import {
+  type Case,
+  CONCURRENCY,
+  classify,
+  type Entry,
+  type Operations,
+  race,
+  type Verdict,
+} from "./internal/contract.ts";
 import { recordsFoundation } from "./internal/foundation.ts";
-import * as StoreContract from "./StoreContract.ts";
 import * as TenantConformance from "./TenantConformance.ts";
 import type { TestFramework } from "./TestFramework.ts";
 import * as TestSql from "./TestSql.ts";
 
-export type Case<R> = StoreContract.Case<R>;
-export const race = StoreContract.race;
-export const CONCURRENCY = StoreContract.CONCURRENCY;
+export { CONCURRENCY, type Case, type Entry, type Operations, race, type Verdict };
 
 /** What every adapter of a mode is built over, and what a case may read besides the stores. */
 export { recordsFoundation };
@@ -47,47 +53,16 @@ export { recordsFoundation };
 /** The services `recordsFoundation` provides. */
 export type Base = Layer.Success<typeof recordsFoundation>;
 
-type NonEmpty<A> = readonly [A, ...Array<A>];
-
-/** The audit's verdict on one operation, written where its cases are (ADR-EA-041 decision 9). */
-export type Verdict<R> =
-  /** Reads; no write. */
-  | { readonly read: NonEmpty<Case<R>> }
-  /** One row, one statement or one `Ref.update`, no condition anyone relies on (last writer wins). */
-  | { readonly write: NonEmpty<Case<R>> }
-  /** A read-modify-write the domain relies on: atomic by contract, and at least one `race` case proves it. */
-  | { readonly atomic: NonEmpty<Case<R>>; readonly race: NonEmpty<Case<R>> }
-  /** Not driven here, and why (a test seam, a method only a cascade calls and another suite covers). */
-  | { readonly exempt: string };
-
-/**
- * The operations of a store interface: its functions and its `Effect`-valued members
- * (`WebhookRecords.listEndpoints`), not its data (`ChallengeStore.guarantees`).
- */
-export type Operations<Shape> = {
-  readonly [
-    K in keyof Shape as Shape[K] extends
-      | ((...args: never) => unknown)
-      | Effect.Effect<unknown, unknown, unknown>
-      ? K
-      : never
-  ]: Shape[K];
-};
-
-/** One registered case: which operation it proves, under which verdict. */
-export interface Entry {
-  readonly operation: string;
-  readonly verdict: "read" | "write" | "atomic" | "race";
-  readonly case: Case<unknown>;
-}
-
 /** Runs one effect on a fresh adapter of one mode (memory, SQL, an extra adapter). */
 type Runner = TenantConformance.Runner<unknown>;
 
 /** What the runner reads off a suite, whatever store it is for. */
 export interface SuiteData {
   readonly entries: ReadonlyArray<Entry>;
-  readonly exempt: ReadonlyArray<{ readonly operation: string; readonly reason: string }>;
+  readonly exempt: ReadonlyArray<{
+    readonly operation: string;
+    readonly reason: string;
+  }>;
   readonly sql: ReadonlyArray<Case<unknown>>;
   readonly tenancy?: (
     framework: TestFramework,
@@ -132,32 +107,7 @@ export const suite = <Id, Shape, RowId = never, R = never>(
     };
   },
 ): Suite<Id> => {
-  const entries: Array<Entry> = [];
-  const exempt: Array<{ readonly operation: string; readonly reason: string }> = [];
-  const verdicts: ReadonlyArray<readonly [string, Verdict<Id | Base | R>]> = Object.entries<
-    Verdict<Id | Base | R>
-  >(definition.operations);
-  const add = (
-    operation: string,
-    verdict: Entry["verdict"],
-    cases: ReadonlyArray<Case<Id | Base | R>>,
-  ) => {
-    for (const contractCase of cases) {
-      entries.push({
-        operation,
-        verdict,
-        case: { name: `${operation} [${verdict}]: ${contractCase.name}`, run: contractCase.run },
-      });
-    }
-  };
-  for (const [operation, verdict] of verdicts) {
-    if ("exempt" in verdict) exempt.push({ operation, reason: verdict.exempt });
-    else if ("atomic" in verdict) {
-      add(operation, "atomic", verdict.atomic);
-      add(operation, "race", verdict.race);
-    } else if ("read" in verdict) add(operation, "read", verdict.read);
-    else add(operation, "write", verdict.write);
-  }
+  const { entries, exempt } = classify<Id | Base | R>(definition.operations);
   const tenancy = definition.tenancy;
   return {
     store,
@@ -349,8 +299,14 @@ export const run = <P extends AuthPlugin.Any>(
         framework,
         plugin,
         [
-          { name: `${key} (memory)`, run: (effect) => runnerOf(bundle("memory", key))(effect) },
-          { name: `${key} (sql)`, run: (effect) => runnerOf(bundle("sql", key))(effect) },
+          {
+            name: `${key} (memory)`,
+            run: (effect) => runnerOf(bundle("memory", key))(effect),
+          },
+          {
+            name: `${key} (sql)`,
+            run: (effect) => runnerOf(bundle("sql", key))(effect),
+          },
         ],
         (effect) => runnerOf(bundle("sql", key))(effect),
       );

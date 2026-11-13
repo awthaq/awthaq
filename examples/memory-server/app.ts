@@ -31,7 +31,7 @@ import { AuthorizationAudit, SubjectExtractor } from "@awthaq/qadi";
 import { Roles, RolesAdmin, RolesAdminApi } from "@awthaq/roles";
 import { AuthHost, AuthHttp, Credentials, Csrf } from "@awthaq/server";
 import { EvaluationServicesNone, role } from "@qadi/core";
-import { RequirePermissionLive } from "@qadi/http";
+import { guardApi, PermissionRegistryLive } from "@qadi/http";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { createServer } from "node:http";
@@ -74,7 +74,8 @@ const platformAdmin = role({
 // default and refuse everyone (TS-007's smoke test is what caught this). `Roles.layer` is the
 // very reference `Auth.make` installs, so the layer graph builds it once and the guard, the
 // `Roles` service handlers use and the plugin all share one instance.
-const GuardLive = RequirePermissionLive.pipe(
+const GuardLive = guardApi(RolesAdminApi.RolesAdminApi).pipe(
+  Layer.provide(PermissionRegistryLive),
   Layer.provide(EvaluationServicesNone),
   Layer.provide(SubjectExtractor.SubjectExtractorLive),
   Layer.provide(Credentials.PrincipalResolverLive),

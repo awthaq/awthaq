@@ -520,10 +520,10 @@ export const sessionSteps = defineSteps<World>(({ Given, When, Then }) => {
   // The World is built from `SessionConfig` (default touchEvery = 1 hour) when the session is
   // issued, so this asserts the effective throttle rather than silently assuming it.
   Given("{string} is configured to {int} hour", function* (knob: string, hours: number) {
-    const { settings } = yield* World;
+    const { app } = yield* World;
     assert.equal(knob, "touchEvery");
     assert.equal(
-      Duration.toMillis((yield* Ref.get(settings)).touchEvery),
+      Duration.toMillis((yield* app.options).touchEvery),
       Duration.toMillis(Duration.hours(hours)),
     );
   });

@@ -41,11 +41,11 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as PasswordApi from "./PasswordApi.ts";
-import { PasswordConfig } from "./PasswordConfig.ts";
+import { PasswordConfigScoped } from "./PasswordConfig.ts";
 import * as PasswordCredential from "./PasswordCredential.ts";
 import * as PasswordEvents from "./PasswordEvents.ts";
 
-export { PasswordConfig, config } from "./PasswordConfig.ts";
+export { PasswordConfig, PasswordConfigScoped, config } from "./PasswordConfig.ts";
 export type { PasswordConfigShape } from "./PasswordConfig.ts";
 
 // ---- rate limits ------------------------------------------------------------------------------------
@@ -424,8 +424,7 @@ export const PasswordHandlers = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const password = yield* Password;
     // EP-007: the enumeration posture is per tenant too — decided in the request's own fiber.
-    const builtConfig = yield* PasswordConfig;
-    const configNow = Tenant.configInForce(PasswordConfig, builtConfig);
+    const configNow = yield* Tenant.inForce(PasswordConfigScoped);
 
     // ADR-EA-047: no handler reads the address or the user agent. The group declares `Api.RequestContext`, so every
     // operation below records and keys on the request's facts through `Api.AuthRequestContext`.
@@ -488,12 +487,12 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
       }: {
         payload: PasswordApi.ChangePasswordPayload;
       }) {
-        const { principal } = yield* CurrentUser.current;
+        const { userId, sessionId } = yield* CurrentUser.current;
         // Typed local (not inferred) so declaration emit can name `SessionDto` in the group's type (TS2883).
         const response: SessionContract.SessionDto = yield* SessionDelivery.respond(
           password.changePassword({
-            userId: Users.UserId(principal.ref.id),
-            currentSessionId: Sessions.SessionId(principal.sessionId),
+            userId: userId,
+            currentSessionId: sessionId,
             currentPassword: payload.currentPassword,
             newPassword: payload.newPassword,
           }),
@@ -506,10 +505,10 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
       }: {
         payload: PasswordApi.ChangeEmailPayload;
       }) {
-        const { principal } = yield* CurrentUser.current;
+        const { userId, sessionId } = yield* CurrentUser.current;
         yield* password.requestEmailChange({
-          userId: Users.UserId(principal.ref.id),
-          currentSessionId: Sessions.SessionId(principal.sessionId),
+          userId: userId,
+          currentSessionId: sessionId,
           newEmail: payload.newEmail,
         });
       }),
@@ -519,10 +518,10 @@ export const PasswordAccountHandlers = HttpApiBuilder.group(
       }: {
         payload: PasswordApi.ReauthenticatePayload;
       }) {
-        const { principal } = yield* CurrentUser.current;
+        const { userId, sessionId } = yield* CurrentUser.current;
         yield* password.reauthenticate({
-          userId: Users.UserId(principal.ref.id),
-          currentSessionId: Sessions.SessionId(principal.sessionId),
+          userId: userId,
+          currentSessionId: sessionId,
           currentPassword: payload.password,
         });
       }),
@@ -543,7 +542,7 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
   events: PasswordEvents.events,
   // ECS-008/BEH-EA-229: the policy knobs `doctor` audits and `config list` prints.
   config: [
-    ConfigDescriptor.make(PasswordConfig, {
+    ConfigDescriptor.make(PasswordConfigScoped, {
       audit: (value, environment) => [
         ...(value.minLength < 8
           ? [
@@ -610,8 +609,9 @@ export class Password extends AuthPlugin.Service<Password, PasswordShape>()("pas
       // with none, the build-time value applies exactly as before. What is derived once at boot
       // from the *built* value stays boot-scoped: the rate-limit email-key function and the
       // identifier-digest key (the calibrated timing floor is `PasswordCredential`'s).
-      const builtConfig = yield* PasswordConfig;
-      const configNow = Tenant.configInForce(PasswordConfig, builtConfig);
+      const configNow = yield* Tenant.inForce(PasswordConfigScoped);
+      // read once at build: the build value (BEH-EA-355 boot fields)
+      const builtConfig = yield* configNow;
       const random = yield* SecureRandom.SecureRandom;
       const mac = yield* Mac.Mac;
       // ERS-002: mail is dispatched in the background (BEH-EA-064/113) by a

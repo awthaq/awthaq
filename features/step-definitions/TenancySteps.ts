@@ -1,9 +1,9 @@
 // P20a: step definitions for 28-tenancy.feature (BEH-EA-230..237). Every assertion reads the
 // state the real services and store adapters produced: the raw `"tenantId"` column, the response
 // a router middleware wrote, the typed refusal an organization operation returned.
-import { TestAuth } from "@awthaq/test";
-import { Accounts, AuditLog, Sessions, Users, Verification } from "@awthaq/core";
-import { AuditLogStore, Encryption, Mailer, PasswordHasher, Tenant } from "@awthaq/ports";
+import { TestAuth, TestMailbox } from "@awthaq/test";
+import { Accounts, AuditLog, CurrentUser, Sessions, Users, Verification } from "@awthaq/core";
+import { AuditLogStore, Encryption, PasswordHasher, Tenant } from "@awthaq/ports";
 import {
   Organization,
   OrganizationActor,
@@ -12,7 +12,7 @@ import {
   OrganizationMembers,
 } from "@awthaq/organization";
 import { ConnectionRecords, OrganizationRecords } from "@awthaq/organization/records";
-import { AdminAccounts, AdminTenants } from "@awthaq/admin";
+import { Admin, AdminAccounts, AdminTenants } from "@awthaq/admin";
 import { OAuthConnections } from "@awthaq/oauth";
 import { Models, TenantScope, TenantScoped } from "@awthaq/sql";
 import { defineSteps } from "@effect-cucumber/vitest";
@@ -213,7 +213,7 @@ const ownsOrganization = Effect.fn("features.tenancy.ownsOrganization")(function
   const record = yield* organization(
     Effect.gen(function* () {
       const plugin = yield* Organization.Organization;
-      return yield* plugin.create({ caller, name: slug, slug });
+      return yield* plugin.create({ caller: CurrentUser.of(caller), name: slug, slug });
     }),
   );
   yield* organizationIds.set(slug, record.id);
@@ -320,7 +320,7 @@ const suspend = Effect.fn("features.tenancy.suspend")(function* (
   const record = yield* organization(
     Effect.gen(function* () {
       const tenants = yield* AdminTenants.AdminTenants;
-      return yield* tenants.suspendOrganization(admin, id, {});
+      return yield* tenants.suspendOrganization(CurrentUser.of(admin), id, {});
     }),
   );
   return Option.match(record.suspendedAt, { onNone: () => "none", onSome: DateTime.formatIso });
@@ -1138,7 +1138,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
         yield* adminAccounts(
           outcomeTag(
             Effect.flatMap(AdminAccounts.AdminAccounts, (accounts) =>
-              accounts.deleteUser(callerOf("an-administrator"), id),
+              accounts.deleteUser(CurrentUser.of(callerOf("an-administrator")), id),
             ).pipe(Effect.provide(AdminAccountsTenantConfig.get(tenant))),
           ),
         ),
@@ -1159,6 +1159,63 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     },
   );
 
+  // ---- BEH-EA-356 (the effective-configuration view, plan 36) ----
+
+  const passwordMinLength = (inTenant: string | null) =>
+    adminAccounts(
+      Effect.flatMap(Admin.Admin, (admin) =>
+        admin.effectiveConfig(CurrentUser.of(callerOf("an-administrator"))),
+      ).pipe(
+        inTenant === null
+          ? (self) => self
+          : Effect.provide(AdminAccountsTenantConfig.get(inTenant)),
+      ),
+    ).pipe(
+      Effect.map((items) => {
+        const item = items.find((found) => found.key.toLowerCase().includes("password"));
+        return [
+          item?.scope,
+          item?.source,
+          item?.entries.find((entry) => entry.path === "minLength")?.value,
+        ].join("|");
+      }),
+    );
+
+  When(
+    "an administrator reads the effective configuration in a request naming the tenant {string}",
+    function* (tenant: string) {
+      const { outcomes } = yield* World;
+      yield* outcomes.set("effective:password", yield* passwordMinLength(tenant));
+    },
+  );
+
+  When(
+    "an administrator reads the effective configuration in a request naming no tenant",
+    function* () {
+      const { outcomes } = yield* World;
+      yield* outcomes.set("effective:password", yield* passwordMinLength(null));
+    },
+  );
+
+  Then(
+    "the Password minimum length is listed as {string}, per tenant, from the tenant",
+    function* (expected: string) {
+      const { outcomes } = yield* World;
+      assert.equal(yield* outcomes.get("effective:password"), `tenant|tenant|${expected}`);
+    },
+  );
+
+  Then(
+    "the Password minimum length is listed as the build-time value, per tenant, from no tenant",
+    function* () {
+      const { outcomes } = yield* World;
+      const [scope, source, minLength] = (yield* outcomes.get("effective:password")).split("|");
+      assert.equal(scope, "tenant");
+      assert.notEqual(source, "tenant");
+      assert.notEqual(minLength, "40");
+    },
+  );
+
   When(
     "an administrator sets a password shorter than the tenant's minimum for {string} in a request naming the tenant {string}",
     function* (name: string, tenant: string) {
@@ -1169,7 +1226,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
         yield* adminAccounts(
           outcomeTag(
             Effect.flatMap(AdminAccounts.AdminAccounts, (accounts) =>
-              accounts.setUserPassword(callerOf("an-administrator"), id, {
+              accounts.setUserPassword(CurrentUser.of(callerOf("an-administrator")), id, {
                 password: Redacted.make("a thirty-six character password, short"),
               }),
             ).pipe(Effect.provide(AdminAccountsTenantConfig.get(tenant))),
@@ -1219,7 +1276,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const tag = yield* organization(
         outcomeTag(
           Effect.flatMap(AdminTenants.AdminTenants, (tenants) =>
-            tenants.suspendOrganization(admin, id, { reason }),
+            tenants.suspendOrganization(CurrentUser.of(admin), id, { reason }),
           ),
         ),
       );
@@ -1264,7 +1321,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const record = yield* organization(
         Effect.gen(function* () {
           const tenants = yield* AdminTenants.AdminTenants;
-          return yield* tenants.unsuspendOrganization(admin, id);
+          return yield* tenants.unsuspendOrganization(CurrentUser.of(admin), id);
         }),
       );
       assert.ok(Option.isNone(record.suspendedAt));
@@ -1279,7 +1336,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const outcome = yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* outcomeTag(plugin.get(caller, id));
+          return yield* outcomeTag(plugin.get(CurrentUser.of(caller), id));
         }),
       );
       assert.equal(outcome, tag);
@@ -1294,7 +1351,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const outcome = yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* outcomeTag(plugin.update(caller, id, { name: "Renamed" }));
+          return yield* outcomeTag(plugin.update(CurrentUser.of(caller), id, { name: "Renamed" }));
         }),
       );
       assert.equal(outcome, tag);
@@ -1308,7 +1365,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const outcome = yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* outcomeTag(plugin.get(caller, "no-such-organization"));
+          return yield* outcomeTag(plugin.get(CurrentUser.of(caller), "no-such-organization"));
         }),
       );
       assert.equal(outcome, tag);
@@ -1321,7 +1378,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     const record = yield* organization(
       Effect.gen(function* () {
         const plugin = yield* Organization.Organization;
-        return yield* plugin.get(caller, id);
+        return yield* plugin.get(CurrentUser.of(caller), id);
       }),
     );
     assert.equal(record.id, id);
@@ -1335,7 +1392,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const listed = yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* plugin.list(caller);
+          return yield* plugin.list(CurrentUser.of(caller));
         }),
       );
       assert.deepEqual(
@@ -1354,7 +1411,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* plugin.setActive(caller, id);
+          return yield* plugin.setActive(CurrentUser.of(caller), id);
         }),
       );
     },
@@ -1365,7 +1422,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     const outcome = yield* organization(
       Effect.gen(function* () {
         const plugin = yield* Organization.Organization;
-        return yield* outcomeTag(plugin.getActiveMember(caller));
+        return yield* outcomeTag(plugin.getActiveMember(CurrentUser.of(caller)));
       }),
     );
     assert.equal(outcome, "NoActiveOrganization");
@@ -1376,7 +1433,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
     const context = yield* organization(
       Effect.gen(function* () {
         const plugin = yield* Organization.Organization;
-        return yield* plugin.getActive(caller);
+        return yield* plugin.getActive(CurrentUser.of(caller));
       }),
     );
     assert.ok(Option.isNone(context.activeOrganizationId));
@@ -1391,7 +1448,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const context = yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* plugin.getActive(caller);
+          return yield* plugin.getActive(CurrentUser.of(caller));
         }),
       );
       assert.deepEqual(context.activeOrganizationId, Option.some(id));
@@ -1406,7 +1463,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const outcome = yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* outcomeTag(plugin.setActive(caller, id));
+          return yield* outcomeTag(plugin.setActive(CurrentUser.of(caller), id));
         }),
       );
       assert.equal(outcome, tag);
@@ -1430,15 +1487,16 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
           });
           yield* users.verifyEmail(created.id);
           const plugin = yield* Organization.Organization;
-          const invited = yield* plugin.invite(inviter, id, { email, role: ["member"] });
+          const invited = yield* plugin.invite(CurrentUser.of(inviter), id, {
+            email,
+            role: ["member"],
+          });
           // MTI-010: the capability only travels by email; read it back as the invitee would.
-          const sent = yield* (yield* Mailer.Mailer).sent;
-          const mailed = sent
-            .toReversed()
-            .map((message) => message.data?.["token"])
-            .find((value) => typeof value === "string");
-          assert.ok(typeof mailed === "string", `no invitation mail was sent to ${email}`);
-          return { userId: created.id, invitation: invited, token: mailed };
+          const mail = yield* (yield* TestMailbox.Mailbox).mail.waitFor({
+            to: email,
+            template: "organization-invite",
+          });
+          return { userId: created.id, invitation: invited, token: TestMailbox.secret(mail) };
         }),
       );
       const { people, invitations } = yield* World;
@@ -1455,7 +1513,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       const outcome = yield* organization(
         Effect.gen(function* () {
           const plugin = yield* Organization.Organization;
-          return yield* outcomeTag(plugin.cancelInvitation(caller, id));
+          return yield* outcomeTag(plugin.cancelInvitation(CurrentUser.of(caller), id));
         }),
       );
       assert.equal(outcome, tag);
@@ -1472,11 +1530,11 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
           const plugin = yield* Organization.Organization;
           switch (act) {
             case "reading":
-              return yield* outcomeTag(plugin.getInvitationByToken(caller, token));
+              return yield* outcomeTag(plugin.getInvitationByToken(CurrentUser.of(caller), token));
             case "accepting":
-              return yield* outcomeTag(plugin.acceptInvitation(caller, id, token));
+              return yield* outcomeTag(plugin.acceptInvitation(CurrentUser.of(caller), id, token));
             case "rejecting":
-              return yield* outcomeTag(plugin.rejectInvitation(caller, id, token));
+              return yield* outcomeTag(plugin.rejectInvitation(CurrentUser.of(caller), id, token));
             default:
               return assert.fail(`unknown invitation act "${act}"`);
           }
@@ -1537,7 +1595,7 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
         yield* organization(
           Effect.gen(function* () {
             const tenants = yield* AdminTenants.AdminTenants;
-            return yield* outcomeTag(tenants.suspendOrganization(caller, id, {}));
+            return yield* outcomeTag(tenants.suspendOrganization(CurrentUser.of(caller), id, {}));
           }),
         ),
       );
@@ -1552,7 +1610,9 @@ export const tenancySteps = defineSteps<World>(({ Given, When, Then }) => {
       yield* organization(
         Effect.gen(function* () {
           const tenants = yield* AdminTenants.AdminTenants;
-          return yield* outcomeTag(tenants.suspendOrganization(caller, "no-such-organization", {}));
+          return yield* outcomeTag(
+            tenants.suspendOrganization(CurrentUser.of(caller), "no-such-organization", {}),
+          );
         }),
       ),
     );

@@ -45,7 +45,14 @@ import {
   Verification,
   VerificationLink,
 } from "@awthaq/core";
-import { Defects, type Encryption, RateLimiter, SqlTransaction, XmlSignature } from "@awthaq/ports";
+import {
+  Defects,
+  type Encryption,
+  Hmac,
+  RateLimiter,
+  SqlTransaction,
+  XmlSignature,
+} from "@awthaq/ports";
 import {
   DomainClaims,
   Organization,
@@ -174,7 +181,7 @@ export interface SamlShape {
   >;
   /** BEH-EA-315: the signed-in user's own SP-initiated logout: ends their session and, when the connection has a logout endpoint, sends the IdP a `LogoutRequest`. */
   readonly logout: (
-    caller: Api.UserPrincipal,
+    caller: CurrentUser.Caller,
     input: { readonly callbackURL?: string | undefined },
   ) => Effect.Effect<SamlSlo.LogoutStart, ServerError | ServerError>;
   /** BEH-EA-318: the administrator's operations (the `saml.admin` group). */
@@ -358,9 +365,6 @@ const samlMigrations: Migrations.Migrations = [
 
 // ---- pieces ------------------------------------------------------------------------------------------
 
-const hexOf = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-
 /** A `callbackURL` is a relative path or an origin the deployment trusts; anything else is the default (BEH-EA-128's rule, as OAuth applies it). */
 const resolveCallbackURL = (
   raw: string | undefined,
@@ -440,7 +444,7 @@ export const SamlHandlers = HttpApiBuilder.group(
   "saml",
   Effect.fnUntraced(function* (handlers) {
     const saml = yield* Saml;
-    const settings = yield* SamlConfig.SamlConfig;
+    const settings = yield* yield* Tenant.inForce(SamlConfig.SamlConfigScoped);
     // ADR-EA-047: no handler reads the address or the user agent; the group's request context carries them.
     return handlers.handleAll({
       metadata: Effect.fnUntraced(function* ({ query }: { query: SamlApi.ConnectionQuery }) {
@@ -474,11 +478,9 @@ export const SamlHandlers = HttpApiBuilder.group(
           samlResponse: payload.SAMLResponse,
           cookieState: request.cookies[REQUEST_COOKIE],
         });
-        // ADR-EA-045: the session cookie rides the redirect through `SessionDelivery` (`SessionLifecycle.Mints`).
-        return yield* SessionDelivery.redirect(
-          HttpServerResponse.redirect(outcome.callbackURL),
-          outcome.session,
-        );
+        // BEH-EA-353 / PV-016: the IdP's POST is cross-site, so under a Strict session cookie the landing goes
+        // through the same-site interstitial (`SessionDelivery.land`); the session cookie rides it (ADR-EA-045, `Mints`).
+        return yield* SessionDelivery.land(outcome.callbackURL, outcome.session);
       }),
 
       slo: Effect.fnUntraced(function* ({
@@ -555,12 +557,12 @@ export const SamlAccountHandlers = HttpApiBuilder.group(
   "saml.account",
   Effect.fnUntraced(function* (handlers) {
     const saml = yield* Saml;
-    const settings = yield* SamlConfig.SamlConfig;
+    const settings = yield* yield* Tenant.inForce(SamlConfig.SamlConfigScoped);
     return handlers.handleAll({
       logout: Effect.fnUntraced(function* ({ payload }: { payload: SamlApi.LogoutPayload }) {
         yield* noReferrer;
-        const { principal } = yield* CurrentUser.current;
-        const started = yield* saml.logout(principal, { callbackURL: payload.callbackURL });
+        const caller = yield* CurrentUser.current;
+        const started = yield* saml.logout(caller, { callbackURL: payload.callbackURL });
         // The caller's own session ended (`SessionLifecycle.Ends`), so its cookie is expired and a bearer
         // client told so, whatever the IdP does next.
         yield* SessionDelivery.end;
@@ -596,27 +598,21 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
       }: {
         payload: SamlApi.CreateConnectionPayload;
       }) {
-        return yield* admin.createConnection((yield* CurrentUser.current).principal, payload);
+        return yield* admin.createConnection(yield* CurrentUser.current, payload);
       }),
       listConnections: Effect.fnUntraced(function* ({
         query,
       }: {
         query: SamlApi.ListConnectionsQuery;
       }) {
-        return yield* admin.listConnections(
-          (yield* CurrentUser.current).principal,
-          query.organizationId,
-        );
+        return yield* admin.listConnections(yield* CurrentUser.current, query.organizationId);
       }),
       getConnection: Effect.fnUntraced(function* ({
         params,
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        return yield* admin.getConnection(
-          (yield* CurrentUser.current).principal,
-          params.connectionId,
-        );
+        return yield* admin.getConnection(yield* CurrentUser.current, params.connectionId);
       }),
       updateConnection: Effect.fnUntraced(function* ({
         params,
@@ -626,7 +622,7 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
         payload: SamlApi.UpdateConnectionPayload;
       }) {
         return yield* admin.updateConnection(
-          (yield* CurrentUser.current).principal,
+          yield* CurrentUser.current,
           params.connectionId,
           payload,
         );
@@ -636,17 +632,14 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        yield* admin.deleteConnection((yield* CurrentUser.current).principal, params.connectionId);
+        yield* admin.deleteConnection(yield* CurrentUser.current, params.connectionId);
       }),
       refreshMetadata: Effect.fnUntraced(function* ({
         params,
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        return yield* admin.refreshMetadata(
-          (yield* CurrentUser.current).principal,
-          params.connectionId,
-        );
+        return yield* admin.refreshMetadata(yield* CurrentUser.current, params.connectionId);
       }),
       rotateSigningKey: Effect.fnUntraced(function* ({
         params,
@@ -656,7 +649,7 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
         payload: SamlApi.SigningKeyPayload;
       }) {
         return yield* admin.rotateSigningKey(
-          (yield* CurrentUser.current).principal,
+          yield* CurrentUser.current,
           params.connectionId,
           payload,
         );
@@ -666,10 +659,7 @@ export const SamlAdminHandlers = HttpApiBuilder.group(
       }: {
         params: SamlApi.ConnectionIdParams;
       }) {
-        return yield* admin.listSigningKeys(
-          (yield* CurrentUser.current).principal,
-          params.connectionId,
-        );
+        return yield* admin.listSigningKeys(yield* CurrentUser.current, params.connectionId);
       }),
     });
   }),
@@ -765,7 +755,7 @@ export const samlSessionRetention = Retention.contribute({
   id: "saml.sessions",
   make: Effect.gen(function* () {
     const records = yield* SamlRecords.SamlRecords;
-    const settings = yield* SamlConfig.SamlConfig;
+    const settings = yield* yield* Tenant.inForce(SamlConfig.SamlConfigScoped);
     return (now: DateTime.Utc) =>
       records.pruneSessions(
         sweepGrant,
@@ -814,7 +804,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
       const xmlSignature = yield* XmlSignature.XmlSignature;
       const random = yield* SecureRandom.SecureRandom;
       const hasher = yield* Digest.Digest;
-      const settings = yield* SamlConfig.SamlConfig;
+      const settings = yield* yield* Tenant.inForce(SamlConfig.SamlConfigScoped);
       const federation = yield* FederatedIdentity.make;
       const completion = yield* SignIn.make;
 
@@ -1018,7 +1008,7 @@ export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
           }
         }
         // One-time assertion id: kept until the assertion could no longer pass the time window anyway.
-        const digest = hexOf(
+        const digest = Hmac.toHex(
           yield* hasher.digest(
             Digest.sha256,
             new TextEncoder().encode(`${connection.idpEntityId}|${assertion.id}`),

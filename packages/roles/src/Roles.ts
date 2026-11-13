@@ -29,6 +29,7 @@
 // same plugin-owned-table pattern this plugin now follows).
 import { Api } from "@awthaq/api";
 import { Defects, Errors, Users } from "@awthaq/core";
+import { Tenant } from "@awthaq/ports";
 import {
   AuthEvents,
   AuthPlugin,
@@ -46,7 +47,6 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as HttpApi from "effect/http-api/HttpApi";
-import * as SqlClient from "effect/sql/SqlClient";
 import type { Role } from "@qadi/core";
 import { fromRoles, withAttributes } from "@qadi/core";
 
@@ -112,10 +112,9 @@ export interface RolesConfigShape {
  * `Roles.config(catalog)` is *required* for any effect, and building the layer
  * with no catalog logs `awthaq.roles.emptyCatalog`.
  */
-export const RolesConfig: Context.Reference<RolesConfigShape> = Context.Reference(
-  "awthaq/roles/Config",
-  { defaultValue: (): RolesConfigShape => ({ catalog: [] }) },
-);
+export const RolesConfig = Context.Reference<RolesConfigShape>("awthaq/roles/Config", {
+  defaultValue: (): RolesConfigShape => ({ catalog: [] }),
+});
 
 /**
  * RRM-004: the catalog, validated once, then indexed by name. A repeated role
@@ -128,7 +127,7 @@ export const RolesConfig: Context.Reference<RolesConfigShape> = Context.Referenc
  * definitions.)
  */
 const validatedCatalog = Effect.gen(function* () {
-  const rolesConfig = yield* RolesConfig;
+  const rolesConfig = yield* yield* Tenant.inForce(RolesConfigScoped);
   const names = rolesConfig.catalog.map((role) => role.name);
   const duplicates = Array.from(new Set(names.filter((name, i) => names.indexOf(name) !== i)));
   if (duplicates.length > 0) {
@@ -140,8 +139,9 @@ const validatedCatalog = Effect.gen(function* () {
   return new Map(rolesConfig.catalog.map((role) => [role.name, role] as const));
 });
 
-export const config = (catalog: ReadonlyArray<Role>): Layer.Layer<never> =>
-  Layer.succeed(RolesConfig, { catalog });
+export const RolesConfigScoped = Tenant.perDeployment(RolesConfig);
+
+export const config = (catalog: ReadonlyArray<Role>) => RolesConfigScoped.layer({ catalog });
 
 /**
  * The one domain implementation of `Roles` (plan 08): catalog validation, `UnknownRole` and the audit events,
@@ -184,51 +184,6 @@ const rolesMake = Effect.gen(function* () {
 });
 
 /**
- * BAM-006 (.issues/high): the migration this plugin's own header used to
- * defer — `UNIQUE(userId, role)` makes `assign` idempotent at the database
- * layer too, matching `layerMemory`'s own "assigning an already-held role
- * name is a no-op" contract. Columns left unquoted under `pg`, like
- * `@awthaq/jwt`'s own `jwtMigrations`: this table's own queries above
- * already reference every column unquoted.
- */
-const rolesMigrations: Migrations.Migrations = [
-  {
-    name: "create_roles_assignments",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`
-          CREATE TABLE roles_assignments (
-            "userId" TEXT NOT NULL,
-            role TEXT NOT NULL,
-            "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
-            UNIQUE ("userId", role)
-          )`,
-        sqlite: () => sql`
-          CREATE TABLE roles_assignments (
-            "userId" TEXT NOT NULL,
-            role TEXT NOT NULL,
-            "createdAt" TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-            UNIQUE ("userId", role)
-          )`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-  {
-    name: "create_roles_assignments_user_id_index",
-    up: Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql.onDialectOrElse({
-        pg: () => sql`CREATE INDEX roles_assignments_user_id ON roles_assignments("userId")`,
-        sqlite: () => sql`CREATE INDEX roles_assignments_user_id ON roles_assignments("userId")`,
-        orElse: () => Defects.unsupportedDialect("migrations"),
-      });
-    }),
-  },
-];
-
-/**
  * Factored out of `Roles.layer` so `layerSql` can share it: builds the
  * `SubjectResolver` override from whichever `RolesShape` implementation
  * gets merged underneath (`rolesMake`/`rolesMakeSql`) — see `Roles.layer`'s
@@ -236,7 +191,7 @@ const rolesMigrations: Migrations.Migrations = [
  */
 const subjectResolverMake = Effect.gen(function* () {
   const roles = yield* Roles;
-  const rolesConfig = yield* RolesConfig;
+  const rolesConfig = yield* yield* Tenant.inForce(RolesConfigScoped);
   const catalog = yield* validatedCatalog;
   // RRM-010: an empty catalog is fail-closed, but almost always a forgotten
   // `Roles.config([...])` — say so once, at build.
@@ -320,14 +275,17 @@ export class Roles extends AuthPlugin.Service<Roles, RolesShape>()("roles", {
   tables: {
     roles_assignments: AuthPlugin.Table.global("global roles, ADR-EA-025"),
   },
-  migrations: rolesMigrations,
+  migrations: Migrations.ledger(
+    [RoleAssignments.migrations],
+    ["create_roles_assignments", "create_roles_assignments_user_id_index"],
+  ),
   // ADR-EA-049: the events this plugin publishes, defined in `RolesEvents.ts`.
   events: RolesEvents.events,
   // Plan 08 (BEH-EA-T4): the assignment store, memory and SQL, matched. The catalog (`Roles.config`) stays config.
   records: RoleAssignments.records,
   // The catalog is listed by role name (each `Role` carries its whole permission tree).
   config: [
-    ConfigDescriptor.make(RolesConfig, {
+    ConfigDescriptor.make(RolesConfigScoped, {
       project: (value) => ({ catalog: value.catalog.map((role) => role.name) }),
       audit: (value) =>
         value.catalog.length === 0

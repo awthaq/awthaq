@@ -1,8 +1,7 @@
 // SOS-001, BCR-005, SOS-004, MLO-002, SAM-009 (BEH-EA-271 to BEH-EA-274): the EmailOtp plugin at the
 // domain level — a six-digit code that is hashed, single-use, attempt-budgeted and resend-windowed.
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import { AuditLog, Sessions, Users } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
 import { SignInProbe } from "@awthaq/test";
 import { Totp, TwoFactor } from "@awthaq/two-factor";
 import { assert, describe, it } from "@effect/vitest";
@@ -17,25 +16,19 @@ import * as TestClock from "effect/testing/TestClock";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Layer from "effect/Layer";
 import * as EmailOtp from "../src/EmailOtp.ts";
-import {
-  awaitMails,
-  buildLayer,
-  letForkedFibersRun,
-  realLimiter,
-  secretOf,
-} from "./support/harness.ts";
+import { buildLayer, realLimiter } from "./support/harness.ts";
 
 const codeFor = (email: string) =>
   Effect.gen(function* () {
     const emailOtp = yield* EmailOtp.EmailOtp;
-    const mailer = yield* Mailer.Mailer;
-    const before = (yield* mailer.sent).length;
+    const box = yield* TestMailbox.Mailbox;
+    const match = { to: email, template: "email-otp" };
+    const before = (yield* box.mail.messages).filter(
+      (m) => m.to === email && m.template === "email-otp",
+    ).length;
     yield* emailOtp.requestCode({ email });
-    yield* awaitMails(mailer.sent, before + 1);
-    const mail = (yield* mailer.sent).findLast(
-      (message) => message.template === "email-otp" && message.to === email,
-    );
-    return { mail, code: secretOf(mail, "code") };
+    const mail = yield* box.mail.waitFor(match, { nth: before + 1 });
+    return { mail, code: TestMailbox.secret(mail, "code") };
   });
 
 const flag = Ref.makeUnsafe(true);
@@ -49,7 +42,7 @@ describe("EmailOtp.requestCode (BEH-EA-272)", () => {
       Effect.gen(function* () {
         const emailOtp = yield* EmailOtp.EmailOtp;
         const users = yield* Users.Users;
-        const mailer = yield* Mailer.Mailer;
+        const box = yield* TestMailbox.Mailbox;
         yield* users.create({ identity: { _tag: "Email", email: "ada@example.com" }, name: "Ada" });
         const { mail, code } = yield* codeFor("ada@example.com");
         assert.match(code, /^[0-9]{6}$/);
@@ -59,10 +52,9 @@ describe("EmailOtp.requestCode (BEH-EA-272)", () => {
         const known = yield* emailOtp.requestCode({ email: "ada@example.com" });
         const unknown = yield* emailOtp.requestCode({ email: "nobody@example.com" });
         assert.strictEqual(known, unknown);
-        yield* awaitMails(mailer.sent, 1);
-        yield* letForkedFibersRun;
+        yield* box.mail.refute({ template: "email-otp" }, { beyond: 1 });
         assert.deepStrictEqual(
-          (yield* mailer.sent).map((sent) => sent.to),
+          (yield* box.mail.messages).map((sent) => sent.to),
           ["ada@example.com"],
         );
       }).pipe(
@@ -72,15 +64,28 @@ describe("EmailOtp.requestCode (BEH-EA-272)", () => {
   );
 
   it.effect(
+    "ADR-EA-018 D8 (plan 36): email OTP configuration is per deployment; a calling-fiber override is not read",
+    () =>
+      Effect.gen(function* () {
+        const emailOtp = yield* EmailOtp.EmailOtp;
+        const box = yield* TestMailbox.Mailbox;
+        yield* emailOtp
+          .requestCode({ email: "stranger@example.com" })
+          .pipe(Effect.provide(EmailOtp.config({ allowSignUp: false })));
+        const mail = yield* box.mail.waitFor({ to: "stranger@example.com", template: "email-otp" });
+        assert.strictEqual(mail.to, "stranger@example.com");
+      }).pipe(TestAuth.withoutRequest, Effect.provide(buildLayer())),
+  );
+
+  it.effect(
     "MLO-002: within the resend window no second code is minted, and the first stays valid",
     () =>
       Effect.gen(function* () {
         const emailOtp = yield* EmailOtp.EmailOtp;
-        const mailer = yield* Mailer.Mailer;
+        const box = yield* TestMailbox.Mailbox;
         const { code } = yield* codeFor("resend@example.com");
         yield* emailOtp.requestCode({ email: "resend@example.com" });
-        yield* letForkedFibersRun;
-        assert.strictEqual((yield* mailer.sent).length, 1);
+        yield* box.mail.refute({ template: "email-otp" }, { beyond: 1 });
         const issued = yield* emailOtp.verify({
           email: "resend@example.com",
           code: Redacted.make(code),

@@ -4,7 +4,6 @@
 // `HttpApiClient`. The credential store is the in-memory one — a test never touches the keychain.
 import { TestAuth } from "@awthaq/test";
 import { Api } from "@awthaq/api";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { assert, describe, it, vi } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
@@ -45,7 +44,7 @@ describe("login --token", () => {
         assert.strictEqual(stored.value.baseUrl, server.baseUrl);
         assert.strictEqual(Redacted.value(stored.value.token), token);
       }),
-    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest),
   );
 
   it.effect("rejects an invalid token (exit 8) and stores nothing", () =>
@@ -63,7 +62,7 @@ describe("login --token", () => {
         assert.isTrue(Option.isNone(yield* Ref.get(creds.ref)));
         assert.notInclude(everything(result), "not-a-real-token");
       }),
-    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest),
   );
 
   it.effect("AWTHAQ_TOKEN and AWTHAQ_BASE_URL make it fully non-interactive", () =>
@@ -72,13 +71,13 @@ describe("login --token", () => {
         const server = yield* serveAuth();
         const { token } = yield* server.issue("grace@example.com");
         const creds = yield* memoryCredentials();
-        const result = yield* runCli(["login"], undefined, { credentials: creds.layer }).pipe(
-          withEnv({ AWTHAQ_TOKEN: token, AWTHAQ_BASE_URL: server.baseUrl }),
-        );
+        const result = yield* runCli(["login"], undefined, {
+          credentials: creds.layer,
+        }).pipe(withEnv({ AWTHAQ_TOKEN: token, AWTHAQ_BASE_URL: server.baseUrl }));
         assert.strictEqual(result.code, 0);
         assert.strictEqual(yield* Ref.get(creds.writes), 1);
       }),
-    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest),
   );
 
   it.effect("needs to know the server: no --base-url and none stored is a usage error", () =>
@@ -115,18 +114,22 @@ describe("whoami", () => {
             baseUrl: server.baseUrl,
             token: Redacted.make(token),
           });
-          const text = yield* runCli(["whoami"], undefined, { credentials: creds.layer });
+          const text = yield* runCli(["whoami"], undefined, {
+            credentials: creds.layer,
+          });
           assert.strictEqual(text.code, 0);
           assert.include(everything(text), sessionId);
           assert.notInclude(everything(text), token);
-          const json = yield* runCli(["whoami", "--json"], undefined, { credentials: creds.layer });
+          const json = yield* runCli(["whoami", "--json"], undefined, {
+            credentials: creds.layer,
+          });
           assert.strictEqual(json.code, 0);
           const doc = JSON.parse(json.stdout.join("\n"));
           assert.strictEqual(doc.sessionId, sessionId);
           assert.strictEqual(doc.baseUrl, server.baseUrl);
           assert.notInclude(json.stdout.join("\n"), token);
         }),
-      ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+      ).pipe(TestAuth.withoutRequest),
   );
 
   it.effect("exits 8 when not logged in", () =>
@@ -147,11 +150,13 @@ describe("whoami", () => {
           baseUrl: server.baseUrl,
           token: Redacted.make(token),
         });
-        const result = yield* runCli(["whoami"], undefined, { credentials: creds.layer });
+        const result = yield* runCli(["whoami"], undefined, {
+          credentials: creds.layer,
+        });
         assert.strictEqual(result.code, 8);
         assert.include(everything(result), "rejected the token");
       }),
-    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest),
   );
 
   it.effect("AWTHAQ_TOKEN wins over the stored credential and is never persisted", () =>
@@ -166,7 +171,12 @@ describe("whoami", () => {
         });
         const result = yield* runCli(["whoami", "--json"], undefined, {
           credentials: withEnvOverride(creds.layer),
-        }).pipe(withEnv({ AWTHAQ_TOKEN: envUser.token, AWTHAQ_BASE_URL: server.baseUrl }));
+        }).pipe(
+          withEnv({
+            AWTHAQ_TOKEN: envUser.token,
+            AWTHAQ_BASE_URL: server.baseUrl,
+          }),
+        );
         assert.strictEqual(result.code, 0);
         // The credential the environment named — not the stored one — was used ...
         assert.strictEqual(JSON.parse(result.stdout.join("\n")).sessionId, envUser.sessionId);
@@ -174,7 +184,7 @@ describe("whoami", () => {
         // ... and nothing was written to the store.
         assert.strictEqual(yield* Ref.get(creds.writes), 0);
       }),
-    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest),
   );
 
   it.effect("persists a token the server rotated (there is no grace window)", () =>
@@ -213,7 +223,9 @@ describe("whoami", () => {
           baseUrl: `http://127.0.0.1:${port}`,
           token: Redacted.make("old-token"),
         });
-        const result = yield* runCli(["whoami"], undefined, { credentials: creds.layer });
+        const result = yield* runCli(["whoami"], undefined, {
+          credentials: creds.layer,
+        });
         assert.strictEqual(result.code, 0);
         const stored = yield* Ref.get(creds.ref);
         assert.strictEqual(
@@ -235,7 +247,9 @@ describe("logout", () => {
           baseUrl: server.baseUrl,
           token: Redacted.make(token),
         });
-        const result = yield* runCli(["logout"], undefined, { credentials: creds.layer });
+        const result = yield* runCli(["logout"], undefined, {
+          credentials: creds.layer,
+        });
         assert.strictEqual(result.code, 0);
         assert.isTrue(Option.isNone(yield* Ref.get(creds.ref)));
         // The token is dead server-side too: presenting it again is rejected.
@@ -247,7 +261,7 @@ describe("logout", () => {
         });
         assert.strictEqual(again.code, 8);
       }),
-    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest),
   );
 
   it.effect("clears locally even when the server cannot be reached, and says so", () =>
@@ -256,7 +270,9 @@ describe("logout", () => {
         baseUrl: "http://127.0.0.1:1",
         token: Redacted.make("t"),
       });
-      const result = yield* runCli(["logout"], undefined, { credentials: creds.layer });
+      const result = yield* runCli(["logout"], undefined, {
+        credentials: creds.layer,
+      });
       assert.strictEqual(result.code, 0);
       assert.isTrue(Option.isNone(yield* Ref.get(creds.ref)));
       assert.include(everything(result), "could not revoke the session on the server");
@@ -293,6 +309,6 @@ describe("session commands never start a listener (BEH-EA-208)", () => {
           listen.mockRestore();
         }
       }),
-    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest),
   );
 });

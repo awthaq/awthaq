@@ -10,7 +10,7 @@ import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { Defects } from "@awthaq/ports";
+import { Defects, Tenant } from "@awthaq/ports";
 
 interface SamlRateLimit {
   readonly limit: number;
@@ -99,10 +99,15 @@ export const defaultAdminRate = { limit: 60, window: Duration.minutes(1) } satis
 
 const MAX_SKEW = Duration.seconds(300);
 
+/**
+ * Plan 36 (Q9 default): declared per deployment. Plan 31's gate reads `canManageSaml` through `Tenant.inForce` in
+ * `SamlAdmin.ts`; no per-tenant field split exists in the tree, so none is declared.
+ */
+export const SamlConfigScoped = Tenant.perDeployment(SamlConfig);
+
 /** Validates at layer build: a malformed `baseUrl`, or a skew over the maximum, is a deployment defect. */
 export const config = (input: SamlConfigInput) =>
-  Layer.effect(
-    SamlConfig,
+  Layer.unwrap(
     Effect.gen(function* () {
       const parsed = URL.parse(input.baseUrl);
       if (
@@ -151,7 +156,7 @@ export const config = (input: SamlConfigInput) =>
         adminRate: input.adminRate ?? defaultAdminRate,
         allowOwnerRoleMapping: input.allowOwnerRoleMapping ?? false,
       };
-      return value;
+      return SamlConfigScoped.layer(value);
     }),
   );
 

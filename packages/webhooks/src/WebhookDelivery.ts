@@ -24,7 +24,7 @@
 // Delivery is at-least-once: a worker that dies between the POST and the row update leaves the lease
 // to lapse and the delivery is sent again, with the same `webhook-id`. Receivers deduplicate on it.
 
-import { type AuditLog, AuthEvents, EventRelay } from "@awthaq/core";
+import { type AuditLog, AuthEvents, EventRelay, Tenant } from "@awthaq/core";
 import { HostResolver, OutboundUrl, RateLimiter, type RelayCursorStore } from "@awthaq/ports";
 import { type StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Cause from "effect/Cause";
@@ -80,6 +80,7 @@ export const enqueue = (
   Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
     const random = yield* SecureRandom.SecureRandom;
+    // runs in a background fiber; reads the build value its owner re-provides (PLAN 36 §3.5 rule 2)
     const settings = yield* WebhooksConfig.WebhooksConfig;
     const registry = yield* AuthEvents.EventRegistry;
     const endpoints = yield* records.listEnabledEndpoints(relay);
@@ -134,7 +135,7 @@ export const transportLayer = Layer.effect(
   Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
     const random = yield* SecureRandom.SecureRandom;
-    const settings = yield* WebhooksConfig.WebhooksConfig;
+    const settings = yield* yield* Tenant.inForce(WebhooksConfig.WebhooksConfigScoped);
     // ADR-EA-049: the registry where the transport is built, so the relay fiber delivers against the composition's.
     const registry = yield* AuthEvents.EventRegistry;
     return EventRelay.EventTransport.of({
@@ -187,6 +188,7 @@ export const attempt = (delivery: WebhookRecords.DeliveryRecord) =>
     const records = yield* WebhookRecords.WebhookRecords;
     const limiter = yield* RateLimiter.RateLimiter;
     const transport = yield* WebhookTransport.WebhookTransport;
+    // runs in a background fiber; reads the build value its owner re-provides (PLAN 36 §3.5 rule 2)
     const settings = yield* WebhooksConfig.WebhooksConfig;
     const now = yield* DateTime.now;
 
@@ -331,6 +333,7 @@ export const drainDue: Effect.Effect<
   | WebhookTransport.WebhookTransport
 > = Effect.gen(function* () {
   const records = yield* WebhookRecords.WebhookRecords;
+  // runs in a background fiber; reads the build value its owner re-provides (PLAN 36 §3.5 rule 2)
   const settings = yield* WebhooksConfig.WebhooksConfig;
   const now = yield* DateTime.now;
   const claimed = yield* records.claimDue(relay, {
@@ -349,6 +352,7 @@ export const drainDue: Effect.Effect<
 export const pruneAt = (now: DateTime.Utc) =>
   Effect.gen(function* () {
     const records = yield* WebhookRecords.WebhookRecords;
+    // runs in a background fiber; reads the build value its owner re-provides (PLAN 36 §3.5 rule 2)
     const settings = yield* WebhooksConfig.WebhooksConfig;
     return yield* records.pruneFinished(
       relay,
@@ -365,7 +369,7 @@ export const pruneOnce = Effect.flatMap(DateTime.now, pruneAt);
  */
 export const workerLayer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const settings = yield* WebhooksConfig.WebhooksConfig;
+    const settings = yield* yield* Tenant.inForce(WebhooksConfig.WebhooksConfigScoped);
     const failures = yield* Ref.make(0);
     const tick = drainDue.pipe(
       Effect.tap(() => Ref.set(failures, 0)),

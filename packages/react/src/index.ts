@@ -27,7 +27,7 @@
 // BO-007: an explicit list, not `export *` — an upstream rename or addition now
 // fails this file's typecheck instead of silently changing this package's public
 // API. The gate-instrumentation registry (`GateRegistry`: `gateInstances`,
-// `registerGate`, ...) is qadi's devtools surface and deliberately not re-exported;
+// `registerGate`, ...) and the dock feed (`useDevtoolsFeed`, `runtimeLayer`) are qadi's devtools surface and deliberately not re-exported;
 // import it from `@qadi/react` (a peer dependency) where a devtools panel needs it.
 export {
   Can,
@@ -52,6 +52,7 @@ export {
   usePolicies,
   useProjected,
   useQadiContext,
+  useQuestions,
   useSubject,
 } from "@qadi/react";
 export type {

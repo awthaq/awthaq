@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-36 |
-> | Revision | 1.2 |
-> | Effective Date | 2026-11-08 |
+> | Revision | 1.3 |
+> | Effective Date | 2026-11-10 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-008](../models/08-jwt-bearer.md) as `@awthaq/jwt`; BDD-005) <br> 1.1 (2026-10-13): BEH-EA-296: the private key is a sealed column (re-sealed on read, an unopenable key is a `sealedColumn.readable` defect) and the stores fail with StoreUnavailable (plan 05 phase 8) <br> 1.2 (2026-11-08): BEH-EA-296: a `kid` names one key forever; registering or importing the same public key again is a no-op, a different key under a stored `kid` fails `KidTaken` (plan 24 R6 and Q3, plan 25 ticket 20) |
+> | Change History | 1.0 (2026-09-29): Initial release (implementing [MOD-EA-008](../models/08-jwt-bearer.md) as `@awthaq/jwt`; BDD-005) <br> 1.1 (2026-10-13): BEH-EA-296: the private key is a sealed column (re-sealed on read, an unopenable key is a `sealedColumn.readable` defect) and the stores fail with StoreUnavailable (plan 05 phase 8) <br> 1.2 (2026-11-08): BEH-EA-296: a `kid` names one key forever; registering or importing the same public key again is a no-op, a different key under a stored `kid` fails `KidTaken` (plan 24 R6 and Q3, plan 25 ticket 20) <br> 1.3 (2026-11-10): BEH-EA-293/298: `crit` refused, malformed segments refused without a defect, RFC 7517 key selection, `alg`-less JWKS keys; BEH-EA-292: a remote-registered key is served with its `kid` and `alg` (plan 38, ADR-EA-057) |
 ---
 
 > `@awthaq/jwt` composes as `Auth.make([Jwt])` and serves two groups: `jwt` (`GET /jwt/jwks`, public) and `jwt.token` (`POST /jwt/token`, `POST /jwt/introspect`, behind `Api.Authentication`). It issues short-lived, self-contained tokens for an already-authenticated caller so other services can verify them without a session store ([MOD-EA-008](../models/08-jwt-bearer.md), [ADR-EA-017](../decisions/017-jwt-signing-key-rotation.md)). It is never a login: the session remains the source of truth, and the token is a delegation credential whose lifetime bounds how stale it can be.
@@ -56,13 +56,18 @@ REQUIREMENT: A token MUST be accepted only if its signature verifies under
              the token alone; `none` and a symmetric `HS*` MUST be refused), its
              `iss` and `aud` match the configuration, its `typ` is the expected
              class, it has not expired, and `nbf` and `iat` are not in the
-             future. Every failure (a tampered payload or signature, an
+             future. A token MUST be refused when it is not three base64url
+             segments of JSON objects, or when its header carries `crit`
+             (RFC 7515 §4.1.11). The key MUST be one whose `use` is absent or
+             `sig`, whose `key_ops` is absent or includes `verify`, whose
+             `alg`, if present, equals the header `alg`, and whose `kty`/`crv`
+             fit it. Every failure (a tampered payload or signature, an
              unknown `kid`, a wrong issuer or audience, an expired token) MUST
              collapse into one undifferentiated result that names no reason to
              the caller.
 ```
 
-RFC 8725 (JWT best current practice) in one rule: the classic algorithm-confusion and `alg: none` attacks work only when a verifier believes the header, so the header is treated as a claim to be checked against the key, not as an instruction.
+RFC 8725 (JWT best current practice) in one rule: the classic algorithm-confusion and `alg: none` attacks work only when a verifier believes the header, so the header is treated as a claim to be checked against the key, not as an instruction. The rules live in `@awthaq/ports`'s `Jws` ([ADR-EA-057](../decisions/057-one-jws-verifier.md)), shared with the OIDC `id_token` verifier.
 
 _Previous: [BEH-EA-292](36-jwt.md#beh-ea-292-the-jwks-is-public-holds-public-keys-only-and-tells-verifiers-how-long-to-cache-it) | Next: [BEH-EA-294](36-jwt.md#beh-ea-294-principal-tokens-and-general-purpose-tokens-are-different-classes-that-cannot-pass-for-one-another)_
 
@@ -152,7 +157,9 @@ REQUIREMENT: `Verify.makeVerifier({ jwksUrl, issuer, audience, algorithms })`
              reuse it for `cacheTtl`, and refetch at most once per
              `minRefetchInterval` when a token names an unknown `kid`, so garbage
              kids cannot become a fetch per request. It MUST NOT claim to know
-             about revocation.
+             about revocation. It MUST apply BEH-EA-293's rules to the fetched
+             set; a key that names no `alg` is usable for an allowlisted
+             algorithm its key type fits (RFC 7517 §4.4).
 ```
 
 The lite path trades freshness for independence: a service with no session store can still trust the token, for as long as the token itself is valid. Anything needing freshness calls introspection.

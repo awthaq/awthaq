@@ -1,7 +1,7 @@
 // Shared composition for the webhooks plugin's tests: the real in-memory core, a real `Encryption`
 // over a fixed test key, and a programmable `HttpClient` that records every request it is asked to send.
 import { Api } from "@awthaq/api";
-import { Auth, AuthEvents, Persistence, Sessions, Users } from "@awthaq/core";
+import { Auth, AuthEvents, CurrentUser, Persistence, Sessions, Users } from "@awthaq/core";
 import { Encryption, HostResolver, KeyProvider, RateLimiter, Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -174,10 +174,12 @@ export const adminLayer = (options: DeliveryOptions = {}) =>
   });
 
 export const adminPrincipal = (id = "admin-1") =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: `${id}-session`,
-  });
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: `${id}-session`,
+    }),
+  );
 
 /** A transport that records what it is asked to send and answers by `reply` (default 200): what the pinning tests inspect. */
 export const fakeTransport = (

@@ -9,7 +9,16 @@
 // IdP (a signed response for a given AuthnRequest). Everything goes through `Saml.acs`, the service behind
 // `POST /auth/saml/acs`, so the chain a scenario exercises is the production one, cookie to session.
 import { Api } from "@awthaq/api";
-import { Accounts, AuditLog, Auth, AuthEvents, Sessions, Users, Verification } from "@awthaq/core";
+import {
+  Accounts,
+  AuditLog,
+  Auth,
+  AuthEvents,
+  CurrentUser,
+  Sessions,
+  Users,
+  Verification,
+} from "@awthaq/core";
 import { Organization, OrganizationConnections } from "@awthaq/organization";
 import { MembershipRecords } from "@awthaq/organization/records";
 import type { Encryption } from "@awthaq/ports";
@@ -207,11 +216,10 @@ const buildLive = (
 
 /** The built application: run an effect against the very instances the scenario has been using. */
 interface AppHandle {
-  /** ADR-EA-047: answers no request unless the effect provides one (`TestAuth.app`'s `run`). */
+  /** ADR-EA-047: answers no request unless the effect provides one (`TestAuth.serve`'s `run`). */
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, AppServices | Api.AuthRequestContext>,
   ) => Promise<Exit.Exit<A, E>>;
-  readonly close: Effect.Effect<void>;
 }
 
 const buildApp = (
@@ -220,13 +228,11 @@ const buildApp = (
   served: ReadonlyMap<string, string>,
   preferred: Sso.SsoProtocol | undefined,
   meeting: number | undefined,
-): AppHandle => {
-  const app = TestAuth.app(buildLive(observations, config, served, preferred, meeting));
-  return {
-    run: (effect) => app.run(Effect.exit(effect)),
-    close: Effect.promise(() => app.dispose()),
-  };
-};
+) =>
+  Effect.map(
+    TestAuth.serve(buildLive(observations, config, served, preferred, meeting)),
+    (app): AppHandle => ({ run: (effect) => app.run(Effect.exit(effect)) }),
+  );
 
 // ---- the scenario's own state ----------------------------------------------------------------------
 
@@ -290,7 +296,8 @@ export interface WorldShape {
   /** Which protocol the `Sso` dispatcher prefers when both route a hint (BEH-EA-317); default the plugin's. */
   readonly ssoPreference: Ref.Ref<Sso.SsoProtocol | undefined>;
   readonly started: Ref.Ref<boolean>;
-  readonly app: Ref.Ref<AppHandle | undefined>;
+  /** Built on first use from the Refs above (the World's own guards keep them from changing after); released with the scenario. */
+  readonly app: TestAuth.LazyApp<Record<string, never>, AppHandle>;
   readonly connections: Map<string, ConnectionState>;
   /** Logins by the label the scenario gave them; `current` is the latest. */
   readonly logins: Map<string, LoginState>;
@@ -327,18 +334,30 @@ export const WorldLive = Layer.effect(
   World,
   Effect.gen(function* () {
     const observations = makeObservations();
-    const app = yield* Ref.make<AppHandle | undefined>(undefined);
-    yield* Effect.addFinalizer(() =>
-      Ref.get(app).pipe(
-        Effect.flatMap((handle) => (handle === undefined ? Effect.void : handle.close)),
-      ),
+    const config = yield* Ref.make<Partial<SamlConfigInput>>({});
+    const metadata = new Map<string, string>();
+    const anchorMeeting = yield* Ref.make<number | undefined>(undefined);
+    const ssoPreference = yield* Ref.make<Sso.SsoProtocol | undefined>(undefined);
+    const app = yield* TestAuth.lazyApp<Record<string, never>, AppHandle>(
+      {},
+      () =>
+        Effect.gen(function* () {
+          return yield* buildApp(
+            observations,
+            yield* Ref.get(config),
+            metadata,
+            yield* Ref.get(ssoPreference),
+            yield* Ref.get(anchorMeeting),
+          );
+        }),
+      { name: "SamlWorld" },
     );
     return World.of({
       observations,
-      config: yield* Ref.make<Partial<SamlConfigInput>>({}),
-      metadata: new Map(),
-      anchorMeeting: yield* Ref.make<number | undefined>(undefined),
-      ssoPreference: yield* Ref.make<Sso.SsoProtocol | undefined>(undefined),
+      config,
+      metadata,
+      anchorMeeting,
+      ssoPreference,
       started: yield* Ref.make(false),
       app,
       connections: new Map(),
@@ -357,17 +376,7 @@ export const WorldLive = Layer.effect(
 const currentApp = Effect.gen(function* () {
   const world = yield* World;
   yield* Ref.set(world.started, true);
-  const existing = yield* Ref.get(world.app);
-  if (existing !== undefined) return existing;
-  const fresh = buildApp(
-    world.observations,
-    yield* Ref.get(world.config),
-    world.metadata,
-    yield* Ref.get(world.ssoPreference),
-    yield* Ref.get(world.anchorMeeting),
-  );
-  yield* Ref.set(world.app, fresh);
-  return fresh;
+  return yield* world.app.get;
 });
 
 /** Merges into the configuration the app will be built with; only before anything has run. */
@@ -404,10 +413,12 @@ export const setClock = (millis: number) => inApp(TestClock.setTime(millis));
 
 // ---- connections and logins ------------------------------------------------------------------------
 
-const ownerPrincipal = new Api.UserPrincipal({
-  ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
-  sessionId: "owner-session",
-});
+const ownerPrincipal = CurrentUser.of(
+  new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
+    sessionId: "owner-session",
+  }),
+);
 
 /** The organization-owned SAML connection called `name`, seeded on first use with whatever the scenario planned for it. */
 export const ensureConnection = Effect.fn("features.saml.ensureConnection")(function* (

@@ -43,7 +43,7 @@ A connection with `authnRequestsSigned` sends every AuthnRequest with a **query-
 ## The flow
 
 1. `GET /auth/saml/login?connection=<id>&callbackURL=/dashboard` reserves the AuthnRequest id, redirects to the IdP (HTTP-Redirect binding) and sets the `__Host-saml-request` cookie (`SameSite=None`: the IdP's POST is cross-site).
-2. `POST /auth/saml/acs` (`SAMLResponse` as a form): the chain below, then `302` to the callback with the session cookie. The session, and the user it creates on a first sign-in, belong to the connection's organization (`tenantScoped`, ADR-EA-018).
+2. `POST /auth/saml/acs` (`SAMLResponse` as a form): the chain below, then, with the session cookie, the same-site interstitial (`200 text/html`, meta refresh to the callback) while the session cookie is `SameSite=Strict` (the default), or a `302` to the callback under `Lax`/`None` (BEH-EA-350). The session, and the user it creates on a first sign-in, belong to the connection's organization (`tenantScoped`, ADR-EA-018).
 
 **Every failure at the ACS is the same `400 SamlAssertionRejected` with no detail.** Which check failed is logged (`awthaq/saml: assertion rejected`) and published as `auth.user.signInFailed` (`reason: "assertionInvalid"`, strategy `saml:<organizationId>:<connectionId>`).
 
@@ -97,4 +97,4 @@ The adapter (`XmlSignatureNode`) wraps [`xml-crypto`](https://github.com/node-sa
 
 ## Not built
 
-**IdP-initiated login and encrypted assertions are refused, as recorded decisions** ([ADR-EA-036](../../spec/decisions/036-saml-refusals-are-decisions.md)): the ACS requires the state of a login this server started (start the flow from an IdP app launcher by pointing it at `GET /auth/saml/login?connection=<id>`), and it holds no decryption key (configure the IdP to send signed, unencrypted assertions to this SP). `RelayState` is accepted and ignored: the return path is held server-side. A session cookie in `SameSite=Strict` mode is not sent on the first navigation after a cross-site POST, as with any federated sign-in; use the default or `Lax` mode, or land on a page that re-navigates.
+**IdP-initiated login and encrypted assertions are refused, as recorded decisions** ([ADR-EA-036](../../spec/decisions/036-saml-refusals-are-decisions.md)): the ACS requires the state of a login this server started (start the flow from an IdP app launcher by pointing it at `GET /auth/saml/login?connection=<id>`), and it holds no decryption key (configure the IdP to send signed, unencrypted assertions to this SP). `RelayState` is accepted and ignored: the return path is held server-side. A session cookie in `SameSite=Strict` mode is not sent on a request inside a cross-site redirect chain, so the ACS answers a same-site interstitial under the default `Strict` cookie: its meta refresh carries the session on the first landing request. `SessionCookie.config({ mode: SessionCookie.HostLax })` keeps the plain `302` (BEH-EA-350, BEH-EA-055).

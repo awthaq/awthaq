@@ -260,7 +260,7 @@ export const cliSteps = defineSteps<World>(({ Given, When, Then }) => {
         auth: passwordAndRoles,
         production: true,
         config: goodConfig,
-        app: Layer.mergeAll(goodConfig, Mailer.layerMemory, RateLimiter.layerMemory),
+        app: Layer.mergeAll(goodConfig, Mailer.layerConsole, RateLimiter.layerMemory),
       });
     },
   );

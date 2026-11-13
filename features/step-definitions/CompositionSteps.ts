@@ -6,10 +6,10 @@ import { defineSteps } from "@effect-cucumber/vitest";
 import assert from "node:assert/strict";
 import { Auth, type AuthPlugin, EventDefinition } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
-import { ClientAddress, Mailer, RateLimiter } from "@awthaq/ports";
+import { ClientAddress, RateLimiter } from "@awthaq/ports";
 import { AuthHost, Csrf } from "@awthaq/server";
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -533,7 +533,7 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
       // Runtime half: with both ports provided (the in-memory Mailer stands in for a real one)
       // the very same composed layer builds.
       const provided = Auth.make([PortUserFixture]).layer.pipe(
-        Layer.provide(Layer.mergeAll(Mailer.layerMemory, cheapArgon2id)),
+        Layer.provide(Layer.mergeAll(TestMailbox.layer, cheapArgon2id)),
         Layer.provide(NodeCrypto.layer),
       );
       yield* Effect.scoped(Layer.build(provided));
@@ -842,7 +842,7 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
       assertTypeGate("auth-host-missing-port", COMPILE_GATES, [
         "@ts-expect-error",
         "Layer.launch(hostedPassword.pipe(Layer.provide(everyPortButMailer)))",
-        `Layer.provide(${port}.layerMemory)`,
+        `Layer.provide(${port}.layerNoop)`,
       ]);
     },
   );
@@ -870,7 +870,7 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
     }).pipe(
       Layer.provide(
         Layer.mergeAll(
-          Mailer.layerMemory,
+          TestMailbox.layer,
           RateLimiter.layerPermissive,
           ClientAddress.layerDirect,
           TestAuth.encryption,
@@ -880,21 +880,17 @@ export const compositionSteps = defineSteps<World>(({ Given, When, Then }) => {
       Layer.provideMerge(HttpServer.layerServices),
       Layer.provideMerge(HttpRouter.layer),
     );
+    const app = yield* TestAuth.serve(served);
     const outcome = yield* Effect.promise(async () => {
-      const app = TestAuth.app(served);
-      try {
-        const founder = await app.signIn("founder@example.com");
-        const response = await founder.request("POST", "/organization", {
-          json: { name: "Acme", slug: "acme" },
-        });
-        const body: unknown = await response.json();
-        return {
-          status: response.status,
-          slug: isObject(body) ? Reflect.get(body, "slug") : undefined,
-        };
-      } finally {
-        await app.dispose();
-      }
+      const founder = await app.signIn("founder@example.com");
+      const response = await founder.request("POST", "/organization", {
+        json: { name: "Acme", slug: "acme" },
+      });
+      const body: unknown = await response.json();
+      return {
+        status: response.status,
+        slug: isObject(body) ? Reflect.get(body, "slug") : undefined,
+      };
     });
     yield* put(hostedOrganization, outcome);
   });

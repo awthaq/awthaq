@@ -8,9 +8,8 @@
 //      call in their own package before this check existed.)
 //   2. `@awthaq/test` is dev-only: no `packages/*/src` file outside `packages/test` imports it, and no
 //      `packages/*/package.json` or `examples/*/package.json` lists it under `dependencies`.
-//   3. Plan 25 (BEH-EA-336, ADR-EA-041 decision 9): a `Contract.test.ts` that passes `records:` (the
-//      record-store contract) is listed in `scripts/test-pg.sh`'s suites, so its cases also run on
-//      Postgres, where the race cases are the point.
+//   3. Plan 37 (BEH-EA-336): `scripts/test-pg.sh` names no `*.test.ts`. `pnpm test:pg` runs every suite,
+//      as CI does; a hand-kept list had drifted (9 Postgres-reaching files missing).
 //   4. Plan 25 ticket 25: `RecordsContract.pending` is gone (every store has its suite); a test file that
 //      still names it is reported here, before the compiler's less direct error.
 //
@@ -41,14 +40,17 @@ const problems = [];
 let classCount = 0;
 
 const testPg = path.join(rootDir, "scripts", "test-pg.sh");
-const pgSuites = new Set(
-  existsSync(testPg)
-    ? read(testPg)
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.endsWith(".test.ts"))
-    : [],
-);
+if (existsSync(testPg)) {
+  for (const line of read(testPg)
+    .split("\n")
+    .map((l) => l.trim())) {
+    if (line.endsWith(".test.ts")) {
+      problems.push(
+        `scripts/test-pg.sh names ${line}: it runs every suite, as CI does; delete the list`,
+      );
+    }
+  }
+}
 
 for (const owner of owners) {
   const classes = [];
@@ -75,12 +77,6 @@ for (const owner of owners) {
     if (!covered.has(name)) {
       problems.push(`${owner}: plugin class ${name} is not run by test/Contract.test.ts`);
     }
-  }
-  const listed = path.posix.join(owner.split(path.sep).join("/"), "test", "Contract.test.ts");
-  if (/\brecords:/.test(code) && !pgSuites.has(listed)) {
-    problems.push(
-      `${listed} passes records: (the record-store contract) but is not listed in scripts/test-pg.sh`,
-    );
   }
 }
 

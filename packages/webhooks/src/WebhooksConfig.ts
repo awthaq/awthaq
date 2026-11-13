@@ -5,11 +5,11 @@
 // Split out of `Webhooks.ts` so the delivery worker and the admin service read one definition
 // without a module cycle.
 
+import { Tenant } from "@awthaq/core";
 import type { AuthSubject } from "@qadi/core";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 
 interface RateBudget {
   readonly limit: number;
@@ -94,8 +94,29 @@ export const WebhooksConfig: Context.Reference<WebhooksConfigShape> = Context.Re
   { defaultValue: () => defaultWebhooksConfig },
 );
 
+/** The worker's settings are boot; `allowPrivateTargets` is not (the worker checks the deployment's value at delivery). */
+export const WebhooksConfigScoped = Tenant.perTenant(WebhooksConfig, {
+  boot: [
+    "maxAttempts",
+    "retryBase",
+    "retryFactor",
+    "retryMax",
+    "requestTimeout",
+    "batchSize",
+    "concurrency",
+    "pollInterval",
+    "lease",
+    "disableAfterConsecutiveDead",
+    "deliveryRetention",
+    "includeClientContext",
+    "platformEndpointsHearAllTenants",
+    "deliveryRate",
+    "userAgent",
+  ],
+});
+
 export const config = (partial: Partial<WebhooksConfigShape>) =>
-  Layer.succeed(WebhooksConfig, { ...defaultWebhooksConfig, ...partial });
+  WebhooksConfigScoped.layer({ ...defaultWebhooksConfig, ...partial });
 
 /** The wait before attempt `attemptsMade + 1`, after `attemptsMade` failed attempts (1-based). */
 export const retryDelay = (

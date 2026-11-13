@@ -6,7 +6,7 @@
 // `RequirePermission` middleware built on it (BEH-EA-154 through 160 are all
 // qadi's own exports — `RequiredPermission`/`PublicEndpoint` annotations,
 // `requiresPermission`/`publicEndpoint`, the 403/502/500 status mapping,
-// `registerApi`/`permissionRegistryRoute` — nothing awthaq-specific to
+// `guardApi`/`permissionRegistryRoute` — nothing awthaq-specific to
 // build for those). What awthaq owns is the one *implementation* of
 // that interface: an adapter over `@awthaq/server`'s `Credentials`, the one
 // credential-resolution module, run directly against the raw request,

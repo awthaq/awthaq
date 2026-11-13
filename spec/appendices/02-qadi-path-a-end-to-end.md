@@ -49,7 +49,7 @@ import { Organization } from "@awthaq/organization"
 import { Roles } from "@awthaq/roles"
 import { AuthorizedSubjectLive, RequestDecisionCache, SubjectExtractorLive } from "@awthaq/qadi"
 import { EvaluationIdLive, EvaluationServicesNone } from "@qadi/core"
-import { PermissionRegistryLive, RequirePermissionLive } from "@qadi/http"
+import { PermissionRegistryLive, guardApi } from "@qadi/http"
 
 export const auth = Auth.make([Password, Organization, Roles])
 //  Roles overrides the SubjectResolver slot: subjects now carry roles and flattened permissions.
@@ -69,7 +69,7 @@ export const RequestCacheLive = RequestDecisionCache.RequestDecisionCacheLive({ 
 // The two bridges: one for handlers (path A), one for annotated endpoints (path B).
 export const AuthzLive = Layer.mergeAll(
   AuthorizedSubjectLive,                                   // CurrentPrincipal → CurrentSubject, as HttpApi middleware
-  RequirePermissionLive.pipe(Layer.provide(SubjectExtractorLive))   // raw request → AuthSubject, for qadi's middleware
+  guardApi(AppApi).pipe(Layer.provide(SubjectExtractorLive))   // raw request → AuthSubject, for qadi's middleware
 ).pipe(Layer.provide(auth.layer))
 ```
 

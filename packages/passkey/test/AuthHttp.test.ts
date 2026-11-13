@@ -32,7 +32,7 @@ const buildApp = (
   webAuthn: Layer.Layer<WebAuthn.WebAuthn>,
   configOverrides?: Partial<Passkey.PasskeyConfigShape>,
 ) =>
-  TestAuth.app(
+  TestAuth.serve(
     TestAuth.layer(Auth.make([Passkey.Passkey]), {
       services: Layer.mergeAll(
         webAuthn,
@@ -44,10 +44,6 @@ const buildApp = (
     { baseUrl: ORIGIN },
   );
 
-/** One running app for the file: a session issued directly against its `Sessions` authenticates a request through its `handler`. */
-const app = buildApp(mockWebAuthn());
-const { handler } = app;
-
 /**
  * Every group here carries `.middleware(Api.CsrfProtection)`: each request comes from an agent of the app, which
  * holds a `__Host-csrf` minted against the harness's own `CsrfConfig` and echoes it on unsafe methods, as a
@@ -55,6 +51,7 @@ const { handler } = app;
  * `Sessions`: passkey registration needs one and this plugin has no sign-up), or a fresh anonymous agent.
  */
 const post = async (
+  app: TestAuth.App<never>,
   as: UserAgent.UserAgent | undefined,
   path: string,
   body: unknown,
@@ -68,17 +65,18 @@ const post = async (
 describe("AuthHttp + Passkey (real HTTP)", () => {
   it.effect("BEH-EA-130: a full registration ceremony persists a credential and answers 200", () =>
     Effect.gen(function* () {
+      const app = yield* buildApp(mockWebAuthn());
       const browser = yield* Effect.promise(() => app.signIn("register@example.com"));
 
       const optionsResponse = yield* Effect.promise(() =>
-        post(browser, "/passkey/register/options", {}),
+        post(app, browser, "/passkey/register/options", {}),
       );
       assert.strictEqual(optionsResponse.status, 200);
       const options = yield* Effect.promise(() => optionsResponse.json());
       const challenge = extractChallenge(options);
 
       const verifyResponse = yield* Effect.promise(() =>
-        post(browser, "/passkey/register/verify", {
+        post(app, browser, "/passkey/register/verify", {
           credential: {
             id: "cred-mock-1",
             rawId: "cred-mock-1",
@@ -104,8 +102,9 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
 
   it.effect("register/options is unreachable without a session cookie", () =>
     Effect.gen(function* () {
+      const app = yield* buildApp(mockWebAuthn());
       const response = yield* Effect.promise(() =>
-        post(undefined, "/passkey/register/options", {}),
+        post(app, undefined, "/passkey/register/options", {}),
       );
       assert.strictEqual(response.status, 401);
     }),
@@ -115,14 +114,15 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     "ticket 07: register/options/conditional is reachable only with a session cookie present",
     () =>
       Effect.gen(function* () {
+        const app = yield* buildApp(mockWebAuthn());
         const anonymous = yield* Effect.promise(() =>
-          post(undefined, "/passkey/register/options/conditional", {}),
+          post(app, undefined, "/passkey/register/options/conditional", {}),
         );
         assert.strictEqual(anonymous.status, 401);
 
         const browser = yield* Effect.promise(() => app.signIn("conditional@example.com"));
         const authenticated = yield* Effect.promise(() =>
-          post(browser, "/passkey/register/options/conditional", {}),
+          post(app, browser, "/passkey/register/options/conditional", {}),
         );
         assert.strictEqual(authenticated.status, 200);
       }),
@@ -132,16 +132,17 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     "BEH-EA-131: a full authentication ceremony sets a real session cookie on success",
     () =>
       Effect.gen(function* () {
+        const app = yield* buildApp(mockWebAuthn());
         const browser = yield* Effect.promise(() => app.signIn("authuser@example.com"));
 
         const registerOptionsResponse = yield* Effect.promise(() =>
-          post(browser, "/passkey/register/options", {}),
+          post(app, browser, "/passkey/register/options", {}),
         );
         const registerChallenge = extractChallenge(
           yield* Effect.promise(() => registerOptionsResponse.json()),
         );
         yield* Effect.promise(() =>
-          post(browser, "/passkey/register/verify", {
+          post(app, browser, "/passkey/register/verify", {
             credential: {
               id: "cred-mock-1",
               rawId: "cred-mock-1",
@@ -159,7 +160,7 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         );
 
         const authOptionsResponse = yield* Effect.promise(() =>
-          post(undefined, "/passkey/authenticate/options", {}),
+          post(app, undefined, "/passkey/authenticate/options", {}),
         );
         assert.strictEqual(authOptionsResponse.status, 200);
         const { ceremonyId, options } = Schema.decodeUnknownSync(
@@ -168,7 +169,7 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         const authChallenge = extractChallenge(options);
 
         const verifyResponse = yield* Effect.promise(() =>
-          post(undefined, "/passkey/authenticate/verify", {
+          post(app, undefined, "/passkey/authenticate/verify", {
             ceremonyId,
             credential: {
               id: "cred-mock-1",
@@ -201,7 +202,7 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     () =>
       Effect.gen(function* () {
         const appAt = (clientAddress: string) =>
-          TestAuth.app(
+          TestAuth.serve(
             TestAuth.layer(Auth.make([Passkey.Passkey]), {
               services: Layer.mergeAll(
                 mockWebAuthn(),
@@ -212,7 +213,7 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
             }),
             { baseUrl: ORIGIN },
           );
-        const probe = appAt("198.51.100.14");
+        const probe = yield* appAt("198.51.100.14");
         const as = async (
           agent: UserAgent.UserAgent | undefined,
           path: string,
@@ -299,12 +300,11 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
           );
         for (let i = 0; i < 59; i++) assert.strictEqual(yield* options60(), 200);
         assert.strictEqual(yield* options60(), 429);
-        const other = appAt("198.51.100.15");
+        const other = yield* appAt("198.51.100.15");
         const elsewhere = yield* Effect.promise(() =>
           other.request("POST", "/passkey/authenticate/options", { json: {} }),
         );
         assert.strictEqual(elsewhere.status, 200);
-        yield* Effect.promise(() => Promise.all([probe.dispose(), other.dispose()]));
       }),
   );
 
@@ -314,15 +314,16 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     "WPS-004: authenticate/verify with X-Awthaq-Token-Delivery: bearer returns the token and sets no cookie",
     () =>
       Effect.gen(function* () {
+        const app = yield* buildApp(mockWebAuthn());
         const browser = yield* Effect.promise(() => app.signIn("bearerpasskey@example.com"));
         const registerOptionsResponse = yield* Effect.promise(() =>
-          post(browser, "/passkey/register/options", {}),
+          post(app, browser, "/passkey/register/options", {}),
         );
         const registerChallenge = extractChallenge(
           yield* Effect.promise(() => registerOptionsResponse.json()),
         );
         yield* Effect.promise(() =>
-          post(browser, "/passkey/register/verify", {
+          post(app, browser, "/passkey/register/verify", {
             credential: {
               id: "cred-mock-bearer",
               rawId: "cred-mock-bearer",
@@ -339,7 +340,7 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
           }),
         );
         const authOptionsResponse = yield* Effect.promise(() =>
-          post(undefined, "/passkey/authenticate/options", {}),
+          post(app, undefined, "/passkey/authenticate/options", {}),
         );
         const { ceremonyId, options } = Schema.decodeUnknownSync(
           PasskeyApi.AuthenticateOptionsResult,
@@ -360,6 +361,7 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         };
         const bad = yield* Effect.promise(() =>
           post(
+            app,
             undefined,
             "/passkey/authenticate/verify",
             { ceremonyId, credential },
@@ -369,6 +371,7 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
         assert.strictEqual(bad.status, 400);
         const verifyResponse = yield* Effect.promise(() =>
           post(
+            app,
             undefined,
             "/passkey/authenticate/verify",
             { ceremonyId, credential },
@@ -388,14 +391,15 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     "BEH-EA-136: an unknown credential at authenticate/verify answers 401 InvalidCredentials",
     () =>
       Effect.gen(function* () {
+        const app = yield* buildApp(mockWebAuthn());
         const optionsResponse = yield* Effect.promise(() =>
-          post(undefined, "/passkey/authenticate/options", {}),
+          post(app, undefined, "/passkey/authenticate/options", {}),
         );
         const { ceremonyId, options } = Schema.decodeUnknownSync(
           PasskeyApi.AuthenticateOptionsResult,
         )(yield* Effect.promise(() => optionsResponse.json()));
         const response = yield* Effect.promise(() =>
-          post(undefined, "/passkey/authenticate/verify", {
+          post(app, undefined, "/passkey/authenticate/verify", {
             ceremonyId,
             credential: {
               id: "no-such-credential",
@@ -421,16 +425,17 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     "credentials list/rename/delete work over real HTTP, including last-credential refusal",
     () =>
       Effect.gen(function* () {
+        const app = yield* buildApp(mockWebAuthn());
         const browser = yield* Effect.promise(() => app.signIn("manage@example.com"));
 
         // WPS-010: a credential id is globally unique, and the earlier tests in
         // this file share this app's stores — so this test registers its own id.
         const optionsResponse = yield* Effect.promise(() =>
-          post(browser, "/passkey/register/options", {}),
+          post(app, browser, "/passkey/register/options", {}),
         );
         const challenge = extractChallenge(yield* Effect.promise(() => optionsResponse.json()));
         yield* Effect.promise(() =>
-          post(browser, "/passkey/register/verify", {
+          post(app, browser, "/passkey/register/verify", {
             credential: {
               id: "cred-manage-1",
               rawId: "cred-manage-1",
@@ -479,9 +484,12 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     "BEH-EA-084: serves generated OpenAPI JSON and Scalar docs from this plugin's own api",
     () =>
       Effect.gen(function* () {
-        const openapi = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/openapi.json`)));
+        const app = yield* buildApp(mockWebAuthn());
+        const openapi = yield* Effect.promise(() =>
+          app.handler(new Request(`${ORIGIN}/openapi.json`)),
+        );
         assert.strictEqual(openapi.status, 200);
-        const docs = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/docs`)));
+        const docs = yield* Effect.promise(() => app.handler(new Request(`${ORIGIN}/docs`)));
         assert.strictEqual(docs.status, 200);
       }),
   );
@@ -492,7 +500,10 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     "AVS-003: the OpenAPI document declares a structured schema for the options endpoints",
     () =>
       Effect.gen(function* () {
-        const openapi = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/openapi.json`)));
+        const app = yield* buildApp(mockWebAuthn());
+        const openapi = yield* Effect.promise(() =>
+          app.handler(new Request(`${ORIGIN}/openapi.json`)),
+        );
         const document = JSON.stringify(yield* Effect.promise(() => openapi.json()));
         // `challenge`/`pubKeyCredParams`/`rp` only appear if the schema is modeled, never for `unknown`.
         assert.include(document, "pubKeyCredParams");
@@ -507,18 +518,19 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
     "the signals endpoint 401s without a session and answers only the caller's own ids with one",
     () =>
       Effect.gen(function* () {
+        const app = yield* buildApp(mockWebAuthn());
         const anonymous = yield* Effect.promise(() =>
-          handler(new Request(`${ORIGIN}/passkey/signals`)),
+          app.handler(new Request(`${ORIGIN}/passkey/signals`)),
         );
         assert.strictEqual(anonymous.status, 401);
 
         const browser = yield* Effect.promise(() => app.signIn("signals@example.com"));
         const optionsResponse = yield* Effect.promise(() =>
-          post(browser, "/passkey/register/options", {}),
+          post(app, browser, "/passkey/register/options", {}),
         );
         const options = yield* Effect.promise(() => optionsResponse.json());
         yield* Effect.promise(() =>
-          post(browser, "/passkey/register/verify", {
+          post(app, browser, "/passkey/register/verify", {
             credential: {
               id: "cred-signals-1",
               rawId: "cred-signals-1",
@@ -552,15 +564,16 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
 
   it.effect("WPS-010: registering an id another account already owns answers 409", () =>
     Effect.gen(function* () {
+      const app = yield* buildApp(mockWebAuthn());
       const register = (email: string, id: string) =>
         Effect.gen(function* () {
           const browser = yield* Effect.promise(() => app.signIn(email));
           const optionsResponse = yield* Effect.promise(() =>
-            post(browser, "/passkey/register/options", {}),
+            post(app, browser, "/passkey/register/options", {}),
           );
           const options = yield* Effect.promise(() => optionsResponse.json());
           return yield* Effect.promise(() =>
-            post(browser, "/passkey/register/verify", {
+            post(app, browser, "/passkey/register/verify", {
               credential: {
                 id,
                 rawId: id,
@@ -587,8 +600,9 @@ describe("AuthHttp + Passkey (real HTTP)", () => {
 describe("GET /.well-known/webauthn (TC-008)", () => {
   it.effect("is a 404 unless related origins are configured (off by default)", () =>
     Effect.gen(function* () {
+      const app = yield* buildApp(mockWebAuthn());
       const response = yield* Effect.promise(() =>
-        handler(new Request(`${ORIGIN}/.well-known/webauthn`)),
+        app.handler(new Request(`${ORIGIN}/.well-known/webauthn`)),
       );
       assert.strictEqual(response.status, 404);
     }),
@@ -596,7 +610,7 @@ describe("GET /.well-known/webauthn (TC-008)", () => {
 
   it.effect("serves the configured related origins as JSON, anonymously", () =>
     Effect.gen(function* () {
-      const related = buildApp(mockWebAuthn(), {
+      const related = yield* buildApp(mockWebAuthn(), {
         relatedOrigins: ["https://example.co.uk", "https://example.de"],
       });
       const response = yield* Effect.promise(() =>
@@ -607,7 +621,6 @@ describe("GET /.well-known/webauthn (TC-008)", () => {
       assert.deepStrictEqual(yield* Effect.promise(() => response.json()), {
         origins: ["https://example.co.uk", "https://example.de"],
       });
-      yield* Effect.promise(() => related.dispose());
     }),
   );
 });

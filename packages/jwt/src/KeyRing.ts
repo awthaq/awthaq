@@ -50,7 +50,7 @@
 // already rotated out. See spec/decisions/017-jwt-signing-key-rotation.md.
 
 import type { Api } from "@awthaq/api";
-import { Defects, SqlTransaction } from "@awthaq/ports";
+import { Defects, SqlTransaction, Tenant } from "@awthaq/ports";
 import { SealedColumn, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -64,7 +64,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as JwtCodec from "./JwtCodec.ts";
 import type { Algorithm } from "./JwtConfig.ts";
-import { JwtConfig } from "./JwtConfig.ts";
+import { JwtConfig, JwtConfigScoped } from "./JwtConfig.ts";
 import * as SigningKeyRecords from "./SigningKeyRecords.ts";
 
 export interface SigningKey {
@@ -162,6 +162,7 @@ const settleCurrent = Effect.fnUntraced(function* (options: {
   readonly gracePeriod: Duration.Duration;
 }) {
   const records = yield* SigningKeyRecords.SigningKeyRecords;
+  // key-ring maintenance: reads the key from its own context (PLAN 36 §3.5 rule 2 exception)
   const config = yield* JwtConfig;
   const transaction = yield* SqlTransaction.SqlTransaction;
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -237,6 +238,7 @@ export const registerRemoteKey = (input: {
 }) =>
   Effect.gen(function* () {
     const records = yield* SigningKeyRecords.SigningKeyRecords;
+    // key-ring maintenance: reads the key from its own context (PLAN 36 §3.5 rule 2 exception)
     const config = yield* JwtConfig;
     const transaction = yield* SqlTransaction.SqlTransaction;
     return yield* transaction
@@ -284,6 +286,7 @@ export const importKey = (input: {
 }) =>
   Effect.gen(function* () {
     const records = yield* SigningKeyRecords.SigningKeyRecords;
+    // key-ring maintenance: reads the key from its own context (PLAN 36 §3.5 rule 2 exception)
     const config = yield* JwtConfig;
     if (input.publicKeyJwk["kty"] !== JwtCodec.keyTypeFor(input.alg)) {
       return yield* Effect.fail(
@@ -317,7 +320,7 @@ const layerFromStore = Layer.effect(
   SigningKeysCache,
   Effect.gen(function* () {
     const records = yield* SigningKeyRecords.SigningKeyRecords;
-    const config = yield* JwtConfig;
+    const config = yield* yield* Tenant.inForce(JwtConfigScoped);
     const current = yield* settleCurrent({ force: false, gracePeriod: config.keyGracePeriod });
     const now = yield* DateTime.now;
     const verifiable = yield* records.listVerifiable(now);
@@ -344,6 +347,7 @@ export class KeyRing extends LayerRef.Service<KeyRing>()("awthaq/jwt/KeyRing", {
  */
 const rotateIfDue = Effect.gen(function* () {
   const ref = yield* KeyRing;
+  // key-ring maintenance: reads the key from its own context (PLAN 36 §3.5 rule 2 exception)
   const config = yield* JwtConfig;
   const cache = yield* Effect.provide(SigningKeysCache, ref.get);
   const now = yield* DateTime.now;
@@ -400,6 +404,7 @@ export const refresh: Effect.Effect<void, Api.StoreUnavailable, KeyRing> = Effec
  */
 export const rotateNow = (options?: { readonly gracePeriod?: Duration.Duration }) =>
   Effect.gen(function* () {
+    // key-ring maintenance: reads the key from its own context (PLAN 36 §3.5 rule 2 exception)
     const config = yield* JwtConfig;
     yield* settleCurrent({
       force: true,

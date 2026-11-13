@@ -4,12 +4,12 @@
 > | Property | Value |
 > |---|---|
 > | Document ID | EFAUTH-BEH-25 |
-> | Revision | 1.10 |
+> | Revision | 1.15 |
 > | Effective Date | 2026-11-09 |
 > | Status | Effective |
 > | Author | awthaq Engineering |
 > | Classification | Functional Specification |
-> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added an honest note that BEH-EA-199's redaction check is not yet mechanically verifiable (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-14): BEH-EA-331..333 and 336: `TestAuth.layer` derives the host middleware, runs over memory or SQL, and `TestAuth.app` serves it; every plugin runs the contract suite, which checks its records bundle; BEH-EA-193 and 198 revised (architecture plan 08) <br> 1.4 (2026-10-14): BEH-EA-333 gains `memoMap`, `runtime`, `context`, and the `testClock`/`memoMap` options with `advance`, plus `TestAuth.buildContext` (plan 08 follow-up) <br> 1.5 (2026-11-08): BEH-EA-342, `TestAuth.layer` is `AuthHost.layer` over the test ports; BEH-EA-193/331/332 *As shipped* notes name `AuthHost` and `Migrations.apply` (ADR-EA-044, plan 15) <br> 1.6 (2026-11-08): BEH-EA-333, `TestAuth.app` hands out user agents (`agent()`, `signIn` returns an agent holding a session rendered under the composition's `SessionCookieConfig`, `request` is a fresh anonymous agent); BEH-EA-197 *As shipped*: `signInAs` returns the rendered `setCookie` (architecture plan 20) <br> 1.7 (2026-11-08): BEH-EA-336: a plugin whose bundle provides a store passes one `RecordsContract` suite per store, on memory, SQLite and Postgres (architecture plan 25) <br> 1.8 (2026-11-08): BEH-EA-336: every shipped store has its suite, so the `RecordsContract.pending` stand-in is removed and `pnpm check:contract-tests` reports a test that still names it (architecture plan 25 ticket 25) <br> 1.9 (2026-11-08): request facts are read from `Api.AuthRequestContext` (ADR-EA-047, architecture plan 26) <br> 1.10 (2026-11-09): BEH-EA-193: `TestAuth.layer` provides the composition's event registry and fails an emit of an undeclared event; BEH-EA-198: `runPluginContractTests` checks every declared event (ADR-EA-049, architecture plan 29) |
+> | Change History | 1.0 (2026-09-12): Initial release (CCR-EA-001) <br> 1.1 (2026-09-12): Added an honest note that BEH-EA-199's redaction check is not yet mechanically verifiable (CCR-EA-002) <br> 1.2 (2026-09-29): Replaced the pre-implementation banner with implementation pointers (DTWS-001, CCR-EA-006) <br> 1.3 (2026-10-14): BEH-EA-331..333 and 336: `TestAuth.layer` derives the host middleware, runs over memory or SQL, and `TestAuth.app` serves it; every plugin runs the contract suite, which checks its records bundle; BEH-EA-193 and 198 revised (architecture plan 08) <br> 1.4 (2026-10-14): BEH-EA-333 gains `memoMap`, `runtime`, `context`, and the `testClock`/`memoMap` options with `advance`, plus `TestAuth.buildContext` (plan 08 follow-up) <br> 1.5 (2026-11-08): BEH-EA-342, `TestAuth.layer` is `AuthHost.layer` over the test ports; BEH-EA-193/331/332 *As shipped* notes name `AuthHost` and `Migrations.apply` (ADR-EA-044, plan 15) <br> 1.6 (2026-11-08): BEH-EA-333, `TestAuth.app` hands out user agents (`agent()`, `signIn` returns an agent holding a session rendered under the composition's `SessionCookieConfig`, `request` is a fresh anonymous agent); BEH-EA-197 *As shipped*: `signInAs` returns the rendered `setCookie` (architecture plan 20) <br> 1.7 (2026-11-08): BEH-EA-336: a plugin whose bundle provides a store passes one `RecordsContract` suite per store, on memory, SQLite and Postgres (architecture plan 25) <br> 1.8 (2026-11-08): BEH-EA-336: every shipped store has its suite, so the `RecordsContract.pending` stand-in is removed and `pnpm check:contract-tests` reports a test that still names it (architecture plan 25 ticket 25) <br> 1.9 (2026-11-08): request facts are read from `Api.AuthRequestContext` (ADR-EA-047, architecture plan 26) <br> 1.10 (2026-11-09): BEH-EA-193: `TestAuth.layer` provides the composition's event registry and fails an emit of an undeclared event; BEH-EA-198: `runPluginContractTests` checks every declared event (ADR-EA-049, architecture plan 29) <br> 1.11 (2026-11-10): BEH-EA-351, BEH-EA-352 and BEH-EA-353: `TestAuth.serve`/`withApp`, `lazyApp` and `listen`; the app is released by the scope that served it (architecture plan 34) <br> 1.12 (2026-11-10): BEH-EA-333 revised (no `dispose`; the app is released by the scope that served it, BEH-EA-351), `TestAuth.app` removed (architecture plan 34 ticket 21) <br> 1.13 (2026-11-10): BEH-EA-354: `TestAuth` records mail and SMS in a mailbox a test awaits; BEH-EA-193/195 name `TestMailbox` instead of `Mailer.layerMemory` (ADR-EA-054, architecture plan 35) <br> 1.14 (2026-11-10): BEH-EA-336: `pnpm test:pg` runs every suite; the check refuses a hand-kept list (architecture plan 37 tickets 02-03) <br> 1.15 (2026-11-10): BEH-EA-357: every core store port passes its `StoreContract` suite, every operation carrying a verdict, on every adapter (ADR-EA-041 rev 1.6, architecture plan 37) |
 ---
 
 > Implemented in `@awthaq/test` (`TestAuth.layer`, `signInAs`, `runPluginContractTests`, the `RedactionGuard`; tests `packages/test/test`); BEH-EA-194 through 196 describe patterns built from Effect's and qadi's own helpers, not awthaq exports; the tests behind each behavior are mapped in [`spec/traceability.md`](../traceability.md) §5, and a behavior whose text differs from the shipped code carries an *Implementation* or *Deviation* note.
@@ -17,18 +17,18 @@
 ## BEH-EA-193: `TestAuth.layer` is the whole pipeline, over memory
 
 ```ts
-const TestLive = TestAuth.layer(Auth.make(plugins), { services })   // Persistence.memory, Mailer.layerMemory, permissive RateLimiter, HttpServer.layerServices, derived middleware, each plugin's records.memory
+const TestLive = TestAuth.layer(Auth.make(plugins), { services })   // Persistence.memory, TestMailbox.layer, permissive RateLimiter, HttpServer.layerServices, derived middleware, each plugin's records.memory
 ```
 
 ```text
 REQUIREMENT: `TestAuth.layer(plugins)` MUST assemble the named plugins over
-             memory repositories, `Mailer.layerMemory`, a permissive
+             memory repositories, `TestMailbox.layer`, a permissive
              `RateLimiter`, and `HttpServer.layerServices`; a test using it
              MUST NOT need a real database, a real mailer, or a real network
              listener.
 ```
 
-**As shipped (plan 08):** `TestAuth.layer(built, options)` takes the value `Auth.make` returned and an options object (`services`, `decorate`, `taps`, `csrf`, `principalResolver`, `rateLimiter`, `records`/`suite`). Beside the in-memory stores and ports it provides, from the composed value alone: the host middleware the groups declare ([BEH-EA-331](25-testing-harness.md#beh-ea-331-testauthlayer-derives-the-host-middleware-from-the-composed-contract)), every plugin's `records` bundle for the chosen mode and its declared `hookPoints` ([BEH-EA-334](01-plugin-contract.md#beh-ea-334-a-plugin-declares-its-record-stores-as-matched-memory-and-sql-bundles), [BEH-EA-335](03-ports-slots-hooks-registries.md#beh-ea-335-a-plugin-declares-the-hook-points-it-owns)), `Encryption` over a fixed test key, the credential-resolver registry and `AuditChain`. `services` is merged into the output, so a service only `services` provides is present at runtime and a capturing `Mailer` given there is the instance the plugin sends through and the test reads. `@awthaq/test` is dev-only: no library `src` imports it and no package lists it under `dependencies` (`pnpm check:contract-tests`).
+**As shipped (plan 08):** `TestAuth.layer(built, options)` takes the value `Auth.make` returned and an options object (`services`, `decorate`, `taps`, `csrf`, `principalResolver`, `rateLimiter`, `records`/`suite`). Beside the in-memory stores and ports it provides, from the composed value alone: the host middleware the groups declare ([BEH-EA-331](25-testing-harness.md#beh-ea-331-testauthlayer-derives-the-host-middleware-from-the-composed-contract)), every plugin's `records` bundle for the chosen mode and its declared `hookPoints` ([BEH-EA-334](01-plugin-contract.md#beh-ea-334-a-plugin-declares-its-record-stores-as-matched-memory-and-sql-bundles), [BEH-EA-335](03-ports-slots-hooks-registries.md#beh-ea-335-a-plugin-declares-the-hook-points-it-owns)), `Encryption` over a fixed test key, the credential-resolver registry and `AuditChain`. `services` is merged into the output, so a service only `services` provides is present at runtime and a `Mailer` given there shadows the mailbox for the plugins. `@awthaq/test` is dev-only: no library `src` imports it and no package lists it under `dependencies` (`pnpm check:contract-tests`). *As shipped (plan 35):* the output also holds `SmsSender` and `TestMailbox.Mailbox`, all over one recording (BEH-EA-354).
 
 *As shipped (plan 15):* the pipeline is built by `AuthHost.layer` ([BEH-EA-342](25-testing-harness.md#beh-ea-342-testauthlayer-is-authhostlayer-over-the-test-ports)); `TestAuth` adds only the test ports, the redaction guard and the HTTP platform, and takes `tier` as `AuthHost` does.
 
@@ -63,7 +63,7 @@ _Previous: [BEH-EA-193](25-testing-harness.md#beh-ea-193-testauthlayer-is-the-wh
 ## BEH-EA-195: `Layer.mock` for partial doubles
 
 ```ts
-Layer.provide(Layer.mock(Mailer, { send: () => Effect.void }))
+Layer.provide(Layer.mock(RateLimiter.RateLimiter)({ consume: () => Effect.succeed(allowed) }))
 ```
 
 ```text
@@ -72,7 +72,7 @@ REQUIREMENT: A test needing to override only one method of a multi-method
              replacement implementation of the port's interface.
 ```
 
-`usage-examples-v4.md` §17 shows this as the lighter-weight alternative to `Mailer.layerMemory` when a test only cares that `send` was called with the right arguments and does not need the recording/inspection behavior the memory implementation provides. Keeping a full custom implementation is more code to maintain and drift out of sync with the port's real interface as it grows; `Layer.mock` only ever specifies the methods a given test actually exercises.
+`usage-examples-v4.md` §17 shows this as the lighter-weight alternative to a recording adapter (`TestMailbox`, for mail) when a test only cares that a call was made with the right arguments and does not need the recording/inspection behavior. `Mailer` has had one member since ADR-EA-054, so a `Mailer` double is a full `Layer.mock(Mailer.Mailer)({ send })`. Keeping a full custom implementation is more code to maintain and drift out of sync with the port's real interface as it grows; `Layer.mock` only ever specifies the methods a given test actually exercises.
 
 _Previous: [BEH-EA-194](25-testing-harness.md#beh-ea-194-httpapitestgroups-runs-under-testclock) | Next: [BEH-EA-196](25-testing-harness.md#beh-ea-196-qaditestlayer-and-subjectwith-for-authorization-unit-tests)_
 
@@ -119,7 +119,7 @@ REQUIREMENT: A test asserting that `RequirePermission` or `AuthorizedSubject`
              fabricated principal.
 ```
 
-**As shipped (PV-261):** `AuthzLive`/`QadiLive` are the illustrative names; the pipeline a suite merges next to `TestAuth.layer` is qadi's `RequirePermissionLive` over awthaq's `SubjectExtractor.SubjectExtractorLive` (+ the `Roles` resolver and qadi's real evaluator, e.g. `EvaluationServicesNone`), and `signInAs` takes an `onSignedUp` callback (`roles.assign(userId, "member")`) instead of a `roles` list, because `@awthaq/test` does not depend on `@awthaq/roles`. `features/step-definitions/TestingHarnessWorld.ts` composes exactly that (a `RequirePermission`-gated admin-only endpoint, callers minted by `signInAs`): an admin is allowed (200), a member is refused by the real evaluator (403 with qadi's typed public denial, never the trace) — REQ-EA-557/558.
+**As shipped (PV-261):** `AuthzLive`/`QadiLive` are the illustrative names; the pipeline a suite merges next to `TestAuth.layer` is qadi's `guardApi` over awthaq's `SubjectExtractor.SubjectExtractorLive` (+ the `Roles` resolver and qadi's real evaluator, e.g. `EvaluationServicesNone`), and `signInAs` takes an `onSignedUp` callback (`roles.assign(userId, "member")`) instead of a `roles` list, because `@awthaq/test` does not depend on `@awthaq/roles`. `features/step-definitions/TestingHarnessWorld.ts` composes exactly that (a `RequirePermission`-gated admin-only endpoint, callers minted by `signInAs`): an admin is allowed (200), a member is refused by the real evaluator (403 with qadi's typed public denial, never the trace) — REQ-EA-557/558.
 
 *As shipped (plan 20):* `signInAs` returns `{ userId, token, setCookie }`, the `Set-Cookie` rendered under the ambient `SessionCookieConfig` (a `SecureDomain` composition gets `__Secure-session; Domain=…`), and `TestAuth.app(...).signIn(email)` returns a user agent already holding it ([BEH-EA-333](25-testing-harness.md#beh-ea-333-testauthapp-serves-the-composition-and-its-context-together)): the ambient session this behavior's example implied, for wire-level tests. The hand-threaded `cookieHeader` string is gone.
 
@@ -236,19 +236,19 @@ _Previous: [BEH-EA-331](25-testing-harness.md#beh-ea-331-testauthlayer-derives-t
 ## BEH-EA-333: `TestAuth.app` serves the composition and its context together
 
 ```ts
-const app = TestAuth.app(TestAuth.layer(built))
+const app = yield* TestAuth.serve(TestAuth.layer(built)) // inside it.effect
 const alice = await app.signIn("a@example.com")              // an agent holding a session
 await alice.request("POST", "/notes", { json: { text: "hi" } })  // cookies and the CSRF echo are its own
 ```
 
 ```text
-REQUIREMENT: The handler and the context runner of `TestAuth.app` MUST share
+REQUIREMENT: The handler and the context runner of the served app MUST share
              one instance of every service (one memo map): a session minted
              through `run` MUST authenticate a request through `handler`.
              `request` MUST satisfy CSRF double-submit for the composition's
              own `CsrfConfig` (read once through `run`), computed independently
-             of `Csrf.ts` (`TestAuth.csrfToken`, `node:crypto`). `dispose` MUST
-             release everything the composition built. `runtime` (a
+             of `Csrf.ts` (`TestAuth.csrfToken`, `node:crypto`). The app MUST be
+             released by the scope that served it (BEH-EA-351). `runtime` (a
              `ManagedRuntime`), `memoMap` and `context()` (the composition built
              once on the real clock, for a World that runs effects on its own
              fiber) MUST resolve against the same instances as `handler`.
@@ -265,6 +265,8 @@ REQUIREMENT: The handler and the context runner of `TestAuth.app` MUST share
              composition's `SessionCookieConfig` (or its bearer token with
              `delivery: "bearer"`); `request` MUST be a fresh anonymous agent.
 ```
+
+*As shipped (plan 34):* `TestAuth.app` became `TestAuth.serve` (BEH-EA-351); there is no `dispose`.
 
 This replaces the hand-rolled memo-map handles, the per-suite CSRF token mints (22 `createHmac` copies) and the hand-threaded cookies (21 reads, four jars). *As shipped (plan 20):* `agent()` is asynchronous (it reads the composition's CSRF config and clock through `run`); under `testClock` an agent's cookie store reads the same clock, so a session cookie's `Max-Age` lapses when `advance` passes it; a `Set-Cookie` a browser would refuse fails the request (`onRefused: "record"` for a test about refusals). `TestAuth.csrfSetCookie(secret)` seeds an agent over a hand-wired handler the same way.
 
@@ -283,7 +285,7 @@ REQUIREMENT: Every `AuthPlugin.Service` class in the repository MUST be
              record modes.
 ```
 
-**Plan 25 (ADR-EA-041 decision 9): every plugin record store passes its contract suite on memory, SQLite and Postgres.** For a plugin whose `records` bundle provides a store, `runPluginContractTests` MUST be given `records: { suite, suites }` (the compiler requires it, and refuses it for a plugin whose bundle provides none): one `RecordsContract.suite(Store, { operations })` per store, keyed by the store's `/records/` key (a missing or surplus key does not compile; for a hand-built `AuthPlugin.Any` a runtime check names it). Every operation of the store's interface carries a verdict, `read`, `write`, `atomic` (with at least one `race` case racing 8 callers and asserting exact counts) or `exempt` with a reason; an unclassified operation does not compile. The runner reads both adapters from `Plugin.records` and runs every case on memory and on SQL (SQLite `:memory:`, a Postgres schema under `pnpm test:pg`), building a fresh adapter for each case; a suite's tenancy cases run through the tenant-isolation suite of [BEH-EA-326](28-tenancy.md#beh-ea-326-a-partitioned-plugin-table-is-filtered-by-the-store-identically-in-memory-and-sql) over the same adapters. `pnpm check:contract-tests` fails when a `Contract.test.ts` that passes `records` is missing from `scripts/test-pg.sh`. Every shipped store has its suite (plan 25 ticket 25): the `RecordsContract.pending` stand-in that tickets 08 to 24 used is removed, and `pnpm check:contract-tests` reports any test file that still names it.
+**Plan 25 (ADR-EA-041 decision 9): every plugin record store passes its contract suite on memory, SQLite and Postgres.** For a plugin whose `records` bundle provides a store, `runPluginContractTests` MUST be given `records: { suite, suites }` (the compiler requires it, and refuses it for a plugin whose bundle provides none): one `RecordsContract.suite(Store, { operations })` per store, keyed by the store's `/records/` key (a missing or surplus key does not compile; for a hand-built `AuthPlugin.Any` a runtime check names it). Every operation of the store's interface carries a verdict, `read`, `write`, `atomic` (with at least one `race` case racing 8 callers and asserting exact counts) or `exempt` with a reason; an unclassified operation does not compile. The runner reads both adapters from `Plugin.records` and runs every case on memory and on SQL (SQLite `:memory:`, a Postgres schema under `pnpm test:pg`), building a fresh adapter for each case; a suite's tenancy cases run through the tenant-isolation suite of [BEH-EA-326](28-tenancy.md#beh-ea-326-a-partitioned-plugin-table-is-filtered-by-the-store-identically-in-memory-and-sql) over the same adapters. `pnpm test:pg` runs every vitest project and the BDD suite against `AWTHAQ_POSTGRES_URL`, the set CI's `pnpm check` runs, and `pnpm check:contract-tests` fails when `scripts/test-pg.sh` names a test file (a hand-kept list had drifted: plan 37 measured 9 files it missed). Every shipped store has its suite (plan 25 ticket 25): the `RecordsContract.pending` stand-in that tickets 08 to 24 used is removed, and `pnpm check:contract-tests` reports any test file that still names it.
 
 13 of the 20 plugin classes had no contract-test call in their own package. The compile-time half of the pairing is [BEH-EA-334](), the runtime half is this check, for a hand-built `AuthPlugin.Any` the type system cannot see into. The same script fails when a library `src` imports `@awthaq/test` or a package lists it under `dependencies`.
 
@@ -310,4 +312,112 @@ The harness used to be the only complete derivation of a servable pipeline, and 
 
 *Implementation* (`packages/test/src/TestAuth.ts`; `test/TestAuthHost.test.ts`, run on Postgres under `pnpm test:pg`; `test/TestAuthRecords.types.test.ts` for the foreign tap; `packages/admin/test/AdminTier.test.ts` for the public tier).
 
-_Previous: [BEH-EA-333](25-testing-harness.md#beh-ea-333-testauthapp-serves-the-composition-and-its-context-together) | Next: [BEH-EA-201](26-cli.md#beh-ea-201-doctor-checks-link-config-and-insecure-defaults)_
+_Previous: [BEH-EA-333](25-testing-harness.md#beh-ea-333-testauthapp-serves-the-composition-and-its-context-together) | Next: [BEH-EA-351](25-testing-harness.md#beh-ea-351-a-served-app-lives-exactly-as-long-as-its-scope)_
+
+## BEH-EA-351: A served app lives exactly as long as its scope
+
+```text
+REQUIREMENT: `TestAuth.serve(composition, options)` MUST acquire the app in the
+             caller's `Scope` and release everything the composition built when
+             that scope closes, whether the scope's work succeeded, failed or was
+             interrupted. The composition MUST be built on the real clock even
+             when the caller runs under a `TestClock`. `TestAuth.withApp`
+             MUST release the app when its callback settles, and MUST surface
+             the callback's rejection unchanged. With `testClock: "now"` the
+             handler, `run` and every agent MUST read one `TestClock` started at
+             the wall clock.
+```
+
+```ts
+const app = yield* TestAuth.serve(TestAuth.layer(built)); // inside it.effect: released with the test's scope
+await TestAuth.withApp(layer, undefined, async (app) => { /* … */ }); // promise-style bracket
+```
+
+*Implementation* (`packages/test/src/TestAuth.ts`; `test/TestAuthLifetime.test.ts`). `TestAuth.app` stays as a deprecated adapter until plan 34 ticket 21.
+
+_Previous: [BEH-EA-342](25-testing-harness.md#beh-ea-342-testauthlayer-is-authhostlayer-over-the-test-ports)_
+
+## BEH-EA-352: A World holds one lazy app cell
+
+```text
+REQUIREMENT: `TestAuth.lazyApp(initial, build, settings)` MUST build at most
+             once per scope from the options accumulated by `configure`, on the
+             first `get`, into a child of the scope it was created in. A
+             `configure` after that build MUST be a defect naming the cell;
+             `replace` MUST release the built app before the next `get` builds
+             again. With `alignStepClock` the caller's `TestClock` MUST read the
+             wall clock after the first `get`.
+```
+
+```ts
+const app = yield* TestAuth.lazyApp(initial, (o) => TestAuth.serve(layerFor(o)), { name: "SessionWorld" });
+```
+
+*Implementation* (`packages/test/src/TestAuth.ts`; `test/TestAuthLazy.test.ts`).
+
+_Previous: [BEH-EA-351](25-testing-harness.md#beh-ea-351-a-served-app-lives-exactly-as-long-as-its-scope)_
+
+## BEH-EA-353: The harness can listen on a socket
+
+```text
+REQUIREMENT: `TestAuth.listen(composition, options)` MUST serve the same
+             instances as the app's `handler` and `run` on 127.0.0.1 at an
+             ephemeral port reported as `url`, MUST record every request line
+             it answers (`requests()`, oldest first), and MUST close the socket
+             when the scope closes.
+```
+
+Agents stay in-process; the socket is for out-of-process clients (the CLI's generated `HttpApiClient`). BEH-EA-193's "no real network listener" still holds because listening is opt-in.
+
+*Implementation* (`packages/test/src/TestAuth.ts`; `test/TestAuthListen.test.ts`).
+
+_Previous: [BEH-EA-352](25-testing-harness.md#beh-ea-352-a-world-holds-one-lazy-app-cell)_
+
+## BEH-EA-354: `TestAuth`'s base records mail and SMS in a mailbox a test awaits
+
+```ts
+const box = yield* TestMailbox.Mailbox
+const mail = yield* box.mail.waitFor({ to: email, template: "verify-email" })
+TestMailbox.secret(mail)
+yield* box.mail.refute({ to: "nobody@example.com" })
+```
+
+```text
+REQUIREMENT: `TestAuth.layer` MUST provide `Mailer` and `SmsSender` through one
+             `TestMailbox.layer`, and its output MUST hold `TestMailbox.Mailbox`
+             over the recording the plugins send into. `waitFor` MUST resolve as
+             soon as a matching message is recorded, without a fixed number of
+             scheduler turns, and MUST fail at a deadline measured on the real
+             clock. `refute` MUST fail when a matching message is recorded
+             already or within its window. A failure message MUST NOT contain a
+             recipient or message data (EOTS-010).
+```
+
+*Implementation* (`packages/test/src/TestMailbox.ts`; `test/TestMailbox.test.ts`, `test/TestAuthApp.test.ts`; BDD REQ-EA-1560..1562). ADR-EA-054.
+
+_Previous: [BEH-EA-353](25-testing-harness.md#beh-ea-353-the-harness-can-listen-on-a-socket) | Next: [BEH-EA-357](25-testing-harness.md#beh-ea-357-every-core-store-port-passes-its-storecontract-suite-on-every-adapter)_
+
+## BEH-EA-357: Every core store port passes its `StoreContract` suite on every adapter
+
+> **See:** [ADR-EA-041](../decisions/041-domain-store-ports.md)
+
+```ts
+StoreContract.run(framework, { mode: "memory" })
+StoreContract.run(framework, { mode: "sql", label, client })
+```
+
+```text
+REQUIREMENT: Every operation of a core store port MUST carry a verdict in its
+             suite, and one without MUST fail to compile. `StoreContract.run`
+             MUST run every suite on the `Ref` adapters, on the SQL adapters
+             over SQLite and (under `pnpm test:pg`) Postgres, and the users and
+             sessions suites on the sealed bundle, building a fresh adapter
+             per case. A store the memory bundle provides without a suite MUST
+             fail the run.
+```
+
+The ports are atomic by contract, so the bar has to name every operation: a store whose `settle` ignored a give-back, or whose rate-limit `increment` read then wrote, passed a list of cases that never asked. A verdict per operation turns a missing case into a compile error, and the two mutants in `StoreContract.test.ts` prove the cases catch what they claim to.
+
+*Implementation* (`packages/test/src/StoreContract.ts`, `packages/test/src/internal/storeContract/*.ts`; `test/StoreContract.test.ts`, `test/StoreContract.types.test.ts`, and the five runner files `StoreContract.memory.test.ts`, `.sql.test.ts`, `.file.test.ts`, `.libsql.test.ts`, `.sealed.test.ts`). ADR-EA-041 decision 6.
+
+_Previous: [BEH-EA-354](25-testing-harness.md#beh-ea-354-testauths-base-records-mail-and-sms-in-a-mailbox-a-test-awaits)_

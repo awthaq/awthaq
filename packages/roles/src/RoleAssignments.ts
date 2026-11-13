@@ -5,7 +5,7 @@
 // in two implementations, memory and SQL, which `Roles.records` bundles as a matched pair. Before, `Roles.layer`
 // and `Roles.layerSql` each carried their own copy of the domain logic over a different storage.
 
-import { Errors, Users } from "@awthaq/core";
+import { Errors, Migrations, Users } from "@awthaq/core";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
@@ -189,3 +189,20 @@ const layerSql = Layer.effect(
 
 /** Plan 08 (BEH-EA-T4): the plugin's record store as two matched layers, `Roles.records`. */
 export const records = { memory: layerMemory, sql: layerSql };
+
+/**
+ * BAM-006 (.issues/high): `UNIQUE(userId, role)` makes `assign` idempotent at the database layer too,
+ * matching `layerMemory`'s "assigning an already-held role name is a no-op" contract. Append-only:
+ * `Roles.ts` names the order, and what a shipped migration builds never changes.
+ */
+export const migrations = Migrations.group({
+  create_roles_assignments: ({ sql, timestamp, nowTimestamp }) => sql`
+    CREATE TABLE roles_assignments (
+      "userId" TEXT NOT NULL,
+      role TEXT NOT NULL,
+      "createdAt" ${timestamp} NOT NULL DEFAULT ${nowTimestamp},
+      UNIQUE ("userId", role)
+    )`,
+  create_roles_assignments_user_id_index: ({ index }) =>
+    index("roles_assignments_user_id", "roles_assignments", ["userId"]),
+});

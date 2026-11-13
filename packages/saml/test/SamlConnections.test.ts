@@ -10,6 +10,7 @@ import * as SamlProtocol from "../src/SamlProtocol.ts";
 import { ecdsa, idp, idpNext, NS, weakRsa } from "./samlFixtures.ts";
 import { atNow, IDP_ENTITY_ID, SamlLive, seedConnection } from "./support.ts";
 import { Api } from "@awthaq/api";
+import { CurrentUser } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
 
 const metadataXml = (
@@ -36,10 +37,12 @@ const metadataXml = (
   );
 };
 
-const owner = new Api.UserPrincipal({
-  ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
-  sessionId: "owner-session",
-});
+const owner = CurrentUser.of(
+  new Api.UserPrincipal({
+    ref: new Api.PrincipalRef({ type: "user", id: "owner-1" }),
+    sessionId: "owner-session",
+  }),
+);
 
 const store = Effect.flatMap(SamlConnections.SamlConnectionStore, Effect.succeed);
 

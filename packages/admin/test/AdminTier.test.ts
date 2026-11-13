@@ -34,15 +34,18 @@ type AdminScheme = Layer.Layer<Api.AdminAuthentication>;
  * `services` layer providing `Api.AdminAuthentication` replaces the derived scheme (a host's own).
  */
 const adminHandler = (adminAuthentication?: AdminScheme) =>
-  TestAuth.app(
-    TestAuth.layer(auth, {
-      services: Layer.mergeAll(
-        Admin.config({ canImpersonate: () => Effect.succeed(true) }),
-        adminAuthentication ?? Layer.empty,
-      ),
-    }),
-    { baseUrl: ORIGIN },
-  ).handler;
+  Effect.map(
+    TestAuth.serve(
+      TestAuth.layer(auth, {
+        services: Layer.mergeAll(
+          Admin.config({ canImpersonate: () => Effect.succeed(true) }),
+          adminAuthentication ?? Layer.empty,
+        ),
+      }),
+      { baseUrl: ORIGIN },
+    ),
+    (app) => app.handler,
+  );
 
 describe("AR-003: the admin tier", () => {
   it.effect("adminApi carries the admin group and publicApi does not", () =>
@@ -61,23 +64,19 @@ describe("AR-003: the admin tier", () => {
     "a listener serving only publicApi answers /admin with 404 and still serves /session",
     () =>
       Effect.gen(function* () {
-        const app = TestAuth.app(
+        const app = yield* TestAuth.serve(
           TestAuth.layer(auth, {
             tier: "public",
-            services: Admin.config({ canImpersonate: () => Effect.succeed(true) }),
+            services: Admin.config({
+              canImpersonate: () => Effect.succeed(true),
+            }),
           }),
           { baseUrl: ORIGIN },
         );
-        try {
-          const admin = yield* Effect.promise(() => app.handler(new Request(`${ORIGIN}/admin`)));
-          assert.strictEqual(admin.status, 404);
-          const session = yield* Effect.promise(() =>
-            app.handler(new Request(`${ORIGIN}/session`)),
-          );
-          assert.strictEqual(session.status, 401);
-        } finally {
-          yield* Effect.promise(() => app.dispose());
-        }
+        const admin = yield* Effect.promise(() => app.handler(new Request(`${ORIGIN}/admin`)));
+        assert.strictEqual(admin.status, 404);
+        const session = yield* Effect.promise(() => app.handler(new Request(`${ORIGIN}/session`)));
+        assert.strictEqual(session.status, 401);
       }),
   );
 
@@ -102,13 +101,17 @@ describe("AR-003: the admin tier", () => {
         cookie: resolveOperator,
         bearer: resolveOperator,
       });
-      const handler = adminHandler(CustomAdminAuthentication);
+      const handler = yield* adminHandler(CustomAdminAuthentication);
 
       // The gate passes for anyone, so what is under test is only *who is let in*.
       const withoutCert = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/admin`)));
       assert.strictEqual(withoutCert.status, 401);
       const withCert = yield* Effect.promise(() =>
-        handler(new Request(`${ORIGIN}/admin`, { headers: { "x-client-cert": "operator" } })),
+        handler(
+          new Request(`${ORIGIN}/admin`, {
+            headers: { "x-client-cert": "operator" },
+          }),
+        ),
       );
       assert.strictEqual(withCert.status, 200);
     }),
@@ -116,7 +119,7 @@ describe("AR-003: the admin tier", () => {
 
   it.effect("the default AdminAuthentication is the ordinary session authentication", () =>
     Effect.gen(function* () {
-      const handler = adminHandler();
+      const handler = yield* adminHandler();
       const anonymous = yield* Effect.promise(() => handler(new Request(`${ORIGIN}/admin`)));
       assert.strictEqual(anonymous.status, 401);
     }),

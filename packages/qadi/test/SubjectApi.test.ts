@@ -89,7 +89,7 @@ describe("SubjectApi exposedAttributes (AAPS-008)", () => {
     "an exposed resolver-backed attribute appears in GET /subject, unexposed ones do not",
     () =>
       Effect.gen(function* () {
-        const browser = yield* loggedIn(TestAuth.app(ExposingLayer));
+        const browser = yield* loggedIn(yield* TestAuth.serve(ExposingLayer));
         const response = yield* Effect.promise(() => browser.request("GET", "/subject"));
         assert.strictEqual(response.status, 200);
         const dto = Schema.decodeUnknownSync(SubjectContract.SubjectDto)(
@@ -104,7 +104,7 @@ describe("SubjectApi exposedAttributes (AAPS-008)", () => {
 
   it.effect("by default (nothing exposed) no resolver-backed attribute reaches the client", () =>
     Effect.gen(function* () {
-      const browser = yield* loggedIn(TestAuth.app(AppLayer));
+      const browser = yield* loggedIn(yield* TestAuth.serve(AppLayer));
       const response = yield* Effect.promise(() => browser.request("GET", "/subject"));
       const dto = Schema.decodeUnknownSync(SubjectContract.SubjectDto)(
         yield* Effect.promise(() => response.json()),
@@ -115,7 +115,7 @@ describe("SubjectApi exposedAttributes (AAPS-008)", () => {
 
   it.effect("exposing an attribute for an anonymous caller resolves to nothing, not an error", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(ExposingLayer);
+      const { handler } = yield* TestAuth.serve(ExposingLayer);
       const response = yield* Effect.promise(() =>
         handler(new Request("http://localhost/subject")),
       );
@@ -131,7 +131,7 @@ describe("SubjectApi exposedAttributes (AAPS-008)", () => {
 describe("SubjectApi (real HTTP)", () => {
   it.effect("BEH-EA-179: with no credential, /subject resolves qadi's anonymous subject", () =>
     Effect.gen(function* () {
-      const { handler } = TestAuth.app(AppLayer);
+      const { handler } = yield* TestAuth.serve(AppLayer);
       const response = yield* Effect.promise(() =>
         handler(new Request("http://localhost/subject")),
       );
@@ -152,7 +152,7 @@ describe("SubjectApi (real HTTP)", () => {
     "BEH-EA-179: with a real session cookie, /subject resolves the user's own subject id",
     () =>
       Effect.gen(function* () {
-        const browser = yield* loggedIn(TestAuth.app(AppLayer));
+        const browser = yield* loggedIn(yield* TestAuth.serve(AppLayer));
         const subjectResponse = yield* Effect.promise(() => browser.request("GET", "/subject"));
         assert.strictEqual(subjectResponse.status, 200);
         const body = (yield* Effect.promise(() => subjectResponse.json())) as { id: string };

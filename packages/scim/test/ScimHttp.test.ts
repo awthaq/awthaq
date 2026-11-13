@@ -6,6 +6,7 @@ import { Errors, Sessions, Users } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
 import { OrganizationRecords } from "@awthaq/organization/records";
 import { assert, describe, it } from "@effect/vitest";
+import { createHash } from "node:crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -23,11 +24,11 @@ const grant = TenantScoped.crossTenant("test: a cross-organization caller");
 
 const ORIGIN = "http://localhost:3000";
 
-const buildApp = (
+const buildApp = Effect.fn(function* (
   scimConfig: Partial<Scim.ScimConfigShape> = {},
   users?: Layer.Layer<Users.Users, never, Users.Users>,
-) => {
-  const app = TestAuth.app(ScimLive(scimConfig, {}, users));
+) {
+  const app = yield* TestAuth.serve(ScimLive(scimConfig, {}, users));
   /** Runs `effect` against the very same service instances the web handler uses. */
   const inside = <A, E>(
     effect: Effect.Effect<
@@ -43,7 +44,7 @@ const buildApp = (
     >,
   ) => app.run(effect);
   return { handler: app.handler, inside };
-};
+});
 
 const call = (
   handler: (request: Request) => Promise<Response>,
@@ -74,7 +75,7 @@ const json = async (response: Response): Promise<Record<string, unknown>> => {
 describe("SCIM over HTTP: authentication (BEH-EA-246)", () => {
   it.effect("a request without a token, with a wrong token, or with a malformed token is 401", () =>
     Effect.gen(function* () {
-      const { handler } = buildApp();
+      const { handler } = yield* buildApp();
       for (const token of [undefined, "scim_" + "0".repeat(64), "not-a-scim-token", ""]) {
         const response = yield* Effect.promise(() =>
           call(handler, "GET", "/scim/v2/Users", token === undefined ? {} : { token }),
@@ -89,7 +90,7 @@ describe("SCIM over HTTP: authentication (BEH-EA-246)", () => {
 
   it.effect("a valid token reaches the resource and is scoped to its own connection", () =>
     Effect.gen(function* () {
-      const { handler, inside } = buildApp();
+      const { handler, inside } = yield* buildApp();
       const okta = yield* Effect.promise(() => inside(seedConnection("Okta")));
       const entra = yield* Effect.promise(() => inside(seedConnection("Entra")));
       const created = yield* Effect.promise(() =>
@@ -113,7 +114,7 @@ describe("SCIM over HTTP: authentication (BEH-EA-246)", () => {
 
   it.effect("a revoked connection's token stops working immediately", () =>
     Effect.gen(function* () {
-      const { handler, inside } = buildApp();
+      const { handler, inside } = yield* buildApp();
       const seeded = yield* Effect.promise(() => inside(seedConnection()));
       const before = yield* Effect.promise(() =>
         call(handler, "GET", "/scim/v2/Users", { token: seeded.token }),
@@ -137,7 +138,7 @@ describe("SCIM over HTTP: authentication (BEH-EA-246)", () => {
 describe("SCIM over HTTP: what the token is checked against (BEH-EA-246)", () => {
   it.effect("only the token's hash is stored, and the hash is what authenticates", () =>
     Effect.gen(function* () {
-      const { inside } = buildApp();
+      const { inside } = yield* buildApp();
       const seeded = yield* Effect.promise(() => inside(seedConnection()));
       const stored = yield* Effect.promise(() =>
         inside(
@@ -154,11 +155,31 @@ describe("SCIM over HTTP: what the token is checked against (BEH-EA-246)", () =>
     }),
   );
 
+  it.effect("a connection stores only the SHA-256 hex of its token (at-rest form pinned)", () =>
+    Effect.gen(function* () {
+      const { inside } = yield* buildApp();
+      const seeded = yield* Effect.promise(() => inside(seedConnection()));
+      const stored = yield* Effect.promise(() =>
+        inside(
+          Effect.flatMap(ScimRecords.ScimRecords, (records) =>
+            records.listConnections(seeded.organizationId),
+          ),
+        ),
+      );
+      assert.strictEqual(stored.length, 1);
+      assert.match(seeded.token, /^scim_[0-9a-f]{64}$/);
+      assert.strictEqual(
+        stored[0]?.tokenHash,
+        createHash("sha256").update(seeded.token, "utf8").digest("hex"),
+      );
+    }),
+  );
+
   it.effect(
     "a suspended organization's connection is refused like an unknown token, and works again once reinstated",
     () =>
       Effect.gen(function* () {
-        const { handler, inside } = buildApp();
+        const { handler, inside } = yield* buildApp();
         const seeded = yield* Effect.promise(() => inside(seedConnection()));
         const setSuspended = (suspended: boolean) =>
           Effect.promise(() =>
@@ -192,7 +213,7 @@ describe("SCIM over HTTP: wire format (BEH-EA-252)", () => {
     "responses are application/scim+json; bodies are accepted as scim+json or plain json",
     () =>
       Effect.gen(function* () {
-        const { handler, inside } = buildApp();
+        const { handler, inside } = yield* buildApp();
         const { token } = yield* Effect.promise(() => inside(seedConnection()));
         for (const [contentType, name] of [
           ["application/scim+json", "scim"],
@@ -213,7 +234,7 @@ describe("SCIM over HTTP: wire format (BEH-EA-252)", () => {
 
   it.effect("PATCH and DELETE work over HTTP: Okta's active:false, then 204", () =>
     Effect.gen(function* () {
-      const { handler, inside } = buildApp();
+      const { handler, inside } = yield* buildApp();
       const { token } = yield* Effect.promise(() => inside(seedConnection()));
       const created = yield* Effect.promise(() =>
         call(handler, "POST", "/scim/v2/Users", { token, body: { userName: "ada@acme.example" } }),
@@ -242,7 +263,7 @@ describe("SCIM over HTTP: wire format (BEH-EA-252)", () => {
     "a list is a ListResponse; a filter names the resource; an unsupported filter is 400 invalidFilter",
     () =>
       Effect.gen(function* () {
-        const { handler, inside } = buildApp();
+        const { handler, inside } = yield* buildApp();
         const { token } = yield* Effect.promise(() => inside(seedConnection()));
         yield* Effect.promise(() =>
           call(handler, "POST", "/scim/v2/Users", {
@@ -283,7 +304,7 @@ describe("SCIM over HTTP: wire format (BEH-EA-252)", () => {
     "conflicts are 409 with scimType uniqueness; unknown ids are 404 in the RFC error shape",
     () =>
       Effect.gen(function* () {
-        const { handler, inside } = buildApp();
+        const { handler, inside } = yield* buildApp();
         const { token } = yield* Effect.promise(() => inside(seedConnection()));
         const body = { userName: "ada@acme.example" };
         yield* Effect.promise(() => call(handler, "POST", "/scim/v2/Users", { token, body }));
@@ -304,7 +325,7 @@ describe("SCIM over HTTP: wire format (BEH-EA-252)", () => {
 
   it.effect("the discovery documents are served behind the token", () =>
     Effect.gen(function* () {
-      const { handler, inside } = buildApp();
+      const { handler, inside } = yield* buildApp();
       const { token } = yield* Effect.promise(() => inside(seedConnection()));
       const config = yield* Effect.promise(() =>
         call(handler, "GET", "/scim/v2/ServiceProviderConfig", { token }),
@@ -330,7 +351,7 @@ describe("SCIM over HTTP: wire format (BEH-EA-252)", () => {
 
   it.effect("a group is created, read and deleted over HTTP", () =>
     Effect.gen(function* () {
-      const { handler, inside } = buildApp();
+      const { handler, inside } = yield* buildApp();
       const { token } = yield* Effect.promise(() => inside(seedConnection()));
       const created = yield* Effect.promise(() =>
         call(handler, "POST", "/scim/v2/Groups", { token, body: { displayName: "Engineering" } }),
@@ -365,7 +386,7 @@ const UsersDownOnLookup = Layer.effect(
 describe("SCIM over HTTP: a store outage (ADR-EA-028)", () => {
   it.effect("is a 503 with the RFC 7644 error body and none of the internal error's detail", () =>
     Effect.gen(function* () {
-      const { handler, inside } = buildApp({}, UsersDownOnLookup);
+      const { handler, inside } = yield* buildApp({}, UsersDownOnLookup);
       const seeded = yield* Effect.promise(() => inside(seedConnection()));
       const response = yield* Effect.promise(() =>
         call(handler, "POST", "/scim/v2/Users", {

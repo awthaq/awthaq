@@ -1,7 +1,7 @@
 // @awthaq/oauth — IdToken
 //
 // spec/behaviors/16-oauth.md, BEH-EA-127 (claims side): verification of an
-// OIDC `id_token` — RS256 signature against the provider's JWKS (`Jwt.ts`),
+// OIDC `id_token` — signature against the provider's JWKS (`Jws` from `@awthaq/ports`, ADR-EA-057),
 // then the claim checks OIDC Core 3.1.3.7 requires. Split out of `OAuth.ts`
 // so the claim rules are one pure, individually testable function and the
 // callback handler stays about the flow.
@@ -10,7 +10,7 @@
 // expiry, `iat`/`nbf` and the JWKS cache age are all driven by `TestClock` in
 // tests and agree with each other within one verification.
 
-import { RefreshingCache } from "@awthaq/ports";
+import { Jws, RefreshingCache } from "@awthaq/ports";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -18,7 +18,6 @@ import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 import * as HttpClient from "effect/http/HttpClient";
 import * as CallbackFailure from "./CallbackFailure.ts";
-import * as Jwt from "./Jwt.ts";
 import type * as OAuthApi from "./OAuthApi.ts";
 import type * as OAuthProvider from "./OAuthProvider.ts";
 import * as ProviderHttp from "./ProviderHttp.ts";
@@ -50,12 +49,12 @@ interface JwksCaches {
   readonly forProvider: (
     provider: OAuthProvider.ResolvedProvider,
     jwksUri: string,
-    load: Effect.Effect<Jwt.Jwks, JwksFailure>,
-  ) => Effect.Effect<RefreshingCache.RefreshingCache<Jwt.Jwks, JwksFailure>>;
+    load: Effect.Effect<Jws.JwkSet, JwksFailure>,
+  ) => Effect.Effect<RefreshingCache.RefreshingCache<Jws.JwkSet, JwksFailure>>;
 }
 
 export const makeJwksCaches = Effect.gen(function* () {
-  const caches = new Map<string, RefreshingCache.RefreshingCache<Jwt.Jwks, JwksFailure>>();
+  const caches = new Map<string, RefreshingCache.RefreshingCache<Jws.JwkSet, JwksFailure>>();
   const creation = yield* Semaphore.make(1);
   const forProvider: JwksCaches["forProvider"] = (provider, jwksUri, load) =>
     creation.withPermit(
@@ -122,25 +121,13 @@ const claimProblem = (
   const audience = audienceProblem(claims, expected.clientId);
   if (audience !== undefined) return audience;
 
-  const exp = claims["exp"];
-  if (typeof exp !== "number" || !Number.isFinite(exp)) return "exp";
-  if (expected.nowMs >= exp * 1000 + expected.skewMs) return "exp";
+  const timing = Jws.timeProblem(claims, { nowMs: expected.nowMs, skewMs: expected.skewMs });
+  if (timing !== undefined) return timing;
 
-  if ("nbf" in claims) {
-    const nbf = claims["nbf"];
-    if (typeof nbf !== "number" || !Number.isFinite(nbf)) return "nbf";
-    if (expected.nowMs + expected.skewMs < nbf * 1000) return "nbf";
-  }
-
-  const iat = claims["iat"];
-  if (iat !== undefined) {
-    if (typeof iat !== "number" || !Number.isFinite(iat)) return "iat";
-    if (iat * 1000 > expected.nowMs + expected.skewMs) return "iat";
-    if (expected.maxAgeMs !== undefined && expected.nowMs - iat * 1000 > expected.maxAgeMs) {
-      return "iat";
-    }
-  } else if (expected.maxAgeMs !== undefined) {
-    return "iat";
+  if (expected.maxAgeMs !== undefined) {
+    const iat = claims["iat"];
+    // timeProblem already proved a present `iat` is a finite number.
+    if (typeof iat !== "number" || expected.nowMs - iat * 1000 > expected.maxAgeMs) return "iat";
   }
 
   if (claims["nonce"] !== expected.nonce) return "nonce";
@@ -179,24 +166,13 @@ export const verify = (
     // MA-002: one clock reading serves every time claim.
     const nowMs = yield* Clock.currentTimeMillis;
 
-    const decoded = yield* Jwt.decode(input.idToken).pipe(
-      Effect.catchTag("JwtVerificationError", (error) =>
-        CallbackFailure.callbackFailed("jwt-malformed", error.reason),
-      ),
-    );
-    // AOMS-005: the header `alg` selects within the provider's allowlist; it never widens it.
-    const alg = decoded.header.alg;
-    if (!Jwt.isSigningAlg(alg) || !provider.idTokenSigningAlgs.includes(alg)) {
-      return yield* CallbackFailure.callbackFailed("alg", alg ?? "absent");
-    }
-
     // ESS-001/GC-001/SFS-002/TTE-001: the JWKS document is untrusted,
     // network-fetched input — schema-decoded, never cast. ECF-001/EEM-004/
     // ERS-003: the retrying client, a deadline over request plus decode, and a
     // transport/timeout/5xx failure is `ProviderUnavailable` while a rejected
     // or malformed document is a 400.
     const fetchJwks = input.httpClient.get(jwksUri).pipe(
-      Effect.flatMap(ProviderHttp.decodeBody(Jwt.JwksDocumentSchema)),
+      Effect.flatMap(ProviderHttp.decodeBody(Jws.JwkSet)),
       Effect.timeout(input.jwksTimeout),
       Effect.catch((error) => CallbackFailure.providerFailure("jwks", error)),
     );
@@ -204,34 +180,33 @@ export const verify = (
     // JJS-001/KRS-004/OIT-002/ECF-002: a TTL'd-out entry is a cache miss, refetched by exactly one
     // of the callers that noticed (single-flight).
     const cache = yield* jwksCaches.forProvider(provider, jwksUri, fetchJwks);
-    const jwks = yield* cache.get;
 
-    const jwk = yield* Jwt.findKey(jwks, decoded.header.kid, alg).pipe(
-      // A `kid` cache miss earns a refetch — the provider may have rotated keys since this
-      // process last cached them — but at most one per `JWKS_MIN_REFETCH_INTERVAL` (ECF-002),
-      // so tokens naming garbage kids cannot turn the callback into a request amplifier.
-      Effect.catch(() =>
-        cache.refreshOnMiss.pipe(
-          Effect.flatMap((fresh) => Jwt.findKey(fresh, decoded.header.kid, alg)),
-        ),
-      ),
-      Effect.catchTag("JwtVerificationError", (error) =>
-        CallbackFailure.callbackFailed("kid", error.reason),
-      ),
+    // A refused `alg` never reaches the cache; a `kid` miss earns one refetch, rate limited by the
+    // cache (ECF-002), so garbage kids cannot turn the callback into a request amplifier.
+    const verified = yield* Jws.verify({
+      token: input.idToken,
+      keys: cache,
+      algorithms: provider.idTokenSigningAlgs,
+      requireKid: false,
+    }).pipe(
+      Effect.catchTag("Jws/Rejected", (error) => {
+        switch (error.reason) {
+          case "malformed":
+          case "crit":
+            return CallbackFailure.callbackFailed("jwt-malformed", error.reason);
+          case "alg":
+            return CallbackFailure.callbackFailed("alg");
+          case "missing-kid":
+          case "unknown-kid":
+          case "key-mismatch":
+            return CallbackFailure.callbackFailed("kid", error.reason);
+          case "signature":
+            return CallbackFailure.callbackFailed("signature", error.reason);
+        }
+      }),
     );
-    const verified = yield* Jwt.verifySignature(
-      alg,
-      jwk,
-      decoded.signingInput,
-      decoded.signature,
-    ).pipe(
-      Effect.catchTag("JwtVerificationError", (error) =>
-        CallbackFailure.callbackFailed("signature", error.reason),
-      ),
-    );
-    if (!verified) return yield* CallbackFailure.callbackFailed("signature");
 
-    const problem = claimProblem(decoded.payload, {
+    const problem = claimProblem(verified.payload, {
       clientId: provider.clientId,
       issuer: Option.getOrUndefined(provider.issuer),
       nonce: input.nonce,
@@ -243,5 +218,5 @@ export const verify = (
       }),
     });
     if (problem !== undefined) return yield* CallbackFailure.callbackFailed(problem);
-    return decoded.payload;
+    return verified.payload;
   });

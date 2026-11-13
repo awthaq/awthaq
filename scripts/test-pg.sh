@@ -1,90 +1,19 @@
 #!/usr/bin/env bash
-# TS-001/ESR-009/PV-010: run the real-Postgres suites against a throwaway
-# postgres:16 container. The CI Postgres service in `.github/workflows/check.yml` runs
-# these too; this is the local equivalent.
+# TS-001/ESR-009/PV-010: run every vitest project and then the BDD suite against a throwaway
+# postgres:16 container: the set CI's `pnpm check` runs with AWTHAQ_POSTGRES_URL set (see
+# `.github/workflows/check.yml`). This is the local equivalent.
 #
 #   pnpm run test:pg                                       # starts a container, runs, removes it
 #   AWTHAQ_POSTGRES_URL=postgres://... pnpm run test:pg    # use an existing server
+#   pnpm run test:pg packages/organization/test            # only those paths (no BDD run)
 #
-# Three kinds of suite run:
-#   * `*.postgres.test.ts` in @awthaq/sql (skipped without AWTHAQ_POSTGRES_URL);
-#   * every plugin's record-store contract (plan 25, ADR-EA-041 decision 9): the
-#     `Contract.test.ts` of each package whose bundle provides a store runs its
-#     `RecordsContract` suites, race cases included, on a Postgres schema per
-#     build (`pnpm check:contract-tests` fails when one is missing here);
-#   * the suites that build a database through `packages/test/src/TestSql.ts`:
-#     core's stores, the domain race tests (`Rendezvous.held`) and the files
-#     that keep sealed-column or migration cases, on Postgres instead of
-#     `:memory:` SQLite, each in its own schema.
+# A suite that builds its database through `TestSql` (directly, through `TestAuth`'s
+# `records: "sql"`, `RecordsContract` or `runPluginContractTests`) runs on a Postgres schema per
+# suite; the rest run unchanged. There is no list of files to keep: `pnpm check:contract-tests`
+# fails when this script names a test file (plan 37, BEH-EA-336).
 #
-# The suites `DROP TABLE`/`DROP SCHEMA` — point the URL at a scratch database.
+# The suites `DROP TABLE`/`DROP SCHEMA` -- point the URL at a scratch database.
 set -euo pipefail
-
-suites=(
-  packages/cli/test/Migration.postgres.test.ts
-  packages/sql/test/ReadRouting.postgres.test.ts
-  packages/sql/test/CoreMigrations.postgres.test.ts
-  packages/sql/test/RateLimiterStoreSql.postgres.test.ts
-  packages/sql/test/TenantScope.postgres.test.ts
-  packages/sql/test/TenantScoped.test.ts
-  packages/sql/test/SealedColumn.test.ts
-  packages/sql/test/SqlDdl.test.ts
-  packages/sql/test/UnitOfWork.test.ts
-  packages/sql/test/SqlStore.test.ts
-  packages/sql/test/StoreFailure.test.ts
-  packages/test/test/CoreSealedColumns.test.ts
-  packages/test/test/StoreContract.sql.test.ts
-  packages/test/test/StoreContract.sealed.test.ts
-  packages/test/test/RecordsContract.test.ts
-  packages/admin/test/Contract.test.ts
-  packages/api-key/test/Contract.test.ts
-  packages/device-authorization/test/Contract.test.ts
-  packages/jwt/test/Contract.test.ts
-  packages/organization/test/Contract.test.ts
-  packages/passkey/test/Contract.test.ts
-  packages/qadi/test/Contract.test.ts
-  packages/roles/test/Contract.test.ts
-  packages/saml/test/Contract.test.ts
-  packages/scim/test/Contract.test.ts
-  packages/two-factor/test/Contract.test.ts
-  packages/webhooks/test/Contract.test.ts
-  examples/plugin-template/test/Contract.test.ts
-  packages/test/test/TestAuthRecords.test.ts
-  packages/test/test/TestAuthHost.test.ts
-  packages/test/test/TestSqlSchema.test.ts
-  examples/plugin-template/test/Template.test.ts
-  packages/api-key/test/ApiKey.test.ts
-  packages/core/test/AuthEventsUnitOfWork.test.ts
-  packages/core/test/Migrations.test.ts
-  packages/core/test/FederatedIdentitySql.test.ts
-  packages/core/test/SignUpSql.test.ts
-  packages/core/test/Users.test.ts
-  packages/core/test/UserFields.test.ts
-  packages/core/test/UserImport.test.ts
-  packages/core/test/Verification.test.ts
-  packages/device-authorization/test/DeviceAuthorization.test.ts
-  packages/device-authorization/test/AuthHttp.test.ts
-  packages/jwt/test/KeyRing.test.ts
-  packages/migrate-better-auth/test/LegacySessionBridgeLive.test.ts
-  packages/organization/test/ConnectionRecords.test.ts
-  packages/organization/test/OrganizationMembers.test.ts
-  packages/organization/test/OrganizationDirectory.test.ts
-  packages/organization/test/OrganizationInvitations.test.ts
-  packages/organization/test/OrganizationRoles.test.ts
-  packages/organization/test/OrganizationTeams.test.ts
-  packages/organization/test/OrganizationSql.test.ts
-  packages/organization/test/TeamRecords.test.ts
-  packages/organization/test/TenantMiddleware.test.ts
-  packages/passkey/test/PasskeyCeremony.test.ts
-  packages/password/test/PasswordCredentialSql.test.ts
-  packages/password/test/PasswordStoreOutage.test.ts
-  packages/qadi/test/UserClaims.test.ts
-  packages/two-factor/test/TwoFactorStore.test.ts
-  packages/roles/test/RolesSql.test.ts
-  packages/saml/test/SamlDomainClaimMigration.test.ts
-  packages/saml/test/SamlRecords.test.ts
-  packages/webhooks/test/WebhookRecords.test.ts
-)
 
 if [[ -z "${AWTHAQ_POSTGRES_URL:-}" ]]; then
   name="awthaq-test-pg-$$"
@@ -99,4 +28,9 @@ if [[ -z "${AWTHAQ_POSTGRES_URL:-}" ]]; then
   export AWTHAQ_POSTGRES_URL="postgres://postgres:pw@localhost:$port/awthaq"
 fi
 
-pnpm exec vitest run --testTimeout=60000 "${suites[@]}"
+if [[ $# -gt 0 ]]; then
+  pnpm exec vitest run --testTimeout=60000 "$@"
+else
+  pnpm exec vitest run --testTimeout=60000
+  pnpm test:bdd
+fi

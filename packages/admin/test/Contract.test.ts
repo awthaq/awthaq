@@ -16,7 +16,9 @@ TestAuth.runPluginContractTests(framework, () => Admin.Admin, {
   options: [{}],
   records: {
     suite: "admin_records_contract",
-    suites: { "awthaq/admin/records/ImpersonationRecords": impersonationRecords },
+    suites: {
+      "awthaq/admin/records/ImpersonationRecords": impersonationRecords,
+    },
   },
   build: { services: Layer.empty },
 });

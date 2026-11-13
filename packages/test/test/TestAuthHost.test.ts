@@ -3,7 +3,7 @@
 // composition must give the same services except the guard's and the undeclared-event policy (ADR-EA-049). A hand-forked base in the harness fails this. Under
 // `pnpm test:pg` the SQL case is the Postgres run of `AuthHost`'s SQL mode (through `TestSql`).
 import { Auth, AuthEvents } from "@awthaq/core";
-import { ClientAddress, Mailer, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { ClientAddress, PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { AuthHost, Csrf } from "@awthaq/server";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -14,6 +14,7 @@ import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
 import * as RedactionGuard from "../src/RedactionGuard.ts";
 import * as TestAuth from "../src/TestAuth.ts";
+import * as TestMailbox from "../src/TestMailbox.ts";
 import * as TestEncryption from "../src/TestEncryption.ts";
 import * as TestSql from "../src/TestSql.ts";
 import { Pins } from "./support/Pins.ts";
@@ -26,7 +27,7 @@ const hostOwned = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
     Layer.provideMerge(
       Layer.mergeAll(
         PasswordHasher.layerArgon2id.pipe(Layer.orDie),
-        Mailer.layerMemory,
+        TestMailbox.layer,
         RateLimiter.layerPermissive,
         ClientAddress.layerDirect,
         TestEncryption.layer,
@@ -53,7 +54,10 @@ describe("TestAuth.layer over AuthHost (BEH-EA-342)", () => {
     it(`TestAuth.layer(built) is AuthHost.layer(built) plus exactly the test-only services (${records})`, async () => {
       const harness = await keysOf(
         records === "sql"
-          ? TestAuth.layer(built, { records: "sql", suite: "test_TestAuthHost_harness" })
+          ? TestAuth.layer(built, {
+              records: "sql",
+              suite: "test_TestAuthHost_harness",
+            })
           : TestAuth.layer(built),
       );
       const host = await keysOf(
@@ -70,7 +74,11 @@ describe("TestAuth.layer over AuthHost (BEH-EA-342)", () => {
               }),
             )
           : hostOwned(
-              AuthHost.layer(built, { ...dials, csrf, persistence: { records: "memory" } }),
+              AuthHost.layer(built, {
+                ...dials,
+                csrf,
+                persistence: { records: "memory" },
+              }),
             ),
       );
       const guard = await keysOf(RedactionGuard.layer);
@@ -90,21 +98,19 @@ describe("TestAuth.layer over AuthHost (BEH-EA-342)", () => {
   }
 
   it("TestAuth.layer({ tier }) selects the served groups as AuthHost does", async () => {
-    const admin = TestAuth.app(TestAuth.layer(built, { tier: "admin" }));
-    try {
+    await TestAuth.withApp(TestAuth.layer(built, { tier: "admin" }), undefined, async (admin) => {
       const operator = await admin.signIn("tier@example.com");
       // `Pins` has no admin-tier group, so the admin listener serves nothing of it, nor core's groups.
       assert.strictEqual((await operator.request("GET", "/pins")).status, 404);
       assert.strictEqual((await operator.request("GET", "/session")).status, 404);
-    } finally {
-      await admin.dispose();
-    }
-    const publicTier = TestAuth.app(TestAuth.layer(built, { tier: "public" }));
-    try {
-      const user = await publicTier.signIn("tier@example.com");
-      assert.strictEqual((await user.request("GET", "/pins")).status, 200);
-    } finally {
-      await publicTier.dispose();
-    }
+    });
+    await TestAuth.withApp(
+      TestAuth.layer(built, { tier: "public" }),
+      undefined,
+      async (publicTier) => {
+        const user = await publicTier.signIn("tier@example.com");
+        assert.strictEqual((await user.request("GET", "/pins")).status, 200);
+      },
+    );
   });
 });

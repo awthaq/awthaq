@@ -17,7 +17,6 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import * as Ref from "effect/Ref";
 
 /**
  * As `Mailer`'s `MailMessage` (EOTS-010): the message carries the recipient and, in `data`, credentials
@@ -54,10 +53,9 @@ export interface SmsSenderShape {
    * `layerNoop` still dies — an unconfigured `SmsSender` is a wiring defect, not an outage.
    */
   readonly send: (message: SmsMessage) => Effect.Effect<void, SmsDeliveryFailed>;
-  readonly sent: Effect.Effect<ReadonlyArray<SmsMessage>>;
   /**
    * As `Mailer`: set by the implementations that must never reach production (`layerNoop`,
-   * `layerMemory`, `layerConsole`). A real provider leaves it unset.
+   * `layerConsole`). A real provider leaves it unset.
    */
   readonly development?: true;
 }
@@ -74,53 +72,34 @@ export const layerNoop: Layer.Layer<SmsSender> = Layer.succeed(
       Defects.invalidConfiguration(
         "SmsSender", // EOTS-010: the template only — never the recipient.
         `awthaq: no SmsSender configured — dropped a "${message.template}" message. ` +
-          "Provide a real SmsSender layer (or SmsSender.layerMemory for tests).",
+          "Provide a real SmsSender layer (or TestMailbox.layer from @awthaq/test for tests).",
       ),
-    sent: Effect.succeed([]),
     development: true,
   }),
 );
 
-/** Records every sent message in memory; `sent` reads them back for assertions. */
-export const layerMemory: Layer.Layer<SmsSender> = Layer.effect(
-  SmsSender,
-  Effect.gen(function* () {
-    const messages = yield* Ref.make<ReadonlyArray<SmsMessage>>([]);
-    return SmsSender.of({
-      send: (message) => Ref.update(messages, (existing) => [...existing, message]),
-      sent: Ref.get(messages),
-      development: true,
-    });
-  }),
-);
-
 /**
- * The development stand-in for a real provider: records like `layerMemory` and also logs the message —
+ * The development stand-in for a real provider: logs the message —
  * recipient, template and `data` with any `Redacted` value unwrapped — so a person running an app
  * locally can read a one-time code off the console. **Development only:** it deliberately breaks
  * EOTS-010 (logging the code is its whole purpose) and sets `development`.
  */
-export const layerConsole: Layer.Layer<SmsSender> = Layer.effect(
+export const layerConsole: Layer.Layer<SmsSender> = Layer.succeed(
   SmsSender,
-  Effect.gen(function* () {
-    const messages = yield* Ref.make<ReadonlyArray<SmsMessage>>([]);
-    return SmsSender.of({
-      send: (message) =>
-        Effect.logInfo("awthaq sms").pipe(
-          Effect.annotateLogs({
-            to: message.to,
-            template: message.template,
-            ...Object.fromEntries(
-              Object.entries(message.data ?? {}).map(([key, value]) => [
-                key,
-                Redacted.isRedacted(value) ? Redacted.value(value) : value,
-              ]),
-            ),
-          }),
-          Effect.andThen(Ref.update(messages, (existing) => [...existing, message])),
-        ),
-      sent: Ref.get(messages),
-      development: true,
-    });
+  SmsSender.of({
+    send: (message) =>
+      Effect.logInfo("awthaq sms").pipe(
+        Effect.annotateLogs({
+          to: message.to,
+          template: message.template,
+          ...Object.fromEntries(
+            Object.entries(message.data ?? {}).map(([key, value]) => [
+              key,
+              Redacted.isRedacted(value) ? Redacted.value(value) : value,
+            ]),
+          ),
+        }),
+      ),
+    development: true,
   }),
 );

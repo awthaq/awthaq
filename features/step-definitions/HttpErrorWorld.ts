@@ -148,8 +148,10 @@ export const DOCS_PATH = "/auth/docs";
  * A running composition: the web handler `HttpRouter.toWebHandler` gives a Next.js/Hono host,
  * and a way to reach the very services that handler runs against (same memo map).
  */
-const makeApp = <A, E>(appLayer: Layer.Layer<A | TestAuth.AppNeeds, E>) => {
-  const app = TestAuth.app(appLayer);
+const makeApp = Effect.fnUntraced(function* <A, E>(
+  appLayer: Layer.Layer<A | TestAuth.AppNeeds, E>,
+) {
+  const app = yield* TestAuth.serve(appLayer);
   const { handler } = app;
   const withContext = <X, EX>(effect: Effect.Effect<X, EX, A | TestAuth.AppNeeds>) =>
     Effect.promise(() => app.run(effect));
@@ -171,7 +173,7 @@ const makeApp = <A, E>(appLayer: Layer.Layer<A | TestAuth.AppNeeds, E>) => {
     ),
   );
   return { handler, withContext, groups, layer: appLayer };
-};
+});
 
 export const GROUP_KEY_PREFIX = "effect/http-api/HttpApiGroup/";
 
@@ -208,7 +210,7 @@ export const makeRuntimeAndRouted = () => {
   return { runtime, routed: handler };
 };
 
-export type PasswordApp = ReturnType<typeof passwordApp>;
+export type PasswordApp = Effect.Success<ReturnType<typeof passwordApp>>;
 export type RuntimeApp = ReturnType<typeof makeRuntimeAndRouted>;
 
 /**
@@ -326,7 +328,7 @@ export const usePasswordApp = Effect.fn("features.httpError.usePasswordApp")(fun
   const world = yield* World;
   const existing = yield* Ref.get(world.passwordApp);
   if (existing !== undefined) return existing;
-  const fresh = passwordApp();
+  const fresh = yield* passwordApp();
   yield* Ref.set(world.passwordApp, fresh);
   return fresh;
 });

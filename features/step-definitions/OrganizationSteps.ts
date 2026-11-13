@@ -273,7 +273,7 @@ export const organizationSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
 
   Given("the team limit is {int}", function* (limit: number) {
-    const app = yield* Ref.get((yield* World).options);
+    const app = yield* (yield* World).app.options;
     const teams = app.config?.teams;
     yield* configureApp({
       config: {
@@ -288,7 +288,7 @@ export const organizationSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
 
   Given("the team member limit is {int}", function* (limit: number) {
-    const app = yield* Ref.get((yield* World).options);
+    const app = yield* (yield* World).app.options;
     const teams = app.config?.teams;
     yield* configureApp({
       config: {
@@ -637,7 +637,7 @@ export const organizationSteps = defineSteps<World>(({ Given, When, Then }) => {
       const world = yield* World;
       const organizationId = yield* world.organizations.get(organization);
       const app = yield* currentApp;
-      const mail = (yield* app.sentMail)
+      const mail = (yield* (yield* app.mailbox).mail.messages)
         .filter(
           (candidate) =>
             candidate.template === "organization-invite" &&
@@ -818,7 +818,7 @@ export const organizationSteps = defineSteps<World>(({ Given, When, Then }) => {
   Then("no response so far carries that token or any token hash", function* () {
     const world = yield* World;
     const app = yield* currentApp;
-    const mail = (yield* app.sentMail)
+    const mail = (yield* (yield* app.mailbox).mail.messages)
       .filter((candidate) => candidate.template === "organization-invite")
       .at(-1);
     assert.ok(mail, "no invitation mail was sent");
@@ -928,8 +928,7 @@ export const organizationSteps = defineSteps<World>(({ Given, When, Then }) => {
   });
 
   Then("no mail was sent to {string}", function* (email: string) {
-    yield* letForkedFibersRun;
-    assert.deepEqual(yield* mailTo(email), []);
+    yield* (yield* (yield* currentApp).mailbox).mail.refute({ to: email });
   });
 
   Then("the event {string} was published {int} time(s)", function* (tag: string, count: number) {

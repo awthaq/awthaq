@@ -189,38 +189,37 @@ export const nextSsrSteps = defineSteps<World>(({ Given, When, Then }) => {
     "a deployment whose session cookie is domain-scoped and a live session for {string}",
     function* (name: string) {
       const world = yield* World;
-      const app = makeSecureDomainApp(world.roles, world.resolverCalls);
+      const app = yield* makeSecureDomainApp(world.roles, world.resolverCalls);
       const outcome = yield* Effect.promise(async () => {
-        try {
-          const issued = await app.runtime.runPromise(
-            Effect.gen(function* () {
-              const users = yield* Users.Users;
-              const sessions = yield* Sessions.Sessions;
-              const user = yield* users
-                .create({ identity: { _tag: "Email", email: `${name}@example.com` }, name })
-                .pipe(Effect.orDie);
-              return {
-                userId: user.id,
-                issued: yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest),
-              };
-            }),
+        const issued = await app.runtime.runPromise(
+          Effect.gen(function* () {
+            const users = yield* Users.Users;
+            const sessions = yield* Sessions.Sessions;
+            const user = yield* users
+              .create({
+                identity: { _tag: "Email", email: `${name}@example.com` },
+                name,
+              })
+              .pipe(Effect.orDie);
+            return {
+              userId: user.id,
+              issued: yield* sessions.issue({ userId: user.id }).pipe(TestAuth.withoutRequest),
+            };
+          }),
+        );
+        const token = Redacted.value(issued.issued.token);
+        const read = async (cookieName: string) => {
+          const session = await getSession(
+            headersWithCookie(`${cookieName}=${token}`),
+            app.runtime,
           );
-          const token = Redacted.value(issued.issued.token);
-          const read = async (cookieName: string) => {
-            const session = await getSession(
-              headersWithCookie(`${cookieName}=${token}`),
-              app.runtime,
-            );
-            return session?.user.id;
-          };
-          return {
-            userId: issued.userId,
-            configured: await read("__Secure-session"),
-            defaultName: await read("__Host-session"),
-          };
-        } finally {
-          await app.dispose();
-        }
+          return session?.user.id;
+        };
+        return {
+          userId: issued.userId,
+          configured: await read("__Secure-session"),
+          defaultName: await read("__Host-session"),
+        };
       });
       yield* world.outcomes.set("secureUserId", outcome.userId);
       yield* world.outcomes.set("secureConfigured", outcome.configured ?? "");

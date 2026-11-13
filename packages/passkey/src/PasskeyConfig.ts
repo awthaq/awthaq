@@ -4,10 +4,10 @@
 // default). A leaf: `Passkey.ts` (options, boot checks) and `PasskeyCeremony.ts` (verification) both
 // read it, and `Passkey.ts` re-exports it, so `Passkey.config(...)` and `Passkey.PasskeyConfig` keep
 // their public names.
+import { Tenant } from "@awthaq/core";
 import type { WebAuthn } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
-import * as Layer from "effect/Layer";
 import type * as Redacted from "effect/Redacted";
 
 /**
@@ -148,5 +148,13 @@ export const PasskeyConfig: Context.Reference<PasskeyConfigShape> = Context.Refe
   { defaultValue: () => defaultPasskeyConfig },
 );
 
-export const config = (partial: Partial<PasskeyConfigShape>): Layer.Layer<never> =>
-  Layer.succeed(PasskeyConfig, { ...defaultPasskeyConfig, ...partial });
+/**
+ * BEH-EA-355: tenant-scoped. Boot fields are validated or derived once at build and read only from the build value;
+ * `relatedOrigins` and `attestation` are read per operation (the ceremony policy), so they are not boot.
+ */
+export const PasskeyConfigScoped = Tenant.perTenant(PasskeyConfig, {
+  boot: ["ceremonyTimeout", "enumerationSecret"],
+});
+
+export const config = (partial: Partial<PasskeyConfigShape>) =>
+  PasskeyConfigScoped.layer({ ...defaultPasskeyConfig, ...partial });

@@ -28,14 +28,14 @@ catalogs:
       specifier: ^4.1.2
       version: 4.1.2
     '@qadi/core':
-      specifier: ^0.11.0
-      version: 0.11.0
+      specifier: ^0.12.0
+      version: 0.12.0
     '@qadi/http':
-      specifier: ^0.11.0
-      version: 0.11.0
+      specifier: ^0.12.0
+      version: 0.12.0
     '@qadi/react':
-      specifier: ^0.11.0
-      version: 0.11.0
+      specifier: ^0.12.0
+      version: 0.12.0
     '@testing-library/react':
       specifier: ^16.3.2
       version: 16.3.3
@@ -154,10 +154,10 @@ importers:
         version: 4.1.2(effect@4.1.2)(redis@6.2.1)
       '@qadi/core':
         specifier: 'catalog:'
-        version: 0.11.0(effect@4.1.2)
+        version: 0.12.0(effect@4.1.2)
       '@qadi/http':
         specifier: 'catalog:'
-        version: 0.11.0(effect@4.1.2)
+        version: 0.12.0(effect@4.1.2)
       effect:
         specifier: 'catalog:'
         version: 4.1.2
@@ -349,10 +349,10 @@ importers:
         version: 4.1.2(effect@4.1.2)(vitest@5.0.2)
       '@qadi/core':
         specifier: 'catalog:'
-        version: 0.11.0(effect@4.1.2)
+        version: 0.12.0(effect@4.1.2)
       '@qadi/http':
         specifier: 'catalog:'
-        version: 0.11.0(effect@4.1.2)
+        version: 0.12.0(effect@4.1.2)
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.4
@@ -419,7 +419,7 @@ importers:
         version: 4.1.2(effect@4.1.2)(vitest@5.0.2)
       '@qadi/core':
         specifier: 'catalog:'
-        version: 0.11.0(effect@4.1.2)
+        version: 0.12.0(effect@4.1.2)
       effect:
         specifier: 'catalog:'
         version: 4.1.2
@@ -535,7 +535,7 @@ importers:
         version: 4.1.2(effect@4.1.2)(vitest@5.0.2)
       '@qadi/core':
         specifier: 'catalog:'
-        version: 0.11.0(effect@4.1.2)
+        version: 0.12.0(effect@4.1.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -921,7 +921,7 @@ importers:
         version: 4.1.2(effect@4.1.2)(vitest@5.0.2)
       '@qadi/core':
         specifier: 'catalog:'
-        version: 0.11.0(effect@4.1.2)
+        version: 0.12.0(effect@4.1.2)
       effect:
         specifier: 'catalog:'
         version: 4.1.2
@@ -1063,10 +1063,10 @@ importers:
         version: 4.1.2(effect@4.1.2)(vitest@5.0.2)
       '@qadi/core':
         specifier: 'catalog:'
-        version: 0.11.0(effect@4.1.2)
+        version: 0.12.0(effect@4.1.2)
       '@qadi/http':
         specifier: 'catalog:'
-        version: 0.11.0(effect@4.1.2)
+        version: 0.12.0(effect@4.1.2)
       effect:
         specifier: 'catalog:'
         version: 4.1.2
@@ -1088,16 +1088,16 @@ importers:
     devDependencies:
       '@effect/atom-react':
         specifier: 'catalog:'
-        version: 4.1.2(effect@4.1.2)(react@19.3.0)(scheduler@0.27.0)
+        version: 4.1.2(effect@4.1.2)(react@19.3.0)(scheduler@0.28.0)
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.1.2(effect@4.1.2)(vitest@5.0.2)
       '@qadi/core':
         specifier: 'catalog:'
-        version: 0.11.0(effect@4.1.2)
+        version: 0.12.0(effect@4.1.2)
       '@qadi/react':
         specifier: 'catalog:'
-        version: 0.11.0(@effect/atom-react@4.1.2(effect@4.1.2)(react@19.3.0)(scheduler@0.27.0))(effect@4.1.2)(react@19.3.0)(scheduler@0.27.0)
+        version: 0.12.0(@effect/atom-react@4.1.2(effect@4.1.2)(react@19.3.0)(scheduler@0.28.0))(effect@4.1.2)(react@19.3.0)(scheduler@0.28.0)
       '@testing-library/react':
         specifier: 'catalog:'
         version: 16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -1134,6 +1134,9 @@ importers:
       '@awthaq/core':
         specifier: workspace:*
         version: link:../core
+      '@awthaq/ports':
+        specifier: workspace:*
+        version: link:../ports
       '@awthaq/qadi':
         specifier: workspace:*
         version: link:../qadi
@@ -1146,10 +1149,10 @@ importers:
         version: 4.1.2(effect@4.1.2)(vitest@5.0.2)
       '@qadi/core':
         specifier: 'catalog:'
-        version: 0.11.0(effect@4.1.2)
+        version: 0.12.0(effect@4.1.2)
       '@qadi/http':
         specifier: 'catalog:'
-        version: 0.11.0(effect@4.1.2)
+        version: 0.12.0(effect@4.1.2)
       effect:
         specifier: 'catalog:'
         version: 4.1.2
@@ -1195,7 +1198,7 @@ importers:
         version: 4.1.2(effect@4.1.2)(vitest@5.0.2)
       '@qadi/core':
         specifier: 'catalog:'
-        version: 0.11.0(effect@4.1.2)
+        version: 0.12.0(effect@4.1.2)
       effect:
         specifier: 'catalog:'
         version: 4.1.2
@@ -1454,7 +1457,7 @@ importers:
         version: 4.1.2(effect@4.1.2)(vitest@5.0.2)
       '@qadi/core':
         specifier: 'catalog:'
-        version: 0.11.0(effect@4.1.2)
+        version: 0.12.0(effect@4.1.2)
       effect:
         specifier: 'catalog:'
         version: 4.1.2
@@ -2573,26 +2576,26 @@ packages:
     resolution: {integrity: sha512-4EDEmvxWtgsCnnVeBvtFIFZtUhPPt1+bA9JrSwU4Sa//6oKtzCSlGGXYJr44OD9aGISymbieJ4mCKHUygUDU+g==}
     engines: {node: '>=18'}
 
-  '@qadi/core@0.11.0':
-    resolution: {integrity: sha512-cipz4AGrW4486PuFVD+9O8S8Q7buZQyKkGFqQi82Y3+nbcJWFEZUmZ5CeeyQF8ReIS+qjxP+tSGgc7zmtpszPw==}
+  '@qadi/core@0.12.0':
+    resolution: {integrity: sha512-N7Y9Vbn6KhtuCCuCMGlOScpHWQzNjplz41zUcEdhvSgQMUHIOIJPeT602r+SwP1cxKV2KzL9EOdMHAN2NBUfuw==}
     engines: {node: '>=22.12.0'}
     peerDependencies:
       effect: ^4.0.0
 
-  '@qadi/http@0.11.0':
-    resolution: {integrity: sha512-rxPNRhXpLM7ReTX0mj9n00INoGqP6kTMPLj5TkfxudIrAqvLJFVg/hCwldMm5srsK++FCtfcmYsU+J6ZksFlbQ==}
+  '@qadi/http@0.12.0':
+    resolution: {integrity: sha512-Vl2L6YV+c63wVsNB1Zp/Ee3TJSJf9tvlFpoeBQ6n3HEegxIfPZWC2Qnp6T6/SB5bphuAeiIw5acvY7YT5LZzmw==}
     engines: {node: '>=22.12.0'}
     peerDependencies:
       effect: ^4.0.0
 
-  '@qadi/react@0.11.0':
-    resolution: {integrity: sha512-oYXtjag64DR23SoATnPygn3dgn3wJeGUmA9IVg3XpH4myvxNNk2G3ECQ5GM0bKCEU8Yd33jmSJdEvcI34Dzz7g==}
+  '@qadi/react@0.12.0':
+    resolution: {integrity: sha512-6PgMakbUkAPUWuX5+huA3FxqvAxTUyxkwZACs/3AvXszP+k56z5rlO0j5RzUKL4wPx8V3UGxFPH/+WxAvL8AWA==}
     engines: {node: '>=22.12.0'}
     peerDependencies:
       '@effect/atom-react': ^4.0.0
       effect: ^4.0.0
       react: '>=19.2.4'
-      scheduler: '>=0.25.0 <0.28.0'
+      scheduler: '>=0.25.0 <0.29.0'
 
   '@redis/bloom@6.2.1':
     resolution: {integrity: sha512-huQgNLaCIZfQ9SeLn4q9124uOUd8HbZDYHwwUzNcRgHqCHiHKl2dDxMqJCeWh8cMqZAoWuHR8XnWbDMIf+o7ag==}
@@ -3872,9 +3875,6 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
-  scheduler@0.27.0:
-    resolution: {integrity: sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q==}
-
   scheduler@0.28.0:
     resolution: {integrity: sha512-juorfCmIkIw8tT+p5BXSm6PJjQF/ycEYmKyzURCIt/RaZIhL+PulbQ9Yu2z1HdOJDdqDTlxA1+xKBmHXJsczAw==}
 
@@ -4426,11 +4426,11 @@ snapshots:
       tinyglobby: 0.2.17
       vitest: 5.0.2(@types/node@22.20.4)(@vitest/coverage-v8@5.0.2)(happy-dom@20.14.6)(vite@8.3.0(@types/node@22.20.4)(jiti@2.7.0)(yaml@2.9.1))
 
-  '@effect/atom-react@4.1.2(effect@4.1.2)(react@19.3.0)(scheduler@0.27.0)':
+  '@effect/atom-react@4.1.2(effect@4.1.2)(react@19.3.0)(scheduler@0.28.0)':
     dependencies:
       effect: 4.1.2
       react: 19.3.0
-      scheduler: 0.27.0
+      scheduler: 0.28.0
 
   '@effect/language-service@0.87.5': {}
 
@@ -5118,22 +5118,22 @@ snapshots:
     dependencies:
       tinyexec: 1.3.1
 
-  '@qadi/core@0.11.0(effect@4.1.2)':
+  '@qadi/core@0.12.0(effect@4.1.2)':
     dependencies:
       effect: 4.1.2
 
-  '@qadi/http@0.11.0(effect@4.1.2)':
+  '@qadi/http@0.12.0(effect@4.1.2)':
     dependencies:
-      '@qadi/core': 0.11.0(effect@4.1.2)
+      '@qadi/core': 0.12.0(effect@4.1.2)
       effect: 4.1.2
 
-  '@qadi/react@0.11.0(@effect/atom-react@4.1.2(effect@4.1.2)(react@19.3.0)(scheduler@0.27.0))(effect@4.1.2)(react@19.3.0)(scheduler@0.27.0)':
+  '@qadi/react@0.12.0(@effect/atom-react@4.1.2(effect@4.1.2)(react@19.3.0)(scheduler@0.28.0))(effect@4.1.2)(react@19.3.0)(scheduler@0.28.0)':
     dependencies:
-      '@effect/atom-react': 4.1.2(effect@4.1.2)(react@19.3.0)(scheduler@0.27.0)
-      '@qadi/core': 0.11.0(effect@4.1.2)
+      '@effect/atom-react': 4.1.2(effect@4.1.2)(react@19.3.0)(scheduler@0.28.0)
+      '@qadi/core': 0.12.0(effect@4.1.2)
       effect: 4.1.2
       react: 19.3.0
-      scheduler: 0.27.0
+      scheduler: 0.28.0
 
   '@redis/bloom@6.2.1(@redis/client@6.2.1)':
     dependencies:
@@ -6357,8 +6357,6 @@ snapshots:
     dependencies:
       commander: 12.1.0
       enhanced-resolve: 5.24.5
-
-  scheduler@0.27.0: {}
 
   scheduler@0.28.0: {}
 

@@ -5,7 +5,6 @@
 // `HttpApiClient`. The person on the second device is the test, deciding through the plugin's own
 // service inside the poll's pacing hook; time is `TestClock`, so a whole login takes milliseconds.
 import { TestAuth } from "@awthaq/test";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -90,7 +89,7 @@ describe("login (the device authorization flow)", () => {
           });
           assert.strictEqual(whoami.code, 0, everything(whoami));
         }),
-      ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+      ).pipe(TestAuth.withoutRequest),
   );
 
   it.effect(
@@ -128,7 +127,7 @@ describe("login (the device authorization flow)", () => {
           assert.isString(document.sessionId);
           assert.include(stderr.join("\n"), "Waiting for approval");
         }),
-      ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+      ).pipe(TestAuth.withoutRequest),
   );
 
   it.effect(
@@ -165,7 +164,7 @@ describe("login (the device authorization flow)", () => {
           // after a slow_down is at least the previous plus 5 (RFC 8628 §3.5).
           assert.deepStrictEqual(sleeps, [5, 5, 10, 15]);
         }),
-      ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+      ).pipe(TestAuth.withoutRequest),
   );
 
   it.effect("a denied request ends the login (exit 8) and stores nothing", () =>
@@ -190,7 +189,7 @@ describe("login (the device authorization flow)", () => {
         assert.include(everything(result), "denied");
         assert.strictEqual(yield* Ref.get(creds.writes), 0);
       }),
-    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest),
   );
 
   it.effect("a code nobody approved expires (exit 8) and stores nothing", () =>
@@ -206,7 +205,7 @@ describe("login (the device authorization flow)", () => {
         assert.include(everything(result), "expired");
         assert.strictEqual(yield* Ref.get(creds.writes), 0);
       }),
-    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest),
   );
 
   it.effect("a server without the plugin is exit 9 and names it", () =>
@@ -223,7 +222,7 @@ describe("login (the device authorization flow)", () => {
         assert.include(everything(result), "--token");
         assert.strictEqual(yield* Ref.get(creds.writes), 0);
       }),
-    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest),
   );
 
   it.effect("an unreachable server is exit 9, not a crash", () =>
@@ -249,7 +248,7 @@ describe("login (the device authorization flow)", () => {
           assert.strictEqual(result.code, 2);
           assert.include(everything(result), "not-registered");
         }),
-      ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+      ).pipe(TestAuth.withoutRequest),
   );
 
   it.effect("--token still wins: no device code is requested when a token is given", () =>
@@ -267,7 +266,7 @@ describe("login (the device authorization flow)", () => {
         assert.strictEqual(result.code, 0, everything(result));
         assert.notInclude(stderr.join("\n"), "confirm the code");
       }),
-    ).pipe(TestAuth.withoutRequest, Effect.provide(NodeHttpServer.layerTest)),
+    ).pipe(TestAuth.withoutRequest),
   );
 });
 
@@ -285,8 +284,14 @@ describe("Browser (BEH-EA-307)", () => {
       assert.isFalse(Browser.isWebUrl(refused), refused);
     }
     const url = "https://app.example.com/device?a=1&b=2";
-    assert.deepStrictEqual(Browser.openerFor("darwin", url), { command: "open", args: [url] });
-    assert.deepStrictEqual(Browser.openerFor("linux", url), { command: "xdg-open", args: [url] });
+    assert.deepStrictEqual(Browser.openerFor("darwin", url), {
+      command: "open",
+      args: [url],
+    });
+    assert.deepStrictEqual(Browser.openerFor("linux", url), {
+      command: "xdg-open",
+      args: [url],
+    });
     assert.deepStrictEqual(Browser.openerFor("win32", url), {
       command: "rundll32",
       args: ["url.dll,FileProtocolHandler", url],

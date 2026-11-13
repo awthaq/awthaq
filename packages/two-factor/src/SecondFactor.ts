@@ -33,7 +33,7 @@ import {
   Verification,
   VerificationLink,
 } from "@awthaq/core";
-import { Defects, PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { Defects, PasswordHasher, RateLimiter, Tenant } from "@awthaq/ports";
 import { SealedColumn } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -54,7 +54,7 @@ import {
 import * as RecoveryCodes from "./RecoveryCodes.ts";
 import * as Totp from "./Totp.ts";
 import * as TwoFactorEvents from "./TwoFactorEvents.ts";
-import { TwoFactorConfig } from "./TwoFactorConfig.ts";
+import { TwoFactorConfig, TwoFactorConfigScoped } from "./TwoFactorConfig.ts";
 import {
   InvalidTwoFactorCode,
   SecondFactorLocked,
@@ -196,7 +196,7 @@ export const layer = Layer.effect(
     const mac = yield* Mac.Mac;
     const limiter = yield* RateLimiter.RateLimiter;
     const events = yield* AuthEvents.AuthEvents;
-    const config = yield* TwoFactorConfig;
+    const config = yield* yield* Tenant.inForce(TwoFactorConfigScoped);
 
     // ---- the failure budget (BCR-006) ------------------------------------------------------
 

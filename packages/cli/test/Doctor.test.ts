@@ -254,7 +254,7 @@ describe("doctor --build", () => {
     Effect.gen(function* () {
       const config = configOf(passwordAndRoles, {
         config: goodConfig,
-        app: app(Layer.mergeAll(Mailer.layerMemory, RateLimiter.layerPermissive)),
+        app: app(Layer.mergeAll(Mailer.layerConsole, RateLimiter.layerPermissive)),
       });
       const report = yield* Doctor.diagnose(config, { build: true, production: true });
       assert.deepStrictEqual(codes(report).sort(), [

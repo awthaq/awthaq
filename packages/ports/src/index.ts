@@ -32,6 +32,7 @@ export * as Encryption from "./Encryption.ts";
 export * as Hmac from "./Hmac.ts";
 export * as HostResolver from "./HostResolver.ts";
 export * as Ids from "./Ids.ts";
+export * as Jws from "./Jws.ts";
 export * as KeyProvider from "./KeyProvider.ts";
 export * as LegacySessionBridge from "./LegacySessionBridge.ts";
 export * as Mailer from "./Mailer.ts";
@@ -49,6 +50,13 @@ export * as SmsSender from "./SmsSender.ts";
 export * as SqlTransaction from "./SqlTransaction.ts";
 export * as Store from "./Store.ts";
 export * as Tenant from "./Tenant.ts";
+export type {
+  ConfigScope,
+  Declared,
+  DeploymentConfigApplied,
+  PerDeployment,
+  PerTenant,
+} from "./Tenant.ts";
 export * as UserStore from "./UserStore.ts";
 export * as VerificationStore from "./VerificationStore.ts";
 export * as WebAuthn from "./WebAuthn.ts";

@@ -182,7 +182,8 @@ export const passkeySteps = defineSteps<World>(({ Given, When, Then }) => {
   }
 
   const registrationOptionsUnder = Effect.fn(function* (port: "mock" | "simplewebauthn") {
-    yield* configureApp({ webAuthnPort: port });
+    // Called twice per scenario (each port is a fresh app): `replace` releases the first.
+    yield* configureApp({ webAuthnPort: port }, "replace");
     const cookie = yield* signIn(`port-${port}-${Date.now()}@example.com`);
     const response = yield* request("POST", "/passkey/register/options", {
       body: {},

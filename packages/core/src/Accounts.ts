@@ -83,8 +83,11 @@ export const AccountsPolicy = Context.Reference<AccountsPolicyShape>("awthaq/cor
   defaultValue: () => ({ allowZeroAccounts: false }),
 });
 
+/** BEH-EA-355: tenant-scoped; read per operation through `Tenant.inForce`. */
+export const AccountsPolicyScoped = Tenant.perTenant(AccountsPolicy);
+
 export const config = (partial: Partial<AccountsPolicyShape>) =>
-  Layer.succeed(AccountsPolicy, { allowZeroAccounts: false, ...partial });
+  AccountsPolicyScoped.layer({ allowZeroAccounts: false, ...partial });
 
 /**
  * SMS-002: the stored provider tokens for an account cannot be decrypted —
@@ -229,7 +232,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const store = yield* AccountStore.AccountStore;
     const random = yield* SecureRandom.SecureRandom;
-    const policyNow = Tenant.configInForce(AccountsPolicy, yield* AccountsPolicy);
+    const policyNow = yield* Tenant.inForce(AccountsPolicyScoped);
 
     const notFound = (id: AccountId) =>
       new AccountNotFound({ message: "awthaq: no such account", id });

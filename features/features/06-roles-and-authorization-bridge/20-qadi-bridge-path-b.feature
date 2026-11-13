@@ -93,34 +93,35 @@ Feature: Qadi Bridge — Path B (Declared Permissions)
   @BEH-EA-156
   Rule: Absence of either annotation is refusal, not an open door
 
+    # qadi 0.12: `guardApi` refuses an endpoint declaring neither annotation when the layer is built, so the host
+    # fails at startup instead of serving a 500 per request; the invariant (never an open door) is unchanged.
     @REQ-EA-436
-    Scenario: An endpoint declaring neither annotation fails every request with a 500 and logs the endpoint's name
+    Scenario: An endpoint declaring neither annotation refuses the guard's build and the refusal names the endpoint
       Given an endpoint in a RequirePermission-middlewared group carrying neither RequiredPermission nor PublicEndpoint
-      When any request reaches that endpoint
-      Then the response is "500 Internal Server Error"
-      And the log names the endpoint that was reached unannotated
+      When the host builds the guard for the API that endpoint belongs to
+      Then the build is refused with "AccessNotDeclared" naming that endpoint
 
     @REQ-EA-437
     Scenario: An unannotated endpoint is never reachable as an unguarded 200, even for a caller with a fully valid session
       Given an endpoint carrying neither RequiredPermission nor PublicEndpoint
       And a signed-in user "alice" with a fully valid, unexpired session
       When "alice" requests that endpoint
-      Then the response is never "200 OK"
-      And the response is "500 Internal Server Error"
+      Then the endpoint is never served as "200 OK"
+      And the build is refused with "AccessNotDeclared" naming that endpoint
 
     @REQ-EA-438
     Scenario: The unannotated-endpoint refusal reflects a wiring mistake, not a policy decision qadi ever evaluated
       Given an endpoint carrying neither RequiredPermission nor PublicEndpoint
-      When a request reaches that endpoint
-      Then the 500 response is produced without qadi's evaluator ever being asked to decide anything
-      And the response is never "403 Forbidden"
+      When the host builds the guard for the API that endpoint belongs to
+      Then the refusal is produced without qadi's evaluator ever being asked to decide anything
+      And the refusal is never an "AccessDenied" decision
 
     @REQ-EA-439
-    Scenario: The unannotated-endpoint refusal is applied to every request to that endpoint, not only the first
+    Scenario: The unannotated-endpoint refusal is applied to every build of that guard, not only the first
       Given an endpoint carrying neither RequiredPermission nor PublicEndpoint
-      When 10 separate requests reach that endpoint over time
-      Then every one of the 10 responses is "500 Internal Server Error"
-      And none of them is ever "200 OK"
+      When the host builds the guard for that API 10 separate times
+      Then every one of the 10 builds is refused with "AccessNotDeclared"
+      And none of them ever yields a guard that serves a request
 
   # BEH-EA-157 — spec/behaviors/20-qadi-bridge-path-b.md
   @BEH-EA-157
@@ -136,12 +137,12 @@ Feature: Qadi Bridge — Path B (Declared Permissions)
       # PV-230: qadi 0.8.0 answers typed views (so a generated client can decode them): a denial its public
       # view without the trace, an undischarged obligation its tag, a resolver outage its tag plus one
       # identifying attribute and never the cause or the failing dependency's own message; only the
-      # wiring-mistake 500 is an empty body.
+      # wiring-mistake 500 is an empty body. (A missing annotation is no longer a row: qadi 0.12 refuses it when
+      # the guard is built, REQ-EA-436.)
       Examples:
         | outcome                     | status                     | body                          |
         | an AccessDenied decision     | 403 Forbidden               | the public denial, no trace   |
         | an UndischargedObligation    | 403 Forbidden               | the tag only                  |
-        | a missing annotation         | 500 Internal Server Error   | empty                         |
         | a resolver outage            | 502 Bad Gateway              | the tag and one attribute     |
 
     @REQ-EA-441

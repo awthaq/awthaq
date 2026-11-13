@@ -29,8 +29,10 @@ const ORIGIN = "http://localhost:3000";
 const appLayer = (config: Parameters<typeof JwtConfig.config>[0]) =>
   TestAuth.layer(Auth.make([Jwt.Jwt]), { services: JwtConfig.config(config) });
 
-const harness = (config: Parameters<typeof JwtConfig.config>[0]) => {
-  const app = TestAuth.app(appLayer(config), { baseUrl: ORIGIN });
+const serveApp = (config: Parameters<typeof JwtConfig.config>[0]) =>
+  TestAuth.serve(appLayer(config), { baseUrl: ORIGIN });
+
+const harnessOf = (app: Effect.Success<ReturnType<typeof serveApp>>) => {
   const { handler } = app;
   const withContext = app.run;
   const userId = Users.UserId("55555555-5555-5555-5555-555555555555");
@@ -60,101 +62,135 @@ const harness = (config: Parameters<typeof JwtConfig.config>[0]) => {
   return { handler, withContext, issueSession, mintFor, probe, userId };
 };
 
+/** One app per test: released when `use` settles. */
+const withHarness = <T>(
+  config: Parameters<typeof JwtConfig.config>[0],
+  use: (harness: ReturnType<typeof harnessOf>) => Promise<T>,
+) => TestAuth.withApp(appLayer(config), { baseUrl: ORIGIN }, (app) => use(harnessOf(app)));
+
 describe("JWT bearer re-entry (MAPS-001/NAM-001)", () => {
   it("acceptAsBearer: true — a minted JWT authenticates as a bearer, statelessly", async () => {
-    const { issueSession, mintFor, probe } = harness({
-      issuer: "https://issuer.test",
-      acceptAsBearer: true,
-    });
-    const { sessionId } = await issueSession();
-    const jwt = await mintFor(sessionId);
-    const response = await probe({ authorization: `Bearer ${jwt}` });
-    assert.strictEqual(response.status, 200);
+    await withHarness(
+      {
+        issuer: "https://issuer.test",
+        acceptAsBearer: true,
+      },
+      async ({ issueSession, mintFor, probe }) => {
+        const { sessionId } = await issueSession();
+        const jwt = await mintFor(sessionId);
+        const response = await probe({ authorization: `Bearer ${jwt}` });
+        assert.strictEqual(response.status, 200);
+      },
+    );
   });
 
   it("acceptAsBearer: true — the JWT needs no session row (no session-store round trip)", async () => {
-    const { mintFor, probe } = harness({ issuer: "https://issuer.test", acceptAsBearer: true });
-    // `sid` names a session that never existed: only a stateless check can accept this.
-    const jwt = await mintFor("00000000-0000-7000-8000-000000000000");
-    const response = await probe({ authorization: `Bearer ${jwt}` });
-    assert.strictEqual(response.status, 200);
+    await withHarness(
+      { issuer: "https://issuer.test", acceptAsBearer: true },
+      async ({ mintFor, probe }) => {
+        // `sid` names a session that never existed: only a stateless check can accept this.
+        const jwt = await mintFor("00000000-0000-7000-8000-000000000000");
+        const response = await probe({ authorization: `Bearer ${jwt}` });
+        assert.strictEqual(response.status, 200);
+      },
+    );
   });
 
   it("acceptAsBearer: true — a revoked session's JWT keeps working until exp (the documented lag)", async () => {
-    const { issueSession, mintFor, probe, withContext } = harness({
-      issuer: "https://issuer.test",
-      acceptAsBearer: true,
-    });
-    const { sessionId } = await issueSession();
-    const jwt = await mintFor(sessionId);
-    await withContext(
-      Effect.gen(function* () {
-        const sessions = yield* Sessions.Sessions;
-        yield* sessions.revoke(Sessions.SessionId(sessionId), "admin");
-      }),
+    await withHarness(
+      {
+        issuer: "https://issuer.test",
+        acceptAsBearer: true,
+      },
+      async ({ issueSession, mintFor, probe, withContext }) => {
+        const { sessionId } = await issueSession();
+        const jwt = await mintFor(sessionId);
+        await withContext(
+          Effect.gen(function* () {
+            const sessions = yield* Sessions.Sessions;
+            yield* sessions.revoke(Sessions.SessionId(sessionId), "admin");
+          }),
+        );
+        const response = await probe({ authorization: `Bearer ${jwt}` });
+        assert.strictEqual(response.status, 200);
+      },
     );
-    const response = await probe({ authorization: `Bearer ${jwt}` });
-    assert.strictEqual(response.status, 200);
   });
 
   it("default (acceptAsBearer off) — the same JWT answers 401", async () => {
-    const { issueSession, mintFor, probe } = harness({ issuer: "https://issuer.test" });
-    const { sessionId } = await issueSession();
-    const jwt = await mintFor(sessionId);
-    const response = await probe({ authorization: `Bearer ${jwt}` });
-    assert.strictEqual(response.status, 401);
+    await withHarness(
+      { issuer: "https://issuer.test" },
+      async ({ issueSession, mintFor, probe }) => {
+        const { sessionId } = await issueSession();
+        const jwt = await mintFor(sessionId);
+        const response = await probe({ authorization: `Bearer ${jwt}` });
+        assert.strictEqual(response.status, 401);
+      },
+    );
   });
 
   it("acceptAsBearer: true — a token minted for another audience never re-enters", async () => {
-    const { issueSession, withContext, probe } = harness({
-      issuer: "https://issuer.test",
-      acceptAsBearer: true,
-    });
-    const { sessionId } = await issueSession();
-    const downstream = await withContext(
-      Effect.gen(function* () {
-        const jwt = yield* Jwt.Jwt;
-        // Same claims a principal token carries, but for `inventory-service`.
-        return yield* jwt.signJWT(
-          { sub: "someone", sid: sessionId },
-          { audience: "inventory-service", typ: "at+jwt" },
+    await withHarness(
+      {
+        issuer: "https://issuer.test",
+        acceptAsBearer: true,
+      },
+      async ({ issueSession, withContext, probe }) => {
+        const { sessionId } = await issueSession();
+        const downstream = await withContext(
+          Effect.gen(function* () {
+            const jwt = yield* Jwt.Jwt;
+            // Same claims a principal token carries, but for `inventory-service`.
+            return yield* jwt.signJWT(
+              { sub: "someone", sid: sessionId },
+              { audience: "inventory-service", typ: "at+jwt" },
+            );
+          }),
         );
-      }),
+        const response = await probe({ authorization: `Bearer ${downstream}` });
+        assert.strictEqual(response.status, 401);
+      },
     );
-    const response = await probe({ authorization: `Bearer ${downstream}` });
-    assert.strictEqual(response.status, 401);
   });
 
   it("acceptAsBearer: true — an expired JWT answers 401", async () => {
-    const { issueSession, withContext, probe } = harness({
-      issuer: "https://issuer.test",
-      acceptAsBearer: true,
-    });
-    const { sessionId } = await issueSession();
-    const expired = await withContext(
-      Effect.gen(function* () {
-        const jwt = yield* Jwt.Jwt;
-        return yield* jwt.sign(
-          new Api.UserPrincipal({
-            ref: new Api.PrincipalRef({ type: "user", id: "someone" }),
-            sessionId,
+    await withHarness(
+      {
+        issuer: "https://issuer.test",
+        acceptAsBearer: true,
+      },
+      async ({ issueSession, withContext, probe }) => {
+        const { sessionId } = await issueSession();
+        const expired = await withContext(
+          Effect.gen(function* () {
+            const jwt = yield* Jwt.Jwt;
+            return yield* jwt.sign(
+              new Api.UserPrincipal({
+                ref: new Api.PrincipalRef({ type: "user", id: "someone" }),
+                sessionId,
+              }),
+              { ttl: Duration.seconds(-30) },
+            );
           }),
-          { ttl: Duration.seconds(-30) },
         );
-      }),
+        const response = await probe({ authorization: `Bearer ${expired}` });
+        assert.strictEqual(response.status, 401);
+      },
     );
-    const response = await probe({ authorization: `Bearer ${expired}` });
-    assert.strictEqual(response.status, 401);
   });
 
   it("acceptAsBearer: true — an opaque session bearer still resolves through Sessions", async () => {
-    const { issueSession, probe } = harness({
-      issuer: "https://issuer.test",
-      acceptAsBearer: true,
-    });
-    const { token } = await issueSession();
-    const response = await probe({ authorization: `Bearer ${token}` });
-    assert.strictEqual(response.status, 200);
+    await withHarness(
+      {
+        issuer: "https://issuer.test",
+        acceptAsBearer: true,
+      },
+      async ({ issueSession, probe }) => {
+        const { token } = await issueSession();
+        const response = await probe({ authorization: `Bearer ${token}` });
+        assert.strictEqual(response.status, 200);
+      },
+    );
   });
 
   // Hand-wired on purpose: the registry's ABSENCE is the wiring under test, and `TestAuth.layer` always derives it

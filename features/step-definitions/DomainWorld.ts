@@ -21,9 +21,9 @@ import {
   Users,
   Verification,
 } from "@awthaq/core";
-import { type Mailer, type PasswordHasher, RateLimiter } from "@awthaq/ports";
+import { type PasswordHasher, RateLimiter } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -35,7 +35,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as SqlClient from "effect/sql/SqlClient";
 import { Profile } from "./UserFieldsFixture.ts";
-import { makeCapturingMailer, makeNamedRegistry } from "./shared/Harness.ts";
+import { makeNamedRegistry } from "./shared/Harness.ts";
 
 type NamedRegistry<A> = ReturnType<typeof makeNamedRegistry<A>>;
 
@@ -196,11 +196,10 @@ const built = Auth.make([Profile, Password.Password]);
  * `Auth.make([Profile, Password])` through `TestAuth.layer({ records: "sql" })`: `Users`/`Accounts`/`Sessions`/
  * `Verification` over an in-memory SQLite database migrated by core's own migrations and the plugins' (the linker's
  * generated user-field columns included), a real `SqlTransaction`, the password plugin and the core `session`/`account`
- * groups on one router. The probes wrap the real services (`decorate`), the mailer, the switchable limiter and the
+ * groups on one router. The probes wrap the real services (`decorate`), the switchable limiter and the
  * `profile` export section are this world's own `services`.
  */
 const buildStack = (probes: Probes) => {
-  const mailer = makeCapturingMailer();
   const { AccountsProbe, VerificationProbe, SessionsProbe } = probesLayer(probes);
 
   // The plugin's own export section (BEH-EA-254): the user fields it holds, under its own id.
@@ -225,7 +224,6 @@ const buildStack = (probes: Probes) => {
     services: Layer.mergeAll(
       NoBreachHttpClient,
       Password.config({}),
-      mailer.layer,
       switchableLimiter(probes),
       ProfileExport,
       eventsLayer(probes),
@@ -233,7 +231,7 @@ const buildStack = (probes: Probes) => {
     decorate: Layer.mergeAll(AccountsProbe, VerificationProbe, SessionsProbe),
   });
 
-  return { appLayer, sentMail: mailer.sent };
+  return { appLayer };
 };
 
 /** What a direct (non-HTTP) step may ask of the composition. */
@@ -269,7 +267,8 @@ export interface WorldShape {
   readonly handler: (request: Request) => Promise<Response>;
   readonly ctx: Context.Context<DomainServices>;
   readonly probes: Probes;
-  readonly sentMail: Effect.Effect<ReadonlyArray<Mailer.MailMessage>>;
+  /** The mailbox the app's `TestAuth` base records into. */
+  readonly mailbox: TestMailbox.MailboxShape;
   readonly people: NamedRegistry<Person>;
   readonly tokens: NamedRegistry<HeldToken>;
   readonly responses: NamedRegistry<Response>;
@@ -286,19 +285,19 @@ export const WorldLive = Layer.effect(
   World,
   Effect.gen(function* () {
     const probes = makeProbes();
-    const { appLayer, sentMail } = buildStack(probes);
+    const { appLayer } = buildStack(probes);
     // Built on the real clock, outside the step's `TestClock`: `CsrfProtection` (and every other service that reads
     // the clock when it is *built*) would otherwise be pinned to 1970 and reject the real-clock CSRF cookie. The
     // context is kept: a direct step runs on the CALLER's fiber (so its `TestClock` moves what it reads), against the
     // very instances the handler serves from (one memo map).
-    const app = TestAuth.app(appLayer);
+    const app = yield* TestAuth.serve(appLayer);
     const ctx = yield* Effect.promise(() => app.context());
-    yield* Effect.addFinalizer(() => Effect.promise(() => app.dispose()));
+    const mailbox = Context.get(ctx, TestMailbox.Mailbox);
     return World.of({
       handler: app.handler,
       ctx,
       probes,
-      sentMail,
+      mailbox,
       people: makeNamedRegistry<Person>("person"),
       tokens: makeNamedRegistry<HeldToken>("token"),
       responses: makeNamedRegistry<Response>("response"),

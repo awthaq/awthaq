@@ -4,7 +4,7 @@
 // port over a fixed test key, and argon2id at its smallest legal cost. Only the rate limiter and the plugin's
 // configuration vary per suite.
 import { Auth, Errors, Sessions } from "@awthaq/core";
-import { Mailer, RateLimiter } from "@awthaq/ports";
+import { RateLimiter } from "@awthaq/ports";
 import { Password } from "@awthaq/password";
 import { TestAuth } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -12,7 +12,6 @@ import * as Mac from "effect/crypto/Mac";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as SecondFactor from "../../src/SecondFactor.ts";
 import * as Totp from "../../src/Totp.ts";
@@ -81,34 +80,6 @@ export const buildLayer = (options?: BuildOptions) => TestAuth.layer(built, comp
  */
 export const buildDurableAuditLayer = (options?: BuildOptions) =>
   TestAuth.layer(built, { ...compose(options), records: "sql", suite: "two_factor_harness" });
-
-/** Lets fibers the plugins fork (mail dispatch) run before a test reads their result. */
-export const letForkedFibersRun = Effect.gen(function* () {
-  for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
-});
-
-/**
- * The newest mail of `template`, waiting for the forked dispatch to land it. On a real database the
- * dispatch crosses socket I/O, which a fixed number of `yieldNow`s does not outwait, so this polls on
- * the real clock (bounded) until the mail is there.
- */
-export const awaitMail = (template: string) =>
-  Effect.gen(function* () {
-    const mailer = yield* Mailer.Mailer;
-    for (let attempt = 0; attempt < 200; attempt++) {
-      yield* letForkedFibersRun;
-      const found = (yield* mailer.sent).findLast((mail) => mail.template === template);
-      if (found !== undefined) return found;
-      yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 10)));
-    }
-    return undefined;
-  });
-
-/** A mailed token, whether the adapter-facing value is a plain string or `Redacted` (EOTS-010). */
-export const tokenOf = (mail: Mailer.MailMessage | undefined): string => {
-  const token = mail?.data?.["token"];
-  return Redacted.isRedacted(token) ? String(Redacted.value(token)) : String(token);
-};
 
 /** The TOTP the enrolled secret yields at the current (test) clock, optionally `steps` away. */
 export const codeFor = (secret: string, steps = 0) =>

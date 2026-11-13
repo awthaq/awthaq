@@ -3,8 +3,7 @@
 // `MembershipRecords`, a hand-built `Api.UserPrincipal` the same way
 // `@awthaq/admin`'s own `Admin.test.ts` does.
 import { Api } from "@awthaq/api";
-import { AuditLog, Auth, Tenant, Users } from "@awthaq/core";
-import { Mailer } from "@awthaq/ports";
+import { AuditLog, Auth, CurrentUser, Tenant, Users } from "@awthaq/core";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -17,24 +16,21 @@ import * as Organization from "../src/Organization.ts";
 import * as OrganizationAuthority from "../src/OrganizationAuthority.ts";
 import * as OrganizationRecords from "../src/OrganizationRecords.ts";
 import * as OrgRoleRecords from "../src/OrgRoleRecords.ts";
-import { TestAuth } from "@awthaq/test";
+import { TestAuth, TestMailbox } from "@awthaq/test";
 import { grant, addMember } from "./support.ts";
 
 const built = Auth.make([Organization.Organization]);
 
-const buildLayer = (
-  configOverrides: Partial<Organization.OrganizationConfigShape> = {},
-  mailerLayer: Layer.Layer<Mailer.Mailer> = Mailer.layerMemory,
-) =>
-  TestAuth.layer(built, {
-    services: Layer.merge(Organization.config(configOverrides), mailerLayer),
-  });
+const buildLayer = (configOverrides: Partial<Organization.OrganizationConfigShape> = {}) =>
+  TestAuth.layer(built, { services: Organization.config(configOverrides) });
 
-const asCaller = (id: string): Api.UserPrincipal =>
-  new Api.UserPrincipal({
-    ref: new Api.PrincipalRef({ type: "user", id }),
-    sessionId: `${id}-session`,
-  });
+const asCaller = (id: string) =>
+  CurrentUser.of(
+    new Api.UserPrincipal({
+      ref: new Api.PrincipalRef({ type: "user", id }),
+      sessionId: `${id}-session`,
+    }),
+  );
 
 /** An audit record's event as published (core stores the plugin's event as a foreign one, ADR-EA-049), as a plain record. */
 const payloadOf = (record: AuditLog.AuditLogRecord | undefined): Record<string, unknown> =>
@@ -42,21 +38,13 @@ const payloadOf = (record: AuditLog.AuditLogRecord | undefined): Record<string, 
 
 /**
  * MTI-010: the invitation capability only ever travels by email — read it back
- * from the recording `Mailer`, exactly as an invitee would receive it.
+ * from the `Mailbox`, exactly as an invitee would receive it.
  */
 const mailedToken = (invitationId: string) =>
   Effect.gen(function* () {
-    const mailer = yield* Mailer.Mailer;
-    const sent = yield* mailer.sent;
-    for (const message of sent.toReversed()) {
-      const data = message.data;
-      if (
-        data !== undefined &&
-        data["invitationId"] === invitationId &&
-        typeof data["token"] === "string"
-      ) {
-        return data["token"];
-      }
+    const box = yield* TestMailbox.Mailbox;
+    for (const message of (yield* box.mail.messages).toReversed()) {
+      if (message.data?.["invitationId"] === invitationId) return TestMailbox.secret(message);
     }
     return yield* Effect.die(new Error(`no invitation mail was sent for ${invitationId}`));
   });
@@ -87,7 +75,11 @@ describe("Organization", () => {
         .pipe(Effect.flip);
       assert.strictEqual(failure._tag, "OrganizationCreationNotAllowed");
     }).pipe(
-      Effect.provide(buildLayer({ allowUserToCreateOrganization: () => Effect.succeed(false) })),
+      Effect.provide(
+        buildLayer({
+          allowUserToCreateOrganization: () => Effect.succeed(false),
+        }),
+      ),
     ),
   );
 
@@ -98,7 +90,11 @@ describe("Organization", () => {
       const outsider = asCaller("outsider-1");
 
       assert.isTrue(yield* organization.checkSlug("acme"));
-      const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const record = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       assert.isFalse(yield* organization.checkSlug("acme"));
 
       const ownerOrgs = yield* organization.list(owner);
@@ -126,18 +122,28 @@ describe("Organization", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const member = asCaller("member-1");
-      const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const record = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("member-1"),
         role: ["member"],
       });
-      yield* organization.create({ caller: asCaller("owner-2"), name: "Globex", slug: "globex" });
+      yield* organization.create({
+        caller: asCaller("owner-2"),
+        name: "Globex",
+        slug: "globex",
+      });
 
       const denied = yield* organization.update(member, record.id, { name: "x" }).pipe(Effect.flip);
       assert.strictEqual(denied._tag, "OrganizationPermissionDenied");
 
-      const updated = yield* organization.update(owner, record.id, { name: "Acme Inc" });
+      const updated = yield* organization.update(owner, record.id, {
+        name: "Acme Inc",
+      });
       assert.strictEqual(updated.name, "Acme Inc");
 
       const collision = yield* organization
@@ -152,7 +158,11 @@ describe("Organization", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const member = asCaller("member-1");
-      const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const record = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("member-1"),
@@ -177,7 +187,11 @@ describe("Organization", () => {
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-1");
         const member = asCaller("member-1");
-        const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const record = yield* organization.create({
+          caller: owner,
+          name: "Acme",
+          slug: "acme",
+        });
         yield* addMember({
           organizationId: record.id,
           userId: Users.UserId("member-1"),
@@ -204,7 +218,11 @@ describe("Organization", () => {
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-1");
         const member = asCaller("member-1");
-        const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const record = yield* organization.create({
+          caller: owner,
+          name: "Acme",
+          slug: "acme",
+        });
         yield* addMember({
           organizationId: record.id,
           userId: Users.UserId("owner-2"),
@@ -239,7 +257,11 @@ describe("Organization", () => {
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
-      const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const record = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       const notFound = yield* organization
         .removeMember(owner, record.id, Users.UserId("nobody"))
         .pipe(Effect.flip);
@@ -252,7 +274,11 @@ describe("Organization", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const member = asCaller("member-1");
-      const record = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const record = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       yield* addMember({
         organizationId: record.id,
         userId: Users.UserId("member-1"),
@@ -269,7 +295,11 @@ describe("Organization", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const outsider = asCaller("outsider-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       const invitation = yield* organization.invite(owner, org.id, {
         email: "invitee@example.com",
         role: ["member"],
@@ -293,8 +323,15 @@ describe("Organization", () => {
       Effect.gen(function* () {
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-1");
-        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        const invitee = yield* verifiedUser({ email: "invitee@example.com", name: "Invitee" });
+        const org = yield* organization.create({
+          caller: owner,
+          name: "Acme",
+          slug: "acme",
+        });
+        const invitee = yield* verifiedUser({
+          email: "invitee@example.com",
+          name: "Invitee",
+        });
 
         const invitation = yield* organization.invite(owner, org.id, {
           email: Option.getOrThrow(Users.emailOf(invitee)),
@@ -322,8 +359,15 @@ describe("Organization", () => {
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      yield* organization.invite(owner, org.id, { email: "a@example.com", role: ["member"] });
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
+      yield* organization.invite(owner, org.id, {
+        email: "a@example.com",
+        role: ["member"],
+      });
       const full = yield* organization.getFull(owner, org.id);
       assert.strictEqual(full.invitations.length, 1);
     }).pipe(Effect.provide(buildLayer())),
@@ -331,13 +375,19 @@ describe("Organization", () => {
 
   describe("RRM-001/RRM-002: role assignment respects canGrant", () => {
     const hrConfig = {
-      permissionStatements: { hr: { member: ["update"], invitation: ["create"] } },
+      permissionStatements: {
+        hr: { member: ["update"], invitation: ["create"] },
+      },
     };
 
     const setup = Effect.gen(function* () {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       yield* addMember({
         organizationId: org.id,
         userId: Users.UserId("hr-1"),
@@ -435,7 +485,11 @@ describe("Organization", () => {
     const setup = Effect.gen(function* () {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       yield* addMember({
         organizationId: org.id,
         userId: Users.UserId("admin-1"),
@@ -489,7 +543,9 @@ describe("Organization", () => {
     it.effect("an admin can still update the organization", () =>
       Effect.gen(function* () {
         const { organization, admin, org } = yield* setup;
-        const updated = yield* organization.update(admin, org.id, { name: "Acme 2" });
+        const updated = yield* organization.update(admin, org.id, {
+          name: "Acme 2",
+        });
         assert.strictEqual(updated.name, "Acme 2");
       }).pipe(Effect.provide(buildLayer())),
     );
@@ -509,7 +565,11 @@ describe("Organization", () => {
         const organization = yield* Organization.Organization;
         const orgRoles = yield* OrgRoleRecords.OrgRoleRecords;
         const owner = asCaller("owner-1");
-        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const org = yield* organization.create({
+          caller: owner,
+          name: "Acme",
+          slug: "acme",
+        });
         // A row that predates the reservation (or was written around the plugin).
         yield* orgRoles.create({
           organizationId: org.id,
@@ -543,7 +603,11 @@ describe("Organization", () => {
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
 
       const failure = yield* organization
         .createRole(owner, org.id, {
@@ -569,7 +633,11 @@ describe("Organization", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const member = asCaller("member-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       // RRM-001: a role must exist before a membership can name it.
       yield* organization.createRole(owner, org.id, {
         role: "custom-updater",
@@ -581,7 +649,9 @@ describe("Organization", () => {
         role: ["custom-updater"],
       });
 
-      const updated = yield* organization.update(member, org.id, { name: "Acme Inc" });
+      const updated = yield* organization.update(member, org.id, {
+        name: "Acme Inc",
+      });
       assert.strictEqual(updated.name, "Acme Inc");
     }).pipe(
       Effect.provide(
@@ -601,7 +671,11 @@ describe("Organization", () => {
       Effect.gen(function* () {
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-1");
-        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const org = yield* organization.create({
+          caller: owner,
+          name: "Acme",
+          slug: "acme",
+        });
         const outsider = yield* organization
           .createTeam(asCaller("outsider-1"), org.id, "Engineering")
           .pipe(Effect.flip);
@@ -631,7 +705,11 @@ describe("Organization", () => {
     const tree = Effect.gen(function* () {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       const eng = yield* organization.createTeam(owner, org.id, "Engineering");
       const platform = yield* organization.createTeam(owner, org.id, "Platform", eng.id);
       const infra = yield* organization.createTeam(owner, org.id, "Infra", platform.id);
@@ -674,12 +752,19 @@ describe("Organization", () => {
       allowRemovingAllTeams: true,
     };
     const layerWith = (teamStatements?: Organization.OrganizationConfigShape["teamStatements"]) =>
-      buildLayer({ teams: teamsOn, ...(teamStatements === undefined ? {} : { teamStatements }) });
+      buildLayer({
+        teams: teamsOn,
+        ...(teamStatements === undefined ? {} : { teamStatements }),
+      });
 
     const setup = Effect.gen(function* () {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       for (const id of ["lead-1", "worker-1", "worker-2"]) {
         yield* addMember({
           organizationId: org.id,
@@ -691,7 +776,15 @@ describe("Organization", () => {
       const platform = yield* organization.createTeam(owner, org.id, "Platform", eng.id);
       const sales = yield* organization.createTeam(owner, org.id, "Sales");
       yield* organization.addTeamMember(owner, org.id, eng.id, Users.UserId("lead-1"), ["lead"]);
-      return { organization, owner, org, eng, platform, sales, lead: asCaller("lead-1") };
+      return {
+        organization,
+        owner,
+        org,
+        eng,
+        platform,
+        sales,
+        lead: asCaller("lead-1"),
+      };
     });
 
     it.effect("a team lead can manage their own team's roster but not another team's", () =>
@@ -778,7 +871,10 @@ describe("Organization", () => {
         );
       }).pipe(
         Effect.provide(
-          layerWith({ lead: { team: ["update"] }, chief: { team: ["update", "delete"] } }),
+          layerWith({
+            lead: { team: ["update"] },
+            chief: { team: ["update", "delete"] },
+          }),
         ),
       ),
     );
@@ -810,7 +906,10 @@ describe("Organization", () => {
         assert.strictEqual(missing._tag, "TeamMembershipNotFound");
       }).pipe(
         Effect.provide(
-          layerWith({ lead: { team: ["update"] }, chief: { team: ["update", "delete"] } }),
+          layerWith({
+            lead: { team: ["update"] },
+            chief: { team: ["update", "delete"] },
+          }),
         ),
       ),
     );
@@ -837,7 +936,11 @@ describe("Organization", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const outsider = asCaller("outsider-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       const team = yield* organization.createTeam(owner, org.id, "Engineering");
       yield* organization.addTeamMember(owner, org.id, team.id, Users.UserId("owner-1"));
 
@@ -859,7 +962,11 @@ describe("Organization", () => {
       Effect.gen(function* () {
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-1");
-        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const org = yield* organization.create({
+          caller: owner,
+          name: "Acme",
+          slug: "acme",
+        });
         const failure = yield* addMember({
           organizationId: org.id,
           userId: Users.UserId("owner-1"),
@@ -878,8 +985,15 @@ describe("Organization", () => {
         Effect.gen(function* () {
           const organization = yield* Organization.Organization;
           const owner = asCaller("owner-1");
-          const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-          const invitee = yield* verifiedUser({ email: "invitee@example.com", name: "Invitee" });
+          const org = yield* organization.create({
+            caller: owner,
+            name: "Acme",
+            slug: "acme",
+          });
+          const invitee = yield* verifiedUser({
+            email: "invitee@example.com",
+            name: "Invitee",
+          });
           const invitation = yield* organization.invite(owner, org.id, {
             email: Option.getOrThrow(Users.emailOf(invitee)),
             role: ["admin"],
@@ -917,7 +1031,11 @@ describe("Organization", () => {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
       const member = asCaller("member-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       yield* addMember({
         organizationId: org.id,
         userId: Users.UserId("member-1"),
@@ -1001,10 +1119,17 @@ describe("Organization", () => {
     const setup = Effect.gen(function* () {
       const organization = yield* Organization.Organization;
       const users = yield* Users.Users;
-      const mailer = yield* Mailer.Mailer;
+      const box = yield* TestMailbox.Mailbox;
       const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-      const invitee = yield* verifiedUser({ email: "invitee@example.com", name: "Invitee" });
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
+      const invitee = yield* verifiedUser({
+        email: "invitee@example.com",
+        name: "Invitee",
+      });
       const stranger = yield* users.create({
         identity: { _tag: "Email", email: "stranger@example.com" },
         name: "Stranger",
@@ -1020,7 +1145,7 @@ describe("Organization", () => {
       });
       return {
         organization,
-        mailer,
+        box,
         owner,
         org,
         invitation,
@@ -1115,10 +1240,13 @@ describe("Organization", () => {
 
     it.effect("the mail names the organization; resend rotates the token", () =>
       Effect.gen(function* () {
-        const { organization, mailer, owner, org, invitation, inviteeCaller } = yield* setup;
+        const { organization, box, owner, org, invitation, inviteeCaller } = yield* setup;
         const first = yield* mailedToken(invitation.id);
-        const sentFirst = yield* mailer.sent;
-        assert.strictEqual(sentFirst[0]?.data?.["organizationName"], "Acme");
+        const mail = yield* box.mail.waitFor({
+          to: "invitee@example.com",
+          template: "organization-invite",
+        });
+        assert.strictEqual(mail.data?.["organizationName"], "Acme");
 
         yield* organization.invite(owner, org.id, {
           email: invitation.email,
@@ -1147,7 +1275,11 @@ describe("Organization", () => {
           const organization = yield* Organization.Organization;
           const auditLog = yield* AuditLog.AuditLog;
           const owner = asCaller("owner-1");
-          const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+          const org = yield* organization.create({
+            caller: owner,
+            name: "Acme",
+            slug: "acme",
+          });
           yield* addMember({
             organizationId: org.id,
             userId: Users.UserId("member-1"),
@@ -1163,7 +1295,9 @@ describe("Organization", () => {
             .pipe(Effect.flip);
           assert.strictEqual(failure._tag, "OrganizationPermissionDenied");
 
-          const recorded = yield* auditLog.list({ eventTag: "auth.organization.permissionDenied" });
+          const recorded = yield* auditLog.list({
+            eventTag: "auth.organization.permissionDenied",
+          });
           assert.strictEqual(recorded.length, 1);
           assert.deepStrictEqual(recorded[0]?.actorUserId, Option.some("member-1"));
           assert.strictEqual(payloadOf(recorded[0])["reason"], "missingStatement");
@@ -1178,13 +1312,19 @@ describe("Organization", () => {
         const organization = yield* Organization.Organization;
         const auditLog = yield* AuditLog.AuditLog;
         const owner = asCaller("owner-1");
-        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const org = yield* organization.create({
+          caller: owner,
+          name: "Acme",
+          slug: "acme",
+        });
         yield* organization.invite(owner, org.id, {
           email: "private@example.com",
           role: ["member"],
         });
 
-        const recorded = yield* auditLog.list({ eventTag: "auth.organization.invitationCreated" });
+        const recorded = yield* auditLog.list({
+          eventTag: "auth.organization.invitationCreated",
+        });
         assert.strictEqual(recorded.length, 1);
         assert.isFalse(JSON.stringify(recorded).includes("private@example.com"));
         assert.isFalse("email" in payloadOf(recorded[0]));
@@ -1201,7 +1341,11 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
       const organization = yield* Organization.Organization;
       const users = yield* Users.Users;
       const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       const invitee = yield* users.create({
         identity: { _tag: "Email", email: "unverified@example.com" },
         name: "Unverified",
@@ -1230,7 +1374,11 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
       const organization = yield* Organization.Organization;
       const users = yield* Users.Users;
       const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       const invitee = yield* users.create({
         identity: { _tag: "Email", email: "unverified@example.com" },
         name: "Unverified",
@@ -1253,8 +1401,16 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
     return Effect.gen(function* () {
       const organization = yield* Organization.Organization;
       const owner = asCaller("owner-1");
-      const small = yield* organization.create({ caller: owner, name: "Small", slug: "small" });
-      const big = yield* organization.create({ caller: owner, name: "Big", slug: "big" });
+      const small = yield* organization.create({
+        caller: owner,
+        name: "Small",
+        slug: "small",
+      });
+      const big = yield* organization.create({
+        caller: owner,
+        name: "Big",
+        slug: "big",
+      });
       bigId = big.id;
       const attempt = (organizationId: string, userId: string) =>
         addMember({
@@ -1283,7 +1439,7 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
   it.effect("EP-005: the invitation mail carries the organization's name and logo", () =>
     Effect.gen(function* () {
       const organization = yield* Organization.Organization;
-      const mailer = yield* Mailer.Mailer;
+      const box = yield* TestMailbox.Mailbox;
       const owner = asCaller("owner-1");
       const org = yield* organization.create({
         caller: owner,
@@ -1291,10 +1447,13 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
         slug: "acme",
         logo: "https://acme.example/logo.png",
       });
-      yield* organization.invite(owner, org.id, { email: "invitee@example.com", role: ["member"] });
-      const sent = yield* mailer.sent;
-      assert.strictEqual(sent[0]?.data?.["organizationName"], "Acme");
-      assert.strictEqual(sent[0]?.data?.["organizationLogo"], "https://acme.example/logo.png");
+      yield* organization.invite(owner, org.id, {
+        email: "invitee@example.com",
+        role: ["member"],
+      });
+      const mail = yield* box.mail.waitFor({ to: "invitee@example.com" });
+      assert.strictEqual(mail.data?.["organizationName"], "Acme");
+      assert.strictEqual(mail.data?.["organizationLogo"], "https://acme.example/logo.png");
     }).pipe(Effect.provide(buildLayer())),
   );
 
@@ -1305,7 +1464,11 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
         const organization = yield* Organization.Organization;
         const records = yield* OrganizationRecords.OrganizationRecords;
         const owner = asCaller("owner-1");
-        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+        const org = yield* organization.create({
+          caller: owner,
+          name: "Acme",
+          slug: "acme",
+        });
         const pending = yield* organization.invite(owner, org.id, {
           email: "pending@example.com",
           role: ["member"],
@@ -1339,8 +1502,15 @@ describe("Organization defaults and tenancy fields (EP-003/005/006/010, DRS-007)
         const records = yield* OrganizationRecords.OrganizationRecords;
         const memberships = yield* MembershipRecords.MembershipRecords;
         const owner = asCaller("owner-1");
-        const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
-        const invitee = yield* verifiedUser({ email: "invitee@example.com", name: "Invitee" });
+        const org = yield* organization.create({
+          caller: owner,
+          name: "Acme",
+          slug: "acme",
+        });
+        const invitee = yield* verifiedUser({
+          email: "invitee@example.com",
+          name: "Invitee",
+        });
         const inviteeCaller = asCaller(invitee.id);
         const invitation = yield* organization.invite(owner, org.id, {
           email: "invitee@example.com",
@@ -1407,8 +1577,16 @@ describe("Per-tenant configuration (EP-007)", () => {
       Effect.gen(function* () {
         const organization = yield* Organization.Organization;
         const owner = asCaller("owner-1");
-        const small = yield* organization.create({ caller: owner, name: "Small", slug: "small" });
-        const big = yield* organization.create({ caller: owner, name: "Big", slug: "big" });
+        const small = yield* organization.create({
+          caller: owner,
+          name: "Small",
+          slug: "small",
+        });
+        const big = yield* organization.create({
+          caller: owner,
+          name: "Big",
+          slug: "big",
+        });
         const add = (organizationId: string, userId: string) =>
           addMember({
             organizationId,
@@ -1454,7 +1632,11 @@ describe("Per-tenant configuration (EP-007)", () => {
       const organization = yield* Organization.Organization;
       const users = yield* Users.Users;
       const owner = asCaller("owner-1");
-      const org = yield* organization.create({ caller: owner, name: "Acme", slug: "acme" });
+      const org = yield* organization.create({
+        caller: owner,
+        name: "Acme",
+        slug: "acme",
+      });
       const invitee = yield* users.create({
         identity: { _tag: "Email", email: "unverified@example.com" },
         name: "Unverified",
