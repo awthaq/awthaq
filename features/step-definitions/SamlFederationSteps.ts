@@ -6,7 +6,7 @@ import { Api } from "@awthaq/api";
 import { TestAuth } from "@awthaq/test";
 import { AuditLog, CurrentUser, Sessions, Tenant, Users } from "@awthaq/core";
 import { Organization, OrganizationActor, OrganizationConnections } from "@awthaq/organization";
-import { MembershipRecords } from "@awthaq/organization/records";
+import { MembershipRecords, OrganizationRecords } from "@awthaq/organization/records";
 import { Encryption } from "@awthaq/ports";
 import { SealedColumn, TenantScoped } from "@awthaq/sql";
 import {
@@ -1367,6 +1367,106 @@ export const samlFederationSteps = defineSteps<World>(({ Given, When, Then }) =>
     );
     assert.ok(Option.isSome(found));
     assert.equal(found.value.name, name);
+  });
+  // ---- BEH-EA-318: a suspended organization's connections (CONN-02) ------------------------------
+  Given("the organization {string} is suspended", function* (name: string) {
+    const organizationId = yield* organizationOf(name);
+    const suspendedAt = yield* DateTime.now;
+    yield* inApp(
+      Effect.flatMap(OrganizationRecords.OrganizationRecords, (records) =>
+        records.setSuspended(grant, organizationId, Option.some(suspendedAt)),
+      ).pipe(Effect.orDie),
+    );
+  });
+  const adminTagOf = (exit: Exit.Exit<unknown, { readonly _tag: string }>) =>
+    Exit.isFailure(exit)
+      ? (Option.getOrUndefined(Exit.findErrorOption(exit))?._tag ?? "defect")
+      : "succeeded";
+  When(
+    "the administrator tries to create a connection for {string} and for an organization that does not exist",
+    function* (name: string) {
+      const world = yield* World;
+      const organizationId = yield* organizationOf(name);
+      const attempt = (id: string) =>
+        inAppExit(
+          Effect.flatMap(Saml.Saml, (saml) =>
+            saml.admin.createConnection(adminPrincipal, {
+              organizationId: id,
+              name: `${name} SAML`,
+              idp: {
+                entityId: `https://idp.${name}.example`,
+                ssoUrl: `https://idp.${name}.example/sso`,
+                certificates: [idp.cert],
+              },
+              emailDomains: [`${name}.example`],
+            }),
+          ),
+        );
+      const real = yield* attempt(organizationId);
+      const missing = yield* attempt("no-such-organization");
+      yield* world.outcomes.set("createPair", {
+        realTag: adminTagOf(real),
+        missingTag: adminTagOf(missing),
+        same:
+          Exit.isFailure(real) &&
+          Exit.isFailure(missing) &&
+          JSON.stringify(Option.getOrUndefined(Exit.findErrorOption(real))) ===
+            JSON.stringify(Option.getOrUndefined(Exit.findErrorOption(missing))),
+      });
+    },
+  );
+  Then("both are refused as {string} with the same answer", function* (tag: string) {
+    const world = yield* World;
+    const pair = yield* world.outcomes.getAs(
+      "createPair",
+      (
+        value,
+      ): value is {
+        readonly realTag: string;
+        readonly missingTag: string;
+        readonly same: boolean;
+      } => typeof value === "object" && value !== null && "missingTag" in value,
+    );
+    assert.equal(pair.realTag, tag);
+    assert.equal(pair.missingTag, tag);
+    assert.equal(pair.same, true);
+  });
+  When(
+    "the administrator tries to rename the connection {string} to {string}",
+    function* (name: string, renamed: string) {
+      const world = yield* World;
+      const connection = yield* connectionState(name);
+      const exit = yield* inAppExit(
+        Effect.flatMap(Saml.Saml, (saml) =>
+          saml.admin.updateConnection(adminPrincipal, connection.id, { name: renamed }),
+        ),
+      );
+      yield* world.outcomes.set("updateAttempt", { tag: adminTagOf(exit) });
+    },
+  );
+  Then("the update is refused as {string}", function* (tag: string) {
+    const world = yield* World;
+    const result = yield* world.outcomes.getAs(
+      "updateAttempt",
+      (value): value is { readonly tag: string } =>
+        typeof value === "object" && value !== null && "tag" in value,
+    );
+    assert.equal(result.tag, tag);
+  });
+  When("the administrator deletes the connection {string}", function* (name: string) {
+    const connection = yield* connectionState(name);
+    yield* inApp(
+      Effect.flatMap(Saml.Saml, (saml) =>
+        saml.admin.deleteConnection(adminPrincipal, connection.id),
+      ).pipe(Effect.orDie),
+    );
+  });
+  Then("the connection {string} no longer exists", function* (name: string) {
+    const connection = yield* connectionState(name);
+    const found = yield* inApp(
+      Effect.flatMap(SamlRecords.SamlRecords, (records) => records.findById(grant, connection.id)),
+    );
+    assert.ok(Option.isNone(found));
   });
   const metadataXml = (options: {
     readonly entityId: string;

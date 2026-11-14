@@ -20,7 +20,7 @@ import {
   Verification,
 } from "@awthaq/core";
 import { Organization, OrganizationConnections } from "@awthaq/organization";
-import { MembershipRecords } from "@awthaq/organization/records";
+import { MembershipRecords, OrganizationRecords } from "@awthaq/organization/records";
 import type { Encryption } from "@awthaq/ports";
 import { XmlSignature } from "@awthaq/ports";
 import { RequestContext } from "@awthaq/server";
@@ -82,6 +82,7 @@ export type AppServices =
   | Sso.Sso
   | OrganizationConnections.OrganizationConnectionStore
   | MembershipRecords.MembershipRecords
+  | OrganizationRecords.OrganizationRecords
   | Organization.Organization
   | Users.Users
   | Accounts.Accounts

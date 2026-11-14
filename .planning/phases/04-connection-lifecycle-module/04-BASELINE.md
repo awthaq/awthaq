@@ -178,7 +178,21 @@ Measured at HEAD above (every command from the worktree root, output verbatim).
 
 ## BDD red window
 
-(to be filled by 04-02: the failing-first BDD rows for the SAML suspended-organization refusals, with their red output and the commit where they turn green)
+Added by 04-02 under the `@BEH-EA-318` Rule of `features/features/13-enterprise-federation/29-saml-sp.feature` (REQ-EA ids from `features/scripts/allocate-req-ea.py`, `features/traceability.md` regenerated: 1361 ids, highest REQ-EA-1572), run against untouched `packages/*/src` (`git diff --quiet c683a1bc -- packages/organization/src packages/saml/src packages/scim/src packages/scim/package.json packages/scim/README.md spec .changeset examples` exits 0).
+
+| REQ-EA | Scenario | State at 04-02 | First failing assertion (verbatim) |
+|--------|----------|----------------|------------------------------------|
+| REQ-EA-1569 | A suspended organization cannot gain a SAML connection, refused exactly like one that does not exist | RED | step `both are refused as {string} with the same answer`: `AssertionError: Expected values to be strictly equal: + actual - expected  + 'succeeded' - 'InvalidSamlConnectionRequest'` (`SamlFederationSteps.ts:1430`, `assert.equal(pair.realTag, tag)`: the suspended create succeeds through `directory.find`) |
+| REQ-EA-1570 | A suspended organization's connection cannot be updated | RED | step `the update is refused as {string}`: `+ 'succeeded' - 'InvalidSamlConnectionRequest'` (the rename succeeds) |
+| REQ-EA-1571 | A suspended organization's connection cannot be refreshed from its metadata | RED | step `the refresh is refused as {string}`: `+ 'refreshed' - 'InvalidSamlConnectionRequest'` (the refresh succeeds) |
+| REQ-EA-1572 | A suspended organization's connection can still be deleted | GREEN (pins "no check on remove") | none |
+
+Runs, against untouched `src`:
+
+- `pnpm --filter @awthaq/features exec vitest run features/13-enterprise-federation/29-saml-sp.steps.test.ts`: exit 1, `Test Files  1 failed (1)`, `Tests  3 failed | 106 passed (109)`; the failures are exactly REQ-EA-1569, 1570 and 1571.
+- `pnpm test:bdd`: exit 1, `Test Files  1 failed | 38 passed (39)`, `Tests  3 failed | 1577 passed | 44 skipped (1624)`. Against the 04-01 counts (1576 passed, 44 skipped, 1620 total): passed +1 (the green deletion scenario), skipped unchanged, total +4, and the only failures are the three rows above. Every other scenario passes.
+- Rule for later plans: until 04-06 `pnpm test:bdd` is red by exactly these three rows and nothing else; any other BDD failure is a regression. The window closes in 04-06, where REQ-EA-1569, 1570 and 1571 turn green (then `pnpm test:bdd` reads 1580 passed, 44 skipped, 0 failed).
+- Steps added to `SamlFederationSteps.ts` (7) and one type-only widening of `AppServices` in `SamlWorld.ts` (adds `OrganizationRecords`, so the suspension step can use `OrganizationRecords.setSuspended` as `packages/saml/test/Saml.test.ts` does; `OrganizationDirectory` is not in `AppServices`).
 
 ## Phase-close comparison rule
 

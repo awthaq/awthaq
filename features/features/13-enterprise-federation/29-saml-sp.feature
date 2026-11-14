@@ -676,6 +676,40 @@ Feature: SAML Service Provider
       When the administrator renames the connection "acme" to "a very private new name" and disables its email linking
       Then the update audit event names the fields "name" and "trustsEmail" and no value
 
+    @REQ-EA-1569
+    Scenario: A suspended organization cannot gain a SAML connection, refused exactly like one that does not exist
+      Given the administrator gate allows every action
+      And the organization "acme" exists
+      And the organization "acme" is suspended
+      When the administrator tries to create a connection for "acme" and for an organization that does not exist
+      Then both are refused as "InvalidSamlConnectionRequest" with the same answer
+
+    @REQ-EA-1570
+    Scenario: A suspended organization's connection cannot be updated
+      Given the administrator gate allows every action
+      And the connection "acme" exists
+      And the organization "acme" is suspended
+      When the administrator tries to rename the connection "acme" to "Renamed"
+      Then the update is refused as "InvalidSamlConnectionRequest"
+      And the connection "acme" is unchanged
+
+    @REQ-EA-1571
+    Scenario: A suspended organization's connection cannot be refreshed from its metadata
+      Given the administrator gate allows every action
+      And the connection "acme" was imported from IdP metadata
+      And the organization "acme" is suspended
+      When the IdP metadata is refreshed with only the next certificate
+      Then the refresh is refused as "InvalidSamlConnectionRequest"
+      And the connection still trusts the original certificate
+
+    @REQ-EA-1572
+    Scenario: A suspended organization's connection can still be deleted
+      Given the administrator gate allows every action
+      And the connection "acme" exists
+      And the organization "acme" is suspended
+      When the administrator deletes the connection "acme"
+      Then the connection "acme" no longer exists
+
   # BEH-EA-347 — spec/behaviors/29-saml-sp.md
   @BEH-EA-347
   Rule: A by-id administrative operation reads the connection first and asks the gate with its organization
