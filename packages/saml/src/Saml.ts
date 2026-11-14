@@ -58,6 +58,7 @@ import {
   Organization,
   OrganizationActor,
   OrganizationAuthority,
+  type OrganizationConnectionLifecycle,
   OrganizationDeletion,
   OrganizationDirectory,
   OrganizationMembers,
@@ -766,6 +767,9 @@ export const samlSessionRetention = Retention.contribute({
 
 /** Named so the class's inferred `records` type can be emitted (TS2883 needs the `Encryption` namespace in scope). */
 export type RecordsEncryption = Encryption.Encryption;
+
+/** Named so the plugin layer's inferred type can be emitted (TS2883 needs the `OrganizationConnectionLifecycle` namespace in scope). */
+export type ConnectionLifecycle = OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
 
 export class Saml extends AuthPlugin.Service<Saml, SamlShape>()("saml", {
   apiVersion: 1,

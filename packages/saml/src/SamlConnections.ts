@@ -23,7 +23,11 @@
 // what gets pinned afterwards is the fingerprint, not the document.
 
 import type { Api } from "@awthaq/api";
-import { DomainClaims, OrganizationAuthority, OrganizationDirectory } from "@awthaq/organization";
+import {
+  DomainClaims,
+  OrganizationAuthority,
+  OrganizationConnectionLifecycle,
+} from "@awthaq/organization";
 import { OutboundUrl, SqlTransaction, Tenant } from "@awthaq/ports";
 import { StoreFailure, TenantScoped } from "@awthaq/sql";
 import type { XmlSignature } from "@awthaq/ports";
@@ -51,6 +55,16 @@ export class SamlConnectionNotFound extends Data.TaggedError("SamlConnections/No
 }> {}
 
 const invalid = (reason: string) => new InvalidSamlConnection({ reason });
+
+/** What the connection lifecycle needs to know about SAML: its stored name and its own refusal and taken-domain errors. */
+const samlProtocol: OrganizationConnectionLifecycle.ConnectionProtocol<
+  InvalidSamlConnection,
+  SamlRecords.SamlDomainTaken
+> = {
+  protocol: "saml",
+  refuse: invalid,
+  taken: (domain) => new SamlRecords.SamlDomainTaken({ domain }),
+};
 
 /** A PEM certificate as a trust-set entry: fingerprint and validity read from the certificate itself. */
 export const certificateOf = (
@@ -208,9 +222,9 @@ export const layerStore = Layer.effect(
   SamlConnectionStore,
   Effect.gen(function* () {
     const records = yield* SamlRecords.SamlRecords;
+    const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
     const claims = yield* DomainClaims.DomainClaims;
     const transaction = yield* SqlTransaction.SqlTransaction;
-    const directory = yield* OrganizationDirectory.OrganizationDirectory;
     const authority = yield* OrganizationAuthority.OrganizationAuthority;
     const spKeys = yield* SamlSpKeys.SamlSpKeys;
     const random = yield* SecureRandom.SecureRandom;
@@ -328,66 +342,70 @@ export const layerStore = Layer.effect(
         : Effect.void;
 
     const create: SamlConnectionStoreShape["create"] = Effect.fnUntraced(function* (input) {
-      const found = yield* directory.find(input.organizationId);
-      if (Option.isNone(found))
-        return yield* Effect.fail(invalid("the organization does not exist"));
-      const name = input.name.trim();
-      if (name === "") return yield* Effect.fail(invalid("a connection needs a name"));
-      const idp =
-        "metadataXml" in input.idp
-          ? yield* Effect.map(metadataOf(input.idp.metadataXml), (metadata) => ({
-              entityId: metadata.entityId,
-              ssoUrl: metadata.ssoUrl,
-              certificates: metadata.certificates,
-              sloUrl: metadata.slo?.url,
-              sloBinding: metadata.slo?.binding,
-              wantsSignedRequests: metadata.wantsSignedRequests,
-            }))
-          : {
-              entityId: input.idp.entityId,
-              ssoUrl: input.idp.ssoUrl,
-              certificates: input.idp.certificates,
-              sloUrl: input.idp.sloUrl,
-              sloBinding: input.idp.sloBinding,
-              wantsSignedRequests: false,
-            };
-      if (idp.entityId.trim() === "")
-        return yield* Effect.fail(invalid("the IdP entity id is empty"));
-      const ssoUrl = yield* validatedUrl("ssoUrl", idp.ssoUrl);
-      const sloUrlRaw = input.sloUrl ?? idp.sloUrl;
-      const sloUrl = sloUrlRaw === undefined ? undefined : yield* validatedUrl("sloUrl", sloUrlRaw);
-      const idpCertificates = yield* certificatesOf(idp.certificates);
-      const emailDomains = yield* normalizeDomains(input.emailDomains ?? []);
-      const roleMapping =
-        input.roleMapping === undefined
-          ? undefined
-          : yield* validatedRoleMapping(input.organizationId, input.roleMapping);
-      const id = yield* random
-        .uuidV7()
-        .pipe(Effect.catch(StoreFailure.storeUnavailable("SamlConnectionStore.create")));
-      const created = yield* claimed(
-        {
-          organizationId: input.organizationId,
-          protocol: "saml",
-          connectionId: id,
-          domains: emailDomains,
-        },
-        undefined,
-        records.create({
-          id,
-          organizationId: input.organizationId,
-          name,
-          idpEntityId: idp.entityId.trim(),
-          ssoUrl,
-          idpCertificates,
-          emailDomains,
-          trustsEmail: input.trustsEmail ?? false,
-          authnRequestsSigned: input.authnRequestsSigned ?? idp.wantsSignedRequests,
-          sloUrl,
-          sloBinding:
-            input.sloBinding ?? (sloUrl === idp.sloUrl ? idp.sloBinding : undefined) ?? "redirect",
-          metadataUrl: input.metadataUrl,
-          roleMapping,
+      const created = yield* lifecycle.create(
+        samlProtocol,
+        input.organizationId,
+        Effect.gen(function* () {
+          const name = input.name.trim();
+          if (name === "") return yield* Effect.fail(invalid("a connection needs a name"));
+          const idp =
+            "metadataXml" in input.idp
+              ? yield* Effect.map(metadataOf(input.idp.metadataXml), (metadata) => ({
+                  entityId: metadata.entityId,
+                  ssoUrl: metadata.ssoUrl,
+                  certificates: metadata.certificates,
+                  sloUrl: metadata.slo?.url,
+                  sloBinding: metadata.slo?.binding,
+                  wantsSignedRequests: metadata.wantsSignedRequests,
+                }))
+              : {
+                  entityId: input.idp.entityId,
+                  ssoUrl: input.idp.ssoUrl,
+                  certificates: input.idp.certificates,
+                  sloUrl: input.idp.sloUrl,
+                  sloBinding: input.idp.sloBinding,
+                  wantsSignedRequests: false,
+                };
+          if (idp.entityId.trim() === "")
+            return yield* Effect.fail(invalid("the IdP entity id is empty"));
+          const ssoUrl = yield* validatedUrl("ssoUrl", idp.ssoUrl);
+          const sloUrlRaw = input.sloUrl ?? idp.sloUrl;
+          const sloUrl =
+            sloUrlRaw === undefined ? undefined : yield* validatedUrl("sloUrl", sloUrlRaw);
+          const idpCertificates = yield* certificatesOf(idp.certificates);
+          const emailDomains = yield* OrganizationConnectionLifecycle.normalizeDomains(
+            samlProtocol,
+            input.emailDomains ?? [],
+          );
+          const roleMapping =
+            input.roleMapping === undefined
+              ? undefined
+              : yield* validatedRoleMapping(input.organizationId, input.roleMapping);
+          const id = yield* random
+            .uuidV7()
+            .pipe(Effect.catch(StoreFailure.storeUnavailable("SamlConnectionStore.create")));
+          return {
+            connectionId: id,
+            domains: emailDomains,
+            write: records.create({
+              id,
+              organizationId: input.organizationId,
+              name,
+              idpEntityId: idp.entityId.trim(),
+              ssoUrl,
+              idpCertificates,
+              emailDomains,
+              trustsEmail: input.trustsEmail ?? false,
+              authnRequestsSigned: input.authnRequestsSigned ?? idp.wantsSignedRequests,
+              sloUrl,
+              sloBinding:
+                input.sloBinding ??
+                (sloUrl === idp.sloUrl ? idp.sloBinding : undefined) ??
+                "redirect",
+              metadataUrl: input.metadataUrl,
+              roleMapping,
+            }),
+          };
         }),
       );
       yield* ensureSigningKey(created);
