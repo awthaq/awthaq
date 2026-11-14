@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: Architecture Deepening, batch 3
 current_phase: 01
 current_phase_name: CLI views and ConfigList removal
-status: executing
-stopped_at: Completed 01-03-PLAN.md
-last_updated: "2026-11-14T02:52:38.559Z"
+status: verifying
+stopped_at: Completed 01-04-PLAN.md
+last_updated: "2026-11-14T03:06:50.322Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 01 execution started
-state_head: 4746297555e9e3c0d68b0bb889507dd772ac4937
+state_head: 1cd89efaeb35e067715746bb2b1eb37d5ef20f2d
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 4
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 
 Phase: 01 (CLI views and ConfigList removal) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-11-14 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -60,6 +60,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P01 | 20min | 3 tasks | 5 files |
 | Phase 01 P02 | 2 min | 2 tasks | 3 files |
 | Phase 01 P03 | 8 min | 2 tasks | 6 files |
+| Phase 01 P04 | 25 min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,7 @@ Recent decisions affecting current work:
 - [Phase 01]: Plugin view matrix encodes the resolution contract (dot only where a view has a dot branch, then json if --format json or --json, else text) and pins failure rendering at exit 9 on the global --json only
 - [Phase 01]: 01-02: PluginViews.render resolves --format and global --json once; DOT printed with { json: false } so the global flag cannot turn it into a document; Output.report gains optional { json } override
 - [Phase 01]: Migration.apply status preview stays hand-guarded: it prints before the drift and pending checks while Output.report couples text and document at one point
+- [Phase 01]: 01-04: one minor changeset covers both the views module and the ConfigList export removal; all baseline gates re-run green at phase close
 
 ### Pending Todos
 
@@ -96,6 +98,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T02:52:38.531Z
-Stopped at: Completed 01-03-PLAN.md
+Last session: 2026-11-14T03:06:50.290Z
+Stopped at: Completed 01-04-PLAN.md
 Resume file: None

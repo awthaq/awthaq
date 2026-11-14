@@ -11,7 +11,7 @@ Milestone "Architecture Deepening, batch 3". Each maps to roadmap phases. Resear
 
 - [x] **CLI-01**: Maintainer can render every `plugin` view (hooks, rules, events, graph) through one views module that resolves `--format` and `--json` once, with identical output to today (graph: `dot` beats `--json`; hooks/rules/events have no dot branch)
 - [x] **CLI-02**: A mode x (text, `--format json`, `--json`, dot) test matrix pins current CLI output before the refactor
-- [ ] **CLI-03**: `ConfigList` is removed from the package export and inlined, with a changeset carrying a `Migration:` line and `spec/behaviors/26-cli.md` (lines 46, 398) updated and Revision bumped
+- [x] **CLI-03**: `ConfigList` is removed from the package export and inlined, with a changeset carrying a `Migration:` line and `spec/behaviors/26-cli.md` (lines 46, 398) updated and Revision bumped
 - [x] **CLI-04**: `Migration.apply` and `Openapi` use the same `Output` seam where it costs no behavior change
 
 ### TestAuth split (C4)
@@ -66,9 +66,9 @@ Milestone "Architecture Deepening, batch 3". Each maps to roadmap phases. Resear
 
 ### Cross-cutting gates
 
-- [ ] **GATE-01**: Every phase passes `tsc -b`, `pnpm test`, `pnpm test:bdd`, `pnpm circular`, `pnpm spec:verify:strict`, `pnpm check:error-tags`, `pnpm check:transactions`, `pnpm coverage` floors and `pnpm knip` against the recorded baseline; `tsc -b` runs before every cross-package vitest run
+- [x] **GATE-01**: Every phase passes `tsc -b`, `pnpm test`, `pnpm test:bdd`, `pnpm circular`, `pnpm spec:verify:strict`, `pnpm check:error-tags`, `pnpm check:transactions`, `pnpm coverage` floors and `pnpm knip` against the recorded baseline; `tsc -b` runs before every cross-package vitest run
 - [x] **GATE-02**: The knip baseline (3 unlisted deps in `packages/sql/test/fixtures/readme-quickstart.ts`, `.reports/`, untracked `.claude/`) is recorded before Phase 1
-- [ ] **GATE-03**: Every package-visible change ships one changeset per candidate with a `Migration:` line for breaking exports; spec Revision and Change History are bumped together
+- [x] **GATE-03**: Every package-visible change ships one changeset per candidate with a `Migration:` line for breaking exports; spec Revision and Change History are bumped together
 - [ ] **GATE-04**: Phases touching SQL (keyset, lifecycle, record scaffolding) are verified on Postgres in CI and record "not run locally"
 
 ## Future Requirements
@@ -103,7 +103,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | CLI-01 | Phase 1 | Complete |
 | CLI-02 | Phase 1 | Complete |
-| CLI-03 | Phase 1 | Pending |
+| CLI-03 | Phase 1 | Complete |
 | CLI-04 | Phase 1 | Complete |
 | TEST-01 | Phase 2 | Pending |
 | TEST-02 | Phase 2 | Pending |
@@ -134,9 +134,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WORLD-01 | Phase 7 | Pending |
 | WORLD-02 | Phase 7 | Pending |
 | CRED-01 | Phase 7 | Pending |
-| GATE-01 | Phase 1 | Pending |
+| GATE-01 | Phase 1 | Complete |
 | GATE-02 | Phase 1 | Complete |
-| GATE-03 | Phase 1 | Pending |
+| GATE-03 | Phase 1 | Complete |
 | GATE-04 | Phase 3 | Pending |
 
 **Coverage:**
