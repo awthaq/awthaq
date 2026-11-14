@@ -78,7 +78,7 @@ describe("the sign-in seam (ADR-EA-038)", () => {
         why: "impersonation (BEH-EA-209): an operator investigating an account is not that account signing in",
       },
       {
-        file: "test/src/TestAuth.ts",
+        file: "test/src/internal/session.ts",
         count: 1,
         why: "signInAs mints a session for an authorization test, with no credential involved",
       },
@@ -135,7 +135,7 @@ describe("the sign-up seam (ADR-EA-038)", () => {
         why: "`awthaq seed admin` is an operator bootstrap, not a sign-up",
       },
       {
-        file: "test/src/TestAuth.ts",
+        file: "test/src/internal/session.ts",
         count: 1,
         why: "signInAs fixes a user for an authorization test, with no sign-up policy involved",
       },
