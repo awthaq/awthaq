@@ -166,7 +166,7 @@ Plans:
   3. On go, shared comparators, tenant-visibility plumbing, `unavailable(op)` labelling, a dialect wire row helper and `SqlStore.make` adoption replace the repeated scaffolding with no `*Shape` change: `RecordsContract` verdicts per operation pass unchanged, every `layerMemory` keeps today's `Ref` count (`ImpersonationRecords` keeps its two `Ref`s and a `Semaphore`), and lock-key strings and operation labels are byte-identical.
   4. On go, `docs/plugin-authoring.md` and `examples/plugin-template/` are updated last and their tests pass; the Postgres legs run locally on the Debian `postgres:16` image and are recorded as "CI confirmation open (no git remote)".
   5. On no-go, the phase closes with REC-03 and REC-04 recorded as not pursued and the reason written down; no scaffolding code lands.
-**Plans**: 9/12 plans executed
+**Plans**: 10/12 plans executed
 - [x] 06-01-PLAN.md
 - [x] 06-02-PLAN.md
 - [x] 06-03-PLAN.md
@@ -176,7 +176,7 @@ Plans:
 - [x] 06-07-PLAN.md — `StoreFailure.labelled` and its adoption, device-authorization, api-key, jwt, admin
 - [x] 06-08-PLAN.md — `StoreFailure.labelled` adoption, organization, saml, scim, webhooks
 - [x] 06-09-PLAN.md — `Keyset.chronological` and its adoption, device and api-key
-- [ ] 06-10-PLAN.md — `Keyset.chronological` adoption, organization, saml, scim, webhooks
+- [x] 06-10-PLAN.md — `Keyset.chronological` adoption, organization, saml, scim, webhooks
 - [ ] 06-11-PLAN.md — docs and template check, spec rows, changeset
 - [ ] 06-12-PLAN.md — phase close: gates on SQLite and Postgres, census, REC-03 closure
 **Research**: recommended (spike with go/no-go; plan 24 Track A dependency)
@@ -215,5 +215,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7. Phases 1
 | 3. Keyset-page module | 9/9 | Complete    | 2026-11-14 |
 | 4. Connection-lifecycle module | 9/9 | Complete    | 2026-11-14 |
 | 5. Core-table list cleanup | 6/6 | Complete    | 2026-11-14 |
-| 6. Record-store scaffolding (gated) | 9/12 | In Progress | - |
+| 6. Record-store scaffolding (gated) | 10/12 | In Progress | - |
 | 7. World scaffold and Credentials split (optional) | 0/TBD | Not started | - |
