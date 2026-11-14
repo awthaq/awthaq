@@ -1,0 +1,176 @@
+## AgentOptions [type]
+type<>: AgentOptions
+  readonly delivery?: "cookie" | "bearer"
+  readonly hold?: (url: URL) => boolean
+  readonly onRefused?: "throw" | "record"
+## App [type]
+type<A, E>: App<A, E>
+  readonly advance: (by: Input) => Promise<void>
+  readonly agent: (options?: AgentOptions | undefined) => Promise<{    baseUrl: string;    origin: URL;    request: (method: string, target: string, init?: RequestInit) => Promise<Response>;    fetch: (input: any, init?: RequestInit | undefined) => Promise<Response>;    httpClient: HttpClient;    cookies: {        get: (name: string) => StoredCookie | undefined;        all: () => readonly StoredCookie[];        value: (name: string) => string | undefined;        scriptVisible: () => string;        receive: (header: string) => Received;    };    bearer: {        current: () => string | undefined;        set: (token: string) => void;        clear: () => void;    };    sent: SentRequest[];    refused: {        readonly _tag: "Refused";        readonly name: string;        readonly refusal: Refusal;        readonly header: string;    }[];}>
+  readonly context: () => Promise<Context<A>>
+  readonly handler: (request: Request) => Promise<Response>
+  readonly memoMap: MemoMap
+  readonly request: (method: string, path: string, init?: RequestInit | undefined) => Promise<Response>
+  readonly run: <X, XE, XR extends A | Api.AuthRequestContext>(effect: Effect<X, XE, XR>) => Promise<X>
+  readonly runtime: ManagedRuntime<A, E>
+  readonly signIn: (email: string, options?: (SignInOptions & AgentOptions) | undefined) => Promise<SignedInAgent>
+## AppNeeds [type]
+type<>: CsrfConfig | Users | Sessions
+## buildContext [value]
+value: <A, E>(layer: Layer<A, E, never>, options: {    readonly scope: Scope;    readonly memoMap?: MemoMap;}) => Promise<Context<A>>
+## CommonOptions [type]
+type<S, SE, SR, D, DR, T>: CommonOptions<S, SE, SR, D, DR, T>
+  readonly clientAddress?: string
+  readonly csrf?: Partial<CsrfConfigShape>
+  readonly decorate?: Layer<D, never, DR>
+  readonly docsPath?: `/${string}`
+  readonly openapiPath?: `/${string}`
+  readonly principalResolver?: Layer<PrincipalResolver, never, Users | Sessions>
+  readonly rateLimiter?: "permissive" | "enforcing"
+  readonly services?: Layer<S, SE, SR>
+  readonly taps?: Layer<never, never, T>
+  readonly tier?: "all" | "public" | "admin"
+## ContractTestOptions [type]
+type<O, R>: ContractTestOptions<O, R>
+  readonly build?: {    readonly services: Layer<never, unknown, unknown>;}
+  readonly events?: {    readonly notPersonal?: readonly string[];}
+  readonly hooks?: readonly {    readonly point: {        readonly id: string;    };    readonly input: unknown;}[]
+  readonly host?: readonly Any[]
+  readonly options: readonly O[]
+  readonly redaction?: {    readonly app: Layer<R | RedactionGuard, unknown, never>;    readonly exercise: (guard: RedactionGuardShape) => Effect<void, unknown, R | RedactionGuard>;}
+## csrfSetCookie [value]
+value: (secret: string | Redacted<string>, options?: {    readonly issuedAt?: number;    readonly sameSite?: "strict" | "none";    readonly partitioned?: true;} | undefined) => string
+## csrfToken [value]
+value: (secret: string | Redacted<string>, options?: {    readonly issuedAt?: number;} | undefined) => string
+## encryption [value]
+value: Layer<Encryption, ConfigError, never>
+## FoundationServices [type]
+type<>: Encryption | AuthEvents | DataExportRegistry | ErasureRegistry
+## httpClient [value]
+value: {    returning: (body: (url: string) => string, status?: number) => Layer<HttpClient, never, never>;    noBreach: Layer<HttpClient, never, never>;    unavailable: Layer<HttpClient, never, never>;}
+## KeyedProbe [type]
+type<Id, R>: KeyedProbe<Id, R>
+  readonly run: (id: Id, as: "owner" | "other") => Effect<boolean, unknown, R>
+## layer [value]
+value: {    <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpApiGroup.Constraint, S = never, SE = never, SR = never, D = never, DR = never, T = never>(built: Built<P, Extra>, options?: (CommonOptions<S, SE, SR, D, DR, T> & MemoryMode) | undefined): Layer<Provided<P, "memory", S, D> | Success<FoldLayer<P>>, SE, Requires<P, Extra, "memory", S, SR, T, D, DR>>;    <P extends ReadonlyArray<AuthPlugin.Any>, Extra extends HttpApiGroup.Constraint, S = never, SE = never, SR = never, D = never, DR = never, T = never>(built: Built<P, Extra>, options: CommonOptions<S, SE, SR, D, DR, T> & SqlMode): Layer<Provided<P, "sql", S, D> | Success<FoldLayer<P>>, SE, Requires<P, Extra, "sql", S, SR, T, D, DR>>;}
+## lazyApp [value]
+value: <O, R>(initial: O, build: (options: O) => Effect<R, never, Scope>, settings?: {    readonly name?: string;    readonly alignStepClock?: boolean;}) => Effect<{    options: Effect<O, never, never>;    configure: (update: (current: O) => O) => Effect<void, never, never>;    replace: (options: O) => Effect<void, never, never>;    get: Effect<R, never, never>;}, never, Scope>
+## LazyApp [type]
+type<O, R>: LazyApp<O, R>
+  readonly configure: (update: (current: O) => O) => Effect<void, never, never>
+  readonly get: Effect<R, never, never>
+  readonly options: Effect<O, never, never>
+  readonly replace: (options: O) => Effect<void, never, never>
+## listen [value]
+value: <A, E>(composition: Layer<AppNeeds | A, E, never>, options?: ServeOptions) => Effect<ListeningApp<AppNeeds | A, E>, Without<E> | ServeError, Scope>
+## ListeningApp [type]
+type<A, E>: ListeningApp<A, E>
+  readonly advance: (by: Input) => Promise<void>
+  readonly agent: (options?: AgentOptions | undefined) => Promise<{    baseUrl: string;    origin: URL;    request: (method: string, target: string, init?: RequestInit) => Promise<Response>;    fetch: (input: any, init?: RequestInit | undefined) => Promise<Response>;    httpClient: HttpClient;    cookies: {        get: (name: string) => StoredCookie | undefined;        all: () => readonly StoredCookie[];        value: (name: string) => string | undefined;        scriptVisible: () => string;        receive: (header: string) => Received;    };    bearer: {        current: () => string | undefined;        set: (token: string) => void;        clear: () => void;    };    sent: SentRequest[];    refused: {        readonly _tag: "Refused";        readonly name: string;        readonly refusal: Refusal;        readonly header: string;    }[];}>
+  readonly context: () => Promise<Context<A>>
+  readonly handler: (request: Request) => Promise<Response>
+  readonly memoMap: MemoMap
+  readonly request: (method: string, path: string, init?: RequestInit | undefined) => Promise<Response>
+  readonly requests: () => readonly string[]
+  readonly run: <X, XE, XR extends AuthRequestContext | A>(effect: Effect<X, XE, XR>) => Promise<X>
+  readonly runtime: ManagedRuntime<A, E>
+  readonly signIn: (email: string, options?: (SignInOptions & AgentOptions) | undefined) => Promise<SignedInAgent>
+  readonly url: string
+## memoryFoundation [value]
+value: Layer<SecureRandom | Digest | Mac | Kdf | Aead | Cipher | Signature | KeyAgreement | KeyWrap | AuthEvents | DataExportRegistry | ErasureRegistry | AuditLog | BeforeUserDelete | AfterUserAttributesChanged | BeforeSignUp | AfterSignUp | BeforeSignIn | AfterSignIn | BeforeSessionIssue | BeforeCredentialReset | RetentionRegistry | SignInContinuationRegistry | AuditChain, never, never>
+## MemoryMode [type]
+type<>: {    readonly records?: "memory";}
+## MethodClass [type]
+type<Id, R>: {    readonly scoped: Probe<Id, R>;} | {    readonly crossTenant: Probe<Id, R>;} | {    readonly keyed: KeyedProbe<Id, R>;} | {    readonly derived: string;} | {    readonly insert: true;}
+## migratedSchema [value]
+value: (plugin: Any) => Promise<{    migrations: string[];    schema: {        tables: {            [k: string]: readonly ColumnShape[];        };        indexes: IndexShape[];        triggers: TriggerShape[];    };}>
+## openApps [value]
+value: () => number
+## Probe [type]
+type<Id, R>: Probe<Id, R>
+  readonly run: (id: Id) => Effect<boolean, unknown, R>
+## recordModes [value]
+value: readonly ["memory", "sql"]
+## RecordsOption [type]
+type<P>: P extends {    readonly records: infer B extends AnyRecords;} ? [RecordKeysOf<Success<B["memory"]>>] extends [never] ? {    readonly records?: never;} : {    readonly records: RunConfig<P>;} : {    readonly records?: RunConfig<P>;}
+## RequestInit [type]
+type<>: RequestInit
+## RetentionRegistryService [type]
+type<>: RetentionRegistry
+## runPluginContractTests [value]
+value: <O, P extends AuthPlugin.Any, R = never>(framework: TestFramework, makePlugin: (options: O) => P, config: ContractTestOptions<O, R> & RecordsOption<P>) => void
+## runSealedColumnTests [value]
+value: <A, R>(framework: TestFramework, config: SealedColumnConfig<A, R>) => void
+## runTenantIsolationTests [value]
+value: <Shape, Id, R>(framework: TestFramework, config: TenantIsolationConfig<Shape, Id, R>) => void
+## SealedColumnConfig [type]
+type<A, R>: SealedColumnConfig<A, R>
+  readonly adapters: readonly {    readonly name: string;    readonly layer: Layer<R, unknown, Encryption>;    readonly raw: (rowKey: string) => Effect<string, unknown, R>;    readonly plant: (rowKey: string, stored: string) => Effect<void, unknown, R>;}[]
+  readonly column: Column<A>
+  readonly read: (rowKey: string) => Effect<Sealed<A>, unknown, R>
+  readonly sample: A
+  readonly write: (rowKey: string, value: A) => Effect<void, unknown, R>
+## serve [value]
+value: <A, E>(composition: Layer<AppNeeds | A, E, never>, options?: ServeOptions) => Effect<App<AppNeeds | A, E>, never, Scope>
+## ServeOptions [type]
+type<>: ServeOptions
+  readonly baseUrl?: string
+  readonly memoMap?: MemoMap
+  readonly request?: {    readonly ip?: string | undefined;    readonly userAgent?: string | undefined;    readonly correlationId?: string | undefined;} | undefined
+  readonly testClock?: boolean | "now"
+## sessionSetCookie [value]
+value: (issued: IssuedSession) => Effect<string, never, never>
+## SignedInAgent [type]
+type<>: SignedInAgent
+  baseUrl: string
+  bearer: {    current: () => string | undefined;    set: (token: string) => void;    clear: () => void;}
+  cookies: {    get: (name: string) => StoredCookie | undefined;    all: () => readonly StoredCookie[];    value: (name: string) => string | undefined;    scriptVisible: () => string;    receive: (header: string) => Received;}
+  fetch: (input: any, init?: RequestInit | undefined) => Promise<Response>
+  httpClient: HttpClient
+  origin: URL
+  refused: {    readonly _tag: "Refused";    readonly name: string;    readonly refusal: Refusal;    readonly header: string;}[]
+  request: (method: string, target: string, init?: RequestInit) => Promise<Response>
+  sent: SentRequest[]
+  readonly token: Redacted<string>
+  readonly userId: string & Brand<"UserId">
+## SignedInSession [type]
+type<>: SignedInSession
+  readonly setCookie: string
+  readonly token: Redacted<string>
+  readonly userId: string & Brand<"UserId">
+## signInAs [value]
+value: (input: {    readonly email: string;    readonly name?: string;    readonly onSignedUp?: (userId: string & Brand<"UserId">) => Effect<void, never, never>;    readonly amr?: readonly AuthMethod[];    readonly request?: {        readonly ip?: string | undefined;        readonly userAgent?: string | undefined;        readonly correlationId?: string | undefined;    } | undefined;}) => Effect<SignedInSession, never, Users | Sessions>
+## SignInOptions [type]
+type<>: SignInOptions
+  readonly amr?: readonly AuthMethod[]
+  readonly name?: string
+  readonly onSignedUp?: (userId: string & Brand<"UserId">) => Effect<void, never, never>
+## SqlMode [type]
+type<>: {    readonly records: "sql";    readonly suite: string;}
+## TableCase [type]
+type<Shape, Id, R>: TableCase<Shape, Id, R>
+  readonly insert: Effect<Id, unknown, R>
+  readonly methods: { readonly [K in keyof Shape]: MethodClass<Id, R>; }
+  readonly table: string
+## TenantIsolationConfig [type]
+type<Shape, Id, R>: TenantIsolationConfig<Shape, Id, R>
+  readonly adapters: readonly {    readonly name: string;    readonly layer: Layer<R, unknown, never>;}[]
+  readonly cases: readonly TableCase<Shape, Id, R>[]
+  readonly covers?: readonly string[]
+  readonly plugin: {    readonly id: string;    readonly tenancy?: Readonly<Record<string, TableDeclaration>> | undefined;}
+  readonly rls?: {    readonly layer: Layer<SqlClient | R, unknown, never>;}
+## TestCsrfConfig [value]
+value: CsrfConfigShape
+## TestFramework [type]
+type<>: TestFramework
+  readonly describe: (name: string, body: () => void) => void
+  readonly fail: (message: string) => never
+  readonly it: (name: string, body: () => void | Promise<void>) => void
+## throwingFramework [value]
+value: (describe: (name: string, body: () => void) => void, it: (name: string, body: () => void | Promise<void>) => void) => TestFramework
+## withApp [value]
+value: <A, E, T>(composition: Layer<AppNeeds | A, E, never>, options: ServeOptions | undefined, use: (app: App<AppNeeds | A, E>) => Promise<T>) => Promise<T>
+## withoutRequest [value]
+value: <A, E, R>(self: Effect<A, E, R>) => Effect<A, E, Exclude<R, AuthRequestContext>>
+## withRequest [value]
+value: (facts?: {    readonly ip?: string | undefined;    readonly userAgent?: string | undefined;    readonly correlationId?: string | undefined;}) => <A, E, R>(self: Effect<A, E, R>) => Effect<A, E, Exclude<R, AuthRequestContext>>
