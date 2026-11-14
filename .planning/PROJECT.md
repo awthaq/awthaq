@@ -51,6 +51,9 @@ Composition is checked by the compiler: a missing plugin, port or duplicate slot
 | `Migration.apply` result and `openapi` stdout go through `Output.report`; the apply status preview stays hand-guarded | The preview prints before the drift and pending checks, while `report` couples text and document at one point | ✓ Phase 1 |
 | `TestAuth.ts` is a named-re-export facade over `internal/{composition,session,appHarness,contractRunner}.ts`; the export surface is pinned by `TestAuthSurface.test.ts` | The surface diff and a permanent runtime-key pin make the split provably non-breaking; `internal/` modules never import the facade (`pnpm circular` counts type-only imports) | ✓ Phase 2 |
 | The two core census tests keep scanning source text; only their four `file:` literals changed | They import nothing from `TestAuth`, so they are not consumers; ROADMAP criterion 1 was reworded to say so | ✓ Phase 2 |
+| One `Keyset` module in `@awthaq/ports` (`paginate`, `window`, clamp 1..200 default 50) and a `KeysetSql` builder in `@awthaq/sql`; adapters supply only `fetch`, so `+1` is applied once by construction | Three listings had three page contracts and five `limit + 1` sites; the declared order now derives the memory comparator, the SQL seek and the ORDER BY | ✓ Phase 3 |
+| Cursor wire bytes unchanged; `UserStore` page field `next` renamed `nextCursor` (one `Migration:` changeset) | The wire is the public contract and is pinned by a golden test; the port-field rename is the one intended breaking change, pre-1.0 | ✓ Phase 3 |
+| Mixed-case ids are asserted for self-consistency, canonical uuidV7 ids for exact code-unit order; no `COLLATE "C"` | Verified on Debian `postgres:16` (`en_US.utf8`), the image CI uses; local `test:pg` uses alpine and hides drift | ✓ Phase 3 |
 
 ## Current Milestone: v1.0 Architecture Deepening, batch 3
 
@@ -84,4 +87,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-11-14 after Phase 2*
+*Last updated: 2026-11-14 after Phase 3*
