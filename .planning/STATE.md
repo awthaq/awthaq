@@ -4,18 +4,18 @@ milestone: v1.0
 milestone_name: Architecture Deepening, batch 3
 current_phase: 2
 current_phase_name: Split TestAuth
-current_plan: 4
+current_plan: 5
 status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-11-14T04:31:28.416Z"
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-11-14T04:35:40.480Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 1 complete, transitioned to Phase 2
-state_head: 10638b69c61d319ece1bce246e05ba8cfac631f0
+state_head: 0693972eedbafeb2160704761b73d01cb56e6610
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 9
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 2 — Split TestAuth
-Current Plan: 4
+Current Plan: 5
 Total Plans in Phase: 5
 Status: Ready to execute
 Last activity: 2026-11-14 — Phase 1 complete, transitioned to Phase 2
@@ -66,6 +66,7 @@ Progress: [█░░░░░░░░░] 14%
 | Phase 02 P01 | 25min | 2 tasks | 3 files |
 | Phase 02 P02 | 15min | 2 tasks | 4 files |
 | Phase 02 P03 | 12min | 2 tasks | 5 files |
+| Phase 02 P04 | 15min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -85,6 +86,7 @@ Recent decisions affecting current work:
 - [Phase 02]: Surface probe kept outside the repo (never committed); TestAuth surface pinned by TestAuthSurface.test.ts (23 values runtime, 24 types compile-time)
 - [Phase 02]: Name Encryption.Encryption in composition.ts TestProvided to keep testPorts/encryption declaration emit portable (TS2883) after FoundationServices left the facade
 - [Phase 02]: 02-03: temporary session import placed in the facade import block so import ordering stays lint-clean
+- [Phase 02]: 02-04: TestFramework type re-export stays in the TestAuth facade; contractRunner imports it from ../TestFramework.ts
 
 ### Pending Todos
 
@@ -106,6 +108,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T04:31:28.390Z
-Stopped at: Completed 02-03-PLAN.md
+Last session: 2026-11-14T04:35:40.426Z
+Stopped at: Completed 02-04-PLAN.md
 Resume file: None

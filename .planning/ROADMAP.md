@@ -58,7 +58,7 @@ Plans:
   2. `packages/test/src/internal/` holds separate modules for composition, session/CSRF minting, app harness and contract runner; `buildContext` is still exported and `migratedSchema` still calls `TestSql.schemaOf`.
   3. The open-app counter lives beside `serve`/`openApps`, and `LeakGuard` accounting is unchanged: the existing `LeakGuard` tests and the 12 `Schema.lock.test.ts` files pass without edits.
   4. `spec/behaviors/25-testing-harness.md` and `spec/traceability.md` cite the new implementation locations while keeping the cited test file names, and `pnpm spec:verify:strict` passes.
-**Plans**: 3/5 plans executed
+**Plans**: 4/5 plans executed
 Plans:
 **Wave 1**
 - [x] 02-01-PLAN.md — Wave 0: surface snapshot (02-SURFACE-BEFORE.txt), gate baseline (02-BASELINE.md), TestAuthSurface.test.ts pin (23 values, 24 types)
@@ -70,7 +70,7 @@ Plans:
 - [x] 02-03-PLAN.md — internal/session.ts (sign-in, CSRF minting, withRequest) and internal/appHarness.ts (counter beside serve/openApps); census `file:` lines moved
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 02-04-PLAN.md — internal/contractRunner.ts (buildContext exported, migratedSchema via TestSql.schemaOf); facade reduced to named re-exports; AFTER probe diff empty
+- [x] 02-04-PLAN.md — internal/contractRunner.ts (buildContext exported, migratedSchema via TestSql.schemaOf); facade reduced to named re-exports; AFTER probe diff empty
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 02-05-PLAN.md — 25-testing-harness.md, traceability.md, invariants.md citations and revisions; allowlist diff and phase-close gates vs baseline
@@ -157,7 +157,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7. Phases 1
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. CLI views and ConfigList removal | 4/4 | Complete    | 2026-11-14 |
-| 2. Split TestAuth | 3/5 | In Progress | - |
+| 2. Split TestAuth | 4/5 | In Progress | - |
 | 3. Keyset-page module | 0/TBD | Not started | - |
 | 4. Connection-lifecycle module | 0/TBD | Not started | - |
 | 5. Core-table list cleanup | 0/TBD | Not started | - |
