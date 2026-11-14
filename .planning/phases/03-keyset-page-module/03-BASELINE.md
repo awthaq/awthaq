@@ -201,3 +201,15 @@ Every gate exits as it did here: all gates 0 except `pnpm knip`, which exits 1 f
 ## Wave 0 golden
 
 `packages/admin/test/KeysetCursors.test.ts` (12 tests: the 3 wire schemas as 2 cases, users 3 cases x memory and SQL, impersonations 1 case x memory and SQL, organizations 1 case x memory and SQL records) landed green against the untouched `src`: `npx vitest run packages/admin/test/KeysetCursors.test.ts` = Test Files 1 passed (1), Tests 12 passed (12). Its 6 distinct literals are the research capture (`grep -oE 'eyJ[A-Za-z0-9_-]{100,}' packages/admin/test/KeysetCursors.test.ts | sort -u | wc -l` prints 6), each also checked equal to the `Buffer` base64url derivation, 112 characters, no `=`, key order `createdAt`/`startedAt` then `id`. Mutation check: changing one character of the users `…005Z/…0004` literal made 4 cases fail (users limit 2 and limit 4, memory and SQL); reverted, 12 pass again. Postgres legs (`TestSql.layer` under `AWTHAQ_POSTGRES_URL`) were not run locally: CI path as above. `pnpm lint` and `pnpm format:check` exit 0 with the new file; `npx tsc -b` and `npx tsc -p tsconfig.test.json` print no `error TS`. Whole-suite gate counts after this file: one more test file and 12 more tests than the table above.
+
+## Wave 0 pins
+
+Wave 0 head: d04d6d62 plus this commit (the 03-02 wire-pin commit that adds this section); `git diff --quiet e74a8a9a -- packages/ports/src packages/sql/src packages/core/src packages/admin/src packages/organization/src spec features .changeset` exits 0 at it.
+
+| Wave 0 file | Tests | Pins |
+|---|---|---|
+| `packages/admin/test/KeysetCursors.test.ts` | 12 | the three cursor wire encodings, memory and SQL (03-01) |
+| `packages/admin/test/KeysetPins.test.ts` | 18 | `Users.list`, `AdminTenants.listOrganizations` and `Admin.list` on memory: 50 / 200 / clamp table, tie walks at limits 1..8, exactly-full pages (5 shared cases x 3 listings), the post-page gate short page, the active filter across a tie, tenant confinement with a replayed cursor |
+| `packages/admin/test/KeysetHttp.test.ts` | 4 | `/admin/organizations?limit=2` wire cursor bytes and next page, 400 for limit 0 / 201 / 2.5 and cursor=garbage, 403 for a non-superadmin, `/admin/users` limit 201 -> 400 and 200 -> 200 |
+
+`npx vitest run` over the three files: Test Files 3 passed (3), Tests 34 passed (34), against untouched `src`. Mutations seen to fail and reverted: the post-page gate's first-page cursor presence (1 case), the key order of the expected organization wire cursor (1 case). Every case is memory only or in-process HTTP; nothing here needs Postgres. Whole-suite gate counts after Wave 0: two more test files and 22 more tests than the 03-01 golden-only figure.
