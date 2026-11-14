@@ -19,9 +19,9 @@
 // ledger and cross-checks the read model against it, so a rewrite that bypassed
 // the triggers is reported with the exact first episode/link it touched.
 
-import { SqlTransaction } from "@awthaq/ports";
+import { Keyset, SqlTransaction } from "@awthaq/ports";
 import { AuditChain, Users } from "@awthaq/core";
-import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
+import { KeysetSql, Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
@@ -30,12 +30,12 @@ import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
-import { MAX_PAGE_SIZE } from "./AdminApi.ts";
 
 type UserId = Users.UserId;
 
@@ -82,11 +82,8 @@ export interface ImpersonationCursor {
   readonly id: string;
 }
 
-export interface ImpersonationPage {
-  readonly items: ReadonlyArray<ImpersonationRecord>;
-  /** `None` on the last page — an exactly-full final page does not invent a cursor. */
-  readonly nextCursor: Option.Option<ImpersonationCursor>;
-}
+/** `nextCursor` is `None` on the last page: an exactly-full final page does not invent a cursor. */
+export type ImpersonationPage = Keyset.Page<ImpersonationRecord, ImpersonationCursor>;
 
 /** ALF-005: the first anomaly `verifyChain` found, in ledger order. */
 export interface ChainBreak {
@@ -103,15 +100,6 @@ export interface ChainBreak {
     /** a row (or its ended state) exists that the ledger never recorded */
     | "row-unledgered";
 }
-
-/** ESS-006: applied when a caller names no `limit`, so no read is ever unbounded. */
-export const DEFAULT_PAGE_SIZE = 50;
-
-/** ESS-006: the one in-process `limit` rule (same as `Users.list`): truncated, clamped to 1..200, 50 when absent or non-finite. */
-export const pageLimit = (limit: number | undefined) =>
-  limit === undefined || !Number.isFinite(limit)
-    ? DEFAULT_PAGE_SIZE
-    : Math.min(Math.max(Math.trunc(limit), 1), MAX_PAGE_SIZE);
 
 export interface ImpersonationRecordsShape {
   /**
@@ -160,7 +148,8 @@ export interface ImpersonationRecordsShape {
   /**
    * BEH-EA-219/ESS-006: history newest-first, keyset-paginated on
    * `(startedAt, id)`; `active: true` narrows to episodes with no `endedAt`
-   * yet. Never loads more than `limit + 1` rows.
+   * yet. `limit` is normalised by `Keyset.paginate` (1..200, default 50) and at
+   * most one row beyond it is read.
    */
   readonly list: (
     input?: {
@@ -190,33 +179,29 @@ const notFound = (sessionId: string): ImpersonationRecordNotFound =>
     message: `awthaq: no active impersonation episode for session: ${sessionId}`,
   });
 
-/** Newest-first with `id` as the tiebreak, the same total order the SQL `ORDER BY startedAt DESC, id DESC` gives. */
-const newestFirst = (
-  records: ReadonlyArray<ImpersonationRecord>,
-): ReadonlyArray<ImpersonationRecord> =>
-  [...records].sort((a, b) => {
-    const byTime = DateTime.toEpochMillis(b.startedAt) - DateTime.toEpochMillis(a.startedAt);
-    return byTime !== 0 ? byTime : a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
-  });
-
-const isBeforeCursor = (record: ImpersonationRecord, cursor: ImpersonationCursor): boolean => {
-  const recordMillis = DateTime.toEpochMillis(record.startedAt);
-  const cursorMillis = DateTime.toEpochMillis(cursor.startedAt);
-  return recordMillis < cursorMillis || (recordMillis === cursorMillis && record.id < cursor.id);
+/** Newest first: the one order memory windows with and SQL seeks with, `(startedAt, id)` descending, `id` by code unit. */
+const pageOrder: Keyset.Declaration<ImpersonationRecord, ImpersonationCursor> = {
+  keys: [
+    Keyset.key({
+      column: "startedAt",
+      direction: "desc",
+      order: DateTime.Order,
+      row: (record) => record.startedAt,
+      cursor: (cursor) => cursor.startedAt,
+    }),
+    Keyset.key({
+      column: "id",
+      direction: "desc",
+      order: Order.String,
+      row: (record) => record.id,
+      cursor: (cursor) => cursor.id,
+    }),
+  ],
+  cursorOf: (record) => ({ startedAt: record.startedAt, id: record.id }),
 };
 
-/** Turns `limit + 1` fetched rows into a page: the extra row proves there is a next one and is dropped. */
-const toPage = (rows: ReadonlyArray<ImpersonationRecord>, limit: number): ImpersonationPage => {
-  const items = rows.slice(0, limit);
-  const last = items.at(-1);
-  return {
-    items,
-    nextCursor:
-      rows.length > limit && last !== undefined
-        ? Option.some({ startedAt: last.startedAt, id: last.id })
-        : Option.none(),
-  };
-};
+/** The row-value seek and ORDER BY of the page, derived from `pageOrder`. */
+const seek = KeysetSql.make(pageOrder);
 
 // ---- ledger (shared by both layers) -------------------------------------------
 
@@ -452,19 +437,21 @@ export const layerMemory = Layer.effect(
       );
 
     const list: ImpersonationRecordsShape["list"] = (input, grant) =>
-      Effect.gen(function* () {
-        const seen = yield* TenantScoped.visibility(grant);
-        const s = yield* Ref.get(state);
-        const limit = pageLimit(input?.limit);
-        const cursor = input?.cursor;
-        const rows = newestFirst(Array.from(HashMap.values(s))).filter(
-          (row) =>
-            TenantScoped.matches(Option.getOrNull(row.tenantId), seen) &&
-            (input?.active !== true || Option.isNone(row.endedAt)) &&
-            (cursor === undefined || isBeforeCursor(row, cursor)),
-        );
-        return toPage(rows.slice(0, limit + 1), limit);
-      });
+      Keyset.paginate(
+        pageOrder,
+        { after: Option.fromNullishOr(input?.cursor), limit: input?.limit },
+        (fetch) =>
+          Effect.gen(function* () {
+            const seen = yield* TenantScoped.visibility(grant);
+            const s = yield* Ref.get(state);
+            const rows = Array.from(HashMap.values(s)).filter(
+              (row) =>
+                TenantScoped.matches(Option.getOrNull(row.tenantId), seen) &&
+                (input?.active !== true || Option.isNone(row.endedAt)),
+            );
+            return Keyset.window(pageOrder, rows, fetch);
+          }),
+      );
 
     const verifyChain: ImpersonationRecordsShape["verifyChain"] = (_grant) =>
       Effect.gen(function* () {
@@ -679,13 +666,13 @@ export const layerSql = Layer.effect(
         `,
     });
 
-    // ESS-006: `(startedAt, id) < cursor`, spelled out for both dialects, `limit + 1` rows.
+    // ESS-006: the keyset seek from the declared order, `take` rows (`Keyset.paginate` sets one above the page).
     const listQuery = SqlSchema.findAll({
       Request: Schema.Struct({
         active: Schema.Boolean,
         cursorStartedAt: wire.nullableDateTime,
         cursorId: Schema.NullOr(Schema.String),
-        limit: Schema.Int,
+        take: Schema.Int,
         seen: VisibilitySchema,
       }),
       Result: ImpersonationRow,
@@ -695,11 +682,9 @@ export const layerSql = Layer.effect(
           ...(r.active ? [sql`"endedAt" IS NULL`] : []),
           ...(r.cursorStartedAt === null || r.cursorId === null
             ? []
-            : [
-                sql`("startedAt" < ${r.cursorStartedAt} OR ("startedAt" = ${r.cursorStartedAt} AND id < ${r.cursorId}))`,
-              ]),
+            : [seek.after(sql, [r.cursorStartedAt, r.cursorId])]),
         ];
-        return sql`SELECT * FROM admin_impersonation WHERE ${sql.and(conditions)} ORDER BY "startedAt" DESC, id DESC LIMIT ${r.limit + 1}`;
+        return sql`SELECT * FROM admin_impersonation WHERE ${sql.and(conditions)} ORDER BY ${seek.orderBy(sql)} LIMIT ${r.take}`;
       },
     });
 
@@ -764,23 +749,28 @@ export const layerSql = Layer.effect(
         }),
       ).pipe(liftFor(grant), unavailable("closeExpired"));
 
-    const list: ImpersonationRecordsShape["list"] = (input, grant) => {
-      const limit = pageLimit(input?.limit);
-      return TenantScoped.visibility(grant).pipe(
-        Effect.flatMap((seen) =>
-          listQuery({
-            active: input?.active === true,
-            cursorStartedAt: input?.cursor?.startedAt ?? null,
-            cursorId: input?.cursor?.id ?? null,
-            limit,
-            seen,
-          }),
-        ),
-        Effect.map((rows) => toPage(rows.map(toRecord), limit)),
-        liftFor(grant),
-        unavailable("list"),
-      );
-    };
+    const list: ImpersonationRecordsShape["list"] = (input, grant) =>
+      Keyset.paginate(
+        pageOrder,
+        { after: Option.fromNullishOr(input?.cursor), limit: input?.limit },
+        ({ after, take }) =>
+          TenantScoped.visibility(grant).pipe(
+            Effect.flatMap((seen) =>
+              listQuery({
+                active: input?.active === true,
+                cursorStartedAt: Option.match(after, {
+                  onNone: () => null,
+                  onSome: (c) => c.startedAt,
+                }),
+                cursorId: Option.match(after, { onNone: () => null, onSome: (c) => c.id }),
+                take,
+                seen,
+              }),
+            ),
+            Effect.map((rows) => rows.map(toRecord)),
+            liftFor(grant),
+          ),
+      ).pipe(unavailable("list"));
 
     // Plan 25 F7: both reads under the chain lock, in one transaction, so a writer committing between them
     // cannot show a row without its link (or a link without its row).
