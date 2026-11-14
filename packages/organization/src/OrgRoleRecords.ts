@@ -253,8 +253,7 @@ export const layerSql = Layer.effect(
   OrgRoleRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`OrgRoleRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("OrgRoleRecords");
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const OrgRoleRow = makeOrgRoleRow(wire);

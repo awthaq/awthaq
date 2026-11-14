@@ -308,8 +308,7 @@ export const layerSql = Layer.effect(
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const OrganizationRow = makeOrganizationRow(wire);
     const random = yield* SecureRandom.SecureRandom;
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`OrganizationRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("OrganizationRecords");
 
     const insert = SqlSchema.findOne({
       Request: Schema.Struct({
