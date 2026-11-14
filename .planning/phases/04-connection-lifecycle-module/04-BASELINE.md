@@ -310,3 +310,98 @@ Plan 04-06 (SAML store over the lifecycle). Postgres results: run locally on the
 ### 04-06 gates
 
 `tsc -b` and `tsc -p tsconfig.test.json` clean (only the pre-existing TS377149 warnings); `pnpm check:transactions`, `pnpm circular`, `pnpm lint` (warnings only under untracked `.claude/`), `pnpm format:check` exit 0; `pnpm check:error-tags`: 163 internal / 137 wire. `pnpm test`: 421 files, 6649 tests passed (1 expected fail, 21 skipped). `pnpm knip`: exit 1 for the baseline reasons only (3 `readme-quickstart.ts` unlisted dependencies plus untracked `.claude/` files), no row under `packages/`. `pnpm test:bdd`: `Tests  1580 passed | 44 skipped (1624)`, 0 failed: the BDD red window is closed.
+
+## Phase close
+
+Recorded by 04-09 at HEAD `fa29e41f493441859e7090bab7cb71be33a87a83` (branch `architecture/deepening-batch-3`; phase base `c683a1bc`). No `src` file changed in 04-09. All commands run from the worktree root; SQLite and memory runs with `AWTHAQ_POSTGRES_URL` unset, Postgres runs with `AWTHAQ_POSTGRES_URL=postgres://postgres:pw@localhost:55433/awthaq` passed explicitly on the same container as the baseline (`awthaq-p3-pg`, Debian `postgres:16`).
+
+### Path allowlist (CONN-06)
+
+`git diff --name-only c683a1bc HEAD` lists 57 paths (22 under `.planning/`); piping the list through `grep -vE` with the 04-09 allowlist regex prints nothing (grep exit 1, no offender). The non-planning paths: `.changeset/connection-lifecycle-module.md`, `examples/{memory,sql}-server/app.ts`, `features/features/13-enterprise-federation/29-saml-sp.feature`, `features/step-definitions/{OrganizationWorld,QadiOrganizationFixture,SamlFederationSteps,SamlWorld,TenancyWorld}.ts`, `features/traceability.md`, `packages/organization/README.md`, 6 organization `src` and 8 organization `test` files (one under `test/contract/`), `packages/saml/src/{Saml,SamlConnections}.ts`, `packages/saml/test/{SamlDomainClaims,SamlLifecyclePins}.test.ts`, `packages/scim/test/ScimConnectionOrphan.test.ts`, `spec/behaviors/{28-tenancy,29-saml-sp}.md`, `spec/decisions/040-plugin-exposes-domain-services.md`, `spec/models/09-sso.md`, `spec/traceability.md`.
+
+### SCIM proofs
+
+- `git diff --stat c683a1bc HEAD -- packages/scim/src packages/scim/package.json packages/scim/README.md` prints nothing.
+- `git diff --name-status c683a1bc HEAD -- packages/scim` prints exactly `A	packages/scim/test/ScimConnectionOrphan.test.ts`.
+- `04-FINDINGS.md` records `FINDING F-04-01: SCIM createConnection accepts an unknown organization` (CONN-06, disposition recorded only) and the deferral CONN-F1; the characterization test passes against untouched SCIM `src`.
+
+### Structural census
+
+| Census command | c683a1bc | Now | Expect |
+|----------------|----------|-----|--------|
+| `grep -rnE '\bwith(Claim\|Release)\b' packages/*/src \| wc -l` | 9 | 0 | 0 |
+| `grep -rl 'DomainClaims' packages/*/src \| grep -v '^packages/organization/' \| wc -l` | 2 | 0 | 0 |
+| `grep -rn 'const DOMAIN = ' packages/*/src` | 2 lines (`OrganizationConnections.ts:338`, `SamlConnections.ts:91`) | 1 line, `packages/organization/src/OrganizationConnectionLifecycle.ts:64` | 1, in `OrganizationConnectionLifecycle.ts` |
+| `grep -c 'directory\.find(' packages/saml/src/SamlConnections.ts` | 1 | 0 | 0 |
+| `grep -c 'SqlStore.atomically' packages/organization/src/DomainClaims.ts` | 0 | 4 | at least 3 |
+| `grep -rniE '@awthaq/saml\|SamlRecords\|SamlDomainTaken\|InvalidSamlConnection' packages/organization/src \| wc -l` | 2 | 2 (`OrganizationActor.ts:24` and `OrganizationMigrations.ts:464`, the same two comment lines) | 2 |
+| `grep -c 'export \* as DomainClaims' packages/organization/src/index.ts` | 1 | 0 | 0 |
+| `grep -c '@awthaq/saml' packages/organization/package.json` | 0 | 0 | 0 |
+
+### Wave 0 oracle integrity
+
+`git log --format=%h c683a1bc..HEAD -- <file>` prints exactly one commit for each: `packages/organization/test/ConnectionLifecyclePins.test.ts` (`ccc79daf`), `packages/saml/test/SamlLifecyclePins.test.ts` (`5b070b92`), `packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts` (`9802322d`), `packages/scim/test/ScimConnectionOrphan.test.ts` (`5b070b92`): none edited after its add commit. `git diff --numstat c683a1bc HEAD -- packages/organization/test/contract/DomainClaims.ts` prints `112	0	packages/organization/test/contract/DomainClaims.ts` (112 lines added, 0 removed). `git diff --stat knip.json` is empty.
+
+### Gate table against the baseline
+
+| Gate | Command | Exit | Summary line printed | Wall time | Baseline | Verdict |
+|------|---------|------|----------------------|-----------|----------|---------|
+| tsc -b | `npx tsc -b tsconfig.json` | 0 | (no output), 0 `error TS` | 1 s | 0 | as baseline |
+| tests typecheck | `npx tsc -p tsconfig.test.json` | 0 | 0 `error TS`; the same 2 pre-existing `warning TS377149` in `TestingHarnessSteps.ts` | 3 s | 0 | as baseline |
+| circular | `pnpm circular` | 0 | no findings | 3 s | 0 | as baseline |
+| error tags | `pnpm check:error-tags` | 0 | `163 internal and 137 wire error tags, none shared` | 1 s | 163 / 137 | same numbers |
+| transactions | `pnpm check:transactions` | 0 | `no bare sql.withTransaction in packages/*/src` | 0 s | 0 | as baseline |
+| contract tests | `pnpm check:contract-tests` | 0 | `all 21 plugin classes run the contract suite` | 1 s | 21 | same number |
+| lint | `pnpm lint` | 0 | warnings only (`.claude/` untracked tree, 7 in `features/step-definitions/RequestContextSteps.ts`), no errors, none under `packages/` | 0 s | 0 | as baseline |
+| format | `pnpm format:check` | 0 | `All matched files use the correct format ... on 1224 files` | 1 s | 0 (1218 files) | as baseline (6 more files) |
+| readmes | `pnpm check:readmes` | 0 | `every package README matches its package's shipped state` | 0 s | 0 | as baseline |
+| workspace | `pnpm workspace:check` | 0 | `29 packages and 3 examples match every roster` | 1 s | 0 | as baseline |
+| bdd | `pnpm test:bdd` | 0 | Test Files 39 passed (39); Tests 1580 passed, 44 skipped (1624) | 8 s | 1576 / 44 skipped | grew by the 4 BEH-EA-318 scenarios, 0 failed |
+| unit | `pnpm test` | 0 | Test Files 420 passed, 6 skipped (426); Tests 6648 passed, 1 expected fail, 21 skipped (6670) | 44 s | 417 + 4 skipped (421); 6593 + 1 expected fail + 15 skipped | grew: +5 files (+3 passed, +2 skipped), +55 passed tests; the +6 skipped tests are the Postgres-only race (3) and claim-lock (3) cases, which ran on Postgres below (the run there has 0 skipped) |
+| coverage | `pnpm coverage` | 0 | Statements 91.73, Branches 85.22, Functions 87.03, Lines 92.25 (floors 89 / 83 / 84 / 90); same 420 / 6 skipped files and 6648 / 1 expected fail / 21 skipped tests | 51 s | 91.71 / 85.20 / 86.95 / 92.24 | above floors, every figure at or above baseline |
+| spec | `pnpm spec:verify:strict` | 0 | `PASS: 32   FAIL: 0   SKIP: 0 (strict: skips count as failures)` | 50 s | 32 / 0 / 0 | as baseline |
+| knip | `pnpm knip` | 1 (pre-existing) | `Unused files (39)` (all under untracked `.claude/`), `Unlisted dependencies (3)` | 65 s | 1 | filtered output identical (below) |
+| package smoke | `pnpm package:smoke` | 0 | `package:smoke: PASS <pkg>` for each of the 30 packages (30 PASS, 0 other) | 40 s | 30 PASS | as baseline |
+
+knip, `pnpm knip 2>&1 | grep -v '^\.claude/' | grep -v '^\.reports/'`, filtered output (extraction of the baseline block done by hand; identical to it, no row under `packages/` other than the three `readme-quickstart.ts` rows):
+
+```text
+$ knip
+Unused files (39)
+Unlisted dependencies (3)
+@awthaq/core      packages/sql/test/fixtures/readme-quickstart.ts:2:10
+@awthaq/password  packages/sql/test/fixtures/readme-quickstart.ts:11:10
+@awthaq/server    packages/sql/test/fixtures/readme-quickstart.ts:12:10
+[ELIFECYCLE] Command failed with exit code 1.
+```
+
+No re-run was needed on the SQLite and memory side: `pnpm test` and `pnpm coverage` were green on their first run (neither known intermittent fired).
+
+### Postgres
+
+Container `awthaq-p3-pg`, the Debian `postgres:16` CI image of the baseline; `AWTHAQ_POSTGRES_URL=postgres://postgres:pw@localhost:55433/awthaq` passed explicitly on each command.
+
+| Run | Command | Exit | Summary line printed | Failing tests | Wall time |
+|-----|---------|------|----------------------|---------------|-----------|
+| baseline targeted legs | `npx vitest run packages/organization/test/Contract.test.ts packages/organization/test/OrganizationSql.test.ts packages/organization/test/OrganizationConnections.test.ts packages/saml/test/Contract.test.ts packages/saml/test/SamlDomainClaims.test.ts packages/scim/test/Contract.test.ts` | 0 | Test Files 6 passed (6); Tests 774 passed (774) (baseline 766) | none | 40 s |
+| phase files and race oracle | `npx vitest run packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts packages/organization/test/OrganizationConnectionLifecycle.test.ts packages/organization/test/DomainClaims.test.ts packages/organization/test/Contract.test.ts packages/organization/test/ConnectionLifecyclePins.test.ts packages/saml/test/SamlLifecyclePins.test.ts` | 0 | Test Files 6 passed (6); Tests 590 passed (590), including the 3 race cases of `OrganizationConnectionLifecycle.sql.test.ts` and the 3 claim-lock cases of `DomainClaims.test.ts` | none | 38 s |
+| full unit, run 1 | `pnpm test` | 1 | Test Files 1 failed, 425 passed (426); Tests 1 failed, 6689 passed, 1 expected fail (6691) | `packages/passkey/test/Contract.test.ts > ... ChallengeStore (sql) > consume [atomic]: false for any other value, a tampered one included` (the Phase 2 known intermittent, no connection or SAML test) | 87 s |
+| full unit, run 2 (the one re-run) | `pnpm test` | 0 | Test Files 426 passed (426); Tests 6690 passed, 1 expected fail (6691) (0 skipped) | none | 92 s |
+| full bdd | `pnpm test:bdd` | 0 | Test Files 39 passed (39); Tests 1580 passed, 44 skipped (1624) | none | 13 s |
+
+The full-suite failing list is empty after the one recorded re-run (baseline: empty); it did not grow. Baseline Postgres full unit: 421 files, 6629 passed; now 426 files, 6690 passed.
+
+run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)
+
+### Comparison rule verdicts
+
+1. Every gate exits as in the baseline (all 0 except `pnpm knip`, 1 for the pre-existing reasons): MET.
+2. Counts only grow; coverage 91.73 / 85.22 / 87.03 / 92.25 at or above 91.71 / 85.20 / 86.95 / 92.24 and the floors 89 / 83 / 84 / 90; spec PASS 32, FAIL 0, SKIP 0: MET.
+3. `check:error-tags` 163 / 137 and `check:contract-tests` 21: MET.
+4. knip filtered output gains nothing, `git diff --stat knip.json` empty: MET.
+5. Postgres: every targeted leg and `OrganizationConnectionLifecycle.sql.test.ts` pass, the full-suite failing list did not grow (empty after one re-run of the known passkey intermittent): MET, CI confirmation open.
+6. The no-SAML grep prints the two comment lines, `@awthaq/saml` count in `packages/organization/package.json` is 0: MET.
+7. `withClaim`/`withRelease` 0 lines, no `DomainClaims` outside organization src, one `const DOMAIN = ` in `OrganizationConnectionLifecycle.ts`, `directory.find(` 0, `atomically` 4: MET.
+8. SCIM proofs: MET.
+9. Wave 0 oracles one commit each, contract file additions only: MET.
+10. Phase allowlist, no offender: MET.
