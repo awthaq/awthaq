@@ -57,6 +57,7 @@ Composition is checked by the compiler: a missing plugin, port or duplicate slot
 | One exposed `OrganizationConnectionLifecycle` service in `organization` owns claim-then-write, release and the suspended-organization gate for SAML and OIDC, parameterized by a protocol descriptor (`{ protocol, refuse, taken, isGone }` plus caller `prepare`/`write`); events stay with the callers | Two protocols had drifted copies of the claim sequence and different gates; the module keeps `organization` free of SAML types and makes the policy (`findActive` on create, update and refresh, none on remove) one decision | ✓ Phase 4 |
 | `DomainClaims` serialises per organization with an advisory lock (`organization_domain_claim:org:<id>`), claims first, owner rows inserted sorted and read in input order; the OIDC secret is sealed before the lock | A reproduced Postgres update-vs-remove deadlock and an opposite-order two-organization deadlock; no external IO may run under the lock | ✓ Phase 4 |
 | `DomainClaims` leaves the organization root export (stays on `@awthaq/organization/records`); SCIM is untouched and its `createConnection` orphan is recorded as F-04-01 | The claim table is a records boundary, not a plugin surface; SCIM has no domains or update | ✓ Phase 4 |
+| One `CoreTables` catalogue in `@awthaq/sql` (name, owner, tenancy `partitioned|directory|none`, `replicated`, sealed view over `CoreSealedColumns`, optional reason; no column types or DDL) is the single list; `TenantScope` lists, `Auth.ts` Derived-parent check (stamped view), `LaggingReplica.coreTables` and the BDD stamped-table assertion project from it; `auth_relay_cursor` and `rate_limit_buckets` are classified `none`, not replicated, with reasons | Two real hand copies and two unclassified core tables remained, so the roadmap's minimal-fix branch did not apply; a drift guard (SQLite and Postgres) fails when a core migration creates an unclassified table, and the sealed AADs are pinned by inline literals | ✓ Phase 5 |
 
 ## Current Milestone: v1.0 Architecture Deepening, batch 3
 
@@ -90,4 +91,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-11-14 after Phase 4*
+*Last updated: 2026-11-14 after Phase 5*

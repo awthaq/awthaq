@@ -43,10 +43,10 @@ Milestone "Architecture Deepening, batch 3". Each maps to roadmap phases. Resear
 
 ### Table list (C6)
 
-- [ ] **CAT-01**: One core-table list in `@awthaq/sql` (name, owner, tenancy, sealed) is the source that `Auth.ts`, `LaggingReplica` and `TenantScope.coverage` project from
-- [ ] **CAT-02**: `auth_relay_cursor` and `rate_limit_buckets` are classified (included or documented as excluded)
-- [ ] **CAT-03**: The catalogue carries no column types or DDL (ADR-EA-004), the `core -> sql` edge stays, and a declaration-list snapshot protects sealed AADs
-- [ ] **CAT-04**: If only the `LaggingReplica` copy proves real after re-grep, ship it as a minimal fix and close the candidate
+- [x] **CAT-01**: One core-table list in `@awthaq/sql` (name, owner, tenancy, sealed) is the source that `Auth.ts`, `LaggingReplica` and `TenantScope.coverage` project from
+- [x] **CAT-02**: `auth_relay_cursor` and `rate_limit_buckets` are classified (included or documented as excluded)
+- [x] **CAT-03**: The catalogue carries no column types or DDL (ADR-EA-004), the `core -> sql` edge stays, and a declaration-list snapshot protects sealed AADs
+- [x] **CAT-04**: If only the `LaggingReplica` copy proves real after re-grep, ship it as a minimal fix and close the candidate
 
 ### Record-store scaffolding (C7, gated)
 
@@ -123,10 +123,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONN-04 | Phase 4 | Complete |
 | CONN-05 | Phase 4 | Complete |
 | CONN-06 | Phase 4 | Complete |
-| CAT-01 | Phase 5 | Pending |
-| CAT-02 | Phase 5 | Pending |
-| CAT-03 | Phase 5 | Pending |
-| CAT-04 | Phase 5 | Pending |
+| CAT-01 | Phase 5 | Complete |
+| CAT-02 | Phase 5 | Complete |
+| CAT-03 | Phase 5 | Complete |
+| CAT-04 | Phase 5 | Complete |
 | REC-01 | Phase 6 | Pending |
 | REC-02 | Phase 6 | Pending |
 | REC-03 | Phase 6 | Pending |

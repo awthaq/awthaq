@@ -20,7 +20,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Split TestAuth** - `TestAuth.ts` becomes a facade over `internal/` modules with an identical public name set (completed 2026-11-14)
 - [x] **Phase 3: Keyset-page module** - One page contract, clamp, cursor derivation and comparator for users, organizations and impersonations (completed 2026-11-14)
 - [x] **Phase 4: Connection-lifecycle module** - SAML and OIDC share one exposed lifecycle service in `organization` with a single suspended-org policy (completed 2026-11-14)
-- [ ] **Phase 5: Core-table list cleanup** - One core-table list in `@awthaq/sql` projected to `Auth.ts`, `LaggingReplica` and `TenantScope.coverage`
+- [x] **Phase 5: Core-table list cleanup** - One core-table list in `@awthaq/sql` projected to `Auth.ts`, `LaggingReplica` and `TenantScope.coverage` (completed 2026-11-14)
 - [ ] **Phase 6: Record-store scaffolding (gated)** - Preconditions recorded, spike with go/no-go, scaffolding only if the spike pays
 - [ ] **Phase 7: World scaffold and Credentials split (optional)** - Shared World tail scaffold in `features/` and a pure file split of `server/Credentials.ts`
 
@@ -147,7 +147,7 @@ Plans:
   2. `auth_relay_cursor` and `rate_limit_buckets` are each either included or excluded with a documented reason.
   3. The catalogue carries no column types or DDL (ADR-EA-004), the `core -> sql` package edge is unchanged (`pnpm circular` passes, no new dependency), and a declaration-list snapshot protects the sealed AADs.
   4. A re-grep at planning time confirms which duplicates are real; if only the `LaggingReplica` copy is, it ships as a minimal fix and the candidate is closed with that disposition recorded.
-**Plans**: 6/6 plans executed
+**Plans**: 6/6 plans complete
 - [x] 05-01-PLAN.md
 - [x] 05-02-PLAN.md
 - [x] 05-03-PLAN.md
@@ -202,6 +202,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7. Phases 1
 | 2. Split TestAuth | 5/5 | Complete    | 2026-11-14 |
 | 3. Keyset-page module | 9/9 | Complete    | 2026-11-14 |
 | 4. Connection-lifecycle module | 9/9 | Complete    | 2026-11-14 |
-| 5. Core-table list cleanup | 6/6 | In Progress | - |
+| 5. Core-table list cleanup | 6/6 | Complete    | 2026-11-14 |
 | 6. Record-store scaffolding (gated) | 0/TBD | Not started | - |
 | 7. World scaffold and Credentials split (optional) | 0/TBD | Not started | - |
