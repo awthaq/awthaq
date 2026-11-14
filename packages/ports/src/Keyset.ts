@@ -6,6 +6,7 @@
 // cursor; `window` is the in-memory twin of the SQL predicate (sort, strictly after the cursor, take).
 // `@awthaq/sql`'s `KeysetSql` reads the same `column` and `direction` to build the row-value predicate.
 
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
@@ -121,4 +122,17 @@ export const paginate = <Row, Cursor, E, R>(
           : Option.none(),
     };
   });
+};
+
+/** The `(createdAt, id)` order of a record listing, ids by code unit; `desc` is its flip. */
+export const chronological = <Row>(spec: {
+  readonly createdAt: (row: Row) => DateTime.Utc;
+  readonly id: (row: Row) => string;
+  readonly direction: Direction;
+}): Order.Order<Row> => {
+  const asc = Order.combine(
+    Order.mapInput(DateTime.Order, spec.createdAt),
+    Order.mapInput(Order.String, spec.id),
+  );
+  return spec.direction === "desc" ? Order.flip(asc) : asc;
 };

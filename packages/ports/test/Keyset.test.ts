@@ -326,3 +326,20 @@ describe("Keyset.window", () => {
     assert.deepStrictEqual(ids(after), ["_x", "B1", "b0"]);
   });
 });
+
+describe("Keyset.chronological", () => {
+  it("orders tied rows by (createdAt, id code unit) ascending and the exact reverse descending", () => {
+    const sorted = (direction: Keyset.Direction) =>
+      ids(
+        [...rows].sort(
+          Keyset.chronological({
+            createdAt: (row: Row) => row.at,
+            id: (row) => row.id,
+            direction,
+          }),
+        ),
+      );
+    assert.deepStrictEqual(sorted("asc"), ["B1", "_x", "a1", "b1", "A2", "a0", "b0", "A1", "Z9"]);
+    assert.deepStrictEqual(sorted("desc"), ["Z9", "A1", "b0", "a0", "A2", "b1", "a1", "_x", "B1"]);
+  });
+});
