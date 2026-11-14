@@ -3,7 +3,7 @@
 // spec/behaviors/25-testing-harness.md, BEH-EA-193 through BEH-EA-200.
 //
 // **What is deliberately not built here, and why:**
-// - BEH-EA-193's "permissive `RateLimiter`" is wired in below
+// - BEH-EA-193's "permissive `RateLimiter`" is wired in `internal/composition.ts`
 //   (`RateLimiter.layerPermissive`, `@awthaq/ports`'s own BEH-EA-112
 //   default; `rateLimiter: "enforcing"` swaps in the real in-memory limiter).
 //   `RateLimits.layer` (`@awthaq/core`'s per-plugin rule
@@ -61,6 +61,14 @@
 // caller that has installed `Roles` passes `onSignedUp: (userId) =>
 // roles.assign(userId, "member")`; `signInAs` runs it, if given, right after
 // issuing the user and before minting the session.
+//
+// **Module map.** This file is a facade: it defines nothing and re-exports by name what
+// lives in `internal/composition.ts` (test ports, guard, `layer`), `internal/session.ts`
+// (request facts, session and CSRF minting), `internal/appHarness.ts` (`serve`, `listen`,
+// `withApp`, `lazyApp`, `buildContext`, the open-app counter), `internal/contractRunner.ts`
+// (`runPluginContractTests`, `migratedSchema`) and `internal/foundation.ts`
+// (`memoryFoundation`).
+
 // ELC-004: `memoryFoundation`, what every memory layer needs beneath it (defined in `internal/foundation.ts`,
 // shared with `RecordsContract`).
 export { memoryFoundation } from "./internal/foundation.ts";
@@ -98,14 +106,14 @@ export type {
   SignedInAgent,
 } from "./internal/appHarness.ts";
 
-export type { TestFramework } from "./TestFramework.ts";
-
 export {
   migratedSchema,
   runPluginContractTests,
   throwingFramework,
 } from "./internal/contractRunner.ts";
 export type { ContractTestOptions, RecordsOption } from "./internal/contractRunner.ts";
+
+export type { TestFramework } from "./TestFramework.ts";
 
 // Plan 05: the plugin-table conformance suites, beside `runPluginContractTests` so a third-party
 // plugin runs them the same way (`TestAuth.runTenantIsolationTests`, `TestAuth.runSealedColumnTests`).
