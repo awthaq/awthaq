@@ -18,7 +18,7 @@
 //   directory's `userName` for a user (unique per connection); `externalId` is the
 //   directory's own key (unique per connection and kind, when present).
 
-import { SqlTransaction } from "@awthaq/ports";
+import { Keyset, SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -176,9 +176,11 @@ const byCreation = <A extends { readonly createdAt: DateTime.Utc }>(
   tieBreak: (row: A) => string,
 ): ReadonlyArray<A> =>
   [...rows].sort(
-    (a, b) =>
-      DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt) ||
-      tieBreak(a).localeCompare(tieBreak(b)),
+    Keyset.chronological({
+      createdAt: (row: A) => row.createdAt,
+      id: tieBreak,
+      direction: "asc",
+    }),
   );
 
 // ---- layerMemory ------------------------------------------------------------------------

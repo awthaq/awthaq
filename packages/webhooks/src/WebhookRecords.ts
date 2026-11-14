@@ -26,7 +26,7 @@
 // and the worker, which run with no tenant and serve every tenant's endpoints, present a
 // `TenantScoped.CrossTenant` witness, so a method that spans tenants says so in its signature.
 
-import { type Encryption, SqlTransaction } from "@awthaq/ports";
+import { type Encryption, Keyset, SqlTransaction } from "@awthaq/ports";
 import {
   Models as SqlModels,
   SealedColumn,
@@ -315,9 +315,11 @@ const byCreation = <A extends { readonly createdAt: DateTime.Utc; readonly id: s
   rows: ReadonlyArray<A>,
 ): ReadonlyArray<A> =>
   [...rows].sort(
-    (a, b) =>
-      DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt) ||
-      a.id.localeCompare(b.id),
+    Keyset.chronological({
+      createdAt: (row: A) => row.createdAt,
+      id: (row) => row.id,
+      direction: "asc",
+    }),
   );
 
 const millis = DateTime.toEpochMillis;

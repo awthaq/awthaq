@@ -18,7 +18,7 @@
 // - `saml_session` — which local sessions a connection's sign-ins created, with the NameID and SessionIndex the IdP knows
 //   them by (BEH-EA-315): what a Single Logout request from the IdP has to find.
 
-import { type Encryption, SqlTransaction } from "@awthaq/ports";
+import { type Encryption, Keyset, SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels, SealedColumn, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -264,18 +264,22 @@ const sortedDomains = (domains: ReadonlyArray<string>): ReadonlyArray<string> =>
 
 const byCreation = (rows: ReadonlyArray<ConnectionRecord>): ReadonlyArray<ConnectionRecord> =>
   [...rows].sort(
-    (a, b) =>
-      DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt) ||
-      a.id.localeCompare(b.id),
+    Keyset.chronological({
+      createdAt: (row: ConnectionRecord) => row.createdAt,
+      id: (row) => row.id,
+      direction: "asc",
+    }),
   );
 
 const newestFirst = <A extends { readonly createdAt: DateTime.Utc; readonly id: string }>(
   rows: ReadonlyArray<A>,
 ): ReadonlyArray<A> =>
   [...rows].sort(
-    (a, b) =>
-      DateTime.toEpochMillis(b.createdAt) - DateTime.toEpochMillis(a.createdAt) ||
-      b.id.localeCompare(a.id),
+    Keyset.chronological({
+      createdAt: (row: A) => row.createdAt,
+      id: (row) => row.id,
+      direction: "desc",
+    }),
   );
 
 const applyPatch = (
