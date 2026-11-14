@@ -502,8 +502,7 @@ export const layerSql: Layer.Layer<
   ConnectionRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`ConnectionRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("ConnectionRecords");
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const ConnectionRow = makeConnectionRow(wire);
