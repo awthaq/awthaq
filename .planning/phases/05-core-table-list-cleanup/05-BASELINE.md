@@ -200,4 +200,21 @@ Every gate exits as it did here: all gates 0 except `pnpm knip`, which exits 1 f
 
 ## Wave 0 pins
 
-(filled by 05-01 Task 2 and 05-02)
+Wave 0 pins are written and green against untouched `packages/*/src`: `git diff --quiet ea56a16f -- packages/sql/src packages/core/src packages/test/src spec features examples .changeset` exits 0 at each Wave 0 commit. Every expected value is an inline literal (never the list it guards, never a file snapshot), and the file imports nothing this phase adds.
+
+### 05-01 Task 2: `packages/sql/test/CoreTablePins.test.ts` (9 tests)
+
+| Pin | Tests | What it freezes |
+|-----|-------|-----------------|
+| P1 | 1 | `partitionedTables` = sessions, verification_tokens, verification_reservations, auth_audit_log; `directoryTables` = users, accounts, both with their order, compared through `ReadonlyArray<string>` so the file type-checks against the tuples now and the arrays later |
+| P2 | 5 | the whole `{ covered, skipped }` of `TenantScope.coverage` for undefined; `{ includeDirectory }`; `{ plugins: declared }`; `{ plugins, includeKeyed }`; all three; frozen from a real run (see below) |
+| P3 | 2 | `CoreSealedColumns.deployed({ encryptPii: true })` = the six `[table, column, key, adoptPlaintext, aadOf(column, "<id>")]` tuples (accounts accessToken, refreshToken, idToken with adoptPlaintext false; users metadata, sessions ipAddress, userAgent with true; key "id" for all); `{ encryptPii: false }` = the first three |
+| P4 | 1 | after the core migrations the tables are accounts, auth_audit_log, auth_relay_cursor, sessions, users, verification_reservations, verification_tokens; after `RateLimiterStoreSql.migrate` as well, those plus awthaq_rate_limiter_migrations and rate_limit_buckets (raw `schemaOf` output, ledger included, same on both dialects) |
+
+Runs, against untouched `src`:
+
+- `npx vitest run packages/sql/test/CoreTablePins.test.ts` (SQLite): Test Files 1 passed (1); Tests 9 passed (9).
+- The same with `AWTHAQ_POSTGRES_URL=postgres://postgres:pw@localhost:55433/awthaq` (run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)): Test Files 1 passed (1); Tests 9 passed (9).
+- `npx tsc -b tsconfig.json` exit 0; `npx tsc -p tsconfig.test.json` prints no `error TS` (only the two pre-existing TS377149 warnings); `pnpm lint` exit 0 with nothing under `packages/`; `pnpm format:check` exit 0 (1225 files).
+- Mutations seen to fail and reverted: swapping "verification_tokens" and "verification_reservations" in the P1 literal failed the P1 test (Tests 1 failed | 8 passed); changing the expected AAD `users:<id>:metadata` to `users:<id>:meta` failed the encryptPii P3 test (Tests 1 failed | 8 passed); reverted, 9 pass again.
+- P2 versus RESEARCH Q2: no difference; the printed output matched the reading. The five real outputs were taken with a temporary probe test (deleted, never committed). Order notes frozen by the pins: Partitioned and Keyed plugin tables are pushed in declaration order before any Derived table, so with `includeKeyed` the order is webhooks_endpoint, organization_org, organization_team, then webhooks_delivery, organization_team_membership, organization_active_context; a Keyed table's column is its own key (`organization_org` on `id`, `organization_team` on `organizationId`), the Partitioned one uses `tenantId`; without `includeKeyed` the only skipped entry is `organization_team_membership` with reason "its parent table is not covered by this call".
