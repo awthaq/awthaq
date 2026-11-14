@@ -5,16 +5,16 @@ milestone_name: Architecture Deepening, batch 3
 current_phase: 01
 current_phase_name: CLI views and ConfigList removal
 status: executing
-stopped_at: Completed 01-02-PLAN.md
-last_updated: "2026-11-14T02:46:21.547Z"
+stopped_at: Completed 01-03-PLAN.md
+last_updated: "2026-11-14T02:52:38.559Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 01 execution started
-state_head: 5488856d7caced730284ab5b3afcbfa966c9e45d
+state_head: 4746297555e9e3c0d68b0bb889507dd772ac4937
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 01 (CLI views and ConfigList removal) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-11-14 — Phase 01 execution started
 
@@ -59,6 +59,7 @@ Progress: [░░░░░░░░░░] 0%
 |------|----------|-------|-------|
 | Phase 01 P01 | 20min | 3 tasks | 5 files |
 | Phase 01 P02 | 2 min | 2 tasks | 3 files |
+| Phase 01 P03 | 8 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,7 @@ Recent decisions affecting current work:
 - [Decided]: SAML suspended-org gate is `findActive` on create and update, none on remove; cursors byte-identical per listing; id collation declared stable by construction
 - [Phase 01]: Plugin view matrix encodes the resolution contract (dot only where a view has a dot branch, then json if --format json or --json, else text) and pins failure rendering at exit 9 on the global --json only
 - [Phase 01]: 01-02: PluginViews.render resolves --format and global --json once; DOT printed with { json: false } so the global flag cannot turn it into a document; Output.report gains optional { json } override
+- [Phase 01]: Migration.apply status preview stays hand-guarded: it prints before the drift and pending checks while Output.report couples text and document at one point
 
 ### Pending Todos
 
@@ -94,6 +96,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T02:46:21.530Z
-Stopped at: Completed 01-02-PLAN.md
+Last session: 2026-11-14T02:52:38.531Z
+Stopped at: Completed 01-03-PLAN.md
 Resume file: None

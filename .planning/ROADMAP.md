@@ -36,14 +36,14 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. All four `plugin` views render through one views module that resolves `--format` and `--json` once, with output identical to today.
   4. `ConfigList` is absent from the package export and the tree, a changeset with a `Migration:` line exists, and `spec/behaviors/26-cli.md` (lines 46 and 398) is updated with Revision and Change History bumped together.
   5. `Migration.apply` and `Openapi` write through the same `Output` seam wherever that costs no behaviour change, proven by their existing tests passing unmodified.
-**Plans**: 2/4 plans executed
+**Plans**: 3/4 plans executed
 Plans:
 **Wave 1**
 - [x] 01-01-PLAN.md — Wave 0: gate baseline (01-BASELINE.md) and pre-refactor pins (PluginViews.test.ts matrix, openapi, migration apply, config list)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [x] 01-02-PLAN.md — Views module: Output.report `{ json }` override, PluginViews.ts, every plugin view through it
-- [ ] 01-03-PLAN.md — ConfigList inlined into Cli.ts and removed; Openapi and Migration.apply on the Output seam
+- [x] 01-03-PLAN.md — ConfigList inlined into Cli.ts and removed; Openapi and Migration.apply on the Output seam
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 01-04-PLAN.md — Changeset with Migration line, 26-cli.md and traceability.md revisions, phase-close gates vs baseline
@@ -141,7 +141,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7. Phases 1
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. CLI views and ConfigList removal | 2/4 | In Progress | - |
+| 1. CLI views and ConfigList removal | 3/4 | In Progress | - |
 | 2. Split TestAuth | 0/TBD | Not started | - |
 | 3. Keyset-page module | 0/TBD | Not started | - |
 | 4. Connection-lifecycle module | 0/TBD | Not started | - |
