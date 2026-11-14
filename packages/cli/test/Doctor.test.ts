@@ -21,7 +21,6 @@ import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { role } from "@qadi/core";
 import { LinkProblem } from "../src/CliErrors.ts";
-import * as ConfigList from "../src/ConfigList.ts";
 import * as Doctor from "../src/Doctor.ts";
 import * as Output from "../src/Output.ts";
 import { runCli } from "./support/RunCli.ts";
@@ -234,9 +233,8 @@ describe("doctor: no secret values (ECS-005)", () => {
         const { text } = yield* finishOutput(report, json);
         for (const canary of CANARIES) assert.notInclude(text, canary);
       }
-      const listed = yield* Output.capture(false);
-      yield* ConfigList.show(config).pipe(Effect.provide(listed.layer));
-      const text = (yield* Ref.get(listed.captured.stdout)).join("\n");
+      const listed = yield* runCli(["config", "list"], config);
+      const text = listed.stdout.join("\n");
       for (const canary of CANARIES) assert.notInclude(text, canary);
       assert.include(text, "clientSecret = <redacted>");
       assert.include(text, "signingKey = <redacted>");
