@@ -4,18 +4,18 @@ milestone: v1.0
 milestone_name: Architecture Deepening, batch 3
 current_phase: 2
 current_phase_name: Split TestAuth
-status: planning
-stopped_at: Phase 1 complete, ready to plan Phase 2
-last_updated: "2026-11-14T03:23:18.520Z"
+current_plan: 2
+status: executing
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-11-14T04:22:48.904Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 1 complete, transitioned to Phase 2
-state_head: 8785e229bd5a215a901bc5e8db688b0ec37c8ade
+state_head: 5ae0ef19bd4aa31dab1694f830183010af406e49
 progress:
   total_phases: 7
   completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
-  percent: 14
+  total_plans: 9
+  completed_plans: 5
 ---
 
 # Project State
@@ -30,8 +30,9 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 2 — Split TestAuth
-Plan: Not started
-Status: Ready to plan
+Current Plan: 2
+Total Plans in Phase: 5
+Status: Ready to execute
 Last activity: 2026-11-14 — Phase 1 complete, transitioned to Phase 2
 
 Progress: [█░░░░░░░░░] 14%
@@ -62,6 +63,7 @@ Progress: [█░░░░░░░░░] 14%
 | Phase 01 P02 | 2 min | 2 tasks | 3 files |
 | Phase 01 P03 | 8 min | 2 tasks | 6 files |
 | Phase 01 P04 | 25 min | 3 tasks | 3 files |
+| Phase 02 P01 | 25min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -78,6 +80,7 @@ Recent decisions affecting current work:
 - [Phase 01]: 01-02: PluginViews.render resolves --format and global --json once; DOT printed with { json: false } so the global flag cannot turn it into a document; Output.report gains optional { json } override
 - [Phase 01]: Migration.apply status preview stays hand-guarded: it prints before the drift and pending checks while Output.report couples text and document at one point
 - [Phase 01]: 01-04: one minor changeset covers both the views module and the ConfigList export removal; all baseline gates re-run green at phase close
+- [Phase 02]: Surface probe kept outside the repo (never committed); TestAuth surface pinned by TestAuthSurface.test.ts (23 values runtime, 24 types compile-time)
 
 ### Pending Todos
 
@@ -99,6 +102,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T03:06:50.290Z
-Stopped at: Phase 1 complete, ready to plan Phase 2
+Last session: 2026-11-14T04:22:41.268Z
+Stopped at: Completed 02-01-PLAN.md
 Resume file: None
