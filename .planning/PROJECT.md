@@ -44,6 +44,11 @@ Composition is checked by the compiler: a missing plugin, port or duplicate slot
 |----------|-----------|---------|
 | Bootstrap GSD beside the existing numbered plans | User chose this on 2026-11-14 over continuing the plan-NN format | — Pending |
 | Scope all 8 review candidates | User: "resolve all the Arch issues" | — Pending |
+| Run executors sequentially in the milestone worktree (`workflow.use_worktrees=false`) | The worktree is the only checkout with `node_modules` and a built `lib/`; per-plan sub-worktrees would need a fresh install and merge-back | ✓ Phase 1 |
+| Pin output before moving it: baseline and test matrix commit green before any `src` change | A behaviour-preserving refactor needs an oracle that predates it | ✓ Phase 1 |
+| `config list` inlined into `Cli.ts`, `ConfigList` removed from the `@awthaq/cli` export (minor changeset with `Migration:` line) | A single-use module behind a public export was a pass-through; the ECS-005 canary guards redaction | ✓ Phase 1 |
+| `Output.report` takes an optional `{ json }` override; plugin views resolve `--format`/`--json` once in `PluginViews.ts` | Dot beats `--json` on graph/default only; the override keeps that precedence exact | ✓ Phase 1 |
+| `Migration.apply` result and `openapi` stdout go through `Output.report`; the apply status preview stays hand-guarded | The preview prints before the drift and pending checks, while `report` couples text and document at one point | ✓ Phase 1 |
 
 ## Current Milestone: v1.0 Architecture Deepening, batch 3
 
@@ -77,4 +82,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-11-14 after milestone v1.0 start*
+*Last updated: 2026-11-14 after Phase 1*
