@@ -4,18 +4,18 @@ milestone: v1.0
 milestone_name: Architecture Deepening, batch 3
 current_phase: 4
 current_phase_name: Connection-lifecycle module
-current_plan: 8
+current_plan: 9
 status: executing
-stopped_at: Completed 04-07-PLAN.md
-last_updated: "2026-11-14T13:14:37.542Z"
+stopped_at: Completed 04-08-PLAN.md
+last_updated: "2026-11-14T13:19:58.591Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 3 complete, transitioned to Phase 4
-state_head: 4f714fe576b49ae0f12f45bde55fe5a09486919d
+state_head: 2378e6e1fa11e7b0d05423ae3a79f8f149389f94
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 27
-  completed_plans: 25
+  completed_plans: 26
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 4 — Connection-lifecycle module
-Current Plan: 8
+Current Plan: 9
 Total Plans in Phase: 9
 Status: Ready to execute
 Last activity: 2026-11-14 — Phase 3 complete, transitioned to Phase 4
@@ -86,6 +86,7 @@ Progress: [████░░░░░░] 43%
 | Phase 04 P05 | 25min | 2 tasks | 4 files |
 | Phase 04 P06 | 30min | 2 tasks | 3 files |
 | Phase 04 P07 | 25min | 2 tasks | 9 files |
+| Phase 04 P08 | 25min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -123,6 +124,7 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-05: OIDC remove reads the row first for its previous domains; events and cache invalidation stay in the store after the lifecycle returns
 - [Phase 04]: 04-06: SqlTransaction stays in the SAML plugin ports (tsc rejects the drop); SAML update/refresh answer NotFound before the lifecycle gate; BDD red window closed (1580 passed, 0 failed)
 - [Phase 04]: 04-07: DomainClaims reachable only at @awthaq/organization/records; RecordsBoundary.test.ts refuses non-organization src imports of it and a root export; withClaim/withRelease deleted
+- [Phase 04]: 04-08: suspended and missing organizations stay indistinguishable in the spec wording; DomainClaims.test.ts traceability row narrowed to the Postgres lock test
 
 ### Pending Todos
 
@@ -144,6 +146,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T13:14:37.462Z
-Stopped at: Completed 04-07-PLAN.md
+Last session: 2026-11-14T13:19:58.513Z
+Stopped at: Completed 04-08-PLAN.md
 Resume file: None
