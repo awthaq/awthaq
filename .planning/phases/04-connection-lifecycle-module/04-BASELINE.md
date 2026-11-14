@@ -250,3 +250,19 @@ Task 3 additions (SAML store and admin pins, SCIM characterization), memory reco
 | `an organization deletion racing a create for it leaves no connection, claim or owner row behind` | `AssertionError: expected { delete: 'ok', …(4) } to deeply equal { delete: 'ok', …(4) }`: `claimRows` 0 vs 1, `connectionRows` 0 vs 1, `ownerRows` 0 vs 1 (the create lands an orphan connection, claim and owner row after the deletion cleared the organization; the create is not `StoreUnavailable`). | 04-05 (in-lock `findActive` re-check) |
 
 Note for the later plans: a case name keeps the word `opposite` (case 2), the filter `-t 'opposite'` used by 04-03 selects only that case. The whole file is the phase-close Postgres oracle (see the comparison rule above).
+
+## 04-03 Postgres
+
+Plan 04-03 (DomainClaims advisory lock plus sorted owner acquisition). All Postgres results below: run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote). `AWTHAQ_POSTGRES_URL=postgres://postgres:pw@localhost:55433/awthaq` passed explicitly.
+
+### Task 1: lock, sorted acquisition, lock-key proof
+
+- Memory and SQLite quick run (`DomainClaims.test.ts`, `Contract.test.ts`, `ConnectionLifecyclePins.test.ts`, `OrganizationConnections.test.ts`, `packages/saml/test/SamlLifecyclePins.test.ts`, `packages/saml/test/SamlDomainClaims.test.ts`): `Test Files  6 passed (6)`, `Tests  567 passed | 3 skipped (570)` (the 3 skipped are the Postgres-only "claim lock" cases).
+- Postgres: `npx vitest run packages/organization/test/DomainClaims.test.ts packages/organization/test/Contract.test.ts packages/organization/test/ConnectionLifecyclePins.test.ts`: `Test Files  3 passed (3)`, `Tests  549 passed (549)`; the three "the claim lock" cases (claim, release, releaseAllForOrganization of org-1) pass: `organization_domain_claim:org:org-1` held, `organization_domain_claim:org:org-2` not.
+- Race file on Postgres (`OrganizationConnectionLifecycle.sql.test.ts`): `Tests  2 failed | 1 passed (3)`; `-t 'opposite'`: `Tests  1 passed | 2 skipped (3)`.
+
+| Race case | State after 04-03 | Current assertion message |
+|-----------|-------------------|---------------------------|
+| `an update racing a remove of the same connection ...` (1) | red, unchanged from Wave 0 | `expected { remove: 'StoreUnavailable', …(6) } to deeply equal { remove: 'ok', …(6) }`: `claimRows` 0 vs 1, `connectionRows` 0 vs 1, `domainRows` 0 vs 1, `ownerRows` 0 vs 1, `remove` "ok" vs "StoreUnavailable", `storeUnavailable` 0 vs 1; needs the claims-first lifecycle (04-05) |
+| `two organizations claiming the same two domains in opposite order ...` (2) | GREEN | (turned green by the sorted owner inserts plus the organization-level lock) |
+| `an organization deletion racing a create for it ...` (3) | red, unchanged from Wave 0 | `expected { delete: 'ok', …(4) } to deeply equal { delete: 'ok', …(4) }`: `claimRows` 0 vs 1, `connectionRows` 0 vs 1, `ownerRows` 0 vs 1; needs the in-lock `findActive` re-check (04-05) |

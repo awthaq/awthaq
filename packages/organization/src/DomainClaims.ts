@@ -22,8 +22,14 @@
 // A claim is written inside the caller's transaction (`SqlTransaction`) beside the connection row: a refused
 // claim rolls the connection write back. The memory twin is atomic per `Ref`; the caller there releases on a
 // failed write.
+//
+// Claim, release and release-all are serialised per organization by an advisory lock (`SqlStore.atomically`,
+// key `organization_domain_claim:org:<organizationId>`, Postgres only; SQLite has one writer). With claims-first
+// ordering in the connection lifecycle that removes the update-versus-remove deadlock and the orphan; owner rows
+// are inserted in sorted order, so two organizations claiming the same domains in opposite order never wait on
+// each other's owner rows either.
 
-import { StoreFailure, TenantScoped } from "@awthaq/sql";
+import { SqlStore, StoreFailure, TenantScoped } from "@awthaq/sql";
 import { SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -152,16 +158,26 @@ export const layerSql = Layer.effect(
         sql`SELECT "organizationId" FROM organization_domain_owner WHERE domain = ${domain}`,
     });
 
+    /** ADR-EA-041 decision 9 key convention: `<table>:<scope>:<id>`. */
+    const lockKey = (organizationId: string) => `organization_domain_claim:org:${organizationId}`;
+
     /** An organization's owner rows that no claim backs any more. */
     const dropOrphanOwners = (organizationId: string) =>
       sql`DELETE FROM organization_domain_owner WHERE "organizationId" = ${organizationId} AND NOT EXISTS (SELECT 1 FROM organization_domain_claim c WHERE c.domain = organization_domain_owner.domain)`;
 
     const claim: DomainClaimsShape["claim"] = (input) =>
-      SqlTransaction.transactional(sql)(
+      SqlStore.atomically(
+        sql,
+        lockKey(input.organizationId),
+      )(
         Effect.gen(function* () {
-          for (const domain of input.domains) {
-            // The primary key decides a race: the loser's insert is skipped and the read names the winner.
+          // The primary key still decides a race: the loser's insert is skipped and the read names the winner.
+          // One sorted insert order for every caller removes the opposite-order deadlock; reading in the
+          // caller's order keeps the refused domain the first foreign one the claim lists.
+          for (const domain of input.domains.toSorted()) {
             yield* sql`INSERT INTO organization_domain_owner (domain, "organizationId") VALUES (${domain}, ${input.organizationId}) ON CONFLICT (domain) DO NOTHING`;
+          }
+          for (const domain of input.domains) {
             // Only this read crosses organizations; the writes stay confined by the row-level policy.
             const owner = yield* ownerOf(domain).pipe(TenantScoped.liftOn(sql, claimGrant));
             if (Option.isNone(owner) || owner.value.organizationId !== input.organizationId) {
@@ -177,7 +193,10 @@ export const layerSql = Layer.effect(
       ).pipe(unavailable("claim"));
 
     const release: DomainClaimsShape["release"] = (organizationId, connectionId) =>
-      SqlTransaction.transactional(sql)(
+      SqlStore.atomically(
+        sql,
+        lockKey(organizationId),
+      )(
         Effect.gen(function* () {
           yield* sql`DELETE FROM organization_domain_claim WHERE "connectionId" = ${connectionId} AND "organizationId" = ${organizationId}`;
           yield* dropOrphanOwners(organizationId);
@@ -187,7 +206,10 @@ export const layerSql = Layer.effect(
     const releaseAllForOrganization: DomainClaimsShape["releaseAllForOrganization"] = (
       organizationId,
     ) =>
-      SqlTransaction.transactional(sql)(
+      SqlStore.atomically(
+        sql,
+        lockKey(organizationId),
+      )(
         Effect.gen(function* () {
           yield* sql`DELETE FROM organization_domain_claim WHERE "organizationId" = ${organizationId}`;
           yield* sql`DELETE FROM organization_domain_owner WHERE "organizationId" = ${organizationId}`;
