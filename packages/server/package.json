@@ -1,9 +1,13 @@
 {
   "name": "@awthaq/server",
   "version": "0.2.0",
-  "private": true,
   "description": "Middleware implementations, core handlers, AuthHttp — the mechanism that registers a composed HttpApi with a router.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/awthaq/awthaq.git",
+    "directory": "packages/server"
+  },
   "files": [
     "lib",
     "src",

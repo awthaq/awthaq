@@ -1,9 +1,13 @@
 {
   "name": "@awthaq/api",
   "version": "0.2.0",
-  "private": true,
   "description": "Principal, SessionView, SubjectDto, errors, Authentication and CsrfProtection middleware definitions, core groups — isomorphic, no server code, importable in the browser.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/awthaq/awthaq.git",
+    "directory": "packages/api"
+  },
   "files": [
     "lib",
     "src",

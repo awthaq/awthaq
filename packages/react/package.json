@@ -1,9 +1,13 @@
 {
   "name": "@awthaq/react",
   "version": "0.2.0",
-  "private": true,
   "description": "React bindings: reactive AtomHttpApi clients over the awthaq contract (CSRF via @awthaq/client) and Providers with QadiProvider integration.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/awthaq/awthaq.git",
+    "directory": "packages/react"
+  },
   "files": [
     "lib",
     "src",

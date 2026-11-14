@@ -1,9 +1,13 @@
 {
   "name": "@awthaq/two-factor",
   "version": "0.2.0",
-  "private": true,
   "description": "TOTP two-factor authentication: encrypted secrets, hashed recovery codes, a challenge over Verification and opt-in hook gates.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/awthaq/awthaq.git",
+    "directory": "packages/two-factor"
+  },
   "files": [
     "lib",
     "src",
