@@ -12,7 +12,7 @@
 // `revoke` answers whether this call is the one that revoked the key.
 
 import { Users } from "@awthaq/core";
-import { Defects, SqlTransaction } from "@awthaq/ports";
+import { Defects, Keyset, SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -96,10 +96,13 @@ export class ApiKeyRecords extends Context.Service<ApiKeyRecords, ApiKeyRecordsS
 // ---- layerMemory ------------------------------------------------------------
 
 const newestFirst = (records: ReadonlyArray<ApiKeyRecord>): ReadonlyArray<ApiKeyRecord> =>
-  [...records].sort((a, b) => {
-    const byTime = DateTime.toEpochMillis(b.createdAt) - DateTime.toEpochMillis(a.createdAt);
-    return byTime !== 0 ? byTime : a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
-  });
+  [...records].sort(
+    Keyset.chronological({
+      createdAt: (record: ApiKeyRecord) => record.createdAt,
+      id: (record) => record.id,
+      direction: "desc",
+    }),
+  );
 
 const millis = DateTime.toEpochMillis;
 

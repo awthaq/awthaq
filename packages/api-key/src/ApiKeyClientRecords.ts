@@ -7,7 +7,7 @@
 // so a rotation never needs a hard cut-over.
 
 import { Users } from "@awthaq/core";
-import { Defects } from "@awthaq/ports";
+import { Defects, Keyset } from "@awthaq/ports";
 import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -75,10 +75,13 @@ export class ApiKeyClientRecords extends Context.Service<
 const newestFirst = (
   records: ReadonlyArray<ApiKeyClientRecord>,
 ): ReadonlyArray<ApiKeyClientRecord> =>
-  [...records].sort((a, b) => {
-    const byTime = DateTime.toEpochMillis(b.createdAt) - DateTime.toEpochMillis(a.createdAt);
-    return byTime !== 0 ? byTime : a.clientId < b.clientId ? 1 : a.clientId > b.clientId ? -1 : 0;
-  });
+  [...records].sort(
+    Keyset.chronological({
+      createdAt: (record: ApiKeyClientRecord) => record.createdAt,
+      id: (record) => record.clientId,
+      direction: "desc",
+    }),
+  );
 
 type Clients = HashMap.HashMap<string, ApiKeyClientRecord>;
 
