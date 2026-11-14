@@ -164,12 +164,21 @@ Plans:
   1. Before any scaffolding code is written, an ADR-EA-041 revision note records plan 24 Track A as closed and ADR-EA-046's fate (use or release) is decided in `spec/decisions/`.
   2. A spike on `DeviceClientRecords`, `ApiKeyClientRecords`, `ApiKeyRecords` and `DeviceGrantRecords` produces a written go/no-go, and the call is no-go if fewer than about 5 files share a helper.
   3. On go, shared comparators, tenant-visibility plumbing, `unavailable(op)` labelling, a dialect wire row helper and `SqlStore.make` adoption replace the repeated scaffolding with no `*Shape` change: `RecordsContract` verdicts per operation pass unchanged, every `layerMemory` keeps today's `Ref` count (`ImpersonationRecords` keeps its two `Ref`s and a `Semaphore`), and lock-key strings and operation labels are byte-identical.
-  4. On go, `docs/plugin-authoring.md` and `examples/plugin-template/` are updated last and their tests pass; `pnpm test:pg` passes in CI, recorded as "not run locally".
+  4. On go, `docs/plugin-authoring.md` and `examples/plugin-template/` are updated last and their tests pass; the Postgres legs run locally on the Debian `postgres:16` image and are recorded as "CI confirmation open (no git remote)".
   5. On no-go, the phase closes with REC-03 and REC-04 recorded as not pursued and the reason written down; no scaffolding code lands.
 **Plans**: 3/3 plans executed
 - [x] 06-01-PLAN.md
 - [x] 06-02-PLAN.md
 - [x] 06-03-PLAN.md
+- [ ] 06-04-PLAN.md — F-06-01 fix: scope the advisory-waiter count in the Phase 4 race test to its lock key
+- [ ] 06-05-PLAN.md — Wave 0 pins: operation labels, Ref/Semaphore counts, lock keys, emitted `.d.ts` hashes
+- [ ] 06-06-PLAN.md — Wave 0 pins: equal-`createdAt` tie cases for the comparator adopters
+- [ ] 06-07-PLAN.md — `StoreFailure.labelled` and its adoption, device-authorization, api-key, jwt, admin
+- [ ] 06-08-PLAN.md — `StoreFailure.labelled` adoption, organization, saml, scim, webhooks
+- [ ] 06-09-PLAN.md — `Keyset.chronological` and its adoption, device and api-key
+- [ ] 06-10-PLAN.md — `Keyset.chronological` adoption, organization, saml, scim, webhooks
+- [ ] 06-11-PLAN.md — docs and template check, spec rows, changeset
+- [ ] 06-12-PLAN.md — phase close: gates on SQLite and Postgres, census, REC-03 closure
 **Research**: recommended (spike with go/no-go; plan 24 Track A dependency)
 
 ### Phase 7: World scaffold and Credentials split (optional)
