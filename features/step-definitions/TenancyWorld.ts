@@ -37,6 +37,7 @@ import {
 } from "@awthaq/core";
 import {
   Organization,
+  OrganizationConnectionLifecycle,
   OrganizationConnections,
   OrganizationDirectory,
   OrganizationHooks,
@@ -296,6 +297,7 @@ const ActiveOrganizations = Layer.succeed(
 const buildConnectionStack = () =>
   Layer.mergeAll(OrganizationConnections.layerStore, OrganizationConnections.oauthConnections).pipe(
     Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
+    Layer.provideMerge(OrganizationConnectionLifecycle.OrganizationConnectionLifecycle.layer),
     Layer.provideMerge(ConnectionRecords.layerMemory),
     Layer.provideMerge(DomainClaims.layerMemory),
     Layer.provideMerge(SqlTransaction.layerNoop),

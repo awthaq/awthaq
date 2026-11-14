@@ -52,6 +52,7 @@ import * as Data from "effect/Data";
 import * as ConnectionRecords from "./ConnectionRecords.ts";
 import * as DomainClaims from "./DomainClaims.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
+import * as OrganizationConnectionLifecycle from "./OrganizationConnectionLifecycle.ts";
 import * as OrganizationDeletion from "./OrganizationDeletion.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationEvents from "./OrganizationEvents.ts";
@@ -335,6 +336,16 @@ export class OrganizationConnectionStore extends Context.Service<
 const endpointProblem = (field: string, value: string): Option.Option<string> =>
   OutboundUrl.problem(field, value);
 
+/** How the OIDC store speaks to the lifecycle: its claim rows say `"oauth"`, its refusals are its own errors. */
+const oauthProtocol: OrganizationConnectionLifecycle.ConnectionProtocol<
+  InvalidConnection,
+  ConnectionRecords.ConnectionDomainTaken
+> = {
+  protocol: "oauth",
+  refuse: (reason) => new InvalidConnection({ reason }),
+  taken: (domain) => new ConnectionRecords.ConnectionDomainTaken({ domain }),
+};
+
 const DOMAIN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 
 const normalizeDomains = (
@@ -424,6 +435,7 @@ export const layerStore = Layer.effect(
     const transaction = yield* SqlTransaction.SqlTransaction;
     const map = yield* OrganizationConnections;
     const directory = yield* OrganizationDirectory.OrganizationDirectory;
+    const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
     const events = yield* AuthEvents.AuthEvents;
     const random = yield* SecureRandom.SecureRandom;
 
@@ -456,47 +468,52 @@ export const layerStore = Layer.effect(
 
     const create: OrganizationConnectionStoreShape["create"] = Effect.fnUntraced(
       function* (actor, input) {
-        yield* requireActiveOrganization(input.organizationId);
-        const id = yield* random
-          .uuidV7()
-          .pipe(Effect.catch(StoreFailure.storeUnavailable("OrganizationConnectionStore.create")));
-        const scopes = input.scopes ?? [];
-        yield* validate({
-          kind: input.kind,
-          name: input.name,
-          issuer: Option.fromNullishOr(input.issuer),
-          discoveryUrl: Option.fromNullishOr(input.discoveryUrl),
-          authorizationEndpoint: Option.fromNullishOr(input.authorizationEndpoint),
-          tokenEndpoint: Option.fromNullishOr(input.tokenEndpoint),
-          jwksUri: Option.fromNullishOr(input.jwksUri),
-          userinfoEndpoint: Option.fromNullishOr(input.userinfoEndpoint),
-          clientId: input.clientId,
-          scopes,
-        });
-        const emailDomains = yield* normalizeDomains(input.emailDomains ?? []);
-        const record = yield* claimed(
-          {
-            organizationId: input.organizationId,
-            protocol: "oauth",
-            connectionId: id,
-            domains: emailDomains,
-          },
-          undefined,
-          records.create({
-            id,
-            organizationId: input.organizationId,
-            kind: input.kind,
-            name: input.name.trim(),
-            issuer: input.issuer,
-            discoveryUrl: input.discoveryUrl,
-            authorizationEndpoint: input.authorizationEndpoint,
-            tokenEndpoint: input.tokenEndpoint,
-            jwksUri: input.jwksUri,
-            userinfoEndpoint: input.userinfoEndpoint,
-            clientId: input.clientId,
-            clientSecret: input.clientSecret,
-            scopes,
-            emailDomains,
+        const record = yield* lifecycle.create(
+          oauthProtocol,
+          input.organizationId,
+          Effect.gen(function* () {
+            const id = yield* random
+              .uuidV7()
+              .pipe(
+                Effect.catch(StoreFailure.storeUnavailable("OrganizationConnectionStore.create")),
+              );
+            const scopes = input.scopes ?? [];
+            yield* validate({
+              kind: input.kind,
+              name: input.name,
+              issuer: Option.fromNullishOr(input.issuer),
+              discoveryUrl: Option.fromNullishOr(input.discoveryUrl),
+              authorizationEndpoint: Option.fromNullishOr(input.authorizationEndpoint),
+              tokenEndpoint: Option.fromNullishOr(input.tokenEndpoint),
+              jwksUri: Option.fromNullishOr(input.jwksUri),
+              userinfoEndpoint: Option.fromNullishOr(input.userinfoEndpoint),
+              clientId: input.clientId,
+              scopes,
+            });
+            const emailDomains = yield* OrganizationConnectionLifecycle.normalizeDomains(
+              oauthProtocol,
+              input.emailDomains ?? [],
+            );
+            return {
+              connectionId: id,
+              domains: emailDomains,
+              write: records.create({
+                id,
+                organizationId: input.organizationId,
+                kind: input.kind,
+                name: input.name.trim(),
+                issuer: input.issuer,
+                discoveryUrl: input.discoveryUrl,
+                authorizationEndpoint: input.authorizationEndpoint,
+                tokenEndpoint: input.tokenEndpoint,
+                jwksUri: input.jwksUri,
+                userinfoEndpoint: input.userinfoEndpoint,
+                clientId: input.clientId,
+                clientSecret: input.clientSecret,
+                scopes,
+                emailDomains,
+              }),
+            };
           }),
         );
         yield* map.invalidate(input.organizationId);
