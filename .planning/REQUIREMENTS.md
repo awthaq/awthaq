@@ -9,7 +9,7 @@ Milestone "Architecture Deepening, batch 3". Each maps to roadmap phases. Resear
 
 ### CLI views (C5)
 
-- [ ] **CLI-01**: Maintainer can render every `plugin` view (hooks, rules, events, graph) through one views module that resolves `--format` and `--json` once, with identical output to today (graph: `dot` beats `--json`; hooks/rules/events have no dot branch)
+- [x] **CLI-01**: Maintainer can render every `plugin` view (hooks, rules, events, graph) through one views module that resolves `--format` and `--json` once, with identical output to today (graph: `dot` beats `--json`; hooks/rules/events have no dot branch)
 - [x] **CLI-02**: A mode x (text, `--format json`, `--json`, dot) test matrix pins current CLI output before the refactor
 - [ ] **CLI-03**: `ConfigList` is removed from the package export and inlined, with a changeset carrying a `Migration:` line and `spec/behaviors/26-cli.md` (lines 46, 398) updated and Revision bumped
 - [ ] **CLI-04**: `Migration.apply` and `Openapi` use the same `Output` seam where it costs no behavior change
@@ -101,7 +101,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CLI-01 | Phase 1 | Pending |
+| CLI-01 | Phase 1 | Complete |
 | CLI-02 | Phase 1 | Complete |
 | CLI-03 | Phase 1 | Pending |
 | CLI-04 | Phase 1 | Pending |
