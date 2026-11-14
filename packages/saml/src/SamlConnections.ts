@@ -23,12 +23,8 @@
 // what gets pinned afterwards is the fingerprint, not the document.
 
 import type { Api } from "@awthaq/api";
-import {
-  DomainClaims,
-  OrganizationAuthority,
-  OrganizationConnectionLifecycle,
-} from "@awthaq/organization";
-import { OutboundUrl, SqlTransaction, Tenant } from "@awthaq/ports";
+import { OrganizationAuthority, OrganizationConnectionLifecycle } from "@awthaq/organization";
+import { OutboundUrl, Tenant } from "@awthaq/ports";
 import { StoreFailure, TenantScoped } from "@awthaq/sql";
 import type { XmlSignature } from "@awthaq/ports";
 import { X509Certificate } from "node:crypto";
@@ -101,16 +97,6 @@ export const trustSetOf = (record: SamlRecords.ConnectionRecord): XmlSignature.T
     notAfter: certificate.notAfter,
   })),
 });
-
-const DOMAIN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
-
-const normalizeDomains = (domains: ReadonlyArray<string>) => {
-  const normalized = Array.from(new Set(domains.map((domain) => domain.trim().toLowerCase())));
-  const bad = normalized.find((domain) => !DOMAIN.test(domain));
-  return bad === undefined
-    ? Effect.succeed(normalized)
-    : Effect.fail(invalid(`"${bad}" is not a valid email domain`));
-};
 
 export type IdpSource =
   | { readonly metadataXml: string }
@@ -217,33 +203,16 @@ export class SamlConnectionStore extends Context.Service<
   SamlConnectionStoreShape
 >()("awthaq/saml/SamlConnectionStore") {}
 
-/** Requires `SamlRecords`, `DomainClaims` (organization's record store), `SqlTransaction`, the exposed `OrganizationDirectory`, the exposed `OrganizationAuthority`, `SamlSpKeys`, `SecureRandom` and `SamlConfig`. */
+/** Requires `SamlRecords`, the exposed `OrganizationConnectionLifecycle` (the gate, the domain claims and their atomicity) and `OrganizationAuthority`, `SamlSpKeys`, `SecureRandom` and `SamlConfig`. */
 export const layerStore = Layer.effect(
   SamlConnectionStore,
   Effect.gen(function* () {
     const records = yield* SamlRecords.SamlRecords;
     const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
-    const claims = yield* DomainClaims.DomainClaims;
-    const transaction = yield* SqlTransaction.SqlTransaction;
     const authority = yield* OrganizationAuthority.OrganizationAuthority;
     const spKeys = yield* SamlSpKeys.SamlSpKeys;
     const random = yield* SecureRandom.SecureRandom;
     const settings = yield* yield* Tenant.inForce(SamlConfig.SamlConfigScoped);
-
-    /** BEH-EA-317: a domain another organization owns, over any protocol, is a taken domain; the claim and the row are one unit. */
-    const claimed = <A, E, R>(
-      input: DomainClaims.DomainClaim,
-      previous: ReadonlyArray<string> | undefined,
-      write: Effect.Effect<A, E, R>,
-    ) =>
-      DomainClaims.withClaim(
-        claims,
-        transaction,
-        input,
-        previous,
-        write,
-        (domain) => new SamlRecords.SamlDomainTaken({ domain }),
-      );
 
     const validatedUrl = (field: string, url: string) => {
       const problem = OutboundUrl.problem(field, url, {
@@ -424,54 +393,56 @@ export const layerStore = Layer.effect(
 
     const update: SamlConnectionStoreShape["update"] = Effect.fnUntraced(function* (id, patch) {
       const current = yield* get(id);
-      const ssoUrl =
-        patch.ssoUrl === undefined ? undefined : yield* validatedUrl("ssoUrl", patch.ssoUrl);
-      const sloUrl =
-        patch.sloUrl === undefined || patch.sloUrl === null
-          ? patch.sloUrl
-          : yield* validatedUrl("sloUrl", patch.sloUrl);
-      const idpCertificates =
-        patch.certificates === undefined ? undefined : yield* certificatesOf(patch.certificates);
-      const emailDomains =
-        patch.emailDomains === undefined ? undefined : yield* normalizeDomains(patch.emailDomains);
-      if (patch.entityId !== undefined && patch.entityId.trim() === "") {
-        return yield* Effect.fail(invalid("the IdP entity id is empty"));
-      }
-      const roleMapping =
-        patch.roleMapping === undefined
-          ? undefined
-          : yield* validatedRoleMapping(current.organizationId, patch.roleMapping);
-      const write = records
-        .update(current.organizationId, id, {
-          name: patch.name?.trim(),
-          idpEntityId: patch.entityId?.trim(),
-          ssoUrl,
-          idpCertificates,
-          emailDomains,
-          trustsEmail: patch.trustsEmail,
-          authnRequestsSigned: patch.authnRequestsSigned,
-          sloUrl,
-          sloBinding: patch.sloBinding,
-          metadataUrl: patch.metadataUrl,
-          roleMapping,
-        })
-        .pipe(
-          Effect.catchTag("SamlRecordNotFound", () =>
-            Effect.fail(new SamlConnectionNotFound({ id })),
-          ),
-        );
-      const updated = yield* emailDomains === undefined
-        ? write
-        : claimed(
-            {
-              organizationId: current.organizationId,
-              protocol: "saml",
-              connectionId: id,
-              domains: emailDomains,
-            },
-            current.emailDomains,
-            write,
-          );
+      const updated = yield* lifecycle.update(
+        samlProtocol,
+        current.organizationId,
+        Effect.gen(function* () {
+          const ssoUrl =
+            patch.ssoUrl === undefined ? undefined : yield* validatedUrl("ssoUrl", patch.ssoUrl);
+          const sloUrl =
+            patch.sloUrl === undefined || patch.sloUrl === null
+              ? patch.sloUrl
+              : yield* validatedUrl("sloUrl", patch.sloUrl);
+          const idpCertificates =
+            patch.certificates === undefined
+              ? undefined
+              : yield* certificatesOf(patch.certificates);
+          const emailDomains =
+            patch.emailDomains === undefined
+              ? undefined
+              : yield* OrganizationConnectionLifecycle.normalizeDomains(
+                  samlProtocol,
+                  patch.emailDomains,
+                );
+          if (patch.entityId !== undefined && patch.entityId.trim() === "") {
+            return yield* Effect.fail(invalid("the IdP entity id is empty"));
+          }
+          const roleMapping =
+            patch.roleMapping === undefined
+              ? undefined
+              : yield* validatedRoleMapping(current.organizationId, patch.roleMapping);
+          const write = records
+            .update(current.organizationId, id, {
+              name: patch.name?.trim(),
+              idpEntityId: patch.entityId?.trim(),
+              ssoUrl,
+              idpCertificates,
+              emailDomains,
+              trustsEmail: patch.trustsEmail,
+              authnRequestsSigned: patch.authnRequestsSigned,
+              sloUrl,
+              sloBinding: patch.sloBinding,
+              metadataUrl: patch.metadataUrl,
+              roleMapping,
+            })
+            .pipe(
+              Effect.catchTag("SamlRecordNotFound", () =>
+                Effect.fail(new SamlConnectionNotFound({ id })),
+              ),
+            );
+          return { connectionId: id, domains: emailDomains, previous: current.emailDomains, write };
+        }),
+      );
       yield* ensureSigningKey(updated);
       return updated;
     });
@@ -479,32 +450,44 @@ export const layerStore = Layer.effect(
     const refreshMetadata: SamlConnectionStoreShape["refreshMetadata"] = Effect.fnUntraced(
       function* (id, metadataXml) {
         const current = yield* get(id);
-        const metadata = yield* metadataOf(metadataXml);
-        if (metadata.entityId !== current.idpEntityId) {
-          return yield* Effect.fail(
-            invalid(
-              "the metadata names another entity id: an IdP whose identity changed is a new connection",
-            ),
-          );
-        }
-        const ssoUrl = yield* validatedUrl("ssoUrl", metadata.ssoUrl);
-        const sloUrl =
-          metadata.slo === undefined ? null : yield* validatedUrl("sloUrl", metadata.slo.url);
-        const idpCertificates = yield* certificatesOf(metadata.certificates);
-        return yield* records
-          .update(current.organizationId, id, {
-            ssoUrl,
-            idpCertificates,
-            sloUrl,
-            ...(metadata.slo === undefined ? {} : { sloBinding: metadata.slo.binding }),
-          })
-          .pipe(
-            Effect.catchTag("SamlRecordNotFound", () =>
-              Effect.fail(new SamlConnectionNotFound({ id })),
-            ),
-            // The update names no email domains, so a domain clash cannot arise here.
-            Effect.catchTag("SamlDomainTaken", Effect.die),
-          );
+        const refreshed = lifecycle.update(
+          samlProtocol,
+          current.organizationId,
+          Effect.gen(function* () {
+            const metadata = yield* metadataOf(metadataXml);
+            if (metadata.entityId !== current.idpEntityId) {
+              return yield* Effect.fail(
+                invalid(
+                  "the metadata names another entity id: an IdP whose identity changed is a new connection",
+                ),
+              );
+            }
+            const ssoUrl = yield* validatedUrl("ssoUrl", metadata.ssoUrl);
+            const sloUrl =
+              metadata.slo === undefined ? null : yield* validatedUrl("sloUrl", metadata.slo.url);
+            const idpCertificates = yield* certificatesOf(metadata.certificates);
+            const write = records
+              .update(current.organizationId, id, {
+                ssoUrl,
+                idpCertificates,
+                sloUrl,
+                ...(metadata.slo === undefined ? {} : { sloBinding: metadata.slo.binding }),
+              })
+              .pipe(
+                Effect.catchTag("SamlRecordNotFound", () =>
+                  Effect.fail(new SamlConnectionNotFound({ id })),
+                ),
+              );
+            return {
+              connectionId: id,
+              domains: undefined,
+              previous: current.emailDomains,
+              write,
+            };
+          }),
+        );
+        // The update names no email domains, so a domain clash cannot arise here.
+        return yield* refreshed.pipe(Effect.catchTag("SamlDomainTaken", Effect.die));
       },
     );
 
@@ -527,11 +510,11 @@ export const layerStore = Layer.effect(
       remove: (id) =>
         get(id).pipe(
           Effect.flatMap((current) =>
-            DomainClaims.withRelease(
-              claims,
-              transaction,
+            lifecycle.remove(
+              samlProtocol,
               current.organizationId,
               id,
+              current.emailDomains,
               records.remove(current.organizationId, id),
             ),
           ),

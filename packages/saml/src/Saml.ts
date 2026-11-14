@@ -54,7 +54,6 @@ import {
   XmlSignature,
 } from "@awthaq/ports";
 import {
-  DomainClaims,
   Organization,
   OrganizationActor,
   OrganizationAuthority,
@@ -719,13 +718,13 @@ const SamlContinuationPayload = Schema.Struct({
 /**
  * Plan 04 (F7): an organization's deletion removes its SAML connections with their domains, SP keys and
  * Single Logout session rows, in the deletion's own transaction. Without it those rows outlived the
- * organization (and its email domains stayed routed to a dead connection).
+ * organization. The email domains the connections claimed are freed by the organization's own contribution
+ * at order -1, so this one removes rows only.
  */
 export const samlOrganizationDeletion = OrganizationDeletion.contribute({
   id: "saml",
   make: Effect.gen(function* () {
     const records = yield* SamlRecords.SamlRecords;
-    const claims = yield* DomainClaims.DomainClaims;
     return {
       inTransaction: (organizationId: string) =>
         Effect.flatMap(records.listByOrganization(organizationId), (connections) =>
@@ -735,11 +734,7 @@ export const samlOrganizationDeletion = OrganizationDeletion.contribute({
               records
                 .remove(organizationId, connection.id)
                 // Removed meanwhile: the goal state holds.
-                .pipe(
-                  Effect.catchTag("SamlRecordNotFound", () => Effect.void),
-                  // Its email domains are free for another organization again (BEH-EA-317).
-                  Effect.andThen(claims.release(organizationId, connection.id)),
-                ),
+                .pipe(Effect.catchTag("SamlRecordNotFound", () => Effect.void)),
             { discard: true },
           ),
         ),
