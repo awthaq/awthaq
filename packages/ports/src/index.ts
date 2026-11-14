@@ -34,6 +34,7 @@ export * as HostResolver from "./HostResolver.ts";
 export * as Ids from "./Ids.ts";
 export * as Jws from "./Jws.ts";
 export * as KeyProvider from "./KeyProvider.ts";
+export * as Keyset from "./Keyset.ts";
 export * as LegacySessionBridge from "./LegacySessionBridge.ts";
 export * as Mailer from "./Mailer.ts";
 export * as OutboundUrl from "./OutboundUrl.ts";
