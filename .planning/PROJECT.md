@@ -49,6 +49,8 @@ Composition is checked by the compiler: a missing plugin, port or duplicate slot
 | `config list` inlined into `Cli.ts`, `ConfigList` removed from the `@awthaq/cli` export (minor changeset with `Migration:` line) | A single-use module behind a public export was a pass-through; the ECS-005 canary guards redaction | ✓ Phase 1 |
 | `Output.report` takes an optional `{ json }` override; plugin views resolve `--format`/`--json` once in `PluginViews.ts` | Dot beats `--json` on graph/default only; the override keeps that precedence exact | ✓ Phase 1 |
 | `Migration.apply` result and `openapi` stdout go through `Output.report`; the apply status preview stays hand-guarded | The preview prints before the drift and pending checks, while `report` couples text and document at one point | ✓ Phase 1 |
+| `TestAuth.ts` is a named-re-export facade over `internal/{composition,session,appHarness,contractRunner}.ts`; the export surface is pinned by `TestAuthSurface.test.ts` | The surface diff and a permanent runtime-key pin make the split provably non-breaking; `internal/` modules never import the facade (`pnpm circular` counts type-only imports) | ✓ Phase 2 |
+| The two core census tests keep scanning source text; only their four `file:` literals changed | They import nothing from `TestAuth`, so they are not consumers; ROADMAP criterion 1 was reworded to say so | ✓ Phase 2 |
 
 ## Current Milestone: v1.0 Architecture Deepening, batch 3
 
@@ -82,4 +84,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-11-14 after Phase 1*
+*Last updated: 2026-11-14 after Phase 2*

@@ -17,7 +17,7 @@ This milestone resolves the eight deepening candidates from the 2026-11-14 archi
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: CLI views and ConfigList removal** - One views module resolves `--format`/`--json` once; `ConfigList` deleted; gate baseline recorded (completed 2026-11-14)
-- [ ] **Phase 2: Split TestAuth** - `TestAuth.ts` becomes a facade over `internal/` modules with an identical public name set
+- [x] **Phase 2: Split TestAuth** - `TestAuth.ts` becomes a facade over `internal/` modules with an identical public name set (completed 2026-11-14)
 - [ ] **Phase 3: Keyset-page module** - One page contract, clamp, cursor derivation and comparator for users, organizations and impersonations
 - [ ] **Phase 4: Connection-lifecycle module** - SAML and OIDC share one exposed lifecycle service in `organization` with a single suspended-org policy
 - [ ] **Phase 5: Core-table list cleanup** - One core-table list in `@awthaq/sql` projected to `Auth.ts`, `LaggingReplica` and `TenantScope.coverage`
@@ -54,11 +54,11 @@ Plans:
 **Depends on**: Nothing (file-disjoint from Phase 1; the two may run in parallel)
 **Requirements**: TEST-01, TEST-02, TEST-03, TEST-04
 **Success Criteria** (what must be TRUE):
-  1. The exported `TestAuth.*` name set diffed before and after the split is identical, and no consumer file outside `packages/test` needs an edit.
+  1. The exported `TestAuth.*` name set diffed before and after the split is identical, and no consumer file (a file that imports `TestAuth` or `@awthaq/test`) outside `packages/test` needs an edit. The two core census tests that source-scan `TestAuth.ts` are not consumers; only their four `file:` path literals change (02-CONTEXT.md decision).
   2. `packages/test/src/internal/` holds separate modules for composition, session/CSRF minting, app harness and contract runner; `buildContext` is still exported and `migratedSchema` still calls `TestSql.schemaOf`.
-  3. The open-app counter lives beside `serve`/`openApps`, and `LeakGuard` accounting is unchanged: the existing `LeakGuard` tests and the 12 `Schema.lock.test.ts` files pass without edits.
+  3. The open-app counter lives beside `serve`/`openApps`, and `LeakGuard` accounting is unchanged: the existing `LeakGuard` tests and the 13 `Schema.lock.test.ts` files pass without edits.
   4. `spec/behaviors/25-testing-harness.md` and `spec/traceability.md` cite the new implementation locations while keeping the cited test file names, and `pnpm spec:verify:strict` passes.
-**Plans**: 5/5 plans executed
+**Plans**: 5/5 plans complete
 Plans:
 **Wave 1**
 - [x] 02-01-PLAN.md — Wave 0: surface snapshot (02-SURFACE-BEFORE.txt), gate baseline (02-BASELINE.md), TestAuthSurface.test.ts pin (23 values, 24 types)
@@ -157,7 +157,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7. Phases 1
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. CLI views and ConfigList removal | 4/4 | Complete    | 2026-11-14 |
-| 2. Split TestAuth | 5/5 | In Progress | - |
+| 2. Split TestAuth | 5/5 | Complete    | 2026-11-14 |
 | 3. Keyset-page module | 0/TBD | Not started | - |
 | 4. Connection-lifecycle module | 0/TBD | Not started | - |
 | 5. Core-table list cleanup | 0/TBD | Not started | - |

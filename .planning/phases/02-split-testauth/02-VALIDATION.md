@@ -1,9 +1,9 @@
 ---
 phase: "02"
 slug: "split-testauth"
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: "2026-11-14"
 ---
 
@@ -39,12 +39,12 @@ created: "2026-11-14"
 
 | Requirement | Behavior | Test Type | Automated Command | File Exists | Status |
 |-------------|----------|-----------|-------------------|-------------|--------|
-| TEST-01 | Exported name set identical before and after | probe diff, runtime pin, typecheck | `diff 02-SURFACE-BEFORE.txt 02-SURFACE-AFTER.txt`; `npx vitest run --project test packages/test/test/TestAuthSurface.test.ts`; `npx tsc -b tsconfig.json && npx tsc -p tsconfig.test.json` | ❌ W0 | ⬜ pending |
-| TEST-01 | Four modules under `internal/`; the facade only re-exports by name | structural | `ls packages/test/src/internal/{composition,session,appHarness,contractRunner}.ts`; `grep -c "^export \*" packages/test/src/TestAuth.ts` is 0; `pnpm circular` | after implementation | ⬜ pending |
-| TEST-01 | No file outside the allowlist edited | diff check | `git diff --name-only <phase-base>..HEAD` only under `packages/test/`, the two core census tests, `spec/`, `.planning/` | after implementation | ⬜ pending |
-| TEST-02 | `buildContext` exported; `migratedSchema` reaches `TestSql.schemaOf` | unit | `npx vitest run --project test packages/test/test/TestAuthApp.test.ts`; the 13 `Schema.lock` tests via `pnpm test`; one `TestSql.schemaOf` hit in `internal/contractRunner.ts` | ✅ | ⬜ pending |
-| TEST-03 | Counter beside `serve`/`openApps`; accounting unchanged | unit and BDD | `npx vitest run --project test packages/test/test/TestAuthLifetime.test.ts packages/test/test/TestAuthLazy.test.ts packages/test/test/TestAuthListen.test.ts`; `openAppCount` appears only in `internal/appHarness.ts`; `pnpm test:bdd` (LeakGuard `afterAll`) | ✅ | ⬜ pending |
-| TEST-04 | Spec cites the new locations, test names kept, strict verify passes | spec gate | `pnpm spec:verify:strict`; `grep -rn "src/TestAuth.ts" spec` lists only intended facade mentions; `test -f` for each newly cited path (check 10 does not verify the `@awthaq/test/src/...` form) | ✅ | ⬜ pending |
+| TEST-01 | Exported name set identical before and after | probe diff, runtime pin, typecheck | `diff 02-SURFACE-BEFORE.txt 02-SURFACE-AFTER.txt`; `npx vitest run --project test packages/test/test/TestAuthSurface.test.ts`; `npx tsc -b tsconfig.json && npx tsc -p tsconfig.test.json` | ✅ | ✅ green |
+| TEST-01 | Four modules under `internal/`; the facade only re-exports by name | structural | `ls packages/test/src/internal/{composition,session,appHarness,contractRunner}.ts`; `grep -c "^export \*" packages/test/src/TestAuth.ts` is 0; `pnpm circular` | ✅ | ✅ green |
+| TEST-01 | No file outside the allowlist edited | diff check | `git diff --name-only <phase-base>..HEAD` only under `packages/test/`, the two core census tests, `spec/`, `.planning/` | ✅ | ✅ green |
+| TEST-02 | `buildContext` exported; `migratedSchema` reaches `TestSql.schemaOf` | unit | `npx vitest run --project test packages/test/test/TestAuthApp.test.ts`; the 13 `Schema.lock` tests via `pnpm test`; one `TestSql.schemaOf` hit in `internal/contractRunner.ts` | ✅ | ✅ green |
+| TEST-03 | Counter beside `serve`/`openApps`; accounting unchanged | unit and BDD | `npx vitest run --project test packages/test/test/TestAuthLifetime.test.ts packages/test/test/TestAuthLazy.test.ts packages/test/test/TestAuthListen.test.ts`; `openAppCount` appears only in `internal/appHarness.ts`; `pnpm test:bdd` (LeakGuard `afterAll`) | ✅ | ✅ green |
+| TEST-04 | Spec cites the new locations, test names kept, strict verify passes | spec gate | `pnpm spec:verify:strict`; `grep -rn "src/TestAuth.ts" spec` lists only intended facade mentions; `test -f` for each newly cited path (check 10 does not verify the `@awthaq/test/src/...` form) | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -52,10 +52,10 @@ created: "2026-11-14"
 
 ## Wave 0 Requirements
 
-- [ ] `02-SURFACE-BEFORE.txt` — probe output of the 47-name surface (the probe script is not committed as `.cjs`/`.mjs`: knip)
-- [ ] `packages/test/test/TestAuthSurface.test.ts` — runtime key pin of the 23 value exports, green before any `src` change
-- [ ] Re-record the `packages/test` project baseline (33 files, 627 passed, 1 expected fail) and the census pair (2 files, 17 passed)
-- [ ] No framework install needed
+- [x] `02-SURFACE-BEFORE.txt` — probe output of the 47-name surface (the probe script is not committed as `.cjs`/`.mjs`: knip)
+- [x] `packages/test/test/TestAuthSurface.test.ts` — runtime key pin of the 23 value exports, green before any `src` change
+- [x] Re-record the `packages/test` project baseline (33 files, 627 passed, 1 expected fail) and the census pair (2 files, 17 passed)
+- [x] No framework install needed
 
 ---
 
@@ -67,11 +67,11 @@ All phase behaviors have automated verification. Postgres-gated cases (`TestAuth
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 15s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 15s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-11-14 (re-run: test project 628 passed + 1 expected fail; census 17 passed; Surface/App/Lifetime/Lazy/Listen 27 passed; surface diff empty; strict spec 32 PASS; tsc -b and tsc -p tsconfig.test.json 0 errors; circular and check:contract-tests clean; diff vs d4282e31 only in allowlist). Postgres-gated cases (`TestAuthHost.test.ts`, contract-runner Postgres parity): not run locally.
