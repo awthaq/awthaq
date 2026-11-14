@@ -83,9 +83,12 @@ export const apply = (auth: LoadedAuth, options: ApplyOptions) =>
     );
     const out = yield* Output.Output;
     // One JSON document per run: the plan, with whether it was applied. Text mode prints the
-    // plan first, so an operator sees what is about to run before it does.
+    // plan first, so an operator sees what is about to run before it does. `finish` emits the
+    // document (under `--json`) and the `applied N migration(s)` line (text, only after a write).
     const finish = (applied: boolean) =>
-      out.json ? out.document({ pending, drift: report.drift, applied }) : Effect.void;
+      Output.report({ pending, drift: report.drift, applied }, (document) =>
+        document.applied ? [`applied ${document.pending.length} migration(s)`] : [],
+      );
     if (!out.json) yield* Effect.forEach(renderStatus(report), out.line, { discard: true });
     if (report.drift) {
       yield* finish(false);
@@ -114,5 +117,4 @@ export const apply = (auth: LoadedAuth, options: ApplyOptions) =>
       }),
     );
     yield* finish(true);
-    if (!out.json) yield* out.line(`applied ${pending.length} migration(s)`);
   });
