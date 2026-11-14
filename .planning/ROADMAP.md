@@ -86,7 +86,34 @@ Plans:
   3. A SQL row-value predicate builder in `@awthaq/sql` replaces the expanded-`OR` spellings and rejects mixed-direction orders, shown by a test.
   4. `StoreContract`/`RecordsContract` page-order cases (ties by id, exactly-full final page, sub-millisecond timestamps, mixed-case ids) pass on memory and on Postgres, `pnpm test:pg` passes in CI, and the phase records "not run locally".
   5. A grep finds no remaining `pageLimit`, `listLimit` or stale `MAX_PAGE_SIZE` copies; Membership offset paging, `SessionStore.listLive`, SCIM paging, audit log and webhook deliveries are untouched (empty diff); `spec/overview.md` `surface:ports` lists the module, BEH-EA-036 is amended to scope "store ports" to core ports, and keyset id ordering is declared collation-stable by construction.
-**Plans**: TBD
+**Plans**: 9 plans
+Plans:
+**Wave 1**
+- [ ] 03-01-PLAN.md — Wave 0: gate baseline (03-BASELINE.md) with KEY-06 grep baseline, KEY-07 path list and "not run locally"; KeysetCursors.test.ts golden pinned to today's code
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 03-02-PLAN.md — Wave 0: KeysetPins.test.ts domain pin matrix and KeysetHttp.test.ts wire pins; Wave 0 head recorded
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 03-03-PLAN.md — `Keyset` module in ports (spike first): paginate, window, limit; barrel and `surface:ports` (overview Rev 1.18); unit tests
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 03-04-PLAN.md — `KeysetSql` row-value seek in sql; mixed-direction refusal; memory-SQL agreement on TestSql
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 03-05-PLAN.md — users adopt Keyset (UserStore, UserStoreSql, Users.list; `next` renamed `nextCursor`); StoreContract KEY-05 cases
+
+**Wave 6** *(blocked on Wave 5 completion)*
+- [ ] 03-06-PLAN.md — organizations adopt Keyset; OrganizationRecords, OrganizationDirectory and AdminTenants in one commit; contract cases; golden append
+
+**Wave 7** *(blocked on Wave 6 completion)*
+- [ ] 03-07-PLAN.md — impersonations adopt Keyset; LimitSchema on Keyset bounds; KEY-06 grep at 0; active and tenant paging contract cases
+
+**Wave 8** *(blocked on Wave 7 completion)*
+- [ ] 03-08-PLAN.md — BEH-EA-036 amended (Rev 1.14), traceability (Rev 1.91), Migration changeset for six packages
+
+**Wave 9** *(blocked on Wave 8 completion)*
+- [ ] 03-09-PLAN.md — phase close: allowlist, KEY-07 empty diff, oracle integrity, full gates vs baseline, open CI (Postgres) confirmations
 **Research**: recommended (collation decision, `limit + 1` contract, sub-millisecond timestamp case; needs a Postgres run)
 
 ### Phase 4: Connection-lifecycle module
