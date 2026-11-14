@@ -24,20 +24,13 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as AdminApi from "./AdminApi.ts";
-import * as ImpersonationRecords from "./ImpersonationRecords.ts";
 import * as AdminTenantsApi from "./AdminTenantsApi.ts";
 import * as AdminGate from "./internal/AdminGate.ts";
 
-export interface OrganizationCursor {
-  readonly createdAt: DateTime.Utc;
-  readonly id: string;
-}
+export type OrganizationCursor = OrganizationDirectory.OrganizationCursor;
 
-export interface OrganizationPage {
-  readonly items: ReadonlyArray<OrganizationDirectory.Organization>;
-  /** `None` on the last page. */
-  readonly nextCursor: Option.Option<OrganizationCursor>;
-}
+/** `nextCursor` is `None` on the last page. */
+export type OrganizationPage = OrganizationDirectory.OrganizationPage;
 
 export interface AdminTenantsShape {
   /** Every organization, keyset-paginated on `(createdAt, id)`. Errors: `AdminActionDenied` (gate). */
@@ -196,20 +189,10 @@ export class AdminTenants extends AuthPlugin.Service<AdminTenants, AdminTenantsS
       const listOrganizations: AdminTenantsShape["listOrganizations"] = Effect.fnUntraced(
         function* (caller, input) {
           yield* gate.collection(caller, "listOrganizations");
-          const limit = ImpersonationRecords.pageLimit(input?.limit);
-          const rows = yield* directory.listPage({
+          return yield* directory.listPage({
             after: Option.fromNullishOr(input?.cursor),
-            limit: limit + 1,
+            limit: input?.limit,
           });
-          const items = rows.slice(0, limit);
-          const last = items.at(-1);
-          return {
-            items,
-            nextCursor:
-              rows.length > limit && last !== undefined
-                ? Option.some({ createdAt: last.createdAt, id: last.id })
-                : Option.none(),
-          };
         },
       );
 
