@@ -190,18 +190,15 @@ const make = (codec: Option.Option<ColumnCodec>) =>
     // exactly-full final page never invents a cursor.
     const usersPage = SqlSchema.findAll({
       Request: Schema.Struct({
-        cursorCreatedAt: models.wire.nullableDateTime,
-        cursorId: Schema.NullOr(Schema.String),
+        cursor: Schema.NullOr(
+          Schema.Struct({ createdAt: models.wire.dateTime, id: Schema.String }),
+        ),
         take: Schema.Int,
       }),
       Result: models.User,
       execute: (request) =>
         sql`SELECT * FROM users
-              WHERE ${sql.and(
-                request.cursorCreatedAt === null || request.cursorId === null
-                  ? []
-                  : [seek.after(sql, [request.cursorCreatedAt, request.cursorId])],
-              )}
+              WHERE ${sql.and(request.cursor === null ? [] : [seek.after(sql, request.cursor)])}
               ORDER BY ${seek.orderBy(sql)} LIMIT ${request.take}`,
     });
 
@@ -486,14 +483,7 @@ const make = (codec: Option.Option<ColumnCodec>) =>
 
       listPage: (request) =>
         Keyset.paginate(UserStore.pageOrder, request, ({ after, take }) =>
-          usersPage({
-            cursorCreatedAt: Option.match(after, {
-              onNone: () => null,
-              onSome: (c) => c.createdAt,
-            }),
-            cursorId: Option.match(after, { onNone: () => null, onSome: (c) => c.id }),
-            take,
-          }).pipe(
+          usersPage({ cursor: Option.getOrNull(after), take }).pipe(
             traced("Users.listPage"),
             Effect.map((rows) => rows.map(stored)),
           ),

@@ -670,8 +670,7 @@ export const layerSql = Layer.effect(
     const listQuery = SqlSchema.findAll({
       Request: Schema.Struct({
         active: Schema.Boolean,
-        cursorStartedAt: wire.nullableDateTime,
-        cursorId: Schema.NullOr(Schema.String),
+        cursor: Schema.NullOr(Schema.Struct({ startedAt: wire.dateTime, id: Schema.String })),
         take: Schema.Int,
         seen: VisibilitySchema,
       }),
@@ -680,9 +679,7 @@ export const layerSql = Layer.effect(
         const conditions = [
           TenantScoped.predicate(sql, "tenantId", r.seen),
           ...(r.active ? [sql`"endedAt" IS NULL`] : []),
-          ...(r.cursorStartedAt === null || r.cursorId === null
-            ? []
-            : [seek.after(sql, [r.cursorStartedAt, r.cursorId])]),
+          ...(r.cursor === null ? [] : [seek.after(sql, r.cursor)]),
         ];
         return sql`SELECT * FROM admin_impersonation WHERE ${sql.and(conditions)} ORDER BY ${seek.orderBy(sql)} LIMIT ${r.take}`;
       },
@@ -758,11 +755,7 @@ export const layerSql = Layer.effect(
             Effect.flatMap((seen) =>
               listQuery({
                 active: input?.active === true,
-                cursorStartedAt: Option.match(after, {
-                  onNone: () => null,
-                  onSome: (c) => c.startedAt,
-                }),
-                cursorId: Option.match(after, { onNone: () => null, onSome: (c) => c.id }),
+                cursor: Option.getOrNull(after),
                 take,
                 seen,
               }),

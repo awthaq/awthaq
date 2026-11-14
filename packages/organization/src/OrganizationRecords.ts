@@ -431,28 +431,19 @@ export const layerSql = Layer.effect(
     // `Keyset.paginate` sets `take` one above the page, so an exactly-full final page has no cursor.
     const listPageQuery = SqlSchema.findAll({
       Request: Schema.Struct({
-        afterCreatedAt: wire.nullableDateTime,
-        afterId: Schema.NullOr(Schema.String),
+        cursor: Schema.NullOr(Schema.Struct({ createdAt: wire.dateTime, id: Schema.String })),
         take: Schema.Int,
       }),
       Result: OrganizationRow,
       execute: (r) =>
         sql`SELECT * FROM organization_org
-              WHERE ${sql.and(
-                r.afterCreatedAt === null || r.afterId === null
-                  ? []
-                  : [seek.after(sql, [r.afterCreatedAt, r.afterId])],
-              )}
+              WHERE ${sql.and(r.cursor === null ? [] : [seek.after(sql, r.cursor)])}
               ORDER BY ${seek.orderBy(sql)} LIMIT ${r.take}`,
     });
 
     const listPage: OrganizationRecordsShape["listPage"] = (grant, request) =>
       Keyset.paginate(pageOrder, request, ({ after, take }) =>
-        listPageQuery({
-          afterCreatedAt: Option.match(after, { onNone: () => null, onSome: (c) => c.createdAt }),
-          afterId: Option.match(after, { onNone: () => null, onSome: (c) => c.id }),
-          take,
-        }).pipe(
+        listPageQuery({ cursor: Option.getOrNull(after), take }).pipe(
           TenantScoped.liftOn(sql, grant),
           Effect.map((rows) => rows.map(toRecord)),
         ),

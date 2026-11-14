@@ -9,13 +9,13 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as KeysetSql from "../src/KeysetSql.ts";
 import * as TestSql from "../../test/src/TestSql.ts";
 
-interface Probe {
+type Probe = {
   readonly at: number;
   readonly grp: number;
   readonly id: string;
   readonly tenantId: string;
   readonly endedAt: number | null;
-}
+};
 
 // Canonical lowercase uuid-shaped ids order identically by code unit and under a glibc collation.
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -70,7 +70,6 @@ const createProbe = (sql: SqlClient.SqlClient) =>
 const agrees = (
   suite: string,
   declaration: Keyset.Declaration<Probe, Probe>,
-  cursorValues: (cursor: Probe) => ReadonlyArray<unknown>,
   scope: { readonly tenant?: string; readonly activeOnly?: boolean } = {},
 ) =>
   Effect.gen(function* () {
@@ -93,7 +92,7 @@ const agrees = (
           ...(scope.activeOnly === true ? [sql`"endedAt" IS NULL`] : []),
           ...Option.match(after, {
             onNone: () => [],
-            onSome: (cursor) => [seek.after(sql, cursorValues(cursor))],
+            onSome: (cursor) => [seek.after(sql, cursor)],
           }),
         ];
         const viaSql = yield* sql<{ readonly id: string }>`
@@ -109,8 +108,6 @@ const agrees = (
     }
   }).pipe(Effect.provide(TestSql.layer(suite)));
 
-const atAndId = (cursor: Probe) => [cursor.at, cursor.id];
-
 const thrown = (run: () => unknown): unknown => {
   try {
     run();
@@ -122,28 +119,24 @@ const thrown = (run: () => unknown): unknown => {
 
 describe("KeysetSql", () => {
   it.effect("an ascending seek returns the rows the memory window returns", () =>
-    agrees("keyset_sql_asc", declare("asc"), atAndId),
+    agrees("keyset_sql_asc", declare("asc")),
   );
 
   it.effect("a descending seek returns the rows the memory window returns", () =>
-    agrees("keyset_sql_desc", declare("desc"), atAndId),
+    agrees("keyset_sql_desc", declare("desc")),
   );
 
   it.effect("a three-key seek agrees with the window", () =>
-    agrees(
-      "keyset_sql_three",
-      {
-        keys: [numberKey("at", "asc"), numberKey("grp", "asc"), idKey("asc")],
-        cursorOf: (row) => row,
-      },
-      (cursor) => [cursor.at, cursor.grp, cursor.id],
-    ),
+    agrees("keyset_sql_three", {
+      keys: [numberKey("at", "asc"), numberKey("grp", "asc"), idKey("asc")],
+      cursorOf: (row) => row,
+    }),
   );
 
   it.effect("the seek composes inside sql.and with a tenant predicate and an IS NULL filter", () =>
     Effect.all([
-      agrees("keyset_sql_scoped_asc", declare("asc"), atAndId, { tenant: "t1", activeOnly: true }),
-      agrees("keyset_sql_scoped_desc", declare("desc"), atAndId, {
+      agrees("keyset_sql_scoped_asc", declare("asc"), { tenant: "t1", activeOnly: true }),
+      agrees("keyset_sql_scoped_desc", declare("desc"), {
         tenant: "t1",
         activeOnly: true,
       }),
@@ -169,7 +162,7 @@ describe("KeysetSql", () => {
       for (const [direction, operator, keyword] of cases) {
         const seek = KeysetSql.make(declare(direction));
         const [text, params] =
-          sql`SELECT 1 WHERE ${seek.after(sql, [7, "x"])} ORDER BY ${seek.orderBy(sql)}`.compile();
+          sql`SELECT 1 WHERE ${seek.after(sql, { id: "x", at: 7 })} ORDER BY ${seek.orderBy(sql)}`.compile();
         assert.match(
           text,
           new RegExp(
@@ -178,6 +171,7 @@ describe("KeysetSql", () => {
         );
         assert.match(text, new RegExp(String.raw`ORDER BY "at" ${keyword}\s*,\s*"id" ${keyword}$`));
         assert.notInclude(text, " OR ");
+        // The values bind in key order (at, id) whatever the field order of the cursor.
         assert.deepStrictEqual(params, [7, "x"]);
       }
     }).pipe(Effect.provide(TestSql.layer("keyset_sql_compiled"))),
@@ -196,15 +190,16 @@ describe("KeysetSql", () => {
     }
   });
 
-  it.effect("after refuses a value count that differs from the key count", () =>
+  it.effect("after refuses a cursor that lacks a key's column", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const seek = KeysetSql.make(declare("asc"));
-      const error = thrown(() => seek.after(sql, [1]));
+      const error = thrown(() => seek.after(sql, { at: 1 }));
       assert.isTrue(error instanceof Defects.InvariantViolation);
       if (error instanceof Defects.InvariantViolation) {
         assert.strictEqual(error._tag, "Defects/InvariantViolation");
-        assert.strictEqual(error.invariant, "keyset cursor arity");
+        assert.strictEqual(error.invariant, "keyset cursor columns");
+        assert.include(error.message, "id");
       }
     }).pipe(Effect.provide(TestSql.layer("keyset_sql_arity"))),
   );
@@ -225,7 +220,7 @@ describe("KeysetSql", () => {
         cursorOf: (row) => row,
       });
       const [text, params] =
-        sql`SELECT 1 WHERE ${weird.after(sql, ["a; DROP TABLE x"])} ORDER BY ${weird.orderBy(sql)}`.compile();
+        sql`SELECT 1 WHERE ${weird.after(sql, { 'we"ird': "a; DROP TABLE x" })} ORDER BY ${weird.orderBy(sql)}`.compile();
       assert.include(text, '"we""ird"');
       assert.notInclude(text, 'we"ird');
       assert.notInclude(text, "DROP");
