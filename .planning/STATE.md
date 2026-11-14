@@ -4,18 +4,18 @@ milestone: v1.0
 milestone_name: Architecture Deepening, batch 3
 current_phase: 3
 current_phase_name: Keyset-page module
-current_plan: 5
+current_plan: 6
 status: executing
-stopped_at: Completed 03-04-PLAN.md
-last_updated: "2026-11-14T06:49:36.694Z"
+stopped_at: Completed 03-05-PLAN.md
+last_updated: "2026-11-14T06:53:52.648Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 2 complete, transitioned to Phase 3
-state_head: ab2379ce8b1ae540c048a40c83d8a5ad061a2dae
+state_head: f1dedb8b3d56124f386a80c6b1d2a45ceee9270a
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 18
-  completed_plans: 13
+  completed_plans: 14
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 3 — Keyset-page module
-Current Plan: 5
+Current Plan: 6
 Total Plans in Phase: 9
 Status: Ready to execute
 Last activity: 2026-11-14 — Completed 03-02 (Wave 0 pins)
@@ -73,6 +73,7 @@ Progress: [███░░░░░░░] 29%
 | Phase 03 P02 | 30min | 2 tasks | 3 files |
 | Phase 03 P03 | 25min | 2 tasks | 5 files |
 | Phase 03 P04 | 15min | 2 tasks | 3 files |
+| Phase 03 P05 | 20min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -98,6 +99,7 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-02: Wave 0 wire pins serve with testClock: true and advance 1 ms between creates; pins name the cursor types through the aliases later plans keep
 - [Phase 03]: 03-03: Keyset.key infers with no annotations (spike); window decides follows-cursor by the first non-zero key comparison; A1 confirmed (TS2322/TS4111), no cursor-schema factory
 - [Phase 03]: 03-04: KeysetSql refuses mixed-direction declarations with Defects.InvalidConfiguration at make (setting 'keyset order'); wrong cursor arity is Defects.InvariantViolation at after
+- [Phase 03]: 03-05: Users.UserCursor and Users.UsersPage kept as names, now aliases of UserStore.UserCursor and Keyset.Page; usersPage SQL is one template via sql.and over an optional KeysetSql seek
 
 ### Pending Todos
 
@@ -119,6 +121,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T06:49:36.563Z
-Stopped at: Completed 03-04-PLAN.md
+Last session: 2026-11-14T06:53:52.498Z
+Stopped at: Completed 03-05-PLAN.md
 Resume file: None
