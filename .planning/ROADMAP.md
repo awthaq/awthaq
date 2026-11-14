@@ -86,7 +86,7 @@ Plans:
   3. A SQL row-value predicate builder in `@awthaq/sql` replaces the expanded-`OR` spellings and rejects mixed-direction orders, shown by a test.
   4. `StoreContract`/`RecordsContract` page-order cases (ties by id, exactly-full final page, sub-millisecond timestamps, mixed-case ids) pass on memory and on Postgres, `pnpm test:pg` passes in CI, and the phase records "not run locally".
   5. A grep finds no remaining `pageLimit`, `listLimit` or stale `MAX_PAGE_SIZE` copies; Membership offset paging, `SessionStore.listLive`, SCIM paging, audit log and webhook deliveries are untouched (empty diff); `spec/overview.md` `surface:ports` lists the module, BEH-EA-036 is amended to scope "store ports" to core ports, and keyset id ordering is declared collation-stable by construction.
-**Plans**: 3/9 plans executed
+**Plans**: 4/9 plans executed
 Plans:
 **Wave 1**
 - [x] 03-01-PLAN.md — Wave 0: gate baseline (03-BASELINE.md) with KEY-06 grep baseline, KEY-07 path list and "not run locally"; KeysetCursors.test.ts golden pinned to today's code
@@ -98,7 +98,7 @@ Plans:
 - [x] 03-03-PLAN.md — `Keyset` module in ports (spike first): paginate, window, limit; barrel and `surface:ports` (overview Rev 1.18); unit tests
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 03-04-PLAN.md — `KeysetSql` row-value seek in sql; mixed-direction refusal; memory-SQL agreement on TestSql
+- [x] 03-04-PLAN.md — `KeysetSql` row-value seek in sql; mixed-direction refusal; memory-SQL agreement on TestSql
 
 **Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 03-05-PLAN.md — users adopt Keyset (UserStore, UserStoreSql, Users.list; `next` renamed `nextCursor`); StoreContract KEY-05 cases
@@ -185,7 +185,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7. Phases 1
 |-------|----------------|--------|-----------|
 | 1. CLI views and ConfigList removal | 4/4 | Complete    | 2026-11-14 |
 | 2. Split TestAuth | 5/5 | Complete    | 2026-11-14 |
-| 3. Keyset-page module | 3/9 | In Progress | - |
+| 3. Keyset-page module | 4/9 | In Progress | - |
 | 4. Connection-lifecycle module | 0/TBD | Not started | - |
 | 5. Core-table list cleanup | 0/TBD | Not started | - |
 | 6. Record-store scaffolding (gated) | 0/TBD | Not started | - |
