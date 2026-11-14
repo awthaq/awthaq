@@ -178,6 +178,9 @@ export interface ConnectionPatch {
   readonly roleMapping?: RoleMapping | undefined;
 }
 
+/** A patch that leaves the connection's email domains alone, so it cannot meet a taken one. */
+export type RefreshPatch = Omit<ConnectionPatch, "emailDomains">;
+
 export interface SamlRecordsShape {
   readonly create: (
     input: NewConnection,
@@ -208,6 +211,12 @@ export interface SamlRecordsShape {
     ConnectionRecord,
     SamlRecordNotFound | SamlDomainTaken | StoreFailure.StoreUnavailable
   >;
+  /** `update` for a patch that names no email domains: the same row write, and no taken-domain outcome to report. */
+  readonly refresh: (
+    organizationId: string,
+    id: string,
+    patch: RefreshPatch,
+  ) => Effect.Effect<ConnectionRecord, SamlRecordNotFound | StoreFailure.StoreUnavailable>;
   /** Removes the connection with its domains, SP keys and session rows. */
   readonly remove: (
     organizationId: string,
@@ -417,6 +426,26 @@ export const layerMemory: Layer.Layer<SamlRecords | MemoryEnvelopes, never, Encr
           return yield* Effect.fromResult(outcome);
         });
 
+      const refresh: SamlRecordsShape["refresh"] = (organizationId, id, patch) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const outcome = yield* Ref.modify(
+            state,
+            (s): readonly [Result.Result<ConnectionRecord, SamlRecordNotFound>, MemoryState] => {
+              const existing = s.connections.find(
+                (row) => row.id === id && row.organizationId === organizationId,
+              );
+              if (existing === undefined) return [Result.fail(notFound(id)), s] as const;
+              const updated = applyPatch(existing, patch, now);
+              return [
+                Result.succeed(updated),
+                { ...s, connections: s.connections.map((row) => (row.id === id ? updated : row)) },
+              ] as const;
+            },
+          );
+          return yield* Effect.fromResult(outcome);
+        });
+
       const records = {
         create,
         findById: (_grant, id) =>
@@ -436,6 +465,7 @@ export const layerMemory: Layer.Layer<SamlRecords | MemoryEnvelopes, never, Encr
             ),
           ),
         update,
+        refresh,
         remove: (organizationId, id) =>
           Effect.gen(function* () {
             const removed = yield* Ref.modify(state, (s) =>
@@ -803,7 +833,7 @@ export const layerSql: Layer.Layer<
     // Plan 25 ticket 22: the row first (`UPDATE … WHERE id AND organization RETURNING *`, which locks it and
     // finds a connection removed meanwhile), then the domain set, in one transaction: a taken domain rolls both
     // back, and `remove` deletes in the same order, so an update racing a removal cannot deadlock on Postgres.
-    const update: SamlRecordsShape["update"] = (organizationId, id, patch) =>
+    const rewriteRow = (organizationId: string, id: string, patch: RefreshPatch) =>
       Effect.gen(function* () {
         const current = yield* connectionById(id);
         if (Option.isNone(current) || current.value.organizationId !== organizationId) {
@@ -827,12 +857,25 @@ export const layerSql: Layer.Layer<
           updatedAt: now,
         });
         if (Option.isNone(row)) return yield* Effect.fail(notFound(id));
+        return row.value;
+      });
+
+    const update: SamlRecordsShape["update"] = (organizationId, id, patch) =>
+      Effect.gen(function* () {
+        const row = yield* rewriteRow(organizationId, id, patch);
         if (patch.emailDomains !== undefined) {
           yield* sql`DELETE FROM saml_connection_domain WHERE "connectionId" = ${id}`;
           yield* claimDomains(id, sortedDomains(patch.emailDomains));
         }
-        return yield* withDomains(row.value);
+        return yield* withDomains(row);
       }).pipe(SqlTransaction.transactional(sql), unavailable("update"));
+
+    const refresh: SamlRecordsShape["refresh"] = (organizationId, id, patch) =>
+      rewriteRow(organizationId, id, patch).pipe(
+        Effect.flatMap(withDomains),
+        SqlTransaction.transactional(sql),
+        unavailable("refresh"),
+      );
 
     return {
       create,
@@ -864,6 +907,7 @@ export const layerSql: Layer.Layer<
           unavailable("findByDomain"),
         ),
       update,
+      refresh,
       // Plan 25 ticket 22: the connection and everything under it in one transaction, the row first (the
       // order `update` locks them in); a connection removed meanwhile is `SamlRecordNotFound`.
       remove: (organizationId, id) =>

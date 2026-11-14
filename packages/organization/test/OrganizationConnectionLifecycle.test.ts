@@ -524,6 +524,59 @@ const suite = <E>(leg: string, Live: Layer.Layer<Needs, E>) => {
     });
   });
 
+  describe(`refresh (${leg})`, () => {
+    it.effect("an unknown and a suspended organization are refused before prepare runs", () =>
+      run(
+        Effect.gen(function* () {
+          const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
+          const org = yield* makeOrganization("a");
+          yield* suspend(org.id);
+          let prepared = false;
+          const attempt = (organizationId: string) =>
+            lifecycle
+              .refresh(
+                protocol,
+                organizationId,
+                Effect.sync(() => {
+                  prepared = true;
+                  return { write: Effect.void };
+                }),
+              )
+              .pipe(Effect.flip);
+          assert.deepStrictEqual(yield* attempt("no-such-org"), new Refused({ reason: GONE }));
+          assert.deepStrictEqual(yield* attempt(org.id), new Refused({ reason: GONE }));
+          assert.isFalse(prepared);
+        }),
+      ),
+    );
+
+    it.effect("runs only the write, returns its value or its error and touches no claim", () =>
+      run(
+        Effect.gen(function* () {
+          const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
+          const a = yield* makeOrganization("a");
+          const b = yield* makeOrganization("b");
+          yield* claimFor(a.id, "c1", ["kept.example"]);
+          const value = yield* lifecycle.refresh(
+            protocol,
+            a.id,
+            Effect.succeed({ write: Effect.succeed("refreshed") }),
+          );
+          assert.strictEqual(value, "refreshed");
+          const failure = yield* lifecycle
+            .refresh(
+              protocol,
+              a.id,
+              Effect.succeed({ write: Effect.fail(new WriteFailed({ step: "row" })) }),
+            )
+            .pipe(Effect.flip);
+          assert.deepStrictEqual(failure, new WriteFailed({ step: "row" }));
+          assert.isFalse(yield* canClaim(b.id, "kept.example"));
+        }),
+      ),
+    );
+  });
+
   describe(`remove (${leg})`, () => {
     it.effect(
       "a suspended organization's connection can be removed, its domains freed before the write",

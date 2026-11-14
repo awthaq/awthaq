@@ -77,6 +77,11 @@ export interface PreparedUpdate<A, E, R> {
   readonly write: Effect.Effect<A, E, R>;
 }
 
+/** A write the protocol has validated that names no email domain: nothing to claim, so only the gate and the write. */
+export interface PreparedRefresh<A, E, R> {
+  readonly write: Effect.Effect<A, E, R>;
+}
+
 const GONE = "the organization does not exist";
 
 const DOMAIN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
@@ -109,6 +114,15 @@ export interface OrganizationConnectionLifecycleShape {
     organizationId: string,
     prepare: Effect.Effect<PreparedUpdate<A, E, R>, EP, RP>,
   ) => Effect.Effect<A, Refused | Taken | E | EP | StoreFailure.StoreUnavailable, R | RP>;
+  /**
+   * The same gate, then the write alone, for a change that names no email domain (a metadata refresh): no claim and
+   * no transaction, so no taken-domain error can arise.
+   */
+  readonly refresh: <Refused, A, E, R, EP, RP>(
+    protocol: ConnectionProtocol<Refused, unknown>,
+    organizationId: string,
+    prepare: Effect.Effect<PreparedRefresh<A, E, R>, EP, RP>,
+  ) => Effect.Effect<A, Refused | E | EP | StoreFailure.StoreUnavailable, R | RP>;
   /** No gate: a suspended organization's connection can be removed. Releases the claims, then runs `write`, as one unit. */
   readonly remove: <A, E, R>(
     protocol: ConnectionProtocol<unknown, unknown>,
@@ -255,6 +269,17 @@ export class OrganizationConnectionLifecycle extends Context.Service<
               );
         });
 
+      const refresh: OrganizationConnectionLifecycleShape["refresh"] = (
+        protocol,
+        organizationId,
+        prepare,
+      ) =>
+        Effect.gen(function* () {
+          yield* requireActive(protocol, organizationId);
+          const { write } = yield* prepare;
+          return yield* write;
+        });
+
       const remove: OrganizationConnectionLifecycleShape["remove"] = (
         protocol,
         organizationId,
@@ -271,7 +296,7 @@ export class OrganizationConnectionLifecycle extends Context.Service<
           reclaim(protocol, organizationId, connectionId, previous),
         );
 
-      return OrganizationConnectionLifecycle.of({ create, update, remove });
+      return OrganizationConnectionLifecycle.of({ create, update, refresh, remove });
     }),
   );
 }

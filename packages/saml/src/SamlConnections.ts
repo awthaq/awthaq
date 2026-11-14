@@ -451,7 +451,7 @@ export const layerStore = Layer.effect(
     const refreshMetadata: SamlConnectionStoreShape["refreshMetadata"] = Effect.fnUntraced(
       function* (id, metadataXml) {
         const current = yield* get(id);
-        const refreshed = lifecycle.update(
+        return yield* lifecycle.refresh(
           samlProtocol,
           current.organizationId,
           Effect.gen(function* () {
@@ -468,7 +468,7 @@ export const layerStore = Layer.effect(
               metadata.slo === undefined ? null : yield* validatedUrl("sloUrl", metadata.slo.url);
             const idpCertificates = yield* certificatesOf(metadata.certificates);
             const write = records
-              .update(current.organizationId, id, {
+              .refresh(current.organizationId, id, {
                 ssoUrl,
                 idpCertificates,
                 sloUrl,
@@ -479,16 +479,9 @@ export const layerStore = Layer.effect(
                   Effect.fail(new SamlConnectionNotFound({ id })),
                 ),
               );
-            return {
-              connectionId: id,
-              domains: undefined,
-              previous: current.emailDomains,
-              write,
-            };
+            return { write };
           }),
         );
-        // The update names no email domains, so a domain clash cannot arise here.
-        return yield* refreshed.pipe(Effect.catchTag("SamlDomainTaken", Effect.die));
       },
     );
 
