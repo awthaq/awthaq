@@ -51,6 +51,33 @@ const intact = (records: ImpersonationRecords.ImpersonationRecordsShape) =>
     assert.deepStrictEqual(broken, Option.none());
   });
 
+/** Follows `page` to the last page: every row in the order served, and how many pages it took. */
+const walk = <E, R>(
+  page: (
+    cursor: ImpersonationRecords.ImpersonationCursor | undefined,
+  ) => Effect.Effect<ImpersonationRecords.ImpersonationPage, E, R>,
+) =>
+  Effect.gen(function* () {
+    const rows: Array<ImpersonationRecords.ImpersonationRecord> = [];
+    let pages = 0;
+    let cursor: ImpersonationRecords.ImpersonationCursor | undefined = undefined;
+    for (;;) {
+      const served: ImpersonationRecords.ImpersonationPage = yield* page(cursor);
+      pages++;
+      rows.push(...served.items);
+      if (Option.isNone(served.nextCursor)) return { rows, pages };
+      cursor = served.nextCursor.value;
+    }
+  });
+
+/** Newest first, `id` by code unit: the order the cases expect, computed here and never from the production declaration. */
+const newestFirst = (rows: ReadonlyArray<ImpersonationRecords.ImpersonationRecord>) =>
+  [...rows].sort(
+    (a, b) =>
+      DateTime.toEpochMillis(b.startedAt) - DateTime.toEpochMillis(a.startedAt) ||
+      codeUnit(b.id, a.id),
+  );
+
 /** Every broken `verifyChain` answer taken while `writers` ran beside them. */
 const verifiedDuring = <A, E, R>(
   records: ImpersonationRecords.ImpersonationRecordsShape,
@@ -562,6 +589,131 @@ export const impersonationRecords = RecordsContract.suite(
               const page = yield* records.list({ limit: 2 });
               assert.strictEqual(page.items.length, 2);
               assert.isTrue(Option.isNone(page.nextCursor));
+            }),
+          },
+          {
+            name: "ESS-006: active-only paging across a startedAt tie never returns an ended row at any limit",
+            run: Effect.gen(function* () {
+              const records = yield* ImpersonationRecords.ImpersonationRecords;
+              // Three rows share T0 (one of them ended), then one at T1, an ended one at T2 and one at T3.
+              const created: Array<ImpersonationRecords.ImpersonationRecord> = [];
+              for (const [group, count] of [3, 1, 1, 1].entries()) {
+                if (group > 0) yield* TestClock.adjust(Duration.millis(1));
+                for (let n = 0; n < count; n++)
+                  created.push(yield* seed(records, `session-${group}-${n}`));
+              }
+              const ended = new Set(["session-0-1", "session-2-0"]);
+              for (const sessionId of ended) yield* records.endEpisode(sessionId, "forcedByAdmin");
+              const expected = newestFirst(created.filter((row) => !ended.has(row.sessionId))).map(
+                (row) => row.sessionId,
+              );
+              assert.strictEqual(expected.length, 4);
+              for (const limit of [1, 2, 3, 4]) {
+                const { rows, pages } = yield* walk((cursor) =>
+                  records.list({
+                    active: true,
+                    limit,
+                    ...(cursor === undefined ? {} : { cursor }),
+                  }),
+                );
+                assert.deepStrictEqual(
+                  rows.map((row) => row.sessionId),
+                  expected,
+                  `limit ${limit}`,
+                );
+                assert.isTrue(rows.every((row) => Option.isNone(row.endedAt)));
+                assert.strictEqual(pages, Math.ceil(4 / limit), `limit ${limit}`);
+              }
+            }),
+          },
+          {
+            name: "ESS-006: tenant-confined paging returns only the ambient tenant's rows at every limit",
+            run: Effect.gen(function* () {
+              const records = yield* ImpersonationRecords.ImpersonationRecords;
+              // The two tenants interleave in time, with ties inside T0 and T1.
+              const orgA: Array<ImpersonationRecords.ImpersonationRecord> = [];
+              const orgB: Array<ImpersonationRecords.ImpersonationRecord> = [];
+              orgA.push(yield* seed(records, "a-0").pipe(Tenant.withTenant("org-a")));
+              orgB.push(yield* seed(records, "b-0").pipe(Tenant.withTenant("org-b")));
+              orgA.push(yield* seed(records, "a-1").pipe(Tenant.withTenant("org-a")));
+              yield* TestClock.adjust(Duration.millis(1));
+              orgB.push(yield* seed(records, "b-1").pipe(Tenant.withTenant("org-b")));
+              orgA.push(yield* seed(records, "a-2").pipe(Tenant.withTenant("org-a")));
+              yield* TestClock.adjust(Duration.millis(1));
+              orgA.push(yield* seed(records, "a-3").pipe(Tenant.withTenant("org-a")));
+              orgB.push(yield* seed(records, "b-2").pipe(Tenant.withTenant("org-b")));
+              orgB.push(yield* seed(records, "b-3").pipe(Tenant.withTenant("org-b")));
+              const confined = (
+                tenant: string,
+                own: ReadonlyArray<ImpersonationRecords.ImpersonationRecord>,
+                other: ReadonlyArray<ImpersonationRecords.ImpersonationRecord>,
+              ) =>
+                Effect.gen(function* () {
+                  const expected = newestFirst(own).map((row) => row.sessionId);
+                  const foreign = new Set(other.map((row) => row.sessionId));
+                  for (const limit of [1, 2, 3, 4]) {
+                    const { rows, pages } = yield* walk((cursor) =>
+                      records
+                        .list({ limit, ...(cursor === undefined ? {} : { cursor }) })
+                        .pipe(Tenant.withTenant(tenant)),
+                    );
+                    const ids = rows.map((row) => row.sessionId);
+                    assert.deepStrictEqual(ids, expected, `${tenant} limit ${limit}`);
+                    assert.isFalse(ids.some((id) => foreign.has(id)));
+                    assert.strictEqual(
+                      pages,
+                      Math.ceil(own.length / limit),
+                      `${tenant} limit ${limit}`,
+                    );
+                  }
+                });
+              yield* confined("org-a", orgA, orgB);
+              yield* confined("org-b", orgB, orgA);
+            }),
+          },
+          {
+            name: "ESS-006: an org-a cursor replayed under org-b answers only org-b rows after it",
+            run: Effect.gen(function* () {
+              const records = yield* ImpersonationRecords.ImpersonationRecords;
+              const orgA: Array<ImpersonationRecords.ImpersonationRecord> = [];
+              const orgB: Array<ImpersonationRecords.ImpersonationRecord> = [];
+              orgB.push(yield* seed(records, "b-0").pipe(Tenant.withTenant("org-b")));
+              orgA.push(yield* seed(records, "a-0").pipe(Tenant.withTenant("org-a")));
+              yield* TestClock.adjust(Duration.millis(1));
+              orgB.push(yield* seed(records, "b-1").pipe(Tenant.withTenant("org-b")));
+              orgA.push(yield* seed(records, "a-1").pipe(Tenant.withTenant("org-a")));
+              orgA.push(yield* seed(records, "a-2").pipe(Tenant.withTenant("org-a")));
+              yield* TestClock.adjust(Duration.millis(1));
+              orgA.push(yield* seed(records, "a-3").pipe(Tenant.withTenant("org-a")));
+              orgB.push(yield* seed(records, "b-2").pipe(Tenant.withTenant("org-b")));
+              const first = yield* records.list({ limit: 2 }).pipe(Tenant.withTenant("org-a"));
+              assert.isTrue(Option.isSome(first.nextCursor));
+              if (Option.isNone(first.nextCursor)) return;
+              const cursor = first.nextCursor.value;
+              const expected = newestFirst(
+                orgB.filter(
+                  (row) =>
+                    DateTime.toEpochMillis(row.startedAt) <
+                      DateTime.toEpochMillis(cursor.startedAt) ||
+                    (DateTime.toEpochMillis(row.startedAt) ===
+                      DateTime.toEpochMillis(cursor.startedAt) &&
+                      codeUnit(row.id, cursor.id) < 0),
+                ),
+              ).map((row) => row.sessionId);
+              assert.isAbove(expected.length, 0);
+              const replayed = yield* records
+                .list({ limit: 10, cursor })
+                .pipe(Tenant.withTenant("org-b"));
+              assert.deepStrictEqual(
+                replayed.items.map((row) => row.sessionId),
+                expected,
+              );
+              assert.isTrue(Option.isNone(replayed.nextCursor));
+              assert.isFalse(
+                replayed.items.some((row) =>
+                  row.tenantId.pipe(Option.exists((t) => t === "org-a")),
+                ),
+              );
             }),
           },
         ],
