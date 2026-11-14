@@ -159,6 +159,7 @@ This set covers both spike outcomes for the work planned now: plans 06-01 to 06-
 
 - 06-04: packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts
 - 06-05: packages/sql/test/RecordsScaffoldPins.test.ts
+- 06-06: packages/organization/test/RecordOrderPins.test.ts, packages/saml/test/RecordOrderPins.test.ts, packages/scim/test/RecordOrderPins.test.ts, packages/webhooks/test/RecordOrderPins.test.ts
 
 ### Go-branch obligations
 
@@ -233,3 +234,34 @@ Identical to the planner's table. Lock keys (11, 9 files): `organization_team:or
 Results (run locally; the pin has no database leg): `npx tsc -b tsconfig.json` and `npx tsc -p tsconfig.test.json` clean; `npx vitest run packages/sql/test/RecordsScaffoldPins.test.ts`: `Test Files 1 passed (1)`, `Tests 4 passed (4)`; `pnpm lint` prints no warning for the file and `pnpm format:check` is clean. Mutation check: changing one label literal in the test's own table (`WebhookRecords.claimDue` to `WebhookRecords.claimDu`, a scratch edit before the add commit) turned the labels case red (`Tests 1 failed | 3 passed (4)`), then was restored byte for byte. `grep -cE 'from "(\.\./src/|@awthaq/)'` on the file: 0. `git diff --name-only 3be32564 -- packages examples | grep -c '/src/'` at the add commit: 0.
 
 Declaration hashes: `.planning/phases/06-record-store-scaffolding/06-SHAPE-DTS.sha256` holds `shasum -a 256` of the 16 emitted `packages/<pkg>/lib/<Store>.d.ts` after `npx tsc -b tsconfig.json` on unchanged `src`; `shasum -a 256 -c` prints 16 OK. The `DeviceClientRecords.d.ts` line equals the planner's hash (`a7a3443d...10791`), so no toolchain difference. Every later plan runs `npx tsc -b tsconfig.json` then `shasum -a 256 -c .planning/phases/06-record-store-scaffolding/06-SHAPE-DTS.sha256` and needs 16 OK (no `*Shape`, layer or record type changed).
+
+### 06-06: equal-createdAt order pins
+
+PLAN_BASE `8d09eced`. Four pin files, each added by exactly one commit and never edited afterwards. Every case runs on memory and on SQL (SQLite `:memory:` in `pnpm test`, a Postgres schema under `AWTHAQ_POSTGRES_URL`), against unchanged `src` (`git diff --name-only 3be32564 -- packages examples | grep -c '/src/'` prints 0 at each add commit; the same diff filtered for `/test/contract/` prints 0). Expected orders are inline literals over canonical ids (`X` = `...0009`, `A` = `...0001`, `B` = `...0002`, `C` = `...0003`: X is inserted first, then C, A, B one millisecond later, so time decides before id); for `TeamRecords`, whose ids the store mints, the expected order is the minted ids sorted by `Array.prototype.sort()` with no comparator. A row of another organization, tenant or subject is in every listing case that filters, and must not appear. `grep -cE 'Keyset|localeCompare|toEpochMillis'` over the four files: 0.
+
+| File | Add commit | Tests | SQLite | Postgres |
+|------|------------|-------|--------|----------|
+| `packages/organization/test/RecordOrderPins.test.ts` | `3b75b1ea` | 6 (3 cases x 2 modes) | 6 passed | 6 passed |
+| `packages/saml/test/RecordOrderPins.test.ts` | `726235f8` | 4 (2 x 2) | 4 passed | 4 passed |
+| `packages/scim/test/RecordOrderPins.test.ts` | `726235f8` | 6 (3 x 2) | 6 passed | 6 passed |
+| `packages/webhooks/test/RecordOrderPins.test.ts` | `726235f8` | 6 (3 x 2) | 6 passed | 6 passed |
+
+22 new tests; with `packages/sql/test/RecordsScaffoldPins.test.ts` (4) the five-file command prints `Test Files 5 passed (5)`, `Tests 26 passed (26)` on SQLite and on Postgres (`postgres://postgres:pw@localhost:55433/awthaq`, container `awthaq-p3-pg`, Debian postgres:16, 16.16). run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote). `npx tsc -b tsconfig.json` and `npx tsc -p tsconfig.test.json` clean, `pnpm lint` exit 0 with no finding for the files, `pnpm format:check` clean, `pnpm check:contract-tests` prints `all 21 plugin classes run the contract suite`. No pin case was red on unchanged `src`: memory and SQL agree on every one, including the descending `listSpKeys` and the depth-first `getDescendants`.
+
+The 11 comparator sites and the case that pins each (the "re-read" cases were read at `8d09eced` and each inserts rows with an equal `createdAt` and different ids, then asserts the order):
+
+| # | Site | Operation(s) | Direction, tie field | Pinned by |
+|---|------|--------------|----------------------|-----------|
+| 1 | `packages/device-authorization/src/DeviceClientRecords.ts:55-59` `oldestFirst` | `list` | asc, `clientId` | contract `packages/device-authorization/test/contract/DeviceClientRecords.ts:117` "every client, revoked ones too, oldest first, equal times by client id ascending" (clients `c` and `b` at 2000 ms, expects `a, b, c, d`): ties on createdAt |
+| 2 | `packages/api-key/src/ApiKeyClientRecords.ts:75-81` `newestFirst` | `listByOwner` | desc, `clientId` | contract `packages/api-key/test/contract/ApiKeyClientRecords.ts:98` "the owner's clients, newest first, equal times by client id descending; nobody else's" (`b`, `c` at 2000 ms, expects `c, b, a`): ties on createdAt |
+| 3 | `packages/api-key/src/ApiKeyRecords.ts:98-102` `newestFirst` | `listByOwner` | desc, `id` | contract `packages/api-key/test/contract/ApiKeyRecords.ts:131` "the owner's keys, newest first, equal times by id descending; nobody else's" (`b`, `c` at 2000 ms, expects `c, b, a`): ties on createdAt |
+| 4 | `packages/organization/src/ConnectionRecords.ts:339-343` | `listByOrganization` | asc, `id` | new: `packages/organization/test/RecordOrderPins.test.ts` "ConnectionRecords.listByOrganization: time first, then id, ascending" |
+| 5 | `packages/organization/src/MembershipRecords.ts:192-203` `applySort` | `listByOrganization` asc and desc | both, `id` | contract `packages/organization/test/contract/MembershipRecords.ts:332` "equal createdAt orders by id, in both directions (plan 24 R2)" (three creates with no clock advance between them, asserts ascending `[...ids].sort()` and descending reversed): ties on createdAt (the tie is the frozen test clock, not an explicit timestamp) |
+| 6 | `packages/organization/src/TeamRecords.ts:364-368` `descendantsIn` | `getDescendants`, `getSubtree` | asc, `id` | new: `packages/organization/test/RecordOrderPins.test.ts` "TeamRecords.getDescendants: depth first, then (createdAt, id) within a level" and "TeamRecords.getSubtree: the team, then its descendants in that order" |
+| 7 | `packages/organization/src/TeamRecords.ts:469-473` | `listTeamsByOrganization` | asc, `id` | contract `packages/organization/test/contract/TeamRecords.ts:433` "orders by (createdAt, id) (plan 24 R3)" (`tied-a`, `tied-b` after a `TestClock.adjust`, expects `first` then the tied ids `.sort()`ed): ties on createdAt |
+| 8 | `packages/saml/src/SamlRecords.ts:265-270` `byCreation` | `listByOrganization` | asc, `id` | new: `packages/saml/test/RecordOrderPins.test.ts` "SamlRecords.listByOrganization: time first, then id, ascending" |
+| 9 | `packages/saml/src/SamlRecords.ts:272-279` `newestFirst` | `listSpKeys` | desc, `id` | new: `packages/saml/test/RecordOrderPins.test.ts` "SamlRecords.listSpKeys: newest first, then id descending" |
+| 10 | `packages/scim/src/ScimRecords.ts:174-182` `byCreation(rows, tieBreak)` | `listConnections` (tie `id`), `list` (tie `resourceId`), `linksOfResource` (tie `connectionId`) | asc | new: `packages/scim/test/RecordOrderPins.test.ts` "ScimRecords.listConnections: time first, then id, ascending", "ScimRecords.list orders a connection's links by (createdAt, resourceId)", "ScimRecords.linksOfResource orders by (createdAt, connectionId)" |
+| 11 | `packages/webhooks/src/WebhookRecords.ts:314-321` `byCreation` | `listEndpoints`, `listEnabledEndpoints`, `listBySubject` | asc, `id` | new: `packages/webhooks/test/RecordOrderPins.test.ts` "WebhookRecords.listEndpoints: ...", "WebhookRecords.listEnabledEndpoints: ...", "WebhookRecords.listBySubject: ..." (each "time first, then id, ascending") |
+
+All 11 sites are pinned; none of the five reused contract cases is a gap. Site 5's tie rests on the test clock not advancing between the three creates (the case asserts the order, not the timestamps), so a future harness that ticks the clock per call would weaken it silently; the Membership contract is unchanged in this phase.
