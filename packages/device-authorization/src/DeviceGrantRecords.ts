@@ -248,8 +248,7 @@ export const layerSql = Layer.effect(
   DeviceGrantRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`DeviceGrantRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("DeviceGrantRecords");
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const Row = makeRow(wire);
 
