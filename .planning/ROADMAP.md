@@ -16,7 +16,7 @@ This milestone resolves the eight deepening candidates from the 2026-11-14 archi
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: CLI views and ConfigList removal** - One views module resolves `--format`/`--json` once; `ConfigList` deleted; gate baseline recorded
+- [x] **Phase 1: CLI views and ConfigList removal** - One views module resolves `--format`/`--json` once; `ConfigList` deleted; gate baseline recorded (completed 2026-11-14)
 - [ ] **Phase 2: Split TestAuth** - `TestAuth.ts` becomes a facade over `internal/` modules with an identical public name set
 - [ ] **Phase 3: Keyset-page module** - One page contract, clamp, cursor derivation and comparator for users, organizations and impersonations
 - [ ] **Phase 4: Connection-lifecycle module** - SAML and OIDC share one exposed lifecycle service in `organization` with a single suspended-org policy
@@ -36,7 +36,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. All four `plugin` views render through one views module that resolves `--format` and `--json` once, with output identical to today.
   4. `ConfigList` is absent from the package export and the tree, a changeset with a `Migration:` line exists, and `spec/behaviors/26-cli.md` (lines 46 and 398) is updated with Revision and Change History bumped together.
   5. `Migration.apply` and `Openapi` write through the same `Output` seam wherever that costs no behaviour change, proven by their existing tests passing unmodified.
-**Plans**: 4/4 plans executed
+**Plans**: 4/4 plans complete
 Plans:
 **Wave 1**
 - [x] 01-01-PLAN.md — Wave 0: gate baseline (01-BASELINE.md) and pre-refactor pins (PluginViews.test.ts matrix, openapi, migration apply, config list)
@@ -141,7 +141,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7. Phases 1
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. CLI views and ConfigList removal | 4/4 | In Progress | - |
+| 1. CLI views and ConfigList removal | 4/4 | Complete    | 2026-11-14 |
 | 2. Split TestAuth | 0/TBD | Not started | - |
 | 3. Keyset-page module | 0/TBD | Not started | - |
 | 4. Connection-lifecycle module | 0/TBD | Not started | - |
