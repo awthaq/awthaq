@@ -451,6 +451,12 @@ export const layerStore = Layer.effect(
               oauthProtocol,
               input.emailDomains ?? [],
             );
+            // Sealed here, before the lifecycle takes the organization lock and opens its transaction: the
+            // `Encryption` port may be a remote key service, and the write must perform no external IO.
+            const clientSecret =
+              input.clientSecret === undefined
+                ? undefined
+                : yield* records.sealSecret(id, input.clientSecret);
             return {
               connectionId: id,
               domains: emailDomains,
@@ -466,7 +472,7 @@ export const layerStore = Layer.effect(
                 jwksUri: input.jwksUri,
                 userinfoEndpoint: input.userinfoEndpoint,
                 clientId: input.clientId,
-                clientSecret: input.clientSecret,
+                clientSecret,
                 scopes,
                 emailDomains,
               }),
@@ -520,6 +526,11 @@ export const layerStore = Layer.effect(
                     oauthProtocol,
                     patch.emailDomains,
                   );
+            // Sealed here, outside the lock and the transaction (see `create`); `null` clears the secret.
+            const clientSecret =
+              patch.clientSecret === undefined || patch.clientSecret === null
+                ? patch.clientSecret
+                : yield* records.sealSecret(connectionId, patch.clientSecret);
             return {
               connectionId,
               domains: emailDomains,
@@ -533,7 +544,7 @@ export const layerStore = Layer.effect(
                 jwksUri: patch.jwksUri,
                 userinfoEndpoint: patch.userinfoEndpoint,
                 clientId: patch.clientId,
-                clientSecret: patch.clientSecret,
+                clientSecret,
                 scopes: patch.scopes,
                 emailDomains,
               }),

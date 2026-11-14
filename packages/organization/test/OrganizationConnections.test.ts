@@ -9,6 +9,7 @@ import { Encryption, KeyProvider, Mailer, SqlTransaction } from "@awthaq/ports";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
+import type * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -81,24 +82,27 @@ const StubDirectoryLive = Layer.succeed(
   }),
 );
 
-/** Connection storage, sealing and the LayerMap — everything but OAuth. */
-const ConnectionsLive = Layer.mergeAll(
-  OrganizationConnections.layerStore,
-  OrganizationConnections.oauthConnections,
-).pipe(
-  Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
-  Layer.provideMerge(OrganizationConnectionLifecycle.OrganizationConnectionLifecycle.layer),
-  Layer.provideMerge(ConnectionRecords.layerMemory),
-  Layer.provideMerge(DomainClaims.layerMemory),
-  Layer.provideMerge(SqlTransaction.layerNoop),
-  Layer.provideMerge(StubDirectoryLive),
-  Layer.provideMerge(EncryptionLive),
-  Layer.provideMerge(
-    Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerNoop),
-  ),
-  Layer.provideMerge(TestAuth.memoryFoundation),
-  Layer.provideMerge(NodeCrypto.layer),
-);
+/** Connection storage, sealing and the LayerMap — everything but OAuth — over the given `Encryption` and `SqlTransaction`. */
+const connectionsLive = (
+  encryption: Layer.Layer<Encryption.Encryption, Config.ConfigError>,
+  transaction: Layer.Layer<SqlTransaction.SqlTransaction>,
+) =>
+  Layer.mergeAll(OrganizationConnections.layerStore, OrganizationConnections.oauthConnections).pipe(
+    Layer.provideMerge(OrganizationConnections.OrganizationConnections.layer),
+    Layer.provideMerge(OrganizationConnectionLifecycle.OrganizationConnectionLifecycle.layer),
+    Layer.provideMerge(ConnectionRecords.layerMemory),
+    Layer.provideMerge(DomainClaims.layerMemory),
+    Layer.provideMerge(transaction),
+    Layer.provideMerge(StubDirectoryLive),
+    Layer.provideMerge(encryption),
+    Layer.provideMerge(
+      Layer.mergeAll(Users.layer.pipe(Layer.provide(Persistence.memory)), Mailer.layerNoop),
+    ),
+    Layer.provideMerge(TestAuth.memoryFoundation),
+    Layer.provideMerge(NodeCrypto.layer),
+  );
+
+const ConnectionsLive = connectionsLive(EncryptionLive, SqlTransaction.layerNoop);
 
 const baseUrl = "https://app.example.com";
 
@@ -130,6 +134,52 @@ const oauth2Input = (organizationId: string): OrganizationConnections.Connection
 });
 
 describe("OrganizationConnectionStore (BEH-EA-235)", () => {
+  it.effect(
+    "the client secret is sealed before the unit's transaction opens, on create and on update",
+    () => {
+      // The unit's transaction is also where the per-organization lock is held (SQL), so a seal that ran inside it
+      // would hold the lock across the `Encryption` / `KeyProvider` ports (KMS-shaped, possibly remote).
+      const trace: Array<string> = [];
+      const SpiedEncryption = Layer.effect(
+        Encryption.Encryption,
+        Effect.map(Encryption.Encryption, (inner) =>
+          Encryption.Encryption.of({
+            ...inner,
+            encrypt: (plaintext, aad) =>
+              Effect.suspend(() => {
+                trace.push("seal");
+                return inner.encrypt(plaintext, aad);
+              }),
+          }),
+        ),
+      ).pipe(Layer.provide(EncryptionLive));
+      const SpiedTransaction = Layer.succeed(
+        SqlTransaction.SqlTransaction,
+        SqlTransaction.SqlTransaction.of({
+          withTransaction: (effect) =>
+            Effect.suspend(() => {
+              trace.push("transaction");
+              return effect;
+            }),
+        }),
+      );
+      return Effect.gen(function* () {
+        const store = yield* OrganizationConnections.OrganizationConnectionStore;
+        const view = yield* store.create(actor, oidcInput("org-1"));
+        assert.deepStrictEqual(trace, ["seal", "transaction"]);
+        trace.length = 0;
+        yield* store.update(actor, "org-1", view.id, {
+          clientSecret: Redacted.make("rotated-secret"),
+          emailDomains: ["acme.example"],
+        });
+        assert.deepStrictEqual(trace, ["seal", "transaction"]);
+      }).pipe(
+        TestAuth.withoutRequest,
+        Effect.provide(connectionsLive(SpiedEncryption, SpiedTransaction)),
+      );
+    },
+  );
+
   it.effect("the client secret is stored sealed and never shown back", () =>
     Effect.gen(function* () {
       const store = yield* OrganizationConnections.OrganizationConnectionStore;

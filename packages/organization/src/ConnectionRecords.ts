@@ -17,7 +17,7 @@
 // to a connection, they do not authenticate anyone — the connection's IdP still
 // has to.
 
-import { type Encryption, SqlTransaction } from "@awthaq/ports";
+import { Defects, type Encryption, SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels, SealedColumn, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -26,7 +26,7 @@ import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import type * as Redacted from "effect/Redacted";
+import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -60,6 +60,21 @@ export interface ConnectionRecord {
   readonly updatedAt: DateTime.Utc;
 }
 
+/**
+ * A client secret already sealed for one connection (`ConnectionRecordsShape.sealSecret`). The store seals before it
+ * takes any lock or opens any transaction, because sealing goes through the `Encryption` and `KeyProvider` ports
+ * (KMS-shaped, possibly remote); `create` and `update` then write the envelope as it is. Opaque to callers: they
+ * hold it, never read it, and records never hand one out.
+ */
+export class PreparedSecret {
+  readonly _tag = "PreparedSecret";
+  constructor(
+    /** The connection this envelope is bound to (its AAD names the id). */
+    readonly connectionId: string,
+    readonly envelope: Redacted.Redacted<string>,
+  ) {}
+}
+
 /** What `create` takes: the caller (the store) mints the id so it can bind the secret's AAD to it. */
 export interface ConnectionInput {
   readonly id: string;
@@ -73,7 +88,8 @@ export interface ConnectionInput {
   readonly jwksUri?: string | undefined;
   readonly userinfoEndpoint?: string | undefined;
   readonly clientId: string;
-  readonly clientSecret?: Redacted.Redacted<string> | undefined;
+  /** The plaintext (sealed inside `create`), or one `sealSecret` sealed earlier for this id. */
+  readonly clientSecret?: Redacted.Redacted<string> | PreparedSecret | undefined;
   readonly scopes: ReadonlyArray<string>;
   readonly emailDomains: ReadonlyArray<string>;
 }
@@ -88,7 +104,8 @@ export interface ConnectionPatch {
   readonly jwksUri?: string | null | undefined;
   readonly userinfoEndpoint?: string | null | undefined;
   readonly clientId?: string | undefined;
-  readonly clientSecret?: Redacted.Redacted<string> | null | undefined;
+  /** The plaintext (sealed inside `update`), or one `sealSecret` sealed earlier for this id; `null` clears it. */
+  readonly clientSecret?: Redacted.Redacted<string> | PreparedSecret | null | undefined;
   readonly scopes?: ReadonlyArray<string> | undefined;
   readonly emailDomains?: ReadonlyArray<string> | undefined;
 }
@@ -103,6 +120,14 @@ export class ConnectionDomainTaken extends Data.TaggedError("ConnectionDomainTak
 }> {}
 
 export interface ConnectionRecordsShape {
+  /**
+   * Seals a plaintext client secret for connection `id` (AAD `organization_oauth_connection:<id>:clientSecret`) and
+   * returns it for `create` or `update`. It runs the `Encryption` port, so call it outside any lock and transaction.
+   */
+  readonly sealSecret: (
+    id: string,
+    secret: Redacted.Redacted<string>,
+  ) => Effect.Effect<PreparedSecret>;
   readonly create: (
     input: ConnectionInput,
   ) => Effect.Effect<ConnectionRecord, ConnectionDomainTaken | StoreFailure.StoreUnavailable>;
@@ -254,7 +279,7 @@ export const layerMemory: Layer.Layer<
       const secret =
         input.clientSecret === undefined
           ? Option.none<string>()
-          : Option.some(yield* secrets.seal(input.id, input.clientSecret));
+          : Option.some(yield* envelopeOf(secrets, input.id, input.clientSecret));
       const outcome = yield* Ref.modify(
         state,
         (s): readonly [Result.Result<StoredConnection, ConnectionDomainTaken>, State] => {
@@ -362,7 +387,11 @@ export const layerMemory: Layer.Layer<
     ) =>
       Ref.update(state, (s) => HashMap.filter(s, (row) => row.organizationId !== organizationId));
 
+    const sealSecret: ConnectionRecordsShape["sealSecret"] = (id, secret) =>
+      prepareSecret(secrets, id, secret);
+
     const records = {
+      sealSecret,
       create,
       findById,
       findByEmailDomain,
@@ -391,17 +420,37 @@ export const layerMemory: Layer.Layer<
   }),
 );
 
-/** The already-sealed new secret a patch carries: `undefined` leaves it, `null` clears it. */
-const patchSecret = (
-  secrets: {
-    readonly seal: (rowKey: string, value: Redacted.Redacted<string>) => Effect.Effect<string>;
-  },
+interface Sealer {
+  readonly seal: (rowKey: string, value: Redacted.Redacted<string>) => Effect.Effect<string>;
+}
+
+/** The envelope of `secret` for connection `id`: sealed now, or the one `sealSecret` made earlier (which must be for this id). */
+const envelopeOf = (
+  secrets: Sealer,
   id: string,
-  patch: ConnectionPatch,
+  secret: Redacted.Redacted<string> | PreparedSecret,
 ) =>
+  secret instanceof PreparedSecret
+    ? secret.connectionId === id
+      ? Effect.succeed(Redacted.value(secret.envelope))
+      : Defects.invariantViolation(
+          "organization.connectionSecret",
+          "awthaq: a prepared connection secret was sealed for another connection",
+        )
+    : secrets.seal(id, secret);
+
+/** The already-sealed new secret a patch carries: `undefined` leaves it, `null` clears it. */
+const patchSecret = (secrets: Sealer, id: string, patch: ConnectionPatch) =>
   patch.clientSecret === undefined || patch.clientSecret === null
     ? Effect.succeed(patch.clientSecret)
-    : secrets.seal(id, patch.clientSecret);
+    : envelopeOf(secrets, id, patch.clientSecret);
+
+/** `sealSecret` over a codec: the envelope, tagged with the connection it is bound to. */
+const prepareSecret = (secrets: Sealer, id: string, secret: Redacted.Redacted<string>) =>
+  Effect.map(
+    secrets.seal(id, secret),
+    (envelope) => new PreparedSecret(id, Redacted.make(envelope)),
+  );
 
 // ---- layerSql -----------------------------------------------------------------
 
@@ -656,7 +705,7 @@ export const layerSql: Layer.Layer<
       const secret =
         input.clientSecret === undefined
           ? Option.none<string>()
-          : Option.some(yield* secrets.seal(input.id, input.clientSecret));
+          : Option.some(yield* envelopeOf(secrets, input.id, input.clientSecret));
       return yield* write({
         id: input.id,
         organizationId: input.organizationId,
@@ -748,6 +797,7 @@ export const layerSql: Layer.Layer<
       );
 
     return {
+      sealSecret: (id, secret) => prepareSecret(secrets, id, secret),
       create,
       findById,
       findByEmailDomain,
