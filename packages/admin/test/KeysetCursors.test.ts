@@ -72,6 +72,16 @@ const assertWire = (
   ]);
 };
 
+/** The cursor a walk produced after page `n`: what a page really answered, not a pinned literal. */
+const cursorAfter = (
+  pages: ReadonlyArray<{ readonly cursor: string | null }>,
+  n: number,
+): string => {
+  const cursor = pages[n]?.cursor;
+  if (cursor === undefined || cursor === null) return assert.fail(`page ${n} answered no cursor`);
+  return cursor;
+};
+
 // ---- the three wire schemas ---------------------------------------------------------------------------------
 
 describe("KEY-04: the wire schemas", () => {
@@ -187,13 +197,13 @@ const usersCases = (leg: string, layer: Layer.Layer<UsersWorld, unknown>) => {
           { ids: ["5"], cursor: null },
         ]);
         assertWire(
-          USERS_AFTER_SECOND_TIE,
+          cursorAfter(pages, 0),
           USERS_AFTER_SECOND_TIE,
           { createdAt: iso(T0 + 1), id: userId(2) },
           "createdAt",
         );
         assertWire(
-          USERS_AFTER_FOURTH,
+          cursorAfter(pages, 1),
           USERS_AFTER_FOURTH,
           { createdAt: iso(T0 + 5), id: userId(4) },
           "createdAt",
@@ -347,13 +357,13 @@ const impersonationCases = (
             { sessions: ["s-0-0"], cursor: null },
           ]);
           assertWire(
-            IMPERSONATION_AFTER_FIRST_PAGE,
+            cursorAfter(walk.pages, 0),
             IMPERSONATION_AFTER_FIRST_PAGE,
             { startedAt: iso(T0 + 2), id: "019ca6b1-dc02-74bd-8bb7-c7c0872b7601" },
             "startedAt",
           );
           assertWire(
-            IMPERSONATION_AFTER_SECOND_PAGE,
+            cursorAfter(walk.pages, 1),
             IMPERSONATION_AFTER_SECOND_PAGE,
             { startedAt: iso(T0), id: "019ca6b1-dc00-70bf-b9b8-eeb5e174a69a" },
             "startedAt",
