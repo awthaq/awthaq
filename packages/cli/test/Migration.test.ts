@@ -159,4 +159,74 @@ describe("Migration.apply", () => {
       assert.deepStrictEqual(Object.keys(docs[0] ?? {}), ["pending", "drift", "applied"]);
     }).pipe(Effect.provide(Sql)),
   );
+
+  it.effect("text: --yes ends with `applied N migration(s)` and prints it once", () =>
+    Effect.gen(function* () {
+      const { exit, stdout, stderr } = yield* run(Migration.apply(passwordAndRoles, yes));
+      assert.isTrue(Exit.isSuccess(exit));
+      assert.strictEqual(
+        stdout.at(-1),
+        `applied ${(yield* coreCount) + PLUGIN_COUNT} migration(s)`,
+      );
+      assert.deepStrictEqual(
+        stdout.slice(0, -1).filter((line) => line.startsWith("applied ")),
+        [],
+      );
+      assert.deepStrictEqual(stderr, []);
+    }).pipe(Effect.provide(Sql)),
+  );
+
+  it.effect("text: --dry-run never prints an `applied N migration(s)` line", () =>
+    Effect.gen(function* () {
+      const { exit, stdout, stderr } = yield* run(
+        Migration.apply(passwordAndRoles, { yes: false, dryRun: true, allowEmpty: false }),
+      );
+      assert.isTrue(Exit.isSuccess(exit));
+      assert.deepStrictEqual(
+        stdout.filter((line) => line.startsWith("applied ")),
+        [],
+      );
+      assert.deepStrictEqual(stderr, []);
+    }).pipe(Effect.provide(Sql)),
+  );
+
+  it.effect("--json: --yes prints exactly one stdout entry, the document, with applied true", () =>
+    Effect.gen(function* () {
+      const { captured, layer } = yield* Output.capture(true);
+      yield* Migration.apply(passwordAndRoles, yes).pipe(Effect.provide(layer));
+      const stdout = yield* Ref.get(captured.stdout);
+      const docs = yield* Ref.get(captured.documents);
+      assert.strictEqual(docs.length, 1);
+      assert.strictEqual(stdout.length, 1);
+      assert.strictEqual(stdout[0], JSON.stringify(docs[0], null, 2));
+      assert.deepStrictEqual(
+        Object.entries(docs[0] ?? {}).filter(([key]) => key === "applied"),
+        [["applied", true]],
+      );
+      assert.deepStrictEqual(yield* Ref.get(captured.stderr), []);
+    }).pipe(Effect.provide(Sql)),
+  );
+
+  it.effect(
+    "--json: --dry-run prints exactly one stdout entry, the document, with applied false",
+    () =>
+      Effect.gen(function* () {
+        const { captured, layer } = yield* Output.capture(true);
+        yield* Migration.apply(passwordAndRoles, {
+          yes: false,
+          dryRun: true,
+          allowEmpty: false,
+        }).pipe(Effect.provide(layer));
+        const stdout = yield* Ref.get(captured.stdout);
+        const docs = yield* Ref.get(captured.documents);
+        assert.strictEqual(docs.length, 1);
+        assert.strictEqual(stdout.length, 1);
+        assert.strictEqual(stdout[0], JSON.stringify(docs[0], null, 2));
+        assert.deepStrictEqual(
+          Object.entries(docs[0] ?? {}).filter(([key]) => key === "applied"),
+          [["applied", false]],
+        );
+        assert.deepStrictEqual(yield* Ref.get(captured.stderr), []);
+      }).pipe(Effect.provide(Sql)),
+  );
 });
