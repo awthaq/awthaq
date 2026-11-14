@@ -1,9 +1,13 @@
 {
   "name": "@awthaq/oauth",
   "version": "0.2.0",
-  "private": true,
   "description": "OAuth providers as Layers, PKCE, explicit account linking.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/awthaq/awthaq.git",
+    "directory": "packages/oauth"
+  },
   "files": [
     "lib",
     "src",

@@ -1,9 +1,13 @@
 {
   "name": "@awthaq/api-key",
   "version": "0.2.0",
-  "private": true,
   "description": "Long-lived API keys and client_credentials service identity: hashed-at-rest keys, rotation with a grace window, short-lived service JWTs.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/awthaq/awthaq.git",
+    "directory": "packages/api-key"
+  },
   "files": [
     "lib",
     "src",

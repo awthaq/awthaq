@@ -1,9 +1,13 @@
 {
   "name": "@awthaq/migrate-auth0",
   "version": "0.2.0",
-  "private": true,
   "description": "Import Auth0 database-connection users, including their bcrypt password hashes, without forcing a mass password reset.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/awthaq/awthaq.git",
+    "directory": "packages/migrate-auth0"
+  },
   "files": [
     "lib",
     "src",

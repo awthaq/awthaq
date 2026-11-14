@@ -1,9 +1,13 @@
 {
   "name": "@awthaq/migrate-better-auth",
   "version": "0.2.0",
-  "private": true,
   "description": "Bridge still-live better-auth sessions into freshly issued awthaq sessions during a cutover, without forcing a mass re-login.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/awthaq/awthaq.git",
+    "directory": "packages/migrate-better-auth"
+  },
   "files": [
     "lib",
     "src",
