@@ -210,3 +210,7 @@ knip's filtered output keeps only the banner, the headings, the three `readme-qu
 The AFTER probe, run with the same source and `TS_API_PATH` against the post-split `packages/test/src/TestAuth.ts`, must diff empty against `02-SURFACE-BEFORE.txt`. A diff is reported, never resolved by editing the BEFORE file.
 
 Phase allowlist, measured from `d4282e31`: `packages/test/**`, `packages/core/test/SignInSeams.test.ts`, `packages/core/test/RequestContextSeams.test.ts`, `spec/**`, `.planning/**`. No `.cjs`/`.mjs` file is added by the phase.
+
+## Wave 0 pin
+
+After `packages/test/test/TestAuthSurface.test.ts` (one case, `Object.keys(TestAuth).sort()` against the 23 value names, plus one `export type { ... } from "../src/TestAuth.ts"` clause of the 24 type names) landed against the untouched `packages/test/src`: `npx vitest run --project test` = Test Files 34 passed (34), Tests 628 passed, 1 expected fail (629), i.e. one more file and one more test than the 33 / 627 row above. `npx tsc -p tsconfig.test.json` prints 0 `error TS`; renaming one type in the clause makes it print TS2724 (checked, then reverted). The value array agrees exactly with the 23 `[value]` headings of `02-SURFACE-BEFORE.txt`.
