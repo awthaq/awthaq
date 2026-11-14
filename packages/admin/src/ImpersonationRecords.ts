@@ -540,8 +540,7 @@ export const layerSql = Layer.effect(
           SqlClient.SqlClient,
           sql,
         );
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`ImpersonationRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("ImpersonationRecords");
 
     const ledgerTail = SqlSchema.findOneOption({
       Request: Schema.Void,
