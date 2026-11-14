@@ -1,12 +1,18 @@
 // CAT-01..03 (phase 5): the core-table catalogue against the real migrations. Runs on SQLite, and on
 // Postgres under `AWTHAQ_POSTGRES_URL` (the same file, `TestSql.layer` picks the database). The guard
 // runs both migrators that create core tables, the core one and the rate limiter's own, so
-// `rate_limit_buckets` is covered through its creation path, not by a hard-coded exception. A future
-// opt-in store with its own migrator is not covered by construction and must be added to this guard
-// (the one documented exception).
+// `rate_limit_buckets` is covered through its creation path, not by a hard-coded exception. What the
+// guard does NOT prove, by design:
+// - a future opt-in store with its own migrator is not covered and must be added to this guard;
+// - it cannot tell `partitioned` from `directory`: the schema carries the same `"tenantId"` column
+//   either way (row-level security is only enabled by `TenantScope.enableRls`, never by migrations),
+//   so that split is defended by the inline pins (`CoreTablePins.test.ts`), not here.
+// The comparison functions are exercised against synthetic and really-stray tables below, so a guard
+// that can no longer fail is itself caught.
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Migrator from "effect/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as CoreMigrations from "../src/CoreMigrations.ts";
 import * as CoreSealedColumns from "../src/CoreSealedColumns.ts";
 import * as CoreTables from "../src/CoreTables.ts";
@@ -14,6 +20,13 @@ import * as RateLimiterStoreSql from "../src/RateLimiterStoreSql.ts";
 import * as TestSql from "../../test/src/TestSql.ts";
 
 const SqlLive = TestSql.layer("sql_CoreTables");
+
+/** Tables the migrations created that the catalogue does not classify. */
+const unclassified = (created: ReadonlyArray<string>, classified: ReadonlyArray<string>) =>
+  created.filter((name) => !classified.includes(name));
+/** Classified tables the migrations never created. */
+const uncreated = (created: ReadonlyArray<string>, classified: ReadonlyArray<string>) =>
+  classified.filter((name) => !created.includes(name));
 
 const tablesNow = Effect.map(TestSql.schemaOf, (shape) =>
   Object.keys(shape.tables)
@@ -27,14 +40,34 @@ describe("CoreTables drift guard", () => {
       yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
       const afterCore = yield* tablesNow;
       const classified: ReadonlyArray<string> = [...CoreTables.names].sort();
-      for (const name of afterCore) assert.include(classified, name);
+      assert.deepStrictEqual(unclassified(afterCore, classified), []);
 
       yield* RateLimiterStoreSql.migrate;
       const afterBoth = yield* tablesNow;
-      assert.deepStrictEqual(afterBoth, classified);
+      assert.deepStrictEqual(unclassified(afterBoth, classified), []);
+      assert.deepStrictEqual(uncreated(afterBoth, classified), []);
 
       // replicated tables are mirrored by `LaggingReplica`, which copies them from a core-migrated primary
       for (const name of CoreTables.replicated) assert.include(afterCore, name);
+    }).pipe(Effect.provide(SqlLive)),
+  );
+
+  it("the comparison reports a table the catalogue lacks and a classified table never created", () => {
+    const classified = ["a", "b"];
+    assert.deepStrictEqual(unclassified(["a", "b", "stray"], classified), ["stray"]);
+    assert.deepStrictEqual(uncreated(["a"], classified), ["b"]);
+    assert.deepStrictEqual(unclassified(["a", "b"], classified), []);
+    assert.deepStrictEqual(uncreated(["a", "b"], classified), []);
+  });
+
+  it.effect("a table created behind the catalogue's back is caught on the real schema", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* Migrator.make({})({ loader: CoreMigrations.coreMigrations });
+      yield* RateLimiterStoreSql.migrate;
+      yield* sql`CREATE TABLE stray_core_table (id TEXT PRIMARY KEY)`;
+      const created = yield* tablesNow;
+      assert.deepStrictEqual(unclassified(created, CoreTables.names), ["stray_core_table"]);
     }).pipe(Effect.provide(SqlLive)),
   );
 
@@ -130,8 +163,20 @@ describe("CoreTables", () => {
 
   it("an entry carries no column types or DDL (ADR-EA-004)", () => {
     const allowed = ["name", "owner", "tenancy", "replicated", "sealed", "reason"];
+    const declaredSealed = CoreSealedColumns.deployed({ encryptPii: true });
     for (const table of CoreTables.tables) {
-      for (const key of Object.keys(table)) assert.include(allowed, key, `${table.name}.${key}`);
+      for (const [key, value] of Object.entries(table)) {
+        assert.include(allowed, key, `${table.name}.${key}`);
+        if (key === "sealed") {
+          // nested keys: a sealed element is the CoreSealedColumns declaration itself, never a copy
+          for (const column of table.sealed) {
+            assert.include(declaredSealed, column, `${table.name} sealed ${column.column}`);
+          }
+        } else {
+          // every other value is a plain scalar, so nothing is nested for a schema to hide in
+          assert.notStrictEqual(typeof value, "object", `${table.name}.${key}`);
+        }
+      }
     }
   });
 
