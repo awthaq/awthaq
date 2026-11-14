@@ -218,3 +218,26 @@ Runs, against untouched `src`:
 - `npx tsc -b tsconfig.json` exit 0; `npx tsc -p tsconfig.test.json` prints no `error TS` (only the two pre-existing TS377149 warnings); `pnpm lint` exit 0 with nothing under `packages/`; `pnpm format:check` exit 0 (1225 files).
 - Mutations seen to fail and reverted: swapping "verification_tokens" and "verification_reservations" in the P1 literal failed the P1 test (Tests 1 failed | 8 passed); changing the expected AAD `users:<id>:metadata` to `users:<id>:meta` failed the encryptPii P3 test (Tests 1 failed | 8 passed); reverted, 9 pass again.
 - P2 versus RESEARCH Q2: no difference; the printed output matched the reading. The five real outputs were taken with a temporary probe test (deleted, never committed). Order notes frozen by the pins: Partitioned and Keyed plugin tables are pushed in declaration order before any Derived table, so with `includeKeyed` the order is webhooks_endpoint, organization_org, organization_team, then webhooks_delivery, organization_team_membership, organization_active_context; a Keyed table's column is its own key (`organization_org` on `id`, `organization_team` on `organizationId`), the Partitioned one uses `tenantId`; without `includeKeyed` the only skipped entry is `organization_team_membership` with reason "its parent table is not covered by this call".
+
+### 05-02: the three remaining pins
+
+| File | Tests added | Pin | What it freezes |
+|------|-------------|-----|-----------------|
+| `packages/test/test/LaggingReplica.test.ts` (new) | 1 | P5 | `LaggingReplica.coreTables` = users, accounts, sessions, verification_tokens, verification_reservations, auth_audit_log, order included |
+| `packages/core/test/AuthTenancy.test.ts` (additions only) | 2 (6 to 8) | P6 | `Auth.make` accepts users, accounts, verification_tokens, verification_reservations, auth_audit_log as a Derived parent (sessions already pinned) and refuses auth_relay_cursor and rate_limit_buckets with cause UnknownParent |
+| `packages/sql/test/TenantScope.postgres.test.ts` (additions only) | 1 (10 to 11 `it.effect`) | P8 | tables with `relrowsecurity`: after `enableRls()` the four partitioned tables; after `enableRls({ includeDirectory: true })` the six stamped tables, `auth_relay_cursor` false; none after `disableRls` |
+
+(CoreTablePins.test.ts, 9 tests, P1 to P4, is in 05-01 above.)
+
+Runs of `npx vitest run packages/sql/test/CoreTablePins.test.ts packages/test/test/LaggingReplica.test.ts packages/core/test/AuthTenancy.test.ts packages/sql/test/TenantScope.postgres.test.ts`, against untouched `src`:
+
+- SQLite (`AWTHAQ_POSTGRES_URL` unset): Test Files 3 passed | 1 skipped (4); Tests 18 passed | 11 skipped (29) (the Postgres file skips as a whole).
+- Postgres (`AWTHAQ_POSTGRES_URL=postgres://postgres:pw@localhost:55433/awthaq`, run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)): Test Files 4 passed (4); Tests 29 passed (29).
+- `npx tsc -b tsconfig.json` exit 0; `npx tsc -p tsconfig.test.json` prints no `error TS` (only the two pre-existing TS377149 warnings); `pnpm format:check` exit 0 (1226 files); `pnpm lint` prints only pre-existing warnings.
+
+Mutations seen to fail and reverted:
+
+- P6: moving `auth_relay_cursor` into the accepted loop failed "accepts every tenant-stamped core table as a Derived parent" (Tests 1 failed | 7 passed); reverted, 8 pass.
+- P8: dropping "users" from the `includeDirectory` literal failed "RLS covers exactly the stamped core tables, never auth_relay_cursor" on Postgres (Tests 1 failed | 10 passed in that file); reverted, 11 pass (run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)).
+
+`git diff --quiet ea56a16f -- packages/sql/src packages/core/src packages/test/src spec features examples .changeset` exits 0 at each Wave 0 commit (05-01 and both 05-02 commits); `git diff ea56a16f -- <file> | grep -c '^-[^-]'` prints 0 for `AuthTenancy.test.ts` and `TenantScope.postgres.test.ts`.

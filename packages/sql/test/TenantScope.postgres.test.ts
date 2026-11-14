@@ -193,6 +193,40 @@ describe.skipIf(skip)("Tenant RLS (real Postgres)", () => {
       assert.isFalse(yield* rlsOn("users"));
     }).pipe(Effect.provide(StoresLive)),
   );
+
+  // Phase 5 Wave 0 pin P8 (GATE-04): the exact set of tables carrying a policy.
+  it.effect("RLS covers exactly the stamped core tables, never auth_relay_cursor", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const rlsTables = sql<{ readonly relname: string }>`
+        SELECT relname FROM pg_class
+        WHERE relnamespace = current_schema()::regnamespace AND relkind = 'r' AND relrowsecurity
+      `.pipe(Effect.map((rows) => rows.map((row) => row.relname).sort()));
+      const relayCursorRls = sql<{ readonly relrowsecurity: boolean }>`
+        SELECT relrowsecurity FROM pg_class WHERE relname = 'auth_relay_cursor' AND relnamespace = current_schema()::regnamespace
+      `.pipe(Effect.map((rows) => rows[0]?.relrowsecurity ?? false));
+
+      yield* TenantScope.enableRls();
+      assert.deepStrictEqual(yield* rlsTables, [
+        "auth_audit_log",
+        "sessions",
+        "verification_reservations",
+        "verification_tokens",
+      ]);
+      yield* TenantScope.enableRls({ includeDirectory: true });
+      assert.deepStrictEqual(yield* rlsTables, [
+        "accounts",
+        "auth_audit_log",
+        "sessions",
+        "users",
+        "verification_reservations",
+        "verification_tokens",
+      ]);
+      assert.isFalse(yield* relayCursorRls);
+      yield* TenantScope.disableRls;
+      assert.deepStrictEqual(yield* rlsTables, []);
+    }).pipe(Effect.provide(StoresLive)),
+  );
 });
 
 // Plan 05 (ADR-EA-018 decision 10): plugin tables. Scratch tables stand in for a Partitioned
