@@ -96,8 +96,10 @@ export const challengeStore = RecordsContract.suite(ChallengeStore.ChallengeStor
             assert.isFalse(yield* store.consume("registration:user-3", "not-the-right-value"));
             const scope = "registration:tamper";
             const issued = Redacted.value(yield* store.issue(scope));
-            // Always differs from `issued` (a fixed suffix collides when the random value already ends in it).
-            const tampered = `${issued.slice(0, -1)}${issued.endsWith("x") ? "y" : "x"}`;
+            // Change the FIRST character: all six of its bits are significant, so the decoded bytes
+            // always differ. The last base64url character carries unused bits that decoding drops,
+            // so changing it can yield the very same challenge.
+            const tampered = `${issued[0] === "A" ? "B" : "A"}${issued.slice(1)}`;
             assert.isFalse(yield* store.consume(scope, tampered));
           }),
         },
