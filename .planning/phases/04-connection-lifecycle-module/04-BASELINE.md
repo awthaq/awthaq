@@ -235,3 +235,18 @@ Task 3 additions (SAML store and admin pins, SCIM characterization), memory reco
 - Mutation seen to fail and reverted: expecting `domain: "y.example"` instead of `"z.example"` in the SAML store case failed that case (Tests 1 failed | 4 passed); reverted, 5 pass again.
 - SCIM zero-diff proof at this commit: `git diff --stat c683a1bc -- packages/scim/src packages/scim/package.json packages/scim/README.md` prints nothing; the only change under `packages/scim` is the one added test file.
 - The phase's finding is recorded in `04-FINDINGS.md` (F-04-01).
+
+## Wave 0 red: Postgres race
+
+`packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts` (suite `organization_ConnectionLifecycleRace`, three cases, `describe.skipIf(AWTHAQ_POSTGRES_URL === undefined)`, `it.live`, 30 s per case, at most two concurrent fibers, `pg_sleep` triggers created per case and dropped in a finalizer). Added by 04-02 and never edited afterwards. Run against untouched `packages/*/src` (`git diff --quiet c683a1bc -- packages/organization/src packages/saml/src packages/scim/src packages/scim/package.json packages/scim/README.md spec .changeset examples` exits 0).
+
+- Without the variable: `npx vitest run packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts` exit 0, `Test Files  1 skipped (1)`, `Tests  3 skipped (3)`.
+- With it: `AWTHAQ_POSTGRES_URL=postgres://postgres:pw@localhost:55433/awthaq npx vitest run packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts` exit 1, `Test Files  1 failed (1)`, `Tests  3 failed (3)` (1326 ms, 1840 ms, 735 ms). Run twice, identical result both times. run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote).
+
+| Case | Red because (verbatim diff, `- Expected` / `+ Received`) | Turns green in |
+|------|-----------------------------------------------------------|----------------|
+| `an update racing a remove of the same connection ends with nothing left and no deadlock` | `AssertionError: expected { remove: 'StoreUnavailable', …(6) } to deeply equal { remove: 'ok', …(6) }`: `claimRows` 0 vs 1, `connectionRows` 0 vs 1, `domainRows` 0 vs 1, `ownerRows` 0 vs 1, `remove` "ok" vs "StoreUnavailable", `storeUnavailable` 0 vs 1 (`update` is "ok or ConnectionRecordNotFound"). The deadlock victim is the remove in both runs (Postgres picks the waiter whose `deadlock_timeout` fires first; RESEARCH Experiment 1 saw the update), so the surviving update leaves its rows. | 04-05 (claims-first lifecycle under the 04-03 lock) |
+| `two organizations claiming the same two domains in opposite order: one wins, the other is refused, no deadlock` | `AssertionError: expected { storeUnavailable: 1, …(2) } to deeply equal { storeUnavailable: +0, …(2) }`: `outcomes` `["ConnectionDomainTaken", "ok"]` expected, `["StoreUnavailable", "ok"]` received; `storeUnavailable` 0 vs 1 (the owner rows already name the one winner for x.example and y.example). | 04-03 (lock and sorted owner inserts) |
+| `an organization deletion racing a create for it leaves no connection, claim or owner row behind` | `AssertionError: expected { delete: 'ok', …(4) } to deeply equal { delete: 'ok', …(4) }`: `claimRows` 0 vs 1, `connectionRows` 0 vs 1, `ownerRows` 0 vs 1 (the create lands an orphan connection, claim and owner row after the deletion cleared the organization; the create is not `StoreUnavailable`). | 04-05 (in-lock `findActive` re-check) |
+
+Note for the later plans: a case name keeps the word `opposite` (case 2), the filter `-t 'opposite'` used by 04-03 selects only that case. The whole file is the phase-close Postgres oracle (see the comparison rule above).
