@@ -1,0 +1,1 @@
+No external API integration: phase 6 records an ADR-EA-041 revision, a gate baseline and a measured spike over the in-repo plugin record stores (`packages/*/src/*Records.ts`), and integrates no external service, SDK or endpoint.
