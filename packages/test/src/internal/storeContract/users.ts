@@ -518,14 +518,14 @@ export const users = suite<
             for (let i = 0; i < 6; i++) {
               const page = yield* store.listPage({ after, limit: 3 });
               collected.push(...userIds(page.items));
-              if (Option.isNone(page.next)) break;
-              after = page.next;
+              if (Option.isNone(page.nextCursor)) break;
+              after = page.nextCursor;
             }
             assert.deepEqual(collected, ["z", "b", "c", "a"]);
             // An exactly-full final page invents no cursor.
             const exact = yield* store.listPage({ after: Option.none(), limit: 4 });
             assert.equal(exact.items.length, 4);
-            assert.equal(Option.isNone(exact.next), true);
+            assert.equal(Option.isNone(exact.nextCursor), true);
           }),
         },
       ],

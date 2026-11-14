@@ -6,7 +6,7 @@
 // union, the folding of an email, the verified-flag transitions, the uniqueness errors, the id and
 // the clock, the announcements); the store owns persistence and the atomicity of each primitive.
 
-import { Defects, type Ids, Sealed, UserStore } from "@awthaq/ports";
+import { Defects, type Ids, type Keyset, Sealed, UserStore } from "@awthaq/ports";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -325,7 +325,8 @@ export interface UsersShape {
   /**
    * BAM-005/BEH-EA-036: the admin surface's user listing — keyset-paginated on
    * `(createdAt, id)`, oldest first, opaque cursor in / `nextCursor` out, never an
-   * offset, never more than `limit + 1` rows read (`limit` defaults to 50).
+   * offset. `limit` is normalised once by `Keyset.limit` inside the store (default 50, at most
+   * 200), and never more than one row beyond it is read.
    */
   readonly list: (input?: {
     readonly cursor?: UserCursor | undefined;
@@ -367,18 +368,9 @@ export interface UsersShape {
 }
 
 /** BAM-005/BEH-EA-036: the keyset position of `Users.list`. */
-export interface UserCursor {
-  readonly createdAt: DateTime.Utc;
-  readonly id: string;
-}
+export type UserCursor = UserStore.UserCursor;
 
-export interface UsersPage {
-  readonly items: ReadonlyArray<UserRecord>;
-  /** `None` on the last page. */
-  readonly nextCursor: Option.Option<UserCursor>;
-}
-
-const DEFAULT_LIST_LIMIT = 50;
+export type UsersPage = Keyset.Page<UserRecord, UserCursor>;
 
 export class Users extends Context.Service<Users, UsersShape>()("awthaq/core/Users") {}
 
@@ -551,14 +543,6 @@ type Plan<Conflict> =
 
 /** How often an identity operation re-reads and retries after losing a compare-and-swap. */
 const SWAP_ATTEMPTS = 3;
-
-/** BEH-EA-036: a page is at least one row and at most this many. */
-const MAX_LIST_LIMIT = 200;
-
-const listLimit = (limit: number | undefined): number =>
-  limit === undefined || !Number.isFinite(limit)
-    ? DEFAULT_LIST_LIMIT
-    : Math.min(Math.max(Math.trunc(limit), 1), MAX_LIST_LIMIT);
 
 /** A profile column as the store takes it: `undefined` keeps, `null` clears. */
 const profileChange = (value: string | null | undefined): UserStore.Change<string> =>
@@ -814,17 +798,15 @@ export const layer = Layer.effectContext(
       });
 
     const list: UsersShape["list"] = (input) =>
-      store
-        .listPage({ after: Option.fromNullishOr(input?.cursor), limit: listLimit(input?.limit) })
-        .pipe(
-          relabel("Users.list"),
-          Effect.flatMap((page) =>
-            Effect.map(Effect.forEach(page.items, toUserRecord), (items) => ({
-              items,
-              nextCursor: page.next,
-            })),
-          ),
-        );
+      store.listPage({ after: Option.fromNullishOr(input?.cursor), limit: input?.limit }).pipe(
+        relabel("Users.list"),
+        Effect.flatMap((page) =>
+          Effect.map(Effect.forEach(page.items, toUserRecord), (items) => ({
+            items,
+            nextCursor: page.nextCursor,
+          })),
+        ),
+      );
 
     /** The declared fields among `descriptors` the page holds, keyed by field key. */
     const byKey = (

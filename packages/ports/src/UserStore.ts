@@ -22,8 +22,10 @@ import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 import * as Ref from "effect/Ref";
 import type { E164, UserId } from "./Ids.ts";
+import * as Keyset from "./Keyset.ts";
 import * as Sealed from "./Sealed.ts";
 import type { StoreUnavailable } from "./Store.ts";
 import * as Tenant from "./Tenant.ts";
@@ -144,17 +146,13 @@ export interface UserStoreShape {
   /** ATOMIC: removes the user AND its declared field values. `true` iff a row was removed. */
   readonly delete: (id: UserId) => Effect.Effect<boolean, StoreUnavailable>;
   /**
-   * Ascending `(createdAt, id)`, strictly after `after` when given, at most `limit` items, and `next`
-   * (the position of the last item) only when more follow. `limit` is a positive integer: the
-   * domain validates it.
+   * Ascending `(createdAt, id)`, strictly after `after` when given, at most `limit` items (normalised
+   * by `Keyset.paginate`: 1..200, default 50), and `nextCursor` (the position of the last item) only
+   * when more follow (BEH-EA-036).
    */
-  readonly listPage: (input: {
-    readonly after: Option.Option<UserCursor>;
-    readonly limit: number;
-  }) => Effect.Effect<
-    { readonly items: ReadonlyArray<StoredUser>; readonly next: Option.Option<UserCursor> },
-    StoreUnavailable
-  >;
+  readonly listPage: (
+    request: Keyset.Request<UserCursor>,
+  ) => Effect.Effect<Keyset.Page<StoredUser, UserCursor>, StoreUnavailable>;
   /** `None` = the user is absent; an unset column is absent from the record. */
   readonly readFields: (
     id: UserId,
@@ -180,10 +178,29 @@ export class UserStore extends Context.Service<UserStore, UserStoreShape>()(
 
 // ---- the pure contract helpers every adapter and the domain share ---------------------------
 
-/** `(createdAt, id)` ascending, the order `listPage` answers in. */
-export const byCreation = (a: StoredUser, b: StoredUser): number =>
-  DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt) ||
-  (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+/**
+ * The one order every adapter answers `listPage` in: `(createdAt, id)` ascending, `id` by code unit.
+ * The memory adapter windows with it, the SQL adapter seeks with it (`KeysetSql.make`).
+ */
+export const pageOrder: Keyset.Declaration<StoredUser, UserCursor> = {
+  keys: [
+    Keyset.key({
+      column: "createdAt",
+      direction: "asc",
+      order: DateTime.Order,
+      row: (user) => user.createdAt,
+      cursor: (cursor) => cursor.createdAt,
+    }),
+    Keyset.key({
+      column: "id",
+      direction: "asc",
+      order: Order.String,
+      row: (user) => user.id,
+      cursor: (cursor) => cursor.id,
+    }),
+  ],
+  cursorOf: (user) => ({ createdAt: user.createdAt, id: user.id }),
+};
 
 /** The identity columns of a stored user. */
 export const identityOf = (user: StoredUser): IdentityColumns => ({
@@ -356,29 +373,10 @@ export const layerMemory = Layer.effect(
         return [true, { ...unindex(s, existing.value), fields: HashMap.remove(s.fields, id) }];
       });
 
-    const listPage: UserStoreShape["listPage"] = ({ after, limit }) =>
-      Effect.map(Ref.get(state), (s) => {
-        const following = Array.from(HashMap.values(s.byId))
-          .sort(byCreation)
-          .filter(
-            (user) =>
-              Option.isNone(after) ||
-              DateTime.toEpochMillis(user.createdAt) >
-                DateTime.toEpochMillis(after.value.createdAt) ||
-              (DateTime.toEpochMillis(user.createdAt) ===
-                DateTime.toEpochMillis(after.value.createdAt) &&
-                user.id > after.value.id),
-          );
-        const items = following.slice(0, limit);
-        const last = items.at(-1);
-        return {
-          items,
-          next:
-            following.length > limit && last !== undefined
-              ? Option.some({ createdAt: last.createdAt, id: last.id })
-              : Option.none(),
-        };
-      });
+    const listPage: UserStoreShape["listPage"] = (request) =>
+      Keyset.paginate(pageOrder, request, (fetch) =>
+        Effect.map(Ref.get(state), (s) => Keyset.window(pageOrder, HashMap.values(s.byId), fetch)),
+      );
 
     const readFields: UserStoreShape["readFields"] = (id, columns) =>
       Effect.map(Ref.get(state), (s) =>

@@ -137,9 +137,9 @@ const paginate = withDatabase(
       yield* insertUser(`pages${i}@example.com`, DateTime.add(BASE, { seconds: i }));
     }
     const first = yield* users.listPage({ after: Option.none(), limit: 2 });
-    const second = yield* users.listPage({ after: first.next, limit: 2 });
-    const third = yield* users.listPage({ after: second.next, limit: 2 });
-    return { first, cursor: Option.getOrUndefined(first.next), second, third };
+    const second = yield* users.listPage({ after: first.nextCursor, limit: 2 });
+    const third = yield* users.listPage({ after: second.nextCursor, limit: 2 });
+    return { first, cursor: Option.getOrUndefined(first.nextCursor), second, third };
   }),
 );
 
@@ -191,7 +191,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
   When("the query is called", function* () {
     const { first, third } = yield* paginate;
     const last = first.items.at(-1);
-    const cursor = Option.getOrUndefined(first.next);
+    const cursor = Option.getOrUndefined(first.nextCursor);
     yield* put(strings, [
       cursor === undefined ? "none" : "some",
       String(last !== undefined && cursor?.id === last.id),
@@ -200,7 +200,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
           cursor !== undefined &&
           DateTime.Equivalence(cursor.createdAt, last.createdAt),
       ),
-      Option.isSome(third.next) ? "some" : "none",
+      Option.isSome(third.nextCursor) ? "some" : "none",
     ]);
   });
 
@@ -235,7 +235,7 @@ export const persistenceMigrationSteps = defineSteps<World>(({ Given, When, Then
         const again = yield* users.listPage({ after: Option.none(), limit: 10 });
         // One row at a time, following cursors: neither tied row is skipped or repeated.
         const one = yield* users.listPage({ after: Option.none(), limit: 1 });
-        const two = yield* users.listPage({ after: one.next, limit: 1 });
+        const two = yield* users.listPage({ after: one.nextCursor, limit: 1 });
         return {
           ids: all.items.map((row) => row.id),
           again: again.items.map((row) => row.id),
