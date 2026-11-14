@@ -209,3 +209,15 @@ Runs, against untouched `src`:
 - The same two files with `AWTHAQ_POSTGRES_URL=postgres://postgres:pw@localhost:55433/awthaq` (run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)): Test Files 2 passed (2); Tests 545 passed (545).
 - `npx tsc -b tsconfig.json` exit 0; `npx tsc -p tsconfig.test.json` prints no `error TS`; `pnpm lint` and `pnpm format:check` exit 0.
 - Mutation seen to fail and reverted: expecting `domain: "y.example"` instead of `"z.example"` in the taken-domain pin failed 2 cases (memory and SQL); reverted, 14 pass again.
+
+Task 3 additions (SAML store and admin pins, SCIM characterization), memory records only:
+
+| Wave 0 file | Tests | Pins |
+|---|---|---|
+| `packages/saml/test/SamlLifecyclePins.test.ts` | 5 | taken domain is `SamlDomainTaken` at the store and `SamlDomainAlreadyRouted` through `saml.admin.createConnection`, both naming z.example for [x, z, y], no `auth.saml.connectionCreated` event; unknown organization is `InvalidSamlConnection` / `InvalidSamlConnectionRequest` with reason "the organization does not exist"; unknown connection id is `SamlConnections/NotFound` for `update`, `refreshMetadata`, `remove`; a suspended organization's connection can be removed and its domain is then free; a failed create holds no claim. The suspended-organization create/update/refresh refusals are deliberately absent (they flip in 04-02). |
+| `packages/scim/test/ScimConnectionOrphan.test.ts` | 1 | FINDING F-04-01 characterization: `ScimConnectionStore.create` for `"no-such-organization"` succeeds, the connection is listed, `OrganizationDirectory.findActive` is `None` (flips under CONN-F1) |
+
+- `npx vitest run packages/saml/test/SamlLifecyclePins.test.ts packages/scim/test/ScimConnectionOrphan.test.ts`: Test Files 2 passed (2); Tests 6 passed (6), against untouched `src`. `npx tsc -b tsconfig.json` exit 0; `npx tsc -p tsconfig.test.json` prints no `error TS`.
+- Mutation seen to fail and reverted: expecting `domain: "y.example"` instead of `"z.example"` in the SAML store case failed that case (Tests 1 failed | 4 passed); reverted, 5 pass again.
+- SCIM zero-diff proof at this commit: `git diff --stat c683a1bc -- packages/scim/src packages/scim/package.json packages/scim/README.md` prints nothing; the only change under `packages/scim` is the one added test file.
+- The phase's finding is recorded in `04-FINDINGS.md` (F-04-01).
