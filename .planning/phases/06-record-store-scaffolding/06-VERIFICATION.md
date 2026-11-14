@@ -1,8 +1,8 @@
 ---
 phase: 06-record-store-scaffolding
 verified: 2026-11-14T20:00:00Z
-status: human_needed
-score: 5/5 roadmap truths verified in code (SC4 on its no-edit branch, flagged for a human call); 0 failed; Postgres legs run locally on Debian postgres:16, CI confirmation open (no git remote)
+status: passed
+score: 5/5 roadmap truths verified in code (SC4 on its no-edit branch; the three human items were accepted by the user on 2026-11-15); 0 failed; Postgres legs run locally on Debian postgres:16, CI confirmation open (no git remote)
 covered_files:
   - .changeset/record-store-helpers.md
   - .planning/phases/06-record-store-scaffolding/06-01-PLAN.md
