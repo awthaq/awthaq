@@ -2,18 +2,19 @@
 gsd_state_version: "1.0"
 milestone: v1.0
 milestone_name: Architecture Deepening, batch 3
-current_phase: 1
+current_phase: 01
+current_phase_name: CLI views and ConfigList removal
 status: executing
-stopped_at: Roadmap created; ready to run `/gsd-plan-phase 1`
-last_updated: "2026-11-14T02:26:28.272Z"
+stopped_at: Completed 01-01-PLAN.md
+last_updated: "2026-11-14T02:43:04.718Z"
 last_activity: 2026-11-14
-last_activity_desc: Roadmap created (7 phases, 37/37 requirements mapped)
-state_head: a5ab6311947006f70819e1ebf4fb6e69bdad469e
+last_activity_desc: Phase 01 execution started
+state_head: 148e88c49d037277dac8a9fa5242fbbc3298dc57
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 4
-  completed_plans: 0
+  completed_plans: 1
 ---
 
 # Project State
@@ -23,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-14)
 
 **Core value:** Composition is checked by the compiler: a missing plugin, port or duplicate slot is a compile error, not a runtime surprise.
-**Current focus:** Phase 1 - CLI views and ConfigList removal
+**Current focus:** Phase 01 — CLI views and ConfigList removal
 
 ## Current Position
 
-Phase: 1 — READY TO EXECUTE
-Plan: 0 of TBD in current phase
+Phase: 01 (CLI views and ConfigList removal) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-11-14 — Roadmap created (7 phases, 37/37 requirements mapped)
+Last activity: 2026-11-14 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -52,6 +53,11 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: -
 
 *Updated after each plan completion*
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 01 P01 | 20min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -64,6 +70,7 @@ Recent decisions affecting current work:
 - [Roadmap]: Phase 0 preconditions attach to the phase that needs them: GATE-02 (knip baseline) to Phase 1, REC-01 (Track A, ADR-EA-046) to Phase 6
 - [Roadmap]: GATE-01/02/03 map to Phase 1, GATE-04 to Phase 3 (first SQL phase); all apply to later phases too
 - [Decided]: SAML suspended-org gate is `findActive` on create and update, none on remove; cursors byte-identical per listing; id collation declared stable by construction
+- [Phase 01]: Plugin view matrix encodes the resolution contract (dot only where a view has a dot branch, then json if --format json or --json, else text) and pins failure rendering at exit 9 on the global --json only
 
 ### Pending Todos
 
@@ -85,6 +92,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14
-Stopped at: Roadmap created; ready to run `/gsd-plan-phase 1`
+Last session: 2026-11-14T02:43:04.685Z
+Stopped at: Completed 01-01-PLAN.md
 Resume file: None
