@@ -418,12 +418,121 @@ F2. `SigningKeyRecords.newestFirst` has no tie-break on either side: memory `:16
 
 ## Verdict table
 
-_Filled by Task 3._
+The CONTEXT rule applied mechanically with D1-D9 to the numbers above; nothing the rule does not name was weighed (not the research's preliminary verdict, not the size of the saving).
+
+| Helper | (a) files (adopter files) | (b) removed / added / net; divergent copies | (c) | Lives in (module, stratum) | Removes or moves | Verdict |
+|--------|---------------------------|---------------------------------------------|-----|----------------------------|------------------|---------|
+| comparators | 9 of 16 (9) | 44 / 103 / -59; divergent yes (3 spellings: ternary chain, `\|\|` + `<`, `\|\|` + `localeCompare`): holds by the second branch only | pass (0 of 20000 canonical UUIDv7 pairs differ; all tie-break fields minted) | `packages/ports/src/Keyset.ts`, `@awthaq/ports`, stratum 2 | moves (net -59) | pass |
+| tenant-visibility | 2 of 16 (n/e) | n/e ((a) fails) | n/e ((a) fails) | `packages/sql/src/TenantScoped.ts` (exists), `@awthaq/sql`, stratum 3 | n/e | not pursued |
+| unavailable-label | 16 of 16 (16) | 31 / 30 / +1; divergent no: holds by the first branch, by one line | pass | `packages/sql/src/StoreFailure.ts`, `@awthaq/sql`, stratum 3 | removes (net +1) | pass |
+| wire-row | 16 of 16 (14) | 14 / 24 / -10; divergent no (one spelling): fails both branches | pass | `packages/sql/src/Models.ts`, `@awthaq/sql`, stratum 3 | moves (net -10) | not pursued |
+| sqlstore-make | 16 of 16 (16) | 198 / 247 / -49; divergent no: fails both branches | pass (`read`/`once` variant only) | `packages/sql/src/SqlStore.ts` (exists), `@awthaq/sql`, stratum 3 | moves (net -49) | not pursued |
+
+Margins, stated as measured: `comparators` passes (b) only through the divergent-copies branch (by line count it adds 59 lines more than it removes); `unavailable-label` passes (b) by a net of one line, and a test case wrapped in its own `describe` (2 more lines) would make it net -1 and fail. Neither margin was adjusted to reach the verdict.
 
 ## Verdict
 
-_Filled by Task 3._
+The phase is a go: two helpers, comparators and unavailable-label, pass all three criteria, and the rule needs one. The other three are not pursued.
+
+REC-02 result: met. The spike on DeviceClientRecords, ApiKeyClientRecords, ApiKeyRecords and DeviceGrantRecords, with the 16-file census, yields go (the call ROADMAP success criterion 2 asks for is written, measured and not a no-go: the fewer-than-about-5-files no-go does not apply to the two helpers that pass, which are carried by 9 and 16 files).
+
+SPIKE-HEAD: b0de5660412fcde882f1095513c33cec3e83bb9f
+SPIKE-VERDICT: go
+SPIKE-PASSED: comparators, unavailable-label
+SPIKE-ADOPTERS comparators: packages/device-authorization/src/DeviceClientRecords.ts, packages/api-key/src/ApiKeyClientRecords.ts, packages/api-key/src/ApiKeyRecords.ts, packages/organization/src/ConnectionRecords.ts, packages/organization/src/MembershipRecords.ts, packages/organization/src/TeamRecords.ts, packages/saml/src/SamlRecords.ts, packages/scim/src/ScimRecords.ts, packages/webhooks/src/WebhookRecords.ts
+SPIKE-DELTA comparators: removed=44 added=103 net=-59
+SPIKE-ADOPTERS unavailable-label: packages/admin/src/ImpersonationRecords.ts, packages/api-key/src/ApiKeyClientRecords.ts, packages/api-key/src/ApiKeyRecords.ts, packages/device-authorization/src/DeviceClientRecords.ts, packages/device-authorization/src/DeviceGrantRecords.ts, packages/jwt/src/SigningKeyRecords.ts, packages/organization/src/ActiveContextRecords.ts, packages/organization/src/ConnectionRecords.ts, packages/organization/src/InvitationRecords.ts, packages/organization/src/MembershipRecords.ts, packages/organization/src/OrganizationRecords.ts, packages/organization/src/OrgRoleRecords.ts, packages/organization/src/TeamRecords.ts, packages/saml/src/SamlRecords.ts, packages/scim/src/ScimRecords.ts, packages/webhooks/src/WebhookRecords.ts
+SPIKE-DELTA unavailable-label: removed=31 added=30 net=1
+SPIKE-NOT-PURSUED tenant-visibility: criterion (a) fails: 2 of 16 files carry a copy (ImpersonationRecords, WebhookRecords) against at least 5; TenantScoped already is the shared helper
+SPIKE-NOT-PURSUED wire-row: criterion (b) fails: removed=14 added=24 net=-10 and the 14 adopter copies are one spelling (D6 not met)
+SPIKE-NOT-PURSUED sqlstore-make: criterion (b) fails: removed=198 added=247 net=-49 and the 16 closures differ only in names (D6 not met)
 
 ## Continuation input
 
-_Filled by Task 3._
+Written for the planner of REC-03 and REC-04 after this commit. Line numbers are valid at `SPIKE-HEAD` (`b0de5660412fcde882f1095513c33cec3e83bb9f`) only; re-read every site before editing. The verdict is go, with two passed helpers (`comparators`, `unavailable-label`), so only those two may be scaffolded; `tenant-visibility`, `wire-row` and `sqlstore-make` are recorded not pursued (their `SPIKE-NOT-PURSUED` lines carry the numbers) and REC-03's pieces for them are closed with that reason. There is no `SPIKE-CONFLICT`: `sqlstore-make` did not pass, so `unavailable-label` is the only helper on the per-file label closure.
+
+Both passed helpers are additive exports to existing modules (`Keyset.chronological` in `@awthaq/ports`, `StoreFailure.labelled` in `@awthaq/sql`); neither is a new module, a new package edge or a `*Shape` change. Both are "moves, or removes by one line", not shrinkers: a go plan should say so in its own record rather than present them as a size win (REC-03's own measure is the spike's rule, not lines).
+
+### comparators
+
+Home and interface: `packages/ports/src/Keyset.ts`, `@awthaq/ports`, stratum 2; the exact prototype signature is under "Measurements > comparators" (`chronological({ createdAt, id, direction })` built from `Order.mapInput(DateTime.Order, ...)`, `Order.mapInput(Order.String, ...)`, `Order.combine`, and `Order.flip` for `desc`; adds a `DateTime` import). Test: one `it` in `packages/ports/test/Keyset.test.ts`, comparing `chronological` against `Keyset.window` on the file's existing `rows` for `asc` and `desc`.
+
+Adopters (site at SPIKE-HEAD, spelling today, per-file removed / added in the prototype, which includes the new `Keyset` import where the file had no `@awthaq/ports` import):
+
+| File | Site | Spelling today | removed / added |
+|------|------|----------------|-----------------|
+| `packages/device-authorization/src/DeviceClientRecords.ts` | `:55-59` `oldestFirst` | ternary chain, asc, code-unit tie | 4 / 8 (new `@awthaq/ports` import line) |
+| `packages/api-key/src/ApiKeyClientRecords.ts` | `:75-81` `newestFirst` | ternary chain, desc, code-unit tie | 5 / 8 |
+| `packages/api-key/src/ApiKeyRecords.ts` | `:98-102` `newestFirst` | ternary chain, desc, code-unit tie | 5 / 8 |
+| `packages/organization/src/ConnectionRecords.ts` | `:339-343` inline in `listByOrganization` | `\|\|` + `localeCompare`, asc | 4 / 6 |
+| `packages/organization/src/MembershipRecords.ts` | `:192-203` `applySort` | `\|\|` + `<`, `.reverse()` for desc | 5 / 7 (new `@awthaq/ports` import line; the `.reverse()` goes, the helper takes `direction`) |
+| `packages/organization/src/TeamRecords.ts` | `:364-368` `descendantsIn`, `:469-473` `listTeamsByOrganization` | `.epochMilliseconds` + `localeCompare`; `.epochMilliseconds` + `<` | 6 / 11 |
+| `packages/saml/src/SamlRecords.ts` | `:265-270` `byCreation`, `:272-279` `newestFirst` | `\|\|` + `localeCompare`, asc and desc | 7 / 11 |
+| `packages/scim/src/ScimRecords.ts` | `:174-182` `byCreation(rows, tieBreak)` (callers `:226-233` `row.id`, `:391-394` `row.resourceId`, `:449-452` `row.connectionId`) | `\|\|` + `tieBreak(a).localeCompare(tieBreak(b))` | 4 / 6 (`id: tieBreak` keeps the call sites) |
+| `packages/webhooks/src/WebhookRecords.ts` | `:314-321` `byCreation` | `\|\|` + `localeCompare` | 4 / 6 |
+| `packages/ports/src/Keyset.ts` and `packages/ports/test/Keyset.test.ts` | end of file / end of the `describe("Keyset.window")` | helper and one `it` | 0 / 14 and 0 / 18 |
+
+Total `SPIKE-DELTA comparators: removed=44 added=103 net=-59`. Keep the named functions and their callers; replace only the comparator body.
+
+Not adopted, with the reason: `DeviceGrantRecords.ts:213-215` (memory sort has no id tie-break; adopting would silently change `listByUser` tie order, finding F1; if the user wants F1 fixed it is a separate, deliberate change with its own contract case), `SigningKeyRecords.ts:168-173` (no tie-break on either side, F2; different semantics), `WebhookRecords.ts:555-558` (`nextAttemptAt` then `localeCompare`: same shape on another key, left out because it was not in the measured set), `WebhookRecords.ts:796` (id only), `ImpersonationRecords.ts:249-254` (`endedAt` with `None` as `0`), `SigningKeyRecords.ts:191` (tuple sort).
+
+Behaviour the contract suites already pin for these sites (equal `createdAt`, different id): `ApiKeyClientRecords` contract (`packages/api-key/test/contract/ApiKeyClientRecords.ts:98`, desc), `ApiKeyRecords` (`:131`, desc), `DeviceClientRecords` (`packages/device-authorization/test/contract/DeviceClientRecords.ts:117`, asc), `MembershipRecords` (`packages/organization/test/contract/MembershipRecords.ts:332`, both directions), `TeamRecords` (`packages/organization/test/contract/TeamRecords.ts:433-441`, ties `tied-a`/`tied-b`). Time-ordered cases without an equal-time case: `SamlRecords` (`packages/saml/test/contract/SamlRecords.ts:404`, `:697`), `ScimRecords` (`packages/scim/test/contract/ScimRecords.ts:248`, `:508`), `WebhookRecords` (`packages/webhooks/test/contract/WebhookRecords.ts:505`, `:523`); `ConnectionRecords` has no listing-order case found by grep. The localeCompare sites (Connection, Saml, Scim, Webhook, Team `:364`) are the ones whose order could differ for a non-canonical id.
+
+Wave 0 pins the go branch must add before any `src` change (narrowed to what comparators can touch): for each adopter file an equal-`createdAt`, different-id (canonical UUIDv7-shaped ids) listing case with an inline literal expected order, in both directions where the file has both (Saml connections asc and sp keys desc; Membership asc and desc), for the four files with no equal-time case (Connection, Saml, Scim, Webhook) and for Team `:364` `descendantsIn` (through a descendants read); the helper's own case in `Keyset.test.ts`; and each of the 16 modules' `Ref` count frozen as in the "`Ref.make` per module" table above (`ImpersonationRecords` keeps two `Ref`s and a `Semaphore`). Operation labels and lock keys are untouched by this helper (it changes no `unavailable(...)` call and no `SqlStore.atomically` key), so they are pinned only through the whole-label pin below.
+
+Docs and template impact (REC-04 updates last): `grep -n` over `docs/plugin-authoring.md` and `examples/plugin-template/src/Template.ts` for ordering, `Keyset`, `sort`, `localeCompare` and `newestFirst` finds nothing, so a comparator export needs no doc or template edit unless the go plan chooses to mention it.
+
+Changeset and spec: one `.changeset/<name>.md` naming `@awthaq/ports` (and `@awthaq/sql` if `unavailable-label` ships in the same change) with a `Migration:` line; an additive export to an existing module needs no `spec/overview.md` or `spec/traceability.md` change.
+
+Allowlist paths to append to `06-BASELINE.md` "Path allowlist": `packages/ports/src/Keyset.ts`, `packages/ports/test/Keyset.test.ts`, the nine adopter files listed in `SPIKE-ADOPTERS comparators`, the go branch's Wave 0 pin files (named by that plan), and one `.changeset/<name>.md`.
+
+### unavailable-label
+
+Home and interface: `packages/sql/src/StoreFailure.ts`, `@awthaq/sql`, stratum 3; the exact prototype signature is under "Measurements > unavailable-label" (`labelled(store)(operation)` returning ``orStoreUnavailable(`${store}.${operation}`)``, one one-line doc comment). Test: one `it` in the existing `describe("StoreFailure.orStoreUnavailable")` of `packages/sql/test/StoreFailure.test.ts` asserting `labelled("Probe")("read")` fails with `operation === "Probe.read"`. Keep it inside that `describe` (a wrapper of its own costs 2 lines and flips the sign of the spike's net).
+
+Adopters (closure definition at SPIKE-HEAD; each becomes one line `const unavailable = StoreFailure.labelled("<Store>");`, `failing` in `WebhookRecords`; call sites unchanged; per-file removed / added is 2 / 1, `WebhookRecords` 1 / 1):
+
+| File | Closure lines |
+|------|---------------|
+| `packages/admin/src/ImpersonationRecords.ts` | `:543-544` |
+| `packages/api-key/src/ApiKeyClientRecords.ts` | `:164-165` |
+| `packages/api-key/src/ApiKeyRecords.ts` | `:206-207` |
+| `packages/device-authorization/src/DeviceClientRecords.ts` | `:103-104` |
+| `packages/device-authorization/src/DeviceGrantRecords.ts` | `:251-252` |
+| `packages/jwt/src/SigningKeyRecords.ts` | `:400-401` |
+| `packages/organization/src/ActiveContextRecords.ts` | `:248-249` (two further calls `unavailable(operation)` at `:308`, `:325` stay) |
+| `packages/organization/src/ConnectionRecords.ts` | `:505-506` |
+| `packages/organization/src/InvitationRecords.ts` | `:389-390` |
+| `packages/organization/src/MembershipRecords.ts` | `:451-452` |
+| `packages/organization/src/OrganizationRecords.ts` | `:311-312` |
+| `packages/organization/src/OrgRoleRecords.ts` | `:256-257` |
+| `packages/organization/src/TeamRecords.ts` | `:802-803` |
+| `packages/saml/src/SamlRecords.ts` | `:637-638` |
+| `packages/scim/src/ScimRecords.ts` | `:508-509` |
+| `packages/webhooks/src/WebhookRecords.ts` | `:1137` (`failing`, one line) |
+
+Total `SPIKE-DELTA unavailable-label: removed=31 added=30 net=1` (sites removed 31 and added 16, helper added 4, test added 10). No site in the adopter set is left out. If both this helper and `comparators` are adopted, `MembershipRecords`, `ConnectionRecords`, `TeamRecords`, `SamlRecords`, `ScimRecords`, `WebhookRecords`, `ApiKey*Records` and `DeviceClientRecords` are edited by both: sequence them (or do both in one plan per file) so the pins for each are green first.
+
+Behaviour the contract suites already pin: `StoreUnavailable.operation` is asserted on one operation in 7 of the 16 contract files (`ApiKeyClientRecords:240`, `ApiKeyRecords`, `DeviceClientRecords`, `DeviceGrantRecords`, `SigningKeyRecords`, `ScimRecords`, one each) and in none of the other nine. The 154 literal labels plus the two `ActiveContextRecords` variable calls are otherwise pinned by nothing but the census. Wave 0 pin the go branch must add before any `src` change: a label pin that, for each of the 16 modules, fails every operation's statement and asserts the exact `<Store>.<operation>` literal (inline literals; the four spike files' 29 labels are listed below and the other 12 files' labels come from the census and the source). Lock keys (`SqlStore.atomically`, 5 files) and `Ref` counts are untouched by this helper; pin the `Ref` counts as in the table above anyway, since the same files are edited.
+
+The four spike files' 29 labels (from the census): DeviceClientRecords findById insert list revoke; ApiKeyClientRecords deleteByOwner findById insert listByOwner revoke rotateSecret; ApiKeyRecords deleteByOwner findById insert listByOwner revoke rotate touch; DeviceGrantRecords claim consume decide deleteByUser findByDeviceHash findByUserHash insert listByUser purgeExpired raiseInterval remove touchPoll.
+
+Docs and template impact (REC-04, last): `docs/plugin-authoring.md:29` tells plugin authors to "Pipe each method through `StoreFailure.orStoreUnavailable("<Records>.<method>")`" and `examples/plugin-template/src/Template.ts:266` and `:273` do exactly that (`StoreFailure.orStoreUnavailable("NoteRecords.create")`, `"NoteRecords.listByOwner"`). Both remain correct (`orStoreUnavailable` is unchanged), so the go plan decides whether to add `StoreFailure.labelled("NoteRecords")` to the template and one sentence to the doc; if it does, the template's contract test (`examples/plugin-template/test/Contract.test.ts`) and the docs checks must pass.
+
+Changeset and spec: as for comparators (one changeset, `Migration:` line, no spec edit for an additive export to an existing module).
+
+Allowlist paths to append: `packages/sql/src/StoreFailure.ts`, `packages/sql/test/StoreFailure.test.ts`, the 16 adopter files listed in `SPIKE-ADOPTERS unavailable-label`, the Wave 0 pin files, one `.changeset/<name>.md`, and `docs/plugin-authoring.md` and `examples/plugin-template/src/Template.ts` only if the plan edits them.
+
+### Not pursued (REC-03 pieces closed with these numbers)
+
+- shared comparators for `DeviceGrantRecords` and `SigningKeyRecords`: outside the adopter set (no tie-break, F1/F2).
+- tenant-visibility plumbing: (a) fails, 2 of 16 files; `TenantScoped` is already the shared helper.
+- dialect wire row helper: (b) fails, removed=14 added=24 net=-10, one spelling across the 14 adopter copies; the row-to-record mapping has no shared candidate.
+- `SqlStore.make` adoption: (b) fails, removed=198 added=247 net=-49, closures differ only in names; (c) would hold for a `read`/`once` variant, and `write` would add a transient retry (6 of the 29 spike operations are repeat-safe), a behaviour change.
+
+### In every case
+
+- The 16-module `Ref.make` table is in "(a) Count per helper"; `ImpersonationRecords` keeps two `Ref`s and one `Semaphore` (REC-04's wording "every layerMemory is one Ref<State>" is corrected in the record, per CONTEXT, not by rewriting a module).
+- The four spike files' 29 labels and their idempotency classification are in "Measurements > sqlstore-make" (9 read, 6 write, 14 once).
+- Findings F1 (`DeviceGrantRecords.listByUser` tie drift, memory vs SQL, unpinned, not fixed) and F2 (`SigningKeyRecords` no tie-break) stand regardless of the go.
+- Line numbers are valid at SPIKE-HEAD (`b0de5660412fcde882f1095513c33cec3e83bb9f`) only; `git diff --quiet 3be32564 -- packages features examples` exits 0 at that head.
