@@ -163,7 +163,7 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. Before any scaffolding code is written, an ADR-EA-041 revision note records plan 24 Track A as closed and ADR-EA-046's fate (use or release) is decided in `spec/decisions/`.
   2. A spike on `DeviceClientRecords`, `ApiKeyClientRecords`, `ApiKeyRecords` and `DeviceGrantRecords` produces a written go/no-go, and the call is no-go if fewer than about 5 files share a helper.
-  3. On go, shared comparators, tenant-visibility plumbing, `unavailable(op)` labelling, a dialect wire row helper and `SqlStore.make` adoption replace the repeated scaffolding with no `*Shape` change: `RecordsContract` verdicts per operation pass unchanged, every `layerMemory` is still one `Ref<State>`, and lock-key strings and operation labels are byte-identical.
+  3. On go, shared comparators, tenant-visibility plumbing, `unavailable(op)` labelling, a dialect wire row helper and `SqlStore.make` adoption replace the repeated scaffolding with no `*Shape` change: `RecordsContract` verdicts per operation pass unchanged, every `layerMemory` keeps today's `Ref` count (`ImpersonationRecords` keeps its two `Ref`s and a `Semaphore`), and lock-key strings and operation labels are byte-identical.
   4. On go, `docs/plugin-authoring.md` and `examples/plugin-template/` are updated last and their tests pass; `pnpm test:pg` passes in CI, recorded as "not run locally".
   5. On no-go, the phase closes with REC-03 and REC-04 recorded as not pursued and the reason written down; no scaffolding code lands.
 **Plans**: 2/3 plans executed
