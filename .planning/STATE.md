@@ -4,19 +4,18 @@ milestone: v1.0
 milestone_name: Architecture Deepening, batch 3
 current_phase: 5
 current_phase_name: Core-table list cleanup
-current_plan: Not started
-status: planning
-stopped_at: Phase 4 complete, ready to plan Phase 5
-last_updated: "2026-11-14T14:37:15.006Z"
+current_plan: 2
+status: executing
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-11-14T15:33:37.572Z"
 last_activity: 2026-11-14
-last_activity_desc: Phase 4 complete, transitioned to Phase 5
-state_head: 5cab64cacf79783480748fa566c9dccaed27379c
+last_activity_desc: Phase 5 execution started
+state_head: 7720a413104e3677158c610af6e9aa197eaa5e14
 progress:
   total_phases: 7
   completed_phases: 4
-  total_plans: 27
-  completed_plans: 27
-  percent: 57
+  total_plans: 33
+  completed_plans: 28
 ---
 
 # Project State
@@ -26,15 +25,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-14)
 
 **Core value:** Composition is checked by the compiler: a missing plugin, port or duplicate slot is a compile error, not a runtime surprise.
-**Current focus:** Phase 01 — CLI views and ConfigList removal
+**Current focus:** Phase 5 — Core-table list cleanup
 
 ## Current Position
 
-Phase: 5 — Core-table list cleanup
-Current Plan: Not started
-Total Plans in Phase: 9
-Status: Ready to plan
-Last activity: 2026-11-14 — Phase 4 complete, transitioned to Phase 5
+Phase: 5 (Core-table list cleanup) — EXECUTING
+Current Plan: 2
+Total Plans in Phase: 6
+Status: Ready to execute
+Last activity: 2026-11-14 — Phase 5 execution started
 
 Progress: [██████░░░░] 57%
 
@@ -90,6 +89,7 @@ Progress: [██████░░░░] 57%
 | Phase 04 P07 | 25min | 2 tasks | 9 files |
 | Phase 04 P08 | 25min | 2 tasks | 6 files |
 | Phase 04 P09 | 40min | 2 tasks | 1 files |
+| Phase 05 P01 | 17min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -129,6 +129,7 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-07: DomainClaims reachable only at @awthaq/organization/records; RecordsBoundary.test.ts refuses non-organization src imports of it and a root export; withClaim/withRelease deleted
 - [Phase 04]: 04-08: suspended and missing organizations stay indistinguishable in the spec wording; DomainClaims.test.ts traceability row narrowed to the Postgres lock test
 - [Phase 04]: 04-09: phase-close gates recorded in 04-BASELINE.md; every gate meets the baseline; Postgres run locally on the CI image, CI confirmation open (no git remote)
+- [Phase 05]: CAT-04 minimal-fix branch not taken: the BDD STAMPED_TABLES literal is a second real copy and auth_relay_cursor and rate_limit_buckets are in no list; the candidate closes with the catalogue (CAT-01..03)
 
 ### Pending Todos
 
@@ -150,6 +151,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T13:31:58.805Z
-Stopped at: Phase 4 complete, ready to plan Phase 5
+Last session: 2026-11-14T15:33:37.483Z
+Stopped at: Completed 05-01-PLAN.md
 Resume file: None

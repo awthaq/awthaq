@@ -147,7 +147,13 @@ Plans:
   2. `auth_relay_cursor` and `rate_limit_buckets` are each either included or excluded with a documented reason.
   3. The catalogue carries no column types or DDL (ADR-EA-004), the `core -> sql` package edge is unchanged (`pnpm circular` passes, no new dependency), and a declaration-list snapshot protects the sealed AADs.
   4. A re-grep at planning time confirms which duplicates are real; if only the `LaggingReplica` copy is, it ships as a minimal fix and the candidate is closed with that disposition recorded.
-**Plans**: TBD
+**Plans**: 1/6 plans executed
+- [x] 05-01-PLAN.md
+- [ ] 05-02-PLAN.md
+- [ ] 05-03-PLAN.md
+- [ ] 05-04-PLAN.md
+- [ ] 05-05-PLAN.md
+- [ ] 05-06-PLAN.md
 **Research**: skip (re-grep before widening past `LaggingReplica`)
 
 ### Phase 6: Record-store scaffolding (gated)
@@ -196,6 +202,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7. Phases 1
 | 2. Split TestAuth | 5/5 | Complete    | 2026-11-14 |
 | 3. Keyset-page module | 9/9 | Complete    | 2026-11-14 |
 | 4. Connection-lifecycle module | 9/9 | Complete    | 2026-11-14 |
-| 5. Core-table list cleanup | 0/TBD | Not started | - |
+| 5. Core-table list cleanup | 1/6 | In Progress | - |
 | 6. Record-store scaffolding (gated) | 0/TBD | Not started | - |
 | 7. World scaffold and Credentials split (optional) | 0/TBD | Not started | - |
