@@ -2,7 +2,8 @@
 // SAML store claim through the one `DomainClaims` the organization's records bundle provides, so organization B cannot
 // route `acme.com` over SAML while the real Acme routes it over OIDC (or the other way round), and the organization
 // that owns a domain may route it over both.
-import { DomainClaims, OrganizationActor, OrganizationConnections } from "@awthaq/organization";
+import { OrganizationActor, OrganizationConnections } from "@awthaq/organization";
+import { DomainClaims } from "@awthaq/organization/records";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

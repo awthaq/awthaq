@@ -1,7 +1,8 @@
-// Plan 04 phase 8 (ADR-EA-040, G4): no plugin reaches another plugin's records. The seven `*Records`
-// stores live behind `@awthaq/organization/records`; `packages/*/src` outside the organization package may
-// import neither that sub-path nor a `*Records` name from the root, because every write to an
-// `organization_*` table goes through one system module (BEH-EA-330). Tests, `features/` and `examples/`
+// Plan 04 phase 8 (ADR-EA-040, G4): no plugin reaches another plugin's records. The `*Records` stores and the
+// `DomainClaims` claim store live behind `@awthaq/organization/records`; `packages/*/src` outside the
+// organization package may import neither that sub-path nor a `*Records` or `DomainClaims` name from the
+// root, because every write to an `organization_*` table goes through one system module (BEH-EA-330). The
+// claim store is reached only through `OrganizationConnectionLifecycle`. Tests, `features/` and `examples/`
 // arrange state through the sub-path and are not scanned.
 import * as Fs from "node:fs";
 import * as Path from "node:path";
@@ -29,7 +30,10 @@ describe("organization records boundary", () => {
         );
         for (const found of imports) {
           const names = (found[1] ?? "").split(",").map((entry) => entry.trim());
-          if (found[2] !== undefined || names.some((entry) => /\w*Records$/.test(entry))) {
+          if (
+            found[2] !== undefined ||
+            names.some((entry) => /\w*Records$|^(?:type\s+)?DomainClaims\b/.test(entry))
+          ) {
             offenders.push(Path.relative(packagesDir, file));
           }
         }
@@ -44,6 +48,7 @@ describe("organization records boundary", () => {
       "utf8",
     );
     assert.notMatch(index, /export \* as \w*Records\b/);
+    assert.notMatch(index, /export \* as DomainClaims\b/);
     const records = Fs.readFileSync(
       Path.join(packagesDir, "organization", "src", "records.ts"),
       "utf8",
@@ -51,6 +56,7 @@ describe("organization records boundary", () => {
     for (const name of [
       "ActiveContextRecords",
       "ConnectionRecords",
+      "DomainClaims",
       "InvitationRecords",
       "MembershipRecords",
       "OrganizationRecords",

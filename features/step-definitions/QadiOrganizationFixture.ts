@@ -5,7 +5,6 @@
 // steer and observe it.
 import { Auth } from "@awthaq/core";
 import {
-  DomainClaims,
   Organization,
   OrganizationActiveContext,
   OrganizationAuthority,
@@ -22,6 +21,7 @@ import {
 import {
   ActiveContextRecords,
   ConnectionRecords,
+  DomainClaims,
   InvitationRecords,
   MembershipRecords,
   OrganizationRecords,

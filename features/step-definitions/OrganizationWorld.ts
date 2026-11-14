@@ -8,7 +8,6 @@
 import { Auth, AuthEvents, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Admin } from "@awthaq/admin";
 import {
-  DomainClaims,
   Organization,
   OrganizationActiveContext,
   OrganizationAuthority,
@@ -24,6 +23,7 @@ import {
 import {
   ActiveContextRecords,
   ConnectionRecords,
+  DomainClaims,
   InvitationRecords,
   MembershipRecords,
   OrganizationRecords,
