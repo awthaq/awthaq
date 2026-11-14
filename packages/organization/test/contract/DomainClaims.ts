@@ -121,6 +121,22 @@ export const domainClaims = RecordsContract.suite(DomainClaims.DomainClaims, {
         },
 
         {
+          name: "the refusal names the first domain, in the order the claim lists them, that another organization owns",
+          run: Effect.gen(function* () {
+            yield* claim("org-1", "c1", ["b.example", "c.example"]);
+            const clash = yield* claim("org-2", "c2", ["a.example", "c.example", "b.example"]).pipe(
+              Effect.flip,
+            );
+            assert.strictEqual(clash._tag, "DomainClaimTaken");
+            assert.strictEqual(clash._tag === "DomainClaimTaken" ? clash.domain : "", "c.example");
+            // Nothing changed: the refused claim took a.example nowhere, and the owner still holds both.
+            yield* claim("org-3", "c3", ["a.example"]);
+            const other = yield* claim("org-3", "c4", ["b.example"]).pipe(Effect.flip);
+            assert.strictEqual(other._tag, "DomainClaimTaken");
+          }),
+        },
+
+        {
           name: "the owner may route a domain over both protocols and several connections",
           run: Effect.gen(function* () {
             yield* claim("org-1", "c1", ["acme.example"], "oauth");

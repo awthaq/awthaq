@@ -193,3 +193,19 @@ Every gate exits as it did here: all gates 0 except `pnpm knip`, which exits 1 f
 - The SCIM proofs as in "SCIM path list".
 - The Wave 0 pin files (`packages/organization/test/ConnectionLifecyclePins.test.ts`, `packages/saml/test/SamlLifecyclePins.test.ts`, `packages/scim/test/ScimConnectionOrphan.test.ts`) are byte-unchanged after their add commits; `packages/organization/test/contract/DomainClaims.ts` only gained lines (`git diff c683a1bc -- packages/organization/test/contract/DomainClaims.ts | grep -c '^-[^-]'` prints 0).
 - The phase allowlist is the one 04-09 checks, measured from `c683a1bc` with `git diff --name-only c683a1bc HEAD`.
+
+## Wave 0 pins
+
+Wave 0 pins are written and green against untouched `packages/*/src`: `git diff --quiet c683a1bc -- packages/organization/src packages/saml/src packages/scim spec features examples .changeset` exits 0 at each Wave 0 commit except for the one added SCIM test file (checked with the narrower `packages/scim/src packages/scim/package.json packages/scim/README.md` form in Task 3). No Wave 0 pin file imports `DomainClaims`; the OIDC pins build the store over `TestAuth.layer(Auth.make([Organization.Organization]), ...)` (the `RealLive` pattern), never over a hand-provided claim store, transaction or directory stub.
+
+| Wave 0 file | Tests | Pins |
+|---|---|---|
+| `packages/organization/test/ConnectionLifecyclePins.test.ts` | 14 (7 cases x memory and SQL records) | unknown and suspended organization refused alike on create (`InvalidConnection`, "the organization does not exist"); suspended update refused the same way; suspended remove succeeds and frees the domain; a taken domain is `ConnectionDomainTaken` naming the first foreign domain in input order (z.example for [x, z, y]) with no `connectionCreated` event and x.example still claimable; a failed create holds no claim; a failed update keeps the previous domains and publishes no `connectionUpdated`; deleting an organization frees its domains and leaves no rows |
+| `packages/organization/test/contract/DomainClaims.ts` (RecordsContract) | +1 case (16 lines added, 0 removed) | the refusal names the first domain, in the order the claim lists them, that another organization owns (c.example for [a, c, b]); runs on memory, SQLite and Postgres through `Contract.test.ts` |
+
+Runs, against untouched `src`:
+
+- `npx vitest run packages/organization/test/ConnectionLifecyclePins.test.ts packages/organization/test/Contract.test.ts` (SQLite): Test Files 2 passed (2); Tests 544 passed (544) (pins alone: 14 passed).
+- The same two files with `AWTHAQ_POSTGRES_URL=postgres://postgres:pw@localhost:55433/awthaq` (run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)): Test Files 2 passed (2); Tests 545 passed (545).
+- `npx tsc -b tsconfig.json` exit 0; `npx tsc -p tsconfig.test.json` prints no `error TS`; `pnpm lint` and `pnpm format:check` exit 0.
+- Mutation seen to fail and reverted: expecting `domain: "y.example"` instead of `"z.example"` in the taken-domain pin failed 2 cases (memory and SQL); reverted, 14 pass again.
