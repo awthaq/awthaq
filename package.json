@@ -49,7 +49,7 @@
     "knip": "^6.44.1",
     "madge": "^8.0.0",
     "oxfmt": "^0.72.0",
-    "oxlint": "^1.90.0",
+    "oxlint": "^1.92.0",
     "publint": "^0.3.25",
     "typescript": "catalog:",
     "vitest": "catalog:"
