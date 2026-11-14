@@ -96,7 +96,7 @@ describe("request facts have one source (ADR-EA-047)", () => {
         why: "Path B's fallback capture on a route without the middleware (@qadi/http's interface carries no requirement)",
       },
       {
-        file: "test/src/TestAuth.ts",
+        file: "test/src/internal/composition.ts",
         count: 2,
         why: "the harness's fixed `clientAddress` resolver (a port layer, not a read)",
       },
