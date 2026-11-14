@@ -1,6 +1,8 @@
 # Plan 24: Plugin record stores: one behaviour for memory and SQL (a parity contract by default; SQL over SQLite `:memory:` if the spike says go)
 
 > **Superseded in part (2026-11-08, plan 25 Q0 accepted):** plan 25 subsumes Track B (Phases 1–5: R1–R6, `orConflict`, C1–C10 become plan-25 contract cases). This plan keeps only the Track A spike and ADR-EA-046. Do not implement Phases 1–5 from here.
+>
+> **Track A closed (2026-11-14, architecture deepening batch 3, phase 6, REC-01):** ADR-EA-041 revision 1.7 records Track A closed and releases ADR-EA-046. Nothing in this plan remains to implement.
 
 | Property | Value |
 |---|---|

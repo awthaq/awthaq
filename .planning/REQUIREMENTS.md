@@ -53,7 +53,7 @@ Milestone "Architecture Deepening, batch 3". Each maps to roadmap phases. Resear
 - [ ] **REC-01**: Plan 24 Track A is recorded closed (ADR-EA-041 revision note) and ADR-EA-046's fate is decided before any scaffolding work starts
 - [ ] **REC-02**: A spike on `DeviceClientRecords`, `ApiKeyClientRecords`, `ApiKeyRecords` and `DeviceGrantRecords` yields a go/no-go; no-go if fewer than ~5 files share a helper
 - [ ] **REC-03**: On go, shared comparators, tenant-visibility plumbing, `unavailable(op)` labelling, a dialect wire row helper and `SqlStore.make` adoption replace the repeated scaffolding, with no `*Shape` change
-- [ ] **REC-04**: Every `layerMemory` stays one `Ref<State>`; lock-key strings and operation labels stay byte-identical; `docs/plugin-authoring.md` and `examples/plugin-template/` update last
+- [ ] **REC-04**: Every `layerMemory` keeps today's `Ref` count (one `Ref<State>` per store, except `ImpersonationRecords`, whose two `Ref`s and `Semaphore` stay as designed); lock-key strings and operation labels stay byte-identical; `docs/plugin-authoring.md` and `examples/plugin-template/` update last
 
 ### World scaffold (C3)
 
