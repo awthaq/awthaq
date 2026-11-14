@@ -104,8 +104,8 @@ export class UndeclaredTableDependency extends Data.TaggedError("UndeclaredTable
 /**
  * Plan 05 (ADR-EA-018 decision 10, BEH-EA-328): a plugin's `tables` declaration is malformed: an
  * identifier that is not a plain SQL identifier, a Derived table whose parent is not one of its own
- * plugin's tables, a `dependsOn` plugin's, or a tenant-stamped core table, a Derived table beneath a Global one, or a
- * Derived chain that loops. Found at link time, never per request.
+ * plugin's tables, a `dependsOn` plugin's, or a tenant-stamped core table, a Derived table beneath a
+ * Global one, or a Derived chain that loops. Found at link time, never per request.
  */
 export class TenancyDeclarationInvalid extends Data.TaggedError("Auth/TenancyDeclarationInvalid")<{
   readonly pluginId: string;
