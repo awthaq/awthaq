@@ -4,10 +4,14 @@
 // in a finalizer, then asserts outcome classes and final row counts, never which fiber finished first.
 // Red against the pre-phase stores (a deadlock between the claim-then-row update and the row-then-release remove, the
 // opposite-order owner-row deadlock between two organizations, and the deletion-vs-create orphan); green once 04-03
-// (lock, sorted owner inserts) and 04-05 (claims-first lifecycle, in-lock re-check) land. Never edited after this commit.
+// (lock, sorted owner inserts) and 04-05 (claims-first lifecycle, in-lock re-check) land. Strengthened by the phase 4
+// code review (IN-03): the deletion-vs-create case now gates its interleaving on advisory-lock waiters instead of
+// wall-clock sleeps and asserts the create's outcome. The two cases that still race on `pg_sleep` margins assert
+// outcome classes and final row counts that hold on either side of the race.
 import { Auth, Users } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -15,6 +19,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Schedule from "effect/Schedule";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Organization from "../src/Organization.ts";
 import * as OrganizationActor from "../src/OrganizationActor.ts";
@@ -113,6 +118,78 @@ const withSleepTrigger =
         ),
       );
     });
+
+/** The advisory-lock key the latch trigger waits on (a plain number, never one `SqlStore.atomically` derives: those hash text keys). */
+const LATCH_KEY = 4_040_404;
+
+/** A transaction that holds the latch key until `release`, so a latch trigger blocks until the test lets it go. */
+const holdLatch = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const held = yield* Deferred.make<void>();
+  const released = yield* Deferred.make<void>();
+  const holder = yield* Effect.forkChild(
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* sql`SELECT pg_advisory_xact_lock(${LATCH_KEY})`;
+          yield* Deferred.succeed(held, undefined);
+          yield* Deferred.await(released);
+        }),
+      )
+      .pipe(Effect.orDie),
+  );
+  yield* Deferred.await(held);
+  return {
+    release: Deferred.succeed(released, undefined).pipe(Effect.andThen(Fiber.join(holder))),
+  };
+});
+
+/** Runs `effect` with a trigger on `table` that blocks on the latch key before the write, dropped afterwards whatever happens. */
+const withLatchTrigger =
+  (options: { readonly name: string; readonly table: string; readonly event: "DELETE" }) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql
+        .unsafe(
+          `CREATE OR REPLACE FUNCTION ${options.name}() RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN PERFORM pg_advisory_xact_lock(${LATCH_KEY}); RETURN NULL; END $$`,
+        )
+        .pipe(Effect.orDie);
+      yield* sql
+        .unsafe(
+          `CREATE TRIGGER ${options.name} BEFORE ${options.event} ON ${options.table}
+           FOR EACH STATEMENT EXECUTE FUNCTION ${options.name}()`,
+        )
+        .pipe(Effect.orDie);
+      return yield* effect.pipe(
+        Effect.ensuring(
+          sql
+            .unsafe(`DROP TRIGGER IF EXISTS ${options.name} ON ${options.table}`)
+            .pipe(
+              Effect.andThen(sql.unsafe(`DROP FUNCTION IF EXISTS ${options.name}()`)),
+              Effect.orDie,
+            ),
+        ),
+      );
+    });
+
+/** Resolves once `count` sessions wait on an advisory lock (the latch trigger, then the create's organization lock). */
+const waitForAdvisoryWaiters = (count: number) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql
+      .unsafe<{
+        readonly n: number | string;
+      }>(`SELECT COUNT(*) AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`)
+      .pipe(Effect.orDie);
+    return Number(rows[0]?.n ?? 0);
+  }).pipe(
+    Effect.repeat({ until: (waiting) => waiting >= count, schedule: Schedule.spaced("20 millis") }),
+    Effect.timeout("10 seconds"),
+    Effect.orDie,
+    Effect.asVoid,
+  );
 
 describe.skipIf(process.env["AWTHAQ_POSTGRES_URL"] === undefined)(
   "OIDC connection lifecycle races (real Postgres, CONN-03/CONN-05)",
@@ -241,33 +318,40 @@ describe.skipIf(process.env["AWTHAQ_POSTGRES_URL"] === undefined)(
     );
 
     it.live(
-      "an organization deletion racing a create for it leaves no connection, claim or owner row behind",
+      "an organization deletion racing a create for it leaves no connection, claim or owner row behind, and the create is refused",
       () =>
         Effect.gen(function* () {
           const directory = yield* OrganizationDirectory.OrganizationDirectory;
           const org = yield* organization("a");
+          const latch = yield* holdLatch;
 
-          const [deleted, created] = yield* withSleepTrigger({
-            name: "race_sleep_org_delete",
+          // The interleaving is forced by what each session waits on, not by elapsed time: the deletion takes the
+          // organization lock (its order -1 hook) and then blocks at the organization-row delete on the latch; the
+          // create passes its gate (the deletion is uncommitted) and blocks on the organization lock; only then
+          // does the latch open. The create must see the committed deletion in its in-lock re-check.
+          const [deleted, created] = yield* withLatchTrigger({
+            name: "race_latch_org_delete",
             table: "organization_org",
             event: "DELETE",
-            scope: "STATEMENT",
-            seconds: 0.5,
           })(
             Effect.gen(function* () {
               const deleting = yield* Effect.forkChild(
                 Effect.exit(directory.delete(actor, { organizationId: org.id })),
               );
-              yield* Effect.sleep(Duration.millis(100));
-              const creation = yield* Effect.exit(create(org.id, ["acme.example"]));
-              return [yield* Fiber.join(deleting), creation] as const;
-            }),
+              yield* waitForAdvisoryWaiters(1);
+              const creating = yield* Effect.forkChild(
+                Effect.exit(create(org.id, ["acme.example"])),
+              );
+              yield* waitForAdvisoryWaiters(2);
+              yield* latch.release;
+              return [yield* Fiber.join(deleting), yield* Fiber.join(creating)] as const;
+            }).pipe(Effect.ensuring(latch.release)),
           );
 
           assert.deepStrictEqual(
             {
               delete: outcome(deleted),
-              createIsNotStoreUnavailable: outcome(created) !== "StoreUnavailable",
+              create: outcome(created),
               connectionRows: yield* countRows(
                 "organization_oauth_connection",
                 `"organizationId" = '${org.id}'`,
@@ -283,7 +367,7 @@ describe.skipIf(process.env["AWTHAQ_POSTGRES_URL"] === undefined)(
             },
             {
               delete: "ok",
-              createIsNotStoreUnavailable: true,
+              create: "InvalidConnection",
               connectionRows: 0,
               claimRows: 0,
               ownerRows: 0,

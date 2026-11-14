@@ -179,6 +179,9 @@ export const domainClaims = RecordsContract.suite(DomainClaims.DomainClaims, {
           }),
         },
 
+        // The two "opposite order" cases below can only fail on Postgres, where two sessions really interleave:
+        // the memory twin and SQLite have one writer, so they pass on any implementation there. The Postgres
+        // legs (and `OrganizationConnectionLifecycle.sql.test.ts`) are what give them force.
         {
           name: "one organization's connections claiming the same domains in opposite order all succeed",
           run: Effect.gen(function* () {
