@@ -4,18 +4,18 @@ milestone: v1.0
 milestone_name: Architecture Deepening, batch 3
 current_phase: 2
 current_phase_name: Split TestAuth
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-11-14T04:22:48.904Z"
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-11-14T04:26:58.503Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 1 complete, transitioned to Phase 2
-state_head: 5ae0ef19bd4aa31dab1694f830183010af406e49
+state_head: 03c8571a0dab3022d2f9c3298176175bab35b769
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 9
-  completed_plans: 5
+  completed_plans: 6
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 2 — Split TestAuth
-Current Plan: 2
+Current Plan: 3
 Total Plans in Phase: 5
 Status: Ready to execute
 Last activity: 2026-11-14 — Phase 1 complete, transitioned to Phase 2
@@ -64,6 +64,7 @@ Progress: [█░░░░░░░░░] 14%
 | Phase 01 P03 | 8 min | 2 tasks | 6 files |
 | Phase 01 P04 | 25 min | 3 tasks | 3 files |
 | Phase 02 P01 | 25min | 2 tasks | 3 files |
+| Phase 02 P02 | 15min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,7 @@ Recent decisions affecting current work:
 - [Phase 01]: Migration.apply status preview stays hand-guarded: it prints before the drift and pending checks while Output.report couples text and document at one point
 - [Phase 01]: 01-04: one minor changeset covers both the views module and the ConfigList export removal; all baseline gates re-run green at phase close
 - [Phase 02]: Surface probe kept outside the repo (never committed); TestAuth surface pinned by TestAuthSurface.test.ts (23 values runtime, 24 types compile-time)
+- [Phase 02]: Name Encryption.Encryption in composition.ts TestProvided to keep testPorts/encryption declaration emit portable (TS2883) after FoundationServices left the facade
 
 ### Pending Todos
 
@@ -102,6 +104,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T04:22:41.268Z
-Stopped at: Completed 02-01-PLAN.md
+Last session: 2026-11-14T04:26:58.457Z
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None

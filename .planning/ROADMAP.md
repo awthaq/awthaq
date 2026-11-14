@@ -58,13 +58,13 @@ Plans:
   2. `packages/test/src/internal/` holds separate modules for composition, session/CSRF minting, app harness and contract runner; `buildContext` is still exported and `migratedSchema` still calls `TestSql.schemaOf`.
   3. The open-app counter lives beside `serve`/`openApps`, and `LeakGuard` accounting is unchanged: the existing `LeakGuard` tests and the 12 `Schema.lock.test.ts` files pass without edits.
   4. `spec/behaviors/25-testing-harness.md` and `spec/traceability.md` cite the new implementation locations while keeping the cited test file names, and `pnpm spec:verify:strict` passes.
-**Plans**: 1/5 plans executed
+**Plans**: 2/5 plans executed
 Plans:
 **Wave 1**
 - [x] 02-01-PLAN.md — Wave 0: surface snapshot (02-SURFACE-BEFORE.txt), gate baseline (02-BASELINE.md), TestAuthSurface.test.ts pin (23 values, 24 types)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 02-02-PLAN.md — internal/composition.ts extracted; foundation types moved to internal/foundation.ts; census `file:` line moved
+- [x] 02-02-PLAN.md — internal/composition.ts extracted; foundation types moved to internal/foundation.ts; census `file:` line moved
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 02-03-PLAN.md — internal/session.ts (sign-in, CSRF minting, withRequest) and internal/appHarness.ts (counter beside serve/openApps); census `file:` lines moved
@@ -157,7 +157,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7. Phases 1
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. CLI views and ConfigList removal | 4/4 | Complete    | 2026-11-14 |
-| 2. Split TestAuth | 1/5 | In Progress | - |
+| 2. Split TestAuth | 2/5 | In Progress | - |
 | 3. Keyset-page module | 0/TBD | Not started | - |
 | 4. Connection-lifecycle module | 0/TBD | Not started | - |
 | 5. Core-table list cleanup | 0/TBD | Not started | - |
