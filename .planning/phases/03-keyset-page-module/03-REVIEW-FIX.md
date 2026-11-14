@@ -39,7 +39,7 @@ Edited in the main checkout (`workflow.use_worktrees` is `false`); verification 
 ### IN-03: Changeset Migration text is silent on the `UserStore` limit-normalisation shift
 
 **Files modified:** `.changeset/keyset-page-module.md`
-**Commit:** caf50e5f (with this report)
+**Commit:** 7e28ebac (with this report)
 **Applied fix:** the Migration paragraph now says `Users.list` no longer clamps, `UserStore.listPage` receives the caller's raw `limit` (possibly `undefined`, `0` or `NaN`), a third-party store must clamp via `Keyset.paginate` or `Keyset.limit`, and a store that keeps its own `slice(0, limit)` misbehaves on limit 0. Confirmed against `packages/core/src/Users.ts:800`.
 
 ## Gate results (run in the main checkout)
