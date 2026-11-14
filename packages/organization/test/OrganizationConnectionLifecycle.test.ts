@@ -17,11 +17,13 @@ import * as OrganizationDirectory from "../src/OrganizationDirectory.ts";
 class Refused extends Data.TaggedError("Refused")<{ readonly reason: string }> {}
 class Taken extends Data.TaggedError("Taken")<{ readonly domain: string }> {}
 class WriteFailed extends Data.TaggedError("WriteFailed")<{ readonly step: string }> {}
+class NotFound extends Data.TaggedError("NotFound")<{ readonly id: string }> {}
 
 const protocol: OrganizationConnectionLifecycle.ConnectionProtocol<Refused, Taken> = {
   protocol: "test",
   refuse: (reason) => new Refused({ reason }),
   taken: (domain) => new Taken({ domain }),
+  isGone: (error) => error instanceof NotFound,
 };
 
 const GONE = "the organization does not exist";
@@ -339,6 +341,89 @@ const suite = <E>(leg: string, Live: Layer.Layer<Needs, E>) => {
           assert.deepStrictEqual(failure, new WriteFailed({ step: "row" }));
           assert.isFalse(yield* canClaim(b.id, "old.example"));
           assert.isTrue(yield* canClaim(b.id, "new.example"));
+        }),
+      ),
+    );
+  });
+
+  describe(`a connection removed meanwhile (${leg})`, () => {
+    // The write releases the claims inside the unit to stand for another fiber's committed removal. Over SQL that
+    // release is part of the unit and rolls back with it, so only the memory twin (no transaction) can show it.
+    (leg === "memory" ? it.effect : it.effect.skip)(
+      "an update whose write finds the connection gone (a concurrent removal released its claims) restores no claim",
+      () =>
+        run(
+          Effect.gen(function* () {
+            const lifecycle =
+              yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
+            const a = yield* makeOrganization("a");
+            const b = yield* makeOrganization("b");
+            yield* claimFor(a.id, "c1", ["old.example"]);
+            const failure = yield* lifecycle
+              .update(
+                protocol,
+                a.id,
+                Effect.succeed({
+                  connectionId: "c1",
+                  domains: ["new.example"],
+                  previous: ["old.example"],
+                  // The concurrent removal: it releases every claim of the connection and deletes its row.
+                  write: Effect.andThen(
+                    Effect.flatMap(DomainClaims.DomainClaims, (claims) =>
+                      claims.release(a.id, "c1"),
+                    ),
+                    Effect.fail(new NotFound({ id: "c1" })),
+                  ),
+                }),
+              )
+              .pipe(Effect.flip);
+            assert.deepStrictEqual(failure, new NotFound({ id: "c1" }));
+            assert.isTrue(yield* canClaim(b.id, "old.example"));
+            assert.isTrue(yield* canClaim(b.id, "new.example"));
+          }),
+        ),
+    );
+
+    it.effect(
+      "an update that claimed after the removal released, then finds the connection gone, leaves no claim",
+      () =>
+        run(
+          Effect.gen(function* () {
+            const lifecycle =
+              yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
+            const a = yield* makeOrganization("a");
+            const b = yield* makeOrganization("b");
+            const failure = yield* lifecycle
+              .update(
+                protocol,
+                a.id,
+                Effect.succeed({
+                  connectionId: "c1",
+                  domains: ["new.example"],
+                  previous: ["old.example"],
+                  write: Effect.fail(new NotFound({ id: "c1" })),
+                }),
+              )
+              .pipe(Effect.flip);
+            assert.deepStrictEqual(failure, new NotFound({ id: "c1" }));
+            assert.isTrue(yield* canClaim(b.id, "old.example"));
+            assert.isTrue(yield* canClaim(b.id, "new.example"));
+          }),
+        ),
+    );
+
+    it.effect("a removal that loses the race to another removal restores no claim", () =>
+      run(
+        Effect.gen(function* () {
+          const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
+          const a = yield* makeOrganization("a");
+          const b = yield* makeOrganization("b");
+          // The first removal has released the claims and deleted the row; this one finds neither.
+          const failure = yield* lifecycle
+            .remove(protocol, a.id, "c1", ["held.example"], Effect.fail(new NotFound({ id: "c1" })))
+            .pipe(Effect.flip);
+          assert.deepStrictEqual(failure, new NotFound({ id: "c1" }));
+          assert.isTrue(yield* canClaim(b.id, "held.example"));
         }),
       ),
     );

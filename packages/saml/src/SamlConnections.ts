@@ -60,6 +60,7 @@ const samlProtocol: OrganizationConnectionLifecycle.ConnectionProtocol<
   protocol: "saml",
   refuse: invalid,
   taken: (domain) => new SamlRecords.SamlDomainTaken({ domain }),
+  isGone: (error) => error instanceof SamlConnectionNotFound,
 };
 
 /** A PEM certificate as a trust-set entry: fingerprint and validity read from the certificate itself. */
@@ -515,11 +516,15 @@ export const layerStore = Layer.effect(
               current.organizationId,
               id,
               current.emailDomains,
-              records.remove(current.organizationId, id),
+              // Mapped inside the unit, where the lifecycle needs to see the connection is gone.
+              records
+                .remove(current.organizationId, id)
+                .pipe(
+                  Effect.catchTag("SamlRecordNotFound", () =>
+                    Effect.fail(new SamlConnectionNotFound({ id })),
+                  ),
+                ),
             ),
-          ),
-          Effect.catchTag("SamlRecordNotFound", () =>
-            Effect.fail(new SamlConnectionNotFound({ id })),
           ),
         ),
       discover,

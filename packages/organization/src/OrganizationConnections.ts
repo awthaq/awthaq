@@ -342,6 +342,7 @@ const oauthProtocol: OrganizationConnectionLifecycle.ConnectionProtocol<
   protocol: "oauth",
   refuse: (reason) => new InvalidConnection({ reason }),
   taken: (domain) => new ConnectionRecords.ConnectionDomainTaken({ domain }),
+  isGone: (error) => error instanceof ConnectionRecords.ConnectionRecordNotFound,
 };
 
 /** The rules a connection must satisfy, checked on the merged (post-patch) shape. */
