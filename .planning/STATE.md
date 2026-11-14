@@ -4,18 +4,18 @@ milestone: v1.0
 milestone_name: Architecture Deepening, batch 3
 current_phase: 3
 current_phase_name: Keyset-page module
-current_plan: 8
+current_plan: 9
 status: executing
-stopped_at: Completed 03-07-PLAN.md
-last_updated: "2026-11-14T07:03:50.531Z"
+stopped_at: Completed 03-08-PLAN.md
+last_updated: "2026-11-14T07:08:05.122Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 2 complete, transitioned to Phase 3
-state_head: 421a0568fe75eb29124c7513af3dae0e1a3672c2
+state_head: 41ad11f16f584d259f34e83a69d39a46139aec9b
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 18
-  completed_plans: 16
+  completed_plans: 17
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 3 — Keyset-page module
-Current Plan: 8
+Current Plan: 9
 Total Plans in Phase: 9
 Status: Ready to execute
 Last activity: 2026-11-14 — Completed 03-02 (Wave 0 pins)
@@ -76,6 +76,7 @@ Progress: [███░░░░░░░] 29%
 | Phase 03 P05 | 20min | 2 tasks | 6 files |
 | Phase 03 P06 | 25 min | 2 tasks | 5 files |
 | Phase 03 P07 | 20min | 2 tasks | 3 files |
+| Phase 03 P08 | 15min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -104,6 +105,7 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-05: Users.UserCursor and Users.UsersPage kept as names, now aliases of UserStore.UserCursor and Keyset.Page; usersPage SQL is one template via sql.and over an optional KeysetSql seek
 - [Phase 03]: 03-06: OrganizationCursor defined in OrganizationRecords, aliased by OrganizationDirectory and AdminTenants; the admin gate stays in AdminTenants.listOrganizations
 - [Phase 03]: 03-07: ImpersonationPage is a Keyset.Page alias; AdminApi.LimitSchema bound by Keyset.MIN_LIMIT/MAX_LIMIT; KEY-06 scoped grep at 0
+- [Phase 03]: 03-08: BEH-EA-036 amended in place (Rev 1.14, traceability 1.91); changeset names byCreation, pageLimit, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE as removed
 
 ### Pending Todos
 
@@ -125,6 +127,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T07:03:50.380Z
-Stopped at: Completed 03-07-PLAN.md
+Last session: 2026-11-14T07:08:05.048Z
+Stopped at: Completed 03-08-PLAN.md
 Resume file: None
