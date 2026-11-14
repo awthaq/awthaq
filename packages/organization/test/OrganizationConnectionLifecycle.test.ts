@@ -2,7 +2,7 @@
 // as one unit with its compensation, the re-check under the claim, claims-first removal, the single domain
 // normaliser and the release on organization deletion, driven by a test descriptor on the memory records and on
 // the SQL records (SQLite, or Postgres when AWTHAQ_POSTGRES_URL is set).
-import { Auth, Users } from "@awthaq/core";
+import { AuditLog, Auth, Users } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Data from "effect/Data";
@@ -68,6 +68,7 @@ const claimFor = (organizationId: string, connectionId: string, domains: Readonl
   );
 
 type Needs =
+  | AuditLog.AuditLog
   | DomainClaims.DomainClaims
   | OrganizationConnectionLifecycle.OrganizationConnectionLifecycle
   | OrganizationDirectory.OrganizationDirectory;
@@ -219,6 +220,247 @@ const suite = <E>(leg: string, Live: Layer.Layer<Needs, E>) => {
             assert.isTrue(yield* canClaim(b.id, "late.example"));
           }),
         ),
+    );
+  });
+
+  describe(`update (${leg})`, () => {
+    const connect = (
+      organizationId: string,
+      connectionId: string,
+      domains: ReadonlyArray<string>,
+    ) =>
+      Effect.flatMap(OrganizationConnectionLifecycle.OrganizationConnectionLifecycle, (lifecycle) =>
+        lifecycle.create(
+          protocol,
+          organizationId,
+          Effect.succeed({ connectionId, domains, write: Effect.void }),
+        ),
+      );
+
+    it.effect("an unknown and a suspended organization are refused before prepare runs", () =>
+      run(
+        Effect.gen(function* () {
+          const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
+          const org = yield* makeOrganization("a");
+          yield* suspend(org.id);
+          let prepared = false;
+          const attempt = (organizationId: string) =>
+            lifecycle
+              .update(
+                protocol,
+                organizationId,
+                Effect.sync(() => {
+                  prepared = true;
+                  return {
+                    connectionId: "c1",
+                    domains: undefined,
+                    previous: [],
+                    write: Effect.void,
+                  };
+                }),
+              )
+              .pipe(Effect.flip);
+          assert.deepStrictEqual(yield* attempt("no-such-org"), new Refused({ reason: GONE }));
+          assert.deepStrictEqual(yield* attempt(org.id), new Refused({ reason: GONE }));
+          assert.isFalse(prepared);
+        }),
+      ),
+    );
+
+    it.effect("an update naming no domains runs only the write and touches no claim", () =>
+      run(
+        Effect.gen(function* () {
+          const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
+          const a = yield* makeOrganization("a");
+          const b = yield* makeOrganization("b");
+          yield* connect(a.id, "c1", ["kept.example"]);
+          const value = yield* lifecycle.update(
+            protocol,
+            a.id,
+            Effect.succeed({
+              connectionId: "c1",
+              domains: undefined,
+              previous: ["kept.example"],
+              write: Effect.succeed("renamed"),
+            }),
+          );
+          assert.strictEqual(value, "renamed");
+          assert.isFalse(yield* canClaim(b.id, "kept.example"));
+        }),
+      ),
+    );
+
+    it.effect("new domains another organization owns are taken, and the previous claim stays", () =>
+      run(
+        Effect.gen(function* () {
+          const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
+          const a = yield* makeOrganization("a");
+          const b = yield* makeOrganization("b");
+          yield* connect(a.id, "c1", ["old.example"]);
+          yield* claimFor(b.id, "cb", ["theirs.example"]);
+          const failure = yield* lifecycle
+            .update(
+              protocol,
+              a.id,
+              Effect.succeed({
+                connectionId: "c1",
+                domains: ["new.example", "theirs.example"],
+                previous: ["old.example"],
+                write: Effect.void,
+              }),
+            )
+            .pipe(Effect.flip);
+          assert.deepStrictEqual(failure, new Taken({ domain: "theirs.example" }));
+          assert.isFalse(yield* canClaim(b.id, "old.example"));
+          assert.isTrue(yield* canClaim(b.id, "new.example"));
+        }),
+      ),
+    );
+
+    it.effect("a failed write keeps the previous claim and frees the new domains", () =>
+      run(
+        Effect.gen(function* () {
+          const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
+          const a = yield* makeOrganization("a");
+          const b = yield* makeOrganization("b");
+          yield* connect(a.id, "c1", ["old.example"]);
+          const failure = yield* lifecycle
+            .update(
+              protocol,
+              a.id,
+              Effect.succeed({
+                connectionId: "c1",
+                domains: ["new.example"],
+                previous: ["old.example"],
+                write: Effect.fail(new WriteFailed({ step: "row" })),
+              }),
+            )
+            .pipe(Effect.flip);
+          assert.deepStrictEqual(failure, new WriteFailed({ step: "row" }));
+          assert.isFalse(yield* canClaim(b.id, "old.example"));
+          assert.isTrue(yield* canClaim(b.id, "new.example"));
+        }),
+      ),
+    );
+  });
+
+  describe(`remove (${leg})`, () => {
+    it.effect(
+      "a suspended organization's connection can be removed, its domains freed before the write",
+      () =>
+        run(
+          Effect.gen(function* () {
+            const lifecycle =
+              yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
+            const a = yield* makeOrganization("a");
+            const b = yield* makeOrganization("b");
+            yield* claimFor(a.id, "c1", ["gone.example"]);
+            yield* suspend(a.id);
+            // Claims first: inside the write the domain is already free for another organization.
+            const freeInsideWrite = yield* lifecycle.remove(
+              protocol,
+              a.id,
+              "c1",
+              ["gone.example"],
+              Effect.suspend(() => canClaim(b.id, "gone.example")),
+            );
+            assert.isTrue(freeInsideWrite);
+          }),
+        ),
+    );
+
+    it.effect("a failed write keeps the domain held", () =>
+      run(
+        Effect.gen(function* () {
+          const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
+          const a = yield* makeOrganization("a");
+          const b = yield* makeOrganization("b");
+          yield* claimFor(a.id, "c1", ["held.example"]);
+          const failure = yield* lifecycle
+            .remove(
+              protocol,
+              a.id,
+              "c1",
+              ["held.example"],
+              Effect.fail(new WriteFailed({ step: "row" })),
+            )
+            .pipe(Effect.flip);
+          assert.deepStrictEqual(failure, new WriteFailed({ step: "row" }));
+          assert.isFalse(yield* canClaim(b.id, "held.example"));
+        }),
+      ),
+    );
+  });
+
+  describe(`normalizeDomains and deletion (${leg})`, () => {
+    it.effect(
+      "trims, lower-cases, de-duplicates in first-seen order and refuses an invalid domain",
+      () =>
+        Effect.gen(function* () {
+          const normalized = yield* OrganizationConnectionLifecycle.normalizeDomains(protocol, [
+            " B.Example ",
+            "a.example",
+            "b.example",
+          ]);
+          assert.deepStrictEqual(normalized, ["b.example", "a.example"]);
+          const bad = yield* OrganizationConnectionLifecycle.normalizeDomains(protocol, [
+            "ok.example",
+            "bad_domain",
+          ]).pipe(Effect.flip);
+          assert.deepStrictEqual(
+            bad,
+            new Refused({ reason: '"bad_domain" is not a valid email domain' }),
+          );
+        }),
+    );
+
+    it.effect("deleting an organization frees every domain its claims held", () =>
+      run(
+        Effect.gen(function* () {
+          const directory = yield* OrganizationDirectory.OrganizationDirectory;
+          const a = yield* makeOrganization("a");
+          const b = yield* makeOrganization("b");
+          yield* claimFor(a.id, "c1", ["one.example"]);
+          yield* claimFor(a.id, "c2", ["two.example"]);
+          assert.isFalse(yield* canClaim(b.id, "one.example"));
+          yield* directory.delete(application, { organizationId: a.id });
+          assert.isTrue(yield* canClaim(b.id, "one.example"));
+          assert.isTrue(yield* canClaim(b.id, "two.example"));
+        }),
+      ),
+    );
+
+    it.effect("the module publishes no event", () =>
+      run(
+        Effect.gen(function* () {
+          const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
+          const auditLog = yield* AuditLog.AuditLog;
+          const a = yield* makeOrganization("a");
+          yield* lifecycle.create(
+            protocol,
+            a.id,
+            Effect.succeed({ connectionId: "c1", domains: ["quiet.example"], write: Effect.void }),
+          );
+          yield* lifecycle.update(
+            protocol,
+            a.id,
+            Effect.succeed({
+              connectionId: "c1",
+              domains: ["quieter.example"],
+              previous: ["quiet.example"],
+              write: Effect.void,
+            }),
+          );
+          yield* lifecycle.remove(protocol, a.id, "c1", ["quieter.example"], Effect.void);
+          for (const eventTag of [
+            "auth.organization.connectionCreated",
+            "auth.organization.connectionUpdated",
+            "auth.organization.connectionDeleted",
+          ]) {
+            assert.strictEqual((yield* auditLog.list({ eventTag })).length, 0);
+          }
+        }),
+      ),
     );
   });
 };
