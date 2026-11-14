@@ -94,14 +94,43 @@ No unused exports, no unused dependencies, nothing under `packages/` other than 
 
 ## Postgres
 
-(Recorded by 06-01 Task 2: RC9, full `pnpm test` and full `pnpm test:bdd` against the Debian `postgres:16` container.)
+Container `awthaq-p3-pg`, image Debian `postgres:16` (`PostgreSQL 16.16 (Debian 16.16-1.pgdg13+1) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit`; `pg_isready`: `/var/run/postgresql:5432 - accepting connections`), `postgres://postgres:pw@localhost:55433/awthaq` (a throwaway local credential). This is the image CI uses (`.github/workflows/check.yml` runs `postgres:16`), not `scripts/test-pg.sh`'s alpine image. `AWTHAQ_POSTGRES_URL` was passed explicitly on each command. **The container was recreated with `--shm-size=1g` (empty database) before the recorded runs**, after the first attempt on the old container was slowed by leaked per-test schemas (see "First attempt" below). `npx tsc -b tsconfig.json` ran first (exit 0, 1 s).
+
+RC9 (full command and the nine suite paths are in "Phase pins" above), with the Postgres URL prefixed:
+
+```text
+AWTHAQ_POSTGRES_URL=postgres://postgres:pw@localhost:55433/awthaq npx vitest run packages/admin/test/Contract.test.ts packages/api-key/test/Contract.test.ts packages/device-authorization/test/Contract.test.ts packages/jwt/test/Contract.test.ts packages/organization/test/Contract.test.ts packages/saml/test/Contract.test.ts packages/scim/test/Contract.test.ts packages/webhooks/test/Contract.test.ts examples/plugin-template/test/Contract.test.ts
+```
+
+The nine suite paths: `packages/admin/test/Contract.test.ts`, `packages/api-key/test/Contract.test.ts`, `packages/device-authorization/test/Contract.test.ts`, `packages/jwt/test/Contract.test.ts`, `packages/organization/test/Contract.test.ts`, `packages/saml/test/Contract.test.ts`, `packages/scim/test/Contract.test.ts`, `packages/webhooks/test/Contract.test.ts`, `examples/plugin-template/test/Contract.test.ts`.
+
+| Run | Command | Exit | Summary line printed | Failing tests | Wall time |
+|-----|---------|------|----------------------|---------------|-----------|
+| RC9 (nine suites) | the RC9 command above | 0 | Test Files 9 passed (9); Tests 1346 passed (1346) | none | 81 s |
+| full unit, run 1 | `pnpm test` | 1 | Test Files 1 failed, 428 passed (429); Tests 1 failed, 6741 passed, 1 expected fail, 1 skipped (6744) | `packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts` "an organization deletion racing a create for it leaves no connection, claim or owner row behind, and the create is refused" (third known intermittent, see "Known intermittents") | 229 s |
+| the failing file alone, 3 runs | `npx vitest run packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts` | 0, 0, 0 | Test Files 1 passed (1); Tests 3 passed (3), each run | none | 4 s, 4 s, 3 s |
+| full unit, run 2 | `pnpm test` | 0 | Test Files 429 passed (429); Tests 6742 passed, 1 expected fail, 1 skipped (6744) | none | 97 s |
+| full bdd | `pnpm test:bdd` | 0 | Test Files 39 passed (39); Tests 1580 passed, 44 skipped (1624) | none | 13 s |
+
+Verbatim failing-test list for the Postgres full-suite record: empty on run 2 (the run recorded as the baseline); run 1's single failure is the intermittent above. Every run is listed; the unit row of the baseline is run 2 (green).
+
+RC9 on Postgres versus SQLite: 1346 tests against 1334 (+12), the same 9 files; the extra tests are the Postgres-only cases (the race and atomicity cases that need a real server, and the Postgres-versus-SQLite schema-equivalence case). Full unit on Postgres is 6742 passed against 6699 on SQLite with 1 skipped instead of 23 (the Postgres-only files stop skipping). No "server closed the connection", segfault, "terminated unexpectedly" or "shared memory" symptom in any of the three logs (0 matches for `server closed|segfault|terminated unexpectedly|shared memory`, with the container at `--shm-size=1g`).
+
+### First attempt on the old container (not the baseline)
+
+The first Postgres leg ran on the previous container (default 64 MB `/dev/shm`), whose `awthaq` database had grown to 4733 MB with 5877 leaked per-test schemas and 538,624 `pg_class` rows, while the machine load average was 31 to 49 (external `rustc` builds). It produced a different set of failures on each run, all `Test timed out in 5000ms` except the known passkey intermittent, none with a crash or shared-memory symptom (0 matches): RC9 1 failed of 1346 (admin `ImpersonationRecords (sql)` "create [atomic]: an interrupted create leaves its row and its link together, or neither"), 170 s; full `pnpm test` 3 failed of 6744 (admin `ImpersonationRecords (sql)` "create [race]: 8 creates racing verifyChain never report a break", passkey ChallengeStore (memory) tampered-consume, `OrganizationMembers` "natural race, 8 rounds, no hook: every round leaves an owner"), 207 s; a second RC9 run 3 failed (admin create [atomic], and scim and saml "Postgres and SQLite build the same logical schema"); bdd passed (1580 / 44). Those runs are not recorded as results: the container was recreated with `--shm-size=1g` and an empty database, and the table above is the fresh-container record. Nothing under `packages`, `spec`, `features`, `examples` or `docs` changed in between.
+
+run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)
+
+`git diff --quiet 3be32564 -- packages spec features examples docs .changeset knip.json scripts` re-checked after the Postgres runs: exit 0.
 
 ## Known intermittents
 
 1. `packages/passkey/test/Contract.test.ts` > `runPluginContractTests` > `RecordsContract: passkey` > `RecordsContract: awthaq/passkey/records/ChallengeStore (memory or sql variant)` > `consume [atomic]: false for any other value, a tampered one included`. **Fired in this capture** on the first `pnpm coverage` run (the memory variant): `Test Files 1 failed | 422 passed | 6 skipped (429)`, `Tests 1 failed | 6698 passed | 1 expected fail | 23 skipped (6723)`, exit 1, 84 s; it was that run's only failure. The one re-run was green (exit 0, 106 s, the coverage numbers in the gate table). The first `pnpm test` run (run before coverage) was green first time.
 2. `packages/organization/test/TenantMiddleware.test.ts` > `... a suspended organization still resolves (the plugin's own gate refuses it)`. Did not fire in this capture.
+3. **New, finding F-06-01:** `packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts` > "OIDC connection lifecycle races (real Postgres, CONN-03/CONN-05)" > "an organization deletion racing a create for it leaves no connection, claim or owner row behind, and the create is refused" (Postgres only, under parallel load). **Fired in this capture** on the first full Postgres `pnpm test` (assertion, not a timeout: received `create: "ok"` where `create: "InvalidConnection"` was expected; the row counts were all 0). Root cause: the test's helper `waitForAdvisoryWaiters` (`OrganizationConnectionLifecycle.sql.test.ts:178-192`) counts `pg_locks WHERE locktype = 'advisory' AND NOT granted` across the whole database, not for this test's lock key; test files run in parallel against one database, so foreign advisory waiters (for example the `OrganizationMembers` race tests) can satisfy the count early and let the create commit before the delete. It is a defect in the Phase 4 test, not a regression: no `packages` file changed since the Phase 5 close, where the full Postgres run was green. The file passes alone 3 of 3 (3 tests each), and the second full Postgres `pnpm test` was green. A fix scoping the count to the lock key is planned after this phase (not edited here).
 
-Rule for later plans: a command whose only failures are one of these two cases is re-run (at most twice) and every run is recorded; any other failure is a real regression. Runs here: coverage run 1 (exit 1, intermittent 1), coverage run 2 (exit 0); every other gate ran once.
+Rule for later plans: a command whose only failures are one of these three cases is re-run (at most twice) and every run is recorded; any other failure is a real regression. Runs here: coverage run 1 (exit 1, intermittent 1), coverage run 2 (exit 0); Postgres full unit run 1 (exit 1, intermittent 3), run 2 (exit 0); every other gate ran once.
 
 ## Phase-close comparison rule
 
@@ -111,7 +140,7 @@ Every gate exits as it did here, and the comparison is made on a tree where `git
 2. Test, file and coverage counts may only grow; coverage stays at or above the floors 89 / 83 / 84 / 90; `pnpm spec:verify:strict` stays `FAIL 0` and `SKIP 0`, with PASS at or above 32 (this capture).
 3. `pnpm check:error-tags` and `pnpm check:contract-tests` print the same numbers as here (163 / 137, 21 plugin classes), and `pnpm check:readmes`, `pnpm circular` and `pnpm check:transactions` exit 0.
 4. knip's filtered output gains nothing: only the banner, the headings, the three `readme-quickstart.ts` rows and the ELIFECYCLE line, no row under `packages/` besides them; `git diff --stat knip.json` stays empty.
-5. RC9 passes on SQLite and on Postgres (full command and the nine suite paths in "Phase pins" above), and the Postgres full-suite failing list does not grow (record again as "run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)").
+5. RC9 passes on SQLite and on Postgres (full command and the nine suite paths in "Phase pins" above), and the Postgres full-suite failing list does not grow (empty here; the three known intermittents each allow up to two recorded re-runs, the third being F-06-01; record again as "run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)").
 6. No new dependency: `git diff --stat 3be32564 HEAD -- packages/*/package.json features/package.json examples/*/package.json pnpm-lock.yaml` prints nothing.
 
 ### Path allowlist
