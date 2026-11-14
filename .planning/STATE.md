@@ -2,20 +2,21 @@
 gsd_state_version: "1.0"
 milestone: v1.0
 milestone_name: Architecture Deepening, batch 3
-current_phase: 4
-current_phase_name: Connection-lifecycle module
-current_plan: 9
-status: verifying
-stopped_at: Completed 04-09-PLAN.md
-last_updated: "2026-11-14T13:31:58.887Z"
+current_phase: 5
+current_phase_name: Core-table list cleanup
+current_plan: Not started
+status: planning
+stopped_at: Phase 4 complete, ready to plan Phase 5
+last_updated: "2026-11-14T14:37:15.006Z"
 last_activity: 2026-11-14
-last_activity_desc: Phase 3 complete, transitioned to Phase 4
-state_head: 2828b9c6f8dd08ced2e8cc56a20209bbe0661dbc
+last_activity_desc: Phase 4 complete, transitioned to Phase 5
+state_head: 5cab64cacf79783480748fa566c9dccaed27379c
 progress:
   total_phases: 7
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 27
   completed_plans: 27
+  percent: 57
 ---
 
 # Project State
@@ -29,18 +30,18 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 
 ## Current Position
 
-Phase: 4 — Connection-lifecycle module
-Current Plan: 9
+Phase: 5 — Core-table list cleanup
+Current Plan: Not started
 Total Plans in Phase: 9
-Status: Phase complete — ready for verification
-Last activity: 2026-11-14 — Phase 3 complete, transitioned to Phase 4
+Status: Ready to plan
+Last activity: 2026-11-14 — Phase 4 complete, transitioned to Phase 5
 
-Progress: [████░░░░░░] 43%
+Progress: [██████░░░░] 57%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 18
+- Total plans completed: 27
 - Average duration: -
 - Total execution time: 0.0 hours
 
@@ -51,6 +52,7 @@ Progress: [████░░░░░░] 43%
 | 1 | 4 | - | - |
 | 2 | 5 | - | - |
 | 3 | 9 | - | - |
+| 4 | 9 | - | - |
 
 **Recent Trend:**
 - Last 5 plans: -
@@ -134,7 +136,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 3, 4, 6]: no local Postgres (`docker` absent, `AWTHAQ_POSTGRES_URL` unset); these phases must land through CI and record "not run locally"
+- [Phase 6]: Postgres runs locally on the CI image (Debian `postgres:16` container `awthaq-p3-pg` on port 55433, pass `AWTHAQ_POSTGRES_URL` explicitly; use `--shm-size=1g` for full-suite runs); hosted CI cannot run (no git remote), so record "CI confirmation open"
 - [Phase 6]: REC-03 and REC-04 are conditional on the spike go decision; a no-go closes them as not pursued
 - [Phase 1]: knip baseline is already dirty (3 unlisted deps in the sql fixture, `.reports/`, untracked `.claude/`); record it, do not "fix" it by adding `@awthaq/core` to sql (cycle)
 
@@ -149,5 +151,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-11-14T13:31:58.805Z
-Stopped at: Completed 04-09-PLAN.md
+Stopped at: Phase 4 complete, ready to plan Phase 5
 Resume file: None

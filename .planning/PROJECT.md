@@ -54,6 +54,9 @@ Composition is checked by the compiler: a missing plugin, port or duplicate slot
 | One `Keyset` module in `@awthaq/ports` (`paginate`, `window`, clamp 1..200 default 50) and a `KeysetSql` builder in `@awthaq/sql`; adapters supply only `fetch`, so `+1` is applied once by construction | Three listings had three page contracts and five `limit + 1` sites; the declared order now derives the memory comparator, the SQL seek and the ORDER BY | ✓ Phase 3 |
 | Cursor wire bytes unchanged; `UserStore` page field `next` renamed `nextCursor` (one `Migration:` changeset) | The wire is the public contract and is pinned by a golden test; the port-field rename is the one intended breaking change, pre-1.0 | ✓ Phase 3 |
 | Mixed-case ids are asserted for self-consistency, canonical uuidV7 ids for exact code-unit order; no `COLLATE "C"` | Verified on Debian `postgres:16` (`en_US.utf8`), the image CI uses; local `test:pg` uses alpine and hides drift | ✓ Phase 3 |
+| One exposed `OrganizationConnectionLifecycle` service in `organization` owns claim-then-write, release and the suspended-organization gate for SAML and OIDC, parameterized by a protocol descriptor (`{ protocol, refuse, taken, isGone }` plus caller `prepare`/`write`); events stay with the callers | Two protocols had drifted copies of the claim sequence and different gates; the module keeps `organization` free of SAML types and makes the policy (`findActive` on create, update and refresh, none on remove) one decision | ✓ Phase 4 |
+| `DomainClaims` serialises per organization with an advisory lock (`organization_domain_claim:org:<id>`), claims first, owner rows inserted sorted and read in input order; the OIDC secret is sealed before the lock | A reproduced Postgres update-vs-remove deadlock and an opposite-order two-organization deadlock; no external IO may run under the lock | ✓ Phase 4 |
+| `DomainClaims` leaves the organization root export (stays on `@awthaq/organization/records`); SCIM is untouched and its `createConnection` orphan is recorded as F-04-01 | The claim table is a records boundary, not a plugin surface; SCIM has no domains or update | ✓ Phase 4 |
 
 ## Current Milestone: v1.0 Architecture Deepening, batch 3
 
@@ -87,4 +90,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-11-14 after Phase 3*
+*Last updated: 2026-11-14 after Phase 4*

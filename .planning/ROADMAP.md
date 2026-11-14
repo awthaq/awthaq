@@ -19,7 +19,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: CLI views and ConfigList removal** - One views module resolves `--format`/`--json` once; `ConfigList` deleted; gate baseline recorded (completed 2026-11-14)
 - [x] **Phase 2: Split TestAuth** - `TestAuth.ts` becomes a facade over `internal/` modules with an identical public name set (completed 2026-11-14)
 - [x] **Phase 3: Keyset-page module** - One page contract, clamp, cursor derivation and comparator for users, organizations and impersonations (completed 2026-11-14)
-- [ ] **Phase 4: Connection-lifecycle module** - SAML and OIDC share one exposed lifecycle service in `organization` with a single suspended-org policy
+- [x] **Phase 4: Connection-lifecycle module** - SAML and OIDC share one exposed lifecycle service in `organization` with a single suspended-org policy (completed 2026-11-14)
 - [ ] **Phase 5: Core-table list cleanup** - One core-table list in `@awthaq/sql` projected to `Auth.ts`, `LaggingReplica` and `TenantScope.coverage`
 - [ ] **Phase 6: Record-store scaffolding (gated)** - Preconditions recorded, spike with go/no-go, scaffolding only if the spike pays
 - [ ] **Phase 7: World scaffold and Credentials split (optional)** - Shared World tail scaffold in `features/` and a pure file split of `server/Credentials.ts`
@@ -126,7 +126,7 @@ Plans:
   3. A Postgres update-vs-remove race case asserts outcome counts and passes in CI, recorded as "not run locally".
   4. `DomainClaims` is no longer exported from the organization root, `organization` imports no SAML types, protocol error tags and `onTaken` are preserved, and `pnpm check:transactions` and `pnpm check:error-tags` pass; ADR-EA-040 carries a revision line and a changeset with a `Migration:` line exists.
   5. SCIM is unchanged except for the shared active-organization gate and deletion hook, and the SCIM `createConnection` orphan case is recorded as a finding.
-**Plans**: 9/9 plans executed
+**Plans**: 9/9 plans complete
 - [x] 04-01-PLAN.md
 - [x] 04-02-PLAN.md
 - [x] 04-03-PLAN.md
@@ -195,7 +195,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7. Phases 1
 | 1. CLI views and ConfigList removal | 4/4 | Complete    | 2026-11-14 |
 | 2. Split TestAuth | 5/5 | Complete    | 2026-11-14 |
 | 3. Keyset-page module | 9/9 | Complete    | 2026-11-14 |
-| 4. Connection-lifecycle module | 9/9 | In Progress | - |
+| 4. Connection-lifecycle module | 9/9 | Complete    | 2026-11-14 |
 | 5. Core-table list cleanup | 0/TBD | Not started | - |
 | 6. Record-store scaffolding (gated) | 0/TBD | Not started | - |
 | 7. World scaffold and Credentials split (optional) | 0/TBD | Not started | - |

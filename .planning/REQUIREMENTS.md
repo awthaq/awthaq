@@ -34,12 +34,12 @@ Milestone "Architecture Deepening, batch 3". Each maps to roadmap phases. Resear
 
 ### Connection lifecycle (C2)
 
-- [ ] **CONN-01**: An exposed organization service owns the SAML/OIDC connection lifecycle (claim domain then connection row in one transaction, release on delete and on organization deletion), parameterized by a protocol descriptor
-- [ ] **CONN-02**: Create and update refuse a suspended organization for both SAML and OIDC (`findActive`); remove does not check; a failing scenario lands first and BEH-EA-237/318 are amended
-- [ ] **CONN-03**: BEH-EA-317 holds: claim first, claim and row atomic, memory twin compensates, no event is emitted for a rolled-back claim
-- [ ] **CONN-04**: The module takes `SqlTransaction` as a service (`check:transactions` passes), keeps protocol error tags and `onTaken`, and imports no SAML types into `organization`
-- [ ] **CONN-05**: `DomainClaims` leaves the organization root export; ADR-EA-040 gets a revision line; a Postgres update-vs-remove race case asserts outcome counts
-- [ ] **CONN-06**: SCIM is excluded except the shared active-organization gate and deletion hook; the SCIM `createConnection` orphan case is recorded as a finding
+- [x] **CONN-01**: An exposed organization service owns the SAML/OIDC connection lifecycle (claim domain then connection row in one transaction, release on delete and on organization deletion), parameterized by a protocol descriptor
+- [x] **CONN-02**: Create and update refuse a suspended organization for both SAML and OIDC (`findActive`); remove does not check; a failing scenario lands first and BEH-EA-237/318 are amended
+- [x] **CONN-03**: BEH-EA-317 holds: claim first, claim and row atomic, memory twin compensates, no event is emitted for a rolled-back claim
+- [x] **CONN-04**: The module takes `SqlTransaction` as a service (`check:transactions` passes), keeps protocol error tags and `onTaken`, and imports no SAML types into `organization`
+- [x] **CONN-05**: `DomainClaims` leaves the organization root export; ADR-EA-040 gets a revision line; a Postgres update-vs-remove race case asserts outcome counts
+- [x] **CONN-06**: SCIM is excluded except the shared active-organization gate and deletion hook; the SCIM `createConnection` orphan case is recorded as a finding
 
 ### Table list (C6)
 
@@ -117,12 +117,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | KEY-06 | Phase 3 | Complete |
 | KEY-07 | Phase 3 | Complete |
 | KEY-08 | Phase 3 | Complete |
-| CONN-01 | Phase 4 | Pending |
-| CONN-02 | Phase 4 | Pending |
-| CONN-03 | Phase 4 | Pending |
-| CONN-04 | Phase 4 | Pending |
-| CONN-05 | Phase 4 | Pending |
-| CONN-06 | Phase 4 | Pending |
+| CONN-01 | Phase 4 | Complete |
+| CONN-02 | Phase 4 | Complete |
+| CONN-03 | Phase 4 | Complete |
+| CONN-04 | Phase 4 | Complete |
+| CONN-05 | Phase 4 | Complete |
+| CONN-06 | Phase 4 | Complete |
 | CAT-01 | Phase 5 | Pending |
 | CAT-02 | Phase 5 | Pending |
 | CAT-03 | Phase 5 | Pending |
