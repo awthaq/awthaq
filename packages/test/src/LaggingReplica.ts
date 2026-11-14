@@ -18,7 +18,7 @@
 // `catchUp` copies each listed table's rows from the primary, replacing the
 // replica's copy.
 
-import { ReadRouting } from "@awthaq/sql";
+import { CoreTables, ReadRouting } from "@awthaq/sql";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -27,15 +27,12 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
-/** The core tables `@awthaq/sql`'s `CoreMigrations` creates. */
-export const coreTables: ReadonlyArray<string> = [
-  "users",
-  "accounts",
-  "sessions",
-  "verification_tokens",
-  "verification_reservations",
-  "auth_audit_log",
-];
+/**
+ * The tables the core-table catalogue marks replicated (`CoreTables.replicated` in `@awthaq/sql`):
+ * the tenant-stamped core tables, in creation order. `auth_relay_cursor` and `rate_limit_buckets`
+ * are not mirrored; see their catalogue reasons.
+ */
+export const coreTables: ReadonlyArray<string> = CoreTables.replicated;
 
 export interface LaggingReplica {
   /** The replica client itself, for direct inspection in a test. */
