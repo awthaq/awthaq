@@ -10,6 +10,7 @@ import {
   Organization,
   type OrganizationActiveContext,
   type OrganizationAuthority,
+  type OrganizationConnectionLifecycle,
   type OrganizationDeletion,
   type OrganizationDirectory,
   type OrganizationInvitations,
@@ -180,6 +181,7 @@ export type PasswordServices = PasswordCredential.PasswordCredential;
 export type OrganizationServices =
   | OrganizationActiveContext.OrganizationActiveContext
   | OrganizationAuthority.OrganizationAuthority
+  | OrganizationConnectionLifecycle.OrganizationConnectionLifecycle
   | OrganizationDeletion.OrganizationDeletion
   | OrganizationDirectory.OrganizationDirectory
   | OrganizationInvitations.OrganizationInvitations

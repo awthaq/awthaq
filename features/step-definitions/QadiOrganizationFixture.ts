@@ -9,6 +9,7 @@ import {
   Organization,
   OrganizationActiveContext,
   OrganizationAuthority,
+  OrganizationConnectionLifecycle,
   OrganizationDeletion,
   OrganizationDirectory,
   OrganizationHooks,
@@ -86,6 +87,7 @@ export const organizationFixture = (probe: WalkProbe) => {
 export type OrganizationServiceNames =
   | OrganizationActiveContext.OrganizationActiveContext
   | OrganizationAuthority.OrganizationAuthority
+  | OrganizationConnectionLifecycle.OrganizationConnectionLifecycle
   | OrganizationDeletion.OrganizationDeletion
   | OrganizationDirectory.OrganizationDirectory
   | OrganizationInvitations.OrganizationInvitations

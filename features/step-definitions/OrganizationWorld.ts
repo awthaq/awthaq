@@ -12,6 +12,7 @@ import {
   Organization,
   OrganizationActiveContext,
   OrganizationAuthority,
+  OrganizationConnectionLifecycle,
   OrganizationDeletion,
   OrganizationDirectory,
   OrganizationHooks,
@@ -89,6 +90,7 @@ const buildAppLayer = (
 export type OrganizationServiceNames =
   | OrganizationActiveContext.OrganizationActiveContext
   | OrganizationAuthority.OrganizationAuthority
+  | OrganizationConnectionLifecycle.OrganizationConnectionLifecycle
   | OrganizationDeletion.OrganizationDeletion
   | OrganizationDirectory.OrganizationDirectory
   | OrganizationInvitations.OrganizationInvitations
