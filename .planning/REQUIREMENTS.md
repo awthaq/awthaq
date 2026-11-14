@@ -101,12 +101,50 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (filled by roadmapper) | | Pending |
+| CLI-01 | Phase 1 | Pending |
+| CLI-02 | Phase 1 | Pending |
+| CLI-03 | Phase 1 | Pending |
+| CLI-04 | Phase 1 | Pending |
+| TEST-01 | Phase 2 | Pending |
+| TEST-02 | Phase 2 | Pending |
+| TEST-03 | Phase 2 | Pending |
+| TEST-04 | Phase 2 | Pending |
+| KEY-01 | Phase 3 | Pending |
+| KEY-02 | Phase 3 | Pending |
+| KEY-03 | Phase 3 | Pending |
+| KEY-04 | Phase 3 | Pending |
+| KEY-05 | Phase 3 | Pending |
+| KEY-06 | Phase 3 | Pending |
+| KEY-07 | Phase 3 | Pending |
+| KEY-08 | Phase 3 | Pending |
+| CONN-01 | Phase 4 | Pending |
+| CONN-02 | Phase 4 | Pending |
+| CONN-03 | Phase 4 | Pending |
+| CONN-04 | Phase 4 | Pending |
+| CONN-05 | Phase 4 | Pending |
+| CONN-06 | Phase 4 | Pending |
+| CAT-01 | Phase 5 | Pending |
+| CAT-02 | Phase 5 | Pending |
+| CAT-03 | Phase 5 | Pending |
+| CAT-04 | Phase 5 | Pending |
+| REC-01 | Phase 6 | Pending |
+| REC-02 | Phase 6 | Pending |
+| REC-03 | Phase 6 | Pending |
+| REC-04 | Phase 6 | Pending |
+| WORLD-01 | Phase 7 | Pending |
+| WORLD-02 | Phase 7 | Pending |
+| CRED-01 | Phase 7 | Pending |
+| GATE-01 | Phase 1 | Pending |
+| GATE-02 | Phase 1 | Pending |
+| GATE-03 | Phase 1 | Pending |
+| GATE-04 | Phase 3 | Pending |
 
 **Coverage:**
 - v1.0 requirements: 37 total
-- Mapped to phases: 0
-- Unmapped: 37 ⚠️
+- Mapped to phases: 37
+- Unmapped: 0 ✓
+
+GATE-01, GATE-03 and GATE-04 bind every relevant phase; each is mapped to the phase that first establishes it (GATE-01/02/03 to Phase 1, GATE-04 to Phase 3, applying also to Phases 4 and 6). REC-03 and REC-04 are conditional on the Phase 6 spike go decision.
 
 ## Decisions taken (defaults, open to adjustment)
 
@@ -119,4 +157,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-11-14*
-*Last updated: 2026-11-14 after initial definition*
+*Last updated: 2026-11-14 after roadmap creation (traceability filled)*
