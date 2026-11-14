@@ -95,6 +95,12 @@ export const orStoreUnavailable =
       isSqlError(fault) ? storeUnavailable(operation)(fault) : Effect.die(fault),
     );
 
+/** `orStoreUnavailable` for one store: `labelled("Store")("op")` names the operation `Store.op`. */
+export const labelled =
+  (store: string): typeof orStoreUnavailable =>
+  (operation) =>
+    orStoreUnavailable(`${store}.${operation}`);
+
 /**
  * `orStoreUnavailable` for an insert or update that can hit a unique constraint: a `UniqueViolation`
  * is the domain outcome `onUnique(error)` makes (in the Shape's `E`; the error says which constraint), anything else is an outage or a

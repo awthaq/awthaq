@@ -37,6 +37,17 @@ describe("StoreFailure.orStoreUnavailable", () => {
     }),
   );
 
+  it.effect("labelled names the operation <store>.<operation>", () =>
+    Effect.gen(function* () {
+      const failure = yield* Effect.fail(connection()).pipe(
+        StoreFailure.labelled("Probe")("read"),
+        Effect.flip,
+      );
+      assert.instanceOf(failure, StoreFailure.StoreUnavailable);
+      assert.strictEqual(failure.operation, "Probe.read");
+    }),
+  );
+
   it.effect("a statement refused as malformed or unauthorised is a defect, not a 503", () =>
     Effect.gen(function* () {
       for (const reason of [
