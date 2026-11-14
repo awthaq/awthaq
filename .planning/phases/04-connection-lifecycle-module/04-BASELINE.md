@@ -278,3 +278,23 @@ Three `race` cases added to `packages/organization/test/contract/DomainClaims.ts
 ### 04-03 gates
 
 `tsc -b` clean; `pnpm check:transactions`, `pnpm check:error-tags` (163 internal / 137 wire), `pnpm circular`, `pnpm lint` (exit 0, no warnings under `packages/`), `pnpm format:check` exit 0. `pnpm test:bdd`: `Tests  3 failed | 1577 passed | 44 skipped (1624)`, red by exactly the three 04-02 SAML suspended-organization rows (the BDD red window), no other failure.
+
+## 04-05 Postgres
+
+Plan 04-05 (OIDC store over the lifecycle). All Postgres results below: run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote). `AWTHAQ_POSTGRES_URL=postgres://postgres:pw@localhost:55433/awthaq` passed explicitly.
+
+- After Task 1 (OIDC create through the lifecycle): `npx vitest run packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts` exit 1, `Tests  1 failed | 2 passed (3)`; the failing case is `an update racing a remove of the same connection ...` (deletion racing create now passes).
+- After Task 2 (update and remove through the lifecycle, claims first): the same command, exit 0, `Tests  3 passed (3)`, no StoreUnavailable.
+- `npx vitest run packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts packages/organization/test/Contract.test.ts packages/organization/test/ConnectionLifecyclePins.test.ts packages/organization/test/OrganizationConnectionLifecycle.test.ts`: exit 0, `Test Files  4 passed (4)`, `Tests  582 passed (582)`.
+
+| Race case | State after 04-05 |
+|-----------|-------------------|
+| update racing remove (1) | GREEN (claims-first removal through the per-organization lock) |
+| opposite-order claims (2) | GREEN |
+| deletion racing create (3) | GREEN (in-lock `findActive` re-check; order -1 claim release) |
+
+run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)
+
+### 04-05 gates
+
+`tsc -b` and `tsc -p tsconfig.test.json` clean (only the pre-existing TS377149 warnings); `pnpm check:transactions`, `pnpm circular`, `pnpm lint`, `pnpm format:check` exit 0; `pnpm check:error-tags`: 163 internal / 137 wire. `pnpm test`: 421 files, 6649 tests passed (1 expected fail, 21 skipped). `pnpm knip`: exit 1 for the baseline reasons only (3 `readme-quickstart.ts` unlisted dependencies plus untracked `.claude/` files), no row under `packages/organization`. `pnpm test:bdd`: `Tests  3 failed | 1577 passed | 44 skipped (1624)`, red by exactly the three 04-02 SAML rows (REQ-EA-1569, 1570, 1571) until 04-06; no other failure.

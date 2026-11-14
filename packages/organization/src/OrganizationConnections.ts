@@ -37,7 +37,7 @@
 import { OAuthConnections, OAuthProvider } from "@awthaq/oauth";
 import { Claims } from "@awthaq/oauth/presets";
 import { AuthEvents } from "@awthaq/core";
-import { OutboundUrl, SqlTransaction } from "@awthaq/ports";
+import { OutboundUrl } from "@awthaq/ports";
 import { SealedColumn, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -50,11 +50,9 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Data from "effect/Data";
 import * as ConnectionRecords from "./ConnectionRecords.ts";
-import * as DomainClaims from "./DomainClaims.ts";
 import * as OrganizationActor from "./OrganizationActor.ts";
 import * as OrganizationConnectionLifecycle from "./OrganizationConnectionLifecycle.ts";
 import * as OrganizationDeletion from "./OrganizationDeletion.ts";
-import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationEvents from "./OrganizationEvents.ts";
 
 // ---- provider ids -------------------------------------------------------------
@@ -346,18 +344,6 @@ const oauthProtocol: OrganizationConnectionLifecycle.ConnectionProtocol<
   taken: (domain) => new ConnectionRecords.ConnectionDomainTaken({ domain }),
 };
 
-const DOMAIN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
-
-const normalizeDomains = (
-  domains: ReadonlyArray<string>,
-): Effect.Effect<ReadonlyArray<string>, InvalidConnection> => {
-  const normalized = Array.from(new Set(domains.map((domain) => domain.trim().toLowerCase())));
-  const bad = normalized.find((domain) => !DOMAIN.test(domain));
-  return bad === undefined
-    ? Effect.succeed(normalized)
-    : Effect.fail(new InvalidConnection({ reason: `"${bad}" is not a valid email domain` }));
-};
-
 /** The rules a connection must satisfy, checked on the merged (post-patch) shape. */
 const validate = (fields: {
   readonly kind: ConnectionRecords.ConnectionKind;
@@ -425,46 +411,16 @@ const toView = (record: ConnectionRecords.ConnectionRecord): ConnectionView => (
 
 /**
  * Requires `ConnectionRecords`, `OrganizationConnections` (invalidated on every write), the exposed
- * `OrganizationDirectory` (a connection belongs to an active organization), `AuthEvents` and `SecureRandom`.
+ * `OrganizationConnectionLifecycle` (the gate, the domain claims and their atomicity), `AuthEvents` and `SecureRandom`.
  */
 export const layerStore = Layer.effect(
   OrganizationConnectionStore,
   Effect.gen(function* () {
     const records = yield* ConnectionRecords.ConnectionRecords;
-    const claims = yield* DomainClaims.DomainClaims;
-    const transaction = yield* SqlTransaction.SqlTransaction;
     const map = yield* OrganizationConnections;
-    const directory = yield* OrganizationDirectory.OrganizationDirectory;
     const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
     const events = yield* AuthEvents.AuthEvents;
     const random = yield* SecureRandom.SecureRandom;
-
-    /** A domain another organization owns (over any protocol) is a taken domain, worded as this protocol's own refusal. */
-    const claimed = <A, E, R>(
-      input: DomainClaims.DomainClaim,
-      previous: ReadonlyArray<string> | undefined,
-      write: Effect.Effect<A, E, R>,
-    ) =>
-      DomainClaims.withClaim(
-        claims,
-        transaction,
-        input,
-        previous,
-        write,
-        (domain) => new ConnectionRecords.ConnectionDomainTaken({ domain }),
-      );
-
-    /** A connection belongs to an organization that exists and is not suspended (BEH-EA-237), worded as the SAML store words it. */
-    const requireActiveOrganization = (organizationId: string) =>
-      directory.findActive(organizationId).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () =>
-              Effect.fail(new InvalidConnection({ reason: "the organization does not exist" })),
-            onSome: () => Effect.void,
-          }),
-        ),
-      );
 
     const create: OrganizationConnectionStoreShape["create"] = Effect.fnUntraced(
       function* (actor, input) {
@@ -528,55 +484,61 @@ export const layerStore = Layer.effect(
 
     const update: OrganizationConnectionStoreShape["update"] = Effect.fnUntraced(
       function* (actor, organizationId, connectionId, patch) {
-        yield* requireActiveOrganization(organizationId);
-        const existing = yield* records.findById(organizationId, connectionId);
-        if (Option.isNone(existing)) {
-          return yield* new ConnectionRecords.ConnectionRecordNotFound({ id: connectionId });
-        }
-        const current = existing.value;
-        const nullable = (
-          held: Option.Option<string>,
-          next: string | null | undefined,
-        ): Option.Option<string> => (next === undefined ? held : Option.fromNullOr(next));
-        yield* validate({
-          kind: current.kind,
-          name: patch.name ?? current.name,
-          issuer: nullable(current.issuer, patch.issuer),
-          discoveryUrl: nullable(current.discoveryUrl, patch.discoveryUrl),
-          authorizationEndpoint: nullable(
-            current.authorizationEndpoint,
-            patch.authorizationEndpoint,
-          ),
-          tokenEndpoint: nullable(current.tokenEndpoint, patch.tokenEndpoint),
-          jwksUri: nullable(current.jwksUri, patch.jwksUri),
-          userinfoEndpoint: nullable(current.userinfoEndpoint, patch.userinfoEndpoint),
-          clientId: patch.clientId ?? current.clientId,
-          scopes: patch.scopes ?? current.scopes,
-        });
-        const emailDomains =
-          patch.emailDomains === undefined
-            ? undefined
-            : yield* normalizeDomains(patch.emailDomains);
-        const update = records.update(organizationId, connectionId, {
-          ...(patch.name === undefined ? {} : { name: patch.name.trim() }),
-          issuer: patch.issuer,
-          discoveryUrl: patch.discoveryUrl,
-          authorizationEndpoint: patch.authorizationEndpoint,
-          tokenEndpoint: patch.tokenEndpoint,
-          jwksUri: patch.jwksUri,
-          userinfoEndpoint: patch.userinfoEndpoint,
-          clientId: patch.clientId,
-          clientSecret: patch.clientSecret,
-          scopes: patch.scopes,
-          emailDomains,
-        });
-        const record = yield* emailDomains === undefined
-          ? update
-          : claimed(
-              { organizationId, protocol: "oauth", connectionId, domains: emailDomains },
-              current.emailDomains,
-              update,
-            );
+        const record = yield* lifecycle.update(
+          oauthProtocol,
+          organizationId,
+          Effect.gen(function* () {
+            const existing = yield* records.findById(organizationId, connectionId);
+            if (Option.isNone(existing)) {
+              return yield* new ConnectionRecords.ConnectionRecordNotFound({ id: connectionId });
+            }
+            const current = existing.value;
+            const nullable = (
+              held: Option.Option<string>,
+              next: string | null | undefined,
+            ): Option.Option<string> => (next === undefined ? held : Option.fromNullOr(next));
+            yield* validate({
+              kind: current.kind,
+              name: patch.name ?? current.name,
+              issuer: nullable(current.issuer, patch.issuer),
+              discoveryUrl: nullable(current.discoveryUrl, patch.discoveryUrl),
+              authorizationEndpoint: nullable(
+                current.authorizationEndpoint,
+                patch.authorizationEndpoint,
+              ),
+              tokenEndpoint: nullable(current.tokenEndpoint, patch.tokenEndpoint),
+              jwksUri: nullable(current.jwksUri, patch.jwksUri),
+              userinfoEndpoint: nullable(current.userinfoEndpoint, patch.userinfoEndpoint),
+              clientId: patch.clientId ?? current.clientId,
+              scopes: patch.scopes ?? current.scopes,
+            });
+            const emailDomains =
+              patch.emailDomains === undefined
+                ? undefined
+                : yield* OrganizationConnectionLifecycle.normalizeDomains(
+                    oauthProtocol,
+                    patch.emailDomains,
+                  );
+            return {
+              connectionId,
+              domains: emailDomains,
+              previous: current.emailDomains,
+              write: records.update(organizationId, connectionId, {
+                ...(patch.name === undefined ? {} : { name: patch.name.trim() }),
+                issuer: patch.issuer,
+                discoveryUrl: patch.discoveryUrl,
+                authorizationEndpoint: patch.authorizationEndpoint,
+                tokenEndpoint: patch.tokenEndpoint,
+                jwksUri: patch.jwksUri,
+                userinfoEndpoint: patch.userinfoEndpoint,
+                clientId: patch.clientId,
+                clientSecret: patch.clientSecret,
+                scopes: patch.scopes,
+                emailDomains,
+              }),
+            };
+          }),
+        );
         yield* map.invalidate(organizationId);
         yield* events.emit(OrganizationEvents.OrganizationConnectionUpdatedEvent, {
           organizationId,
@@ -592,11 +554,15 @@ export const layerStore = Layer.effect(
 
     const remove: OrganizationConnectionStoreShape["remove"] = Effect.fnUntraced(
       function* (actor, organizationId, connectionId) {
-        yield* DomainClaims.withRelease(
-          claims,
-          transaction,
+        const existing = yield* records.findById(organizationId, connectionId);
+        if (Option.isNone(existing)) {
+          return yield* new ConnectionRecords.ConnectionRecordNotFound({ id: connectionId });
+        }
+        yield* lifecycle.remove(
+          oauthProtocol,
           organizationId,
           connectionId,
+          existing.value.emailDomains,
           records.remove(organizationId, connectionId),
         );
         yield* map.invalidate(organizationId);
@@ -635,24 +601,19 @@ export const layerStore = Layer.effect(
 );
 
 /**
- * Deleting an organization removes its connections and releases their email domains: this plugin's
- * contribution to the organization's deletion (F7). The rows go in the deletion's own transaction, so a
- * failure rolls the deletion back instead of being swallowed, and the cached provider set is dropped once
- * it has committed. A separate opt-in layer, like the store itself: provide it where the store is.
+ * Deleting an organization removes its connections: this plugin's contribution to the organization's deletion
+ * (F7). The rows go in the deletion's own transaction, so a failure rolls the deletion back instead of being
+ * swallowed, and the cached provider set is dropped once it has committed. The email-domain claims go in the
+ * organization's own contribution at order -1 (`claimsOnOrganizationDelete`). A separate opt-in layer, like the
+ * store itself: provide it where the store is.
  */
 export const connectionsOnOrganizationDelete = OrganizationDeletion.contribute({
   id: "organization.oauthConnections",
   make: Effect.gen(function* () {
     const records = yield* ConnectionRecords.ConnectionRecords;
-    const claims = yield* DomainClaims.DomainClaims;
     const map = yield* OrganizationConnections;
     return {
-      // The organization's domain claims go with it, whatever protocol made them.
-      inTransaction: (organizationId: string) =>
-        Effect.andThen(
-          records.removeAllForOrganization(organizationId),
-          claims.releaseAllForOrganization(organizationId),
-        ),
+      inTransaction: records.removeAllForOrganization,
       afterCommit: map.invalidate,
     };
   }),
