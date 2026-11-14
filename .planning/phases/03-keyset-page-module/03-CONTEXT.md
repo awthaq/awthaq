@@ -27,6 +27,15 @@ All implementation choices are at Claude's discretion: this is a structural refa
 - Strata: `api < ports < sql < core < server < qadi < plugins < cli/test/features`; the keyset module lives in `ports`, the predicate builder in `sql`, and `ports` must not import `sql`. `pnpm circular` counts type-only imports.
 - Research is recommended before planning (collation behaviour, the `limit + 1` contract, the sub-millisecond timestamp case); open design questions that research surfaces are resolved by the cleanest-end-state rule and recorded in the plans, and only a question that is genuinely the user's (a product or public-wire decision) is escalated.
 
+### Decided autonomously
+- [Module shape] Q: "Name and shape of the ports module?" → Selected: "`Keyset` in packages/ports/src/Keyset.ts, centred on `paginate(order, fetch)`: it owns the clamp (1..200, default 50), take = limit + 1, the trim and next-cursor derivation, and derives the memory comparator from the same declared order; adapters supply only `fetch`; a `KeysetSql` builder in packages/sql/src emits the row-value predicate plus ORDER BY from the same declaration; the three wire cursor schemas stay untouched" — pre-1.0 and unpublished, so a rename or reshape before the first release is a local edit (03-RESEARCH.md section on design options)
+- [Users page field] Q: "Rename the UserStore page field `next` to `nextCursor` so all three stores share one page contract?" → Selected: "Yes, in the single `Migration:` changeset" — the project is unpublished and the contract change is the point of KEY-02; undoing it is a mechanical rename
+- [Timestamp precision] Q: "Harden against sub-millisecond external writers?" → Selected: "Declare whole-millisecond precision (app writers only produce whole ms; @effect/sql-pg truncates microseconds on decode) and test the premise; do not harden" — a declaration plus a test, tightened later without touching the wire
+- [Collation] Q: "How is id ordering declared collation-stable?" → Selected: "Mixed-case `test:pg` case asserts self-consistency (complete, no duplicates, resumable at every page size); a canonical uuidV7 case asserts exact code-unit parity on every backend; `COLLATE \"C\"` stays the fallback only if CI shows drift (admin_impersonation is the only table that would need an index migration)" — follows the locked decision, nothing persisted changes
+- [Mixed direction] Q: "How does the predicate builder refuse mixed-direction orders?" → Selected: "A defect at `KeysetSql.make` construction, with a refusal test" — an internal builder guard, replaceable by a type-level refusal later
+- [KEY-06 grep scope] Q: "Scope of the no-remaining-copies grep?" → Selected: "core, admin, organization, ports and sql `src` only; the webhook-delivery limit constants (WebhooksApi.ts, Webhooks.ts) are intentional survivors under KEY-07" — a grep scope, not code
+- [Local Postgres] Q: "Can Postgres run locally?" → Selected: "No: docker CLI is installed but the daemon is down; SQL cases are CI-only and recorded as 'not run locally'" — a recording
+
 </decisions>
 
 <code_context>
