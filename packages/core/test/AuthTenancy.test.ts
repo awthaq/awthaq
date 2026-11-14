@@ -67,6 +67,13 @@ describe("Auth.make validates tenancy declarations (BEH-EA-328)", () => {
     }
   });
 
+  it("the UnknownParent refusal names the parent and the tenant-stamped core table rule", () => {
+    const p = plugin("ctx", { ctx_cursor: T.derived("auth_relay_cursor", "parentId") });
+    const message = refusal([p])?.message ?? "";
+    assert.include(message, `its parent "auth_relay_cursor"`);
+    assert.include(message, "tenant-stamped core table");
+  });
+
   it("refuses an identifier that is not a plain SQL identifier", () => {
     const error = refusal([plugin("bad", { bad_x: T.partitioned('tenant"; DROP') })]);
     assert.strictEqual(error?.cause, "Identifier");
