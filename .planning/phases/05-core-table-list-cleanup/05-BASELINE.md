@@ -322,3 +322,77 @@ packages/core/package.json:34:    "@awthaq/sql": "workspace:*"
 features/package.json:33:    "@awthaq/sql": "workspace:*",
 packages/test/package.json:36:    "@awthaq/sql": "workspace:*",
 ```
+
+### Gate results at close (SQLite)
+
+Each gate run on its own from the worktree root at `53d7037d` (the Task 1 record commit adds only this file), `AWTHAQ_POSTGRES_URL` unset, exit from the command, wall time from `date +%s` (whole seconds), output saved outside the repo. The machine was warm (vitest and tsc caches populated), so wall times are shorter than the baseline's cold capture; they are not a signal.
+
+| Gate | Command | Exit | Summary line printed | Wall time | Baseline | Verdict |
+|------|---------|------|----------------------|-----------|----------|---------|
+| tsc -b | `npx tsc -b tsconfig.json` | 0 | (no output) | 0 s | 0 | MET |
+| tests typecheck | `npx tsc -p tsconfig.test.json` | 0 | 0 `error TS`; the same 2 pre-existing `warning TS377149` in `TestingHarnessSteps.ts` (851, 853) | 4 s | 0, same 2 warnings | MET |
+| circular | `pnpm circular` | 0 | `$ node scripts/circular.mjs` (no findings) | 3 s | 0 | MET |
+| error tags | `pnpm check:error-tags` | 0 | `error-tags: 163 internal and 137 wire error tags, none shared` | 1 s | 163 / 137 | MET (same numbers) |
+| transactions | `pnpm check:transactions` | 0 | `check-transactions: no bare sql.withTransaction in packages/*/src` | 0 s | 0 | MET |
+| contract tests | `pnpm check:contract-tests` | 0 | `contract-tests: all 21 plugin classes run the contract suite; @awthaq/test stays dev-only` | 1 s | 21 classes | MET (same number) |
+| lint | `pnpm lint` | 0 | oxlint warnings only: 87 under untracked `.claude/`, 7 in `features/step-definitions/RequestContextSteps.ts`, 0 errors, 0 under `packages/` | 0 s | 87 + 7, none under `packages/` | MET (identical) |
+| format | `pnpm format:check` | 0 | `All matched files use the correct format. ... on 1228 files` | 1 s | 1224 files | MET (+4 files: the phase's new sources, tests, changeset) |
+| readmes | `pnpm check:readmes` | 0 | `readme-status: every package README matches its package's shipped state` | 0 s | 0 | MET |
+| workspace | `pnpm workspace:check` | 0 | `sync-workspace: 29 packages and 3 examples match every roster` | 1 s | 29 / 3 | MET |
+| bdd | `pnpm test:bdd` | 0 | Test Files 39 passed (39); Tests 1580 passed, 44 skipped (1624) | 9 s | 39 / 1580 / 44 | MET (unchanged) |
+| unit | `pnpm test` | 0 (first run, no intermittent fired) | Test Files 423 passed, 6 skipped (429); Tests 6695 passed, 1 expected fail, 23 skipped (6719) | 51 s | 420 + 6 skipped / 6676 / 1 / 22 | MET (+3 files, +19 passed; the +1 skipped is the new `TenantScope.postgres` P8 test, whose file skips as a whole without a Postgres URL) |
+| coverage | `pnpm coverage` | 0 | Statements 91.81, Branches 85.24, Functions 87.13, Lines 92.33 (floors 89 / 83 / 84 / 90); same 423 + 6 skipped files, 6695 / 1 / 23 tests | 64 s | 91.75 / 85.24 / 87.06 / 92.27 | MET (each at or above the baseline and the floors) |
+| spec | `pnpm spec:verify:strict` | 0 | `PASS: 32   FAIL: 0   SKIP: 0 (strict: skips count as failures)` | 51 s | PASS 32, FAIL 0, SKIP 0 | MET |
+| knip | `pnpm knip` | 1 (pre-existing) | `Unused files (39)` (all under `.claude/`), `Unlisted dependencies (3)` | 69 s | exit 1, same | MET (see filtered output) |
+| package smoke | `pnpm package:smoke` | 0 | 30 `package:smoke: PASS`, 0 other | 45 s | 30 PASS | MET |
+
+Phase files on SQLite:
+
+| Run | Command | Exit | Summary line printed | Wall time |
+|-----|---------|------|----------------------|-----------|
+| phase files | `npx vitest run packages/sql/test/CoreTablePins.test.ts packages/sql/test/CoreTables.test.ts packages/sql/test/TenantScoped.test.ts packages/test/test/LaggingReplica.test.ts packages/test/test/ReadRouting.test.ts packages/core/test/AuthTenancy.test.ts` | 0 | Test Files 6 passed (6); Tests 47 passed (47) | 1 s |
+| tenancy feature | `pnpm --filter @awthaq/features exec vitest run features/12-multi-tenancy/28-tenancy.steps.test.ts` | 0 | Test Files 1 passed (1); Tests 60 passed, 7 skipped (67) (baseline 60 / 7) | 3 s |
+
+knip filtered output (`pnpm knip 2>&1 | grep -v '^\.claude/' | grep -v '^\.reports/'`, 39 `.claude/` rows removed, 0 matching `packages/` other than the three below), identical to the baseline block:
+
+```text
+$ knip
+Unused files (39)
+Unlisted dependencies (3)
+@awthaq/core      packages/sql/test/fixtures/readme-quickstart.ts:2:10
+@awthaq/password  packages/sql/test/fixtures/readme-quickstart.ts:11:10
+@awthaq/server    packages/sql/test/fixtures/readme-quickstart.ts:12:10
+[ELIFECYCLE] Command failed with exit code 1.
+```
+
+`git diff --stat knip.json` prints nothing. `git status --short` at close shows only the same untracked `.claude/` files and the modified `.planning/state.json` as at capture.
+
+### Postgres at close
+
+Container `awthaq-p3-pg` (Debian `postgres:16`, `PostgreSQL 16.16 (Debian 16.16-1.pgdg13+1)`, `pg_isready` accepting connections), `AWTHAQ_POSTGRES_URL=postgres://postgres:pw@localhost:55433/awthaq` passed explicitly on each command; never `scripts/test-pg.sh`.
+
+| Run | Command | Exit | Summary line printed | Failing tests | Wall time |
+|-----|---------|------|----------------------|---------------|-----------|
+| targeted legs plus phase files | `npx vitest run packages/sql/test/TenantScope.postgres.test.ts packages/sql/test/CoreMigrations.postgres.test.ts packages/sql/test/ReadRouting.postgres.test.ts packages/sql/test/TenantScoped.test.ts packages/sql/test/CoreMigrations.test.ts packages/test/test/CoreSealedColumns.test.ts packages/sql/test/CoreTablePins.test.ts packages/sql/test/CoreTables.test.ts` | 0 | Test Files 8 passed (8); Tests 73 passed (73) | none | 7 s |
+| full unit | `pnpm test` | 0 | Test Files 429 passed (429); Tests 6738 passed, 1 expected fail, 1 skipped (6740) | none | 110 s |
+| full bdd | `pnpm test:bdd` | 0 | Test Files 39 passed (39); Tests 1580 passed, 44 skipped (1624) | none | 16 s |
+
+Versus the baseline Postgres record (6 targeted files / 56 tests; 426 files / 6718 passed / 1 skipped; bdd 39 / 1580 / 44): +2 targeted files (`CoreTablePins`, `CoreTables`) and +17 targeted tests, +3 full-suite files and +20 passed tests, bdd unchanged. The verbatim failing-test list for the full-suite record is empty (it was empty at the baseline, so it did not grow). The drift guard in `CoreTables.test.ts` and the RLS set in `TenantScope.postgres.test.ts` (including the P8 relrowsecurity pin) pass on Postgres. No "server closed the connection" or segfault symptom appeared in any log (0 matches for `server closed|segfault|terminated unexpectedly|shared memory`); the container's shared-memory limit is the default 64 MB and was not exhausted.
+
+run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)
+
+### Known-intermittent re-runs
+
+None needed. Neither known intermittent fired in this close: `pnpm test` (SQLite), `pnpm coverage`, and `pnpm test` (Postgres) were each green on the first run (one run each, all recorded above). CI confirmation open (no git remote) for the Postgres records.
+
+### Comparison rule verdicts
+
+1. MET: every gate exits as in the baseline (all 0 except `pnpm knip`, 1 for the pre-existing reasons): gate table above.
+2. MET: counts only grew and coverage is above the floors: files 420 to 423 (skipped files unchanged at 6), tests passed 6676 to 6695, coverage 91.75 / 85.24 / 87.06 / 92.27 to 91.81 / 85.24 / 87.13 / 92.33 (floors 89 / 83 / 84 / 90); spec PASS 32 to 32, FAIL 0, SKIP 0.
+3. MET: `check:error-tags` prints 163 / 137 and `check:contract-tests` prints 21 plugin classes, the same numbers.
+4. MET: knip filtered output is identical to the baseline (banner, headings, the three `readme-quickstart.ts` rows, the ELIFECYCLE line, nothing under `packages/` besides them); `git diff --stat knip.json` is empty.
+5. MET: Postgres targeted legs, `CoreTablePins` and `CoreTables` pass (8 files, 73 tests); the full-suite failing list is empty, as at the baseline; run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote).
+6. MET: census at close: reservations grep 2 lines (`CoreTables.ts` row and the `TenancySteps.ts` `case` label); `coreTables` in `Auth.ts` 0; `STAMPED_TABLES` 0; `as const` in `TenantScope.ts` 0; barrel export 1 ("Census" above).
+7. MET: `git diff --stat ea56a16f HEAD -- packages/*/package.json features/package.json pnpm-lock.yaml` prints nothing ("Dependencies" above); `pnpm circular` exit 0.
+8. MET: oracle files each have exactly one commit since `ea56a16f` (`7720a413`, `31385d7b`) and the two additions-only files have 0 removed lines ("Wave 0 oracle integrity" above).
+9. MET: every changed path matches the allowlist (34 paths, filter prints nothing; "Path allowlist" above).
