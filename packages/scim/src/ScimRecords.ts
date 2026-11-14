@@ -505,8 +505,7 @@ export const layerSql = Layer.effect(
   ScimRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`ScimRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("ScimRecords");
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const ConnectionRow = makeConnectionRow(wire);

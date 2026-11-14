@@ -1134,7 +1134,7 @@ export const layerSql: Layer.Layer<
     });
 
     /** `StoreUnavailable` for a store outage, a defect for a row that no longer decodes (ADR-EA-028). */
-    const failing = (method: string) => StoreFailure.orStoreUnavailable(`WebhookRecords.${method}`);
+    const failing = StoreFailure.labelled("WebhookRecords");
     const requireRow =
       <A>(id: string) =>
       (row: Option.Option<A>): Effect.Effect<A, WebhookRecordNotFound> =>

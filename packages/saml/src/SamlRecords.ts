@@ -634,8 +634,7 @@ export const layerSql: Layer.Layer<
   SamlRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`SamlRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("SamlRecords");
     const privateKeys = yield* SealedColumn.codec(
       privateKeyColumn,
       yield* SealedColumn.sqlSwap(privateKeyColumn),
