@@ -266,3 +266,15 @@ Plan 04-03 (DomainClaims advisory lock plus sorted owner acquisition). All Postg
 | `an update racing a remove of the same connection ...` (1) | red, unchanged from Wave 0 | `expected { remove: 'StoreUnavailable', …(6) } to deeply equal { remove: 'ok', …(6) }`: `claimRows` 0 vs 1, `connectionRows` 0 vs 1, `domainRows` 0 vs 1, `ownerRows` 0 vs 1, `remove` "ok" vs "StoreUnavailable", `storeUnavailable` 0 vs 1; needs the claims-first lifecycle (04-05) |
 | `two organizations claiming the same two domains in opposite order ...` (2) | GREEN | (turned green by the sorted owner inserts plus the organization-level lock) |
 | `an organization deletion racing a create for it ...` (3) | red, unchanged from Wave 0 | `expected { delete: 'ok', …(4) } to deeply equal { delete: 'ok', …(4) }`: `claimRows` 0 vs 1, `connectionRows` 0 vs 1, `ownerRows` 0 vs 1; needs the in-lock `findActive` re-check (04-05) |
+
+### Task 2: additive concurrent contract cases
+
+Three `race` cases added to `packages/organization/test/contract/DomainClaims.ts` (additions only; `git diff c683a1bc -- packages/organization/test/contract/DomainClaims.ts | grep -c '^-[^-]'` prints 0): one organization's two connections claiming the same domains in opposite order (all succeed, the organization owns both); two organizations claiming x/y in opposite order (only success or DomainClaimTaken, one winner, both domains with that owner); release and claim of one connection interleaved (no orphan, a.example free, final release leaves b.example free).
+
+- Memory and SQLite: `npx vitest run packages/organization/test/Contract.test.ts`: `Tests  536 passed (536)`; `pnpm check:contract-tests`: all 21 plugin classes.
+- Postgres (`AWTHAQ_POSTGRES_URL=postgres://postgres:pw@localhost:55433/awthaq`, run three times): `Tests  537 passed (537)` every run, no StoreUnavailable.
+- Race case 2 after Task 2: `-t 'opposite'` still `Tests  1 passed | 2 skipped (3)`.
+
+### 04-03 gates
+
+`tsc -b` clean; `pnpm check:transactions`, `pnpm check:error-tags` (163 internal / 137 wire), `pnpm circular`, `pnpm lint` (exit 0, no warnings under `packages/`), `pnpm format:check` exit 0. `pnpm test:bdd`: `Tests  3 failed | 1577 passed | 44 skipped (1624)`, red by exactly the three 04-02 SAML suspended-organization rows (the BDD red window), no other failure.

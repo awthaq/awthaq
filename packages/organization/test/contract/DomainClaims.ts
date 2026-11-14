@@ -17,6 +17,10 @@ const claim = (
     claims.claim({ organizationId, protocol, connectionId, domains }),
   );
 
+/** `"ok"` for a success, else the failing `_tag` (`StoreUnavailable` is how a deadlock victim surfaces). */
+const tagOf = <A, E extends { readonly _tag: string }, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.match(effect, { onSuccess: () => "ok", onFailure: (error) => error._tag });
+
 let isolationCounter = 0;
 
 const using = <A, E, R>(f: (claims: DomainClaims.DomainClaimsShape) => Effect.Effect<A, E, R>) =>
@@ -172,6 +176,98 @@ export const domainClaims = RecordsContract.suite(DomainClaims.DomainClaims, {
               { concurrency: "unbounded" },
             );
             assert.strictEqual(outcomes.filter((exit) => exit._tag === "Success").length, 1);
+          }),
+        },
+
+        {
+          name: "one organization's connections claiming the same domains in opposite order all succeed",
+          run: Effect.gen(function* () {
+            const outcomes = yield* Effect.all(
+              Array.from({ length: RecordsContract.CONCURRENCY }, (_, n) =>
+                tagOf(
+                  claim(
+                    "org-1",
+                    `c-${n % 2}`,
+                    n % 2 === 0 ? ["p.example", "q.example"] : ["q.example", "p.example"],
+                  ),
+                ),
+              ),
+              { concurrency: "unbounded" },
+            );
+            assert.deepStrictEqual(
+              outcomes.filter((tag) => tag !== "ok"),
+              [],
+            );
+            // The organization owns both domains; no one else does.
+            for (const domain of ["p.example", "q.example"]) {
+              assert.strictEqual(
+                (yield* claim("org-2", "x", [domain]).pipe(Effect.flip))._tag,
+                "DomainClaimTaken",
+              );
+            }
+          }),
+        },
+
+        {
+          name: "two organizations claiming the same two domains in opposite order: one owner for both, no store failure",
+          run: Effect.gen(function* () {
+            const outcomes = yield* Effect.all(
+              Array.from({ length: RecordsContract.CONCURRENCY }, (_, n) =>
+                tagOf(
+                  claim(
+                    `org-${n % 2}`,
+                    `c-${n}`,
+                    n % 2 === 0 ? ["x.example", "y.example"] : ["y.example", "x.example"],
+                  ),
+                ).pipe(Effect.map((tag) => [n % 2, tag] as const)),
+              ),
+              { concurrency: "unbounded" },
+            );
+            // Every outcome is a success or a refusal, never StoreUnavailable (a deadlock victim).
+            assert.deepStrictEqual(
+              outcomes
+                .map(([, tag]) => tag)
+                .filter((tag) => tag !== "ok" && tag !== "DomainClaimTaken"),
+              [],
+            );
+            const winners = new Set(outcomes.filter(([, tag]) => tag === "ok").map(([org]) => org));
+            assert.strictEqual(winners.size, 1);
+            const [winner] = [...winners];
+            const loser = winner === 0 ? 1 : 0;
+            // Both domains have the winner as their one owner: the loser is refused each, the winner may re-claim both.
+            for (const domain of ["x.example", "y.example"]) {
+              assert.strictEqual(
+                (yield* claim(`org-${loser}`, "probe", [domain]).pipe(Effect.flip))._tag,
+                "DomainClaimTaken",
+              );
+            }
+            yield* claim(`org-${winner}`, "probe", ["x.example", "y.example"]);
+          }),
+        },
+
+        {
+          name: "releasing and claiming one connection concurrently leaves one of the two sequential end states",
+          run: Effect.gen(function* () {
+            const claims = yield* DomainClaims.DomainClaims;
+            yield* claim("org-1", "c1", ["a.example"]);
+            const outcomes = yield* Effect.all(
+              Array.from({ length: RecordsContract.CONCURRENCY }, (_, n) =>
+                tagOf(
+                  n % 2 === 0 ? claims.release("org-1", "c1") : claim("org-1", "c1", ["b.example"]),
+                ),
+              ),
+              { concurrency: "unbounded" },
+            );
+            assert.deepStrictEqual(
+              outcomes.filter((tag) => tag !== "ok"),
+              [],
+            );
+            // The first set was replaced or released in every order: a.example is free.
+            yield* claim("org-2", "x", ["a.example"]);
+            // b.example is held by the claim the last claim left, or free if the last word was a release; a final
+            // release leaves nothing behind either way (no owner row without its claim).
+            yield* claims.release("org-1", "c1");
+            yield* claim("org-2", "y", ["b.example"]);
           }),
         },
       ],
