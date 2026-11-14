@@ -65,19 +65,15 @@ import type { TestFramework } from "./TestFramework.ts";
 import { Api } from "@awthaq/api";
 import {
   Auth,
-  AuthEvents,
   AuthPlugin,
-  type DataExport,
-  type Erasure,
   EventDefinition,
   HookPoint,
   Migrations,
-  type Retention,
   SessionCookie,
   Sessions,
   Users,
 } from "@awthaq/core";
-import { Defects, type Encryption } from "@awthaq/ports";
+import { Defects } from "@awthaq/ports";
 import { Csrf } from "@awthaq/server";
 import { CoreMigrations } from "@awthaq/sql";
 import { UserAgent } from "@awthaq/web";
@@ -115,18 +111,10 @@ import * as HttpApi from "effect/http-api/HttpApi";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 
-/** Named so the foundations' inferred types can be emitted (declaration emit needs the namespace in scope). */
-export type RetentionRegistryService = Retention.RetentionRegistry;
-/** Named for the same reason: the registries `Hooks.HooksLive` provides, and the test ports' fixed key. */
-export type FoundationServices =
-  | AuthEvents.AuthEvents
-  | DataExport.DataExportRegistry
-  | Erasure.ErasureRegistry
-  | Encryption.Encryption;
-
 // ELC-004: `memoryFoundation`, what every memory layer needs beneath it (defined in `internal/foundation.ts`,
 // shared with `RecordsContract`).
 export { memoryFoundation } from "./internal/foundation.ts";
+export type { FoundationServices, RetentionRegistryService } from "./internal/foundation.ts";
 
 export {
   TestCsrfConfig,

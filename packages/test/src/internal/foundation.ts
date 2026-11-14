@@ -27,6 +27,15 @@ export type FoundationRegistries =
   | Retention.RetentionRegistry
   | Encryption.Encryption;
 
+/** Named so the foundations' inferred types can be emitted (declaration emit needs the namespace in scope). */
+export type RetentionRegistryService = Retention.RetentionRegistry;
+/** Named for the same reason: the registries `Hooks.HooksLive` provides, and the test ports' fixed key. */
+export type FoundationServices =
+  | AuthEvents.AuthEvents
+  | DataExport.DataExportRegistry
+  | Erasure.ErasureRegistry
+  | Encryption.Encryption;
+
 /**
  * ELC-004: what every memory layer (`Users`/`Accounts`/`Sessions`/`Verification`, each plugin's
  * record stores) needs beneath it, as one layer: the platform crypto services (ids, secrets, hashes, MACs),
