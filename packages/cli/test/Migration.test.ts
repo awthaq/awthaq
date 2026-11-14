@@ -27,6 +27,7 @@ const run = <A, E>(
       exit,
       stdout: yield* Ref.get(captured.stdout),
       stderr: yield* Ref.get(captured.stderr),
+      documents: yield* Ref.get(captured.documents),
     };
   });
 
@@ -52,6 +53,29 @@ const yes = { yes: true, dryRun: false, allowEmpty: false };
 /** However many core migrations exist today (other programs add them), and the two the Roles plugin adds. */
 const coreCount = CoreMigrations.coreMigrations.pipe(Effect.map((all) => all.length));
 const PLUGIN_COUNT = 2;
+
+/** The plan `migration apply` reports on an empty database: every core migration, then the two plugin ones. */
+const freshPlan = Effect.gen(function* () {
+  const core = yield* CoreMigrations.coreMigrations;
+  return [
+    ...core.map(([id, name]) => ({ ledger: "core", id, name })),
+    { ledger: "plugins", id: 1, name: "0001_roles_create_roles_assignments" },
+    { ledger: "plugins", id: 2, name: "0002_roles_create_roles_assignments_user_id_index" },
+  ];
+});
+
+/** Applies everything, then adds a ledger row the linker never produced, so the next run sees drift. */
+const driftedLedger = Effect.gen(function* () {
+  yield* run(Migration.apply(passwordAndRoles, yes));
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (500, 'unknown_core')`;
+});
+
+/** Makes core migration 1 (`CREATE TABLE users`) fail mid-write, after the plan was read and printed. */
+const blockedWrite = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TABLE users (id TEXT)`;
+});
 
 const failureCode = <A, E>(exit: Exit.Exit<A, E>) => {
   if (!Exit.isFailure(exit)) return -1;
@@ -199,10 +223,11 @@ describe("Migration.apply", () => {
       assert.strictEqual(docs.length, 1);
       assert.strictEqual(stdout.length, 1);
       assert.strictEqual(stdout[0], JSON.stringify(docs[0], null, 2));
-      assert.deepStrictEqual(
-        Object.entries(docs[0] ?? {}).filter(([key]) => key === "applied"),
-        [["applied", true]],
-      );
+      assert.deepStrictEqual(docs[0], {
+        pending: yield* freshPlan,
+        drift: false,
+        applied: true,
+      });
       assert.deepStrictEqual(yield* Ref.get(captured.stderr), []);
     }).pipe(Effect.provide(Sql)),
   );
@@ -222,11 +247,93 @@ describe("Migration.apply", () => {
         assert.strictEqual(docs.length, 1);
         assert.strictEqual(stdout.length, 1);
         assert.strictEqual(stdout[0], JSON.stringify(docs[0], null, 2));
-        assert.deepStrictEqual(
-          Object.entries(docs[0] ?? {}).filter(([key]) => key === "applied"),
-          [["applied", false]],
-        );
+        assert.deepStrictEqual(docs[0], {
+          pending: yield* freshPlan,
+          drift: false,
+          applied: false,
+        });
         assert.deepStrictEqual(yield* Ref.get(captured.stderr), []);
       }).pipe(Effect.provide(Sql)),
+  );
+
+  // The refusal and failure paths: `finish(true)` must run only after the write succeeded, and a
+  // refused or failed run reports `applied: false` (one document) or no `applied N` line at all.
+  it.effect("--json on a drifted ledger: one document, applied false, then LedgerDrift (7)", () =>
+    Effect.gen(function* () {
+      yield* driftedLedger;
+      const { exit, stdout, documents } = yield* run(Migration.apply(passwordAndRoles, yes), true);
+      assert.strictEqual(failureCode(exit), 7);
+      assert.deepStrictEqual(documents, [{ pending: [], drift: true, applied: false }]);
+      assert.deepStrictEqual(stdout, [JSON.stringify(documents[0], null, 2)]);
+    }).pipe(Effect.provide(Sql)),
+  );
+
+  it.effect("text on a drifted ledger: LedgerDrift (7) and no `applied N migration(s)` line", () =>
+    Effect.gen(function* () {
+      yield* driftedLedger;
+      const { exit, stdout } = yield* run(Migration.apply(passwordAndRoles, yes));
+      assert.strictEqual(failureCode(exit), 7);
+      assert.isTrue(stdout.some((line) => line.includes("DRIFT")));
+      assert.deepStrictEqual(
+        stdout.filter((line) => line.startsWith("applied ")),
+        [],
+      );
+    }).pipe(Effect.provide(Sql)),
+  );
+
+  it.effect(
+    "--json without --yes: one document, applied false, then ConfirmationRequired (6)",
+    () =>
+      Effect.gen(function* () {
+        const { exit, stdout, documents } = yield* run(
+          Migration.apply(passwordAndRoles, { yes: false, dryRun: false, allowEmpty: false }),
+          true,
+        );
+        assert.strictEqual(failureCode(exit), 6);
+        assert.deepStrictEqual(documents, [
+          { pending: yield* freshPlan, drift: false, applied: false },
+        ]);
+        assert.deepStrictEqual(stdout, [JSON.stringify(documents[0], null, 2)]);
+        assert.deepStrictEqual(yield* tableNames, []);
+      }).pipe(Effect.provide(Sql)),
+  );
+
+  it.effect(
+    "text without --yes: ConfirmationRequired (6) and no `applied N migration(s)` line",
+    () =>
+      Effect.gen(function* () {
+        const { exit, stdout } = yield* run(
+          Migration.apply(passwordAndRoles, { yes: false, dryRun: false, allowEmpty: false }),
+        );
+        assert.strictEqual(failureCode(exit), 6);
+        assert.deepStrictEqual(
+          stdout.filter((line) => line.startsWith("applied ")),
+          [],
+        );
+        assert.deepStrictEqual(yield* tableNames, []);
+      }).pipe(Effect.provide(Sql)),
+  );
+
+  it.effect("--json when the write fails mid-run: no document at all", () =>
+    Effect.gen(function* () {
+      yield* blockedWrite;
+      const { exit, stdout, documents } = yield* run(Migration.apply(passwordAndRoles, yes), true);
+      assert.isTrue(Exit.isFailure(exit));
+      assert.deepStrictEqual(documents, []);
+      assert.deepStrictEqual(stdout, []);
+    }).pipe(Effect.provide(Sql)),
+  );
+
+  it.effect("text when the write fails mid-run: no `applied N migration(s)` line", () =>
+    Effect.gen(function* () {
+      yield* blockedWrite;
+      const { exit, stdout } = yield* run(Migration.apply(passwordAndRoles, yes));
+      assert.isTrue(Exit.isFailure(exit));
+      assert.isTrue(stdout.some((line) => line.includes("pending  ")));
+      assert.deepStrictEqual(
+        stdout.filter((line) => line.startsWith("applied ")),
+        [],
+      );
+    }).pipe(Effect.provide(Sql)),
   );
 });
