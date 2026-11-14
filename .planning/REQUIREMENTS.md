@@ -19,7 +19,7 @@ Milestone "Architecture Deepening, batch 3". Each maps to roadmap phases. Resear
 - [x] **TEST-01**: `packages/test/src/TestAuth.ts` is split into modules under `internal/` (composition, session/CSRF minting, app harness, contract runner) and `TestAuth.ts` stays as a facade; the exported `TestAuth.*` name set is identical before and after
 - [x] **TEST-02**: `buildContext` is kept and `migratedSchema` still calls `TestSql.schemaOf`
 - [x] **TEST-03**: The open-app counter stays beside `serve`/`openApps`, and `LeakGuard` accounting is unchanged
-- [ ] **TEST-04**: `spec/behaviors/25-testing-harness.md` and `spec/traceability.md` cite the new implementation locations while keeping cited test file names
+- [x] **TEST-04**: `spec/behaviors/25-testing-harness.md` and `spec/traceability.md` cite the new implementation locations while keeping cited test file names
 
 ### Keyset page (C1)
 
@@ -108,7 +108,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEST-01 | Phase 2 | Complete |
 | TEST-02 | Phase 2 | Complete |
 | TEST-03 | Phase 2 | Complete |
-| TEST-04 | Phase 2 | Pending |
+| TEST-04 | Phase 2 | Complete |
 | KEY-01 | Phase 3 | Pending |
 | KEY-02 | Phase 3 | Pending |
 | KEY-03 | Phase 3 | Pending |
