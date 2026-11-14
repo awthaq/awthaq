@@ -5,17 +5,17 @@ milestone_name: Architecture Deepening, batch 3
 current_phase: 6
 current_phase_name: Record-store scaffolding (gated)
 current_plan: 3
-status: executing
-stopped_at: Phase 5 complete, ready to plan Phase 6
-last_updated: "2026-11-14T17:41:00.155Z"
+status: verifying
+stopped_at: Completed 06-03-PLAN.md
+last_updated: "2026-11-14T17:55:30.781Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 6 execution started
-state_head: cfdc3645264e6455c4362e81a481d89f6fb583cd
+state_head: 3f325034a588ff34ba6005f5cbea68e633b98517
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 36
-  completed_plans: 35
+  completed_plans: 36
 ---
 
 # Project State
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 Phase: 6 (Record-store scaffolding (gated)) — EXECUTING
 Current Plan: 3
 Total Plans in Phase: 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-11-14 — Phase 6 execution started
 
 Progress: [███████░░░] 71%
@@ -95,6 +95,7 @@ Progress: [███████░░░] 71%
 | Phase 05 P03 | 12min | 2 tasks | 3 files |
 | Phase 05 P04 | 8min | 3 tasks | 4 files |
 | Phase 05 P05 | 10min | 2 tasks | 5 files |
+| Phase 06 P03 | long | 3 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -137,6 +138,7 @@ Recent decisions affecting current work:
 - [Phase 05]: CAT-04 minimal-fix branch not taken: the BDD STAMPED_TABLES literal is a second real copy and auth_relay_cursor and rate_limit_buckets are in no list; the candidate closes with the catalogue (CAT-01..03)
 - [Phase 05]: 05-03: partitionedTables typed via Extract over the declared tuple so the quoted reservations name stays on one line; replicated documented as LaggingReplica mirror set, not the ADR-EA-024 read set
 - [Phase 05]: 05-04: TenantScope exports annotated typeof CoreTables views; Auth.ts projects the stamped view (UnknownParent wording now 'tenant-stamped core table')
+- [Phase 06]: Spike verdict go: comparators (Keyset.chronological, by divergent copies) and unavailable-label (StoreFailure.labelled, net +1) pass; tenant-visibility, wire-row, sqlstore-make not pursued
 
 ### Pending Todos
 
@@ -158,6 +160,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T16:01:11.244Z
-Stopped at: Phase 5 complete, ready to plan Phase 6
+Last session: 2026-11-14T17:55:30.650Z
+Stopped at: Completed 06-03-PLAN.md
 Resume file: None
