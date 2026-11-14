@@ -22,6 +22,16 @@ Two independent candidates, both file-disjoint:
 - **D-07 (ADR-EA-042):** untouched. If the split seems to need an ADR edit, stop and record why rather than editing.
 - **D-08 (gates):** same gate set and comparison rule as Phase 6 (`06-BASELINE.md` shape): tsc -b, circular, error-tags, transactions, contract-tests, lint, format, readmes, workspace, spec:verify:strict, knip filtered, unit and bdd on SQLite and Postgres (container `awthaq-p3-pg`, recreate first, explicit `AWTHAQ_POSTGRES_URL`). Spec/changeset rows only if a package-visible or spec-visible change exists; a changeset is needed only if `@awthaq/server` output changes (a pure internal split should not: record the decision).
 
+## Decisions taken after research (orchestrator, 2026-11-15; see 07-RESEARCH.md)
+
+The census showed the roadmap premise only partly holds: `lazyApp` is one call to `TestAuth.lazyApp` per World, `TestClock` is already a `TestAuth` option, and the only repeated tail code is the `AuthEvents` subscriber layer (Admin, Password, Domain). Decisions:
+
+- **D-09 (scaffold shape):** ship the small `captureEvents` scaffold in `features/step-definitions/shared/EventCapture.ts` (does not wrap `TestAuth.layer`: a wrapper would restate its 8 type parameters and 3 overloads and risk erasing the missing-plugin compile error). Scaffolded: Admin, Password, Domain. This reads WORLD-01's "wraps `TestAuth.layer`" as "composes with `TestAuth.layer` without re-wrapping it"; ROADMAP criterion 1 and WORLD-01 wording are aligned to this and flagged in the milestone report.
+- **D-10 (classification):** "exempt" covers the five hand-wired Worlds (Authentication, ContractStratum, Csrf, QadiBridge, Tenancy; source: their `Hand-wired on purpose ... (plan 08 exemption)` headers) and the 23 Worlds with no repeated tail. The table says which reason applies to each.
+- **D-11:** `OrganizationWorld` stays out of the scaffold (it uses `subscribe`, a different behaviour).
+- **D-12 (guard):** the classification guard is a new test file (bdd moves to 40 files / 1581 passed; scenario count and the 44 skipped unchanged), following the `step-patterns.steps.test.ts` precedent.
+- **D-13 (Credentials proof):** commit a `07-CRED-SURFACE-BEFORE.txt` probe snapshot and a runtime-key pin before the split (Phase 2 precedent). No ADR, spec or changeset change expected (record the decision). `lib/Credentials.d.ts` changes textually, so the proof is the probe diff (empty), the `Object.keys` pin and the unedited behavioural suites, not a byte hash.
+
 ## Deferred / out of scope
 
 - Migrating the exempt Worlds, or building a general World factory.

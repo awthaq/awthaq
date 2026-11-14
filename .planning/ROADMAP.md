@@ -186,7 +186,7 @@ Plans:
 **Depends on**: Phase 2 (the World scaffold builds on the split `TestAuth`) and Phase 4 (so the Worlds are recomposed once after the organization/SAML behaviour changes)
 **Requirements**: WORLD-01, WORLD-02, CRED-01
 **Success Criteria** (what must be TRUE):
-  1. A table classifies every World as scaffolded or exempt, and a scaffold in `features/step-definitions/shared/` wrapping `TestAuth.layer` supplies the shared tail (`lazyApp`, `TestClock`, capture layers) to the Worlds that repeat it; `pnpm test:bdd` passes with the same scenario count.
+  1. A table classifies every World as scaffolded or exempt, and a scaffold in `features/step-definitions/shared/` composing with `TestAuth.layer` (not re-wrapping it) supplies the one repeated tail piece, the `AuthEvents` capture layer (`lazyApp` and `TestClock` are already single `TestAuth` calls/options), to the Worlds that repeat it (census: Admin, Password, Domain); `pnpm test:bdd` passes with the same scenario count.
   2. The five hand-wired exempt Worlds are untouched, no second host composer exists, `LeakGuard` accounting is unchanged, and omitting a plugin from a scaffolded World is still a compile error.
   3. `server/src/Credentials.ts` is split into files under `server/src/internal/`; every `Credentials.*` name is still on the public namespace (export-name diff is empty), ADR-EA-042 is untouched, and `api-key`, `jwt`, `qadi`, `web` and `test` compile without edits.
 **Plans**: TBD
