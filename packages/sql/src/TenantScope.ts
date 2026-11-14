@@ -36,21 +36,17 @@
 import { SqlTransaction, Tenant } from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as CoreTables from "./CoreTables.ts";
 import * as TenantScoped from "./TenantScoped.ts";
 
 /** The setting the policies read; `withTenant` writes it. */
 export const TENANT_SETTING = TenantScoped.TENANT_SETTING;
 
-/** Per-user, per-request tables that partition by tenant. */
-export const partitionedTables = [
-  "sessions",
-  "verification_tokens",
-  "verification_reservations",
-  "auth_audit_log",
-] as const;
+/** Per-user, per-request tables that partition by tenant: the catalogue's partitioned tables (`CoreTables`). */
+export const partitionedTables: typeof CoreTables.partitionedTables = CoreTables.partitionedTables;
 
-/** The global identity directory (DRS-005): unique across tenants, RLS only on request. */
-export const directoryTables = ["users", "accounts"] as const;
+/** The global identity directory (DRS-005): unique across tenants, RLS only on request; the catalogue's directory tables (`CoreTables`). */
+export const directoryTables: typeof CoreTables.directoryTables = CoreTables.directoryTables;
 
 /** One plugin table and how it relates to the tenant: what `auth.tenancy` lists. */
 export interface DeclaredTable {
