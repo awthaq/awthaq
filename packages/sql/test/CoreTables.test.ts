@@ -91,6 +91,20 @@ describe("CoreTables", () => {
     assert.deepStrictEqual(replicated, six);
   });
 
+  it("the exported lists are frozen: they are shared by reference", () => {
+    for (const list of [
+      CoreTables.tables,
+      CoreTables.names,
+      CoreTables.partitionedTables,
+      CoreTables.directoryTables,
+      CoreTables.stamped,
+      CoreTables.replicated,
+      ...CoreTables.tables.map((table) => table.sealed),
+    ]) {
+      assert.isTrue(Object.isFrozen(list));
+    }
+  });
+
   it("isStamped is true for the six stamped tables only", () => {
     for (const name of six) assert.isTrue(CoreTables.isStamped(name), name);
     for (const name of ["auth_relay_cursor", "rate_limit_buckets", "stranger_a"]) {

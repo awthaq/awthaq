@@ -66,35 +66,41 @@ export interface CoreTable {
 
 const deployedSealed = CoreSealedColumns.deployed({ encryptPii: true });
 
+// Every exported list is frozen: they are shared by reference (`TenantScope`, `LaggingReplica`), so one
+// mutation would corrupt RLS coverage, `isStamped` and the replica list process-wide.
+const freeze = <A>(list: ReadonlyArray<A>): ReadonlyArray<A> => Object.freeze(list);
+
 /** The eight core tables, in migration-creation order. */
-export const tables: ReadonlyArray<CoreTable> = declared.map((entry): CoreTable => ({
-  ...entry,
-  owner: "core",
-  sealed: deployedSealed.filter((column) => column.table === entry.name),
-}));
+export const tables: ReadonlyArray<CoreTable> = freeze(
+  declared.map((entry): CoreTable => ({
+    ...entry,
+    owner: "core",
+    sealed: freeze(deployedSealed.filter((column) => column.table === entry.name)),
+  })),
+);
 
 /** Every core table name, in migration-creation order. */
-export const names: ReadonlyArray<CoreTableName> = declared.map((entry) => entry.name);
+export const names: ReadonlyArray<CoreTableName> = freeze(declared.map((entry) => entry.name));
 
 /** The tables Postgres row-level security partitions on `"tenantId"`. */
 export const partitionedTables: ReadonlyArray<
   Extract<Declared, { readonly tenancy: "partitioned" }>["name"]
-> = declared.filter((entry) => entry.tenancy === "partitioned").map((entry) => entry.name);
+> = freeze(declared.filter((entry) => entry.tenancy === "partitioned").map((entry) => entry.name));
 
 /** The tables whose `"tenantId"` is a membership stamp resolved across tenants. */
 export const directoryTables: ReadonlyArray<
   Extract<Declared, { readonly tenancy: "directory" }>["name"]
-> = declared.filter((entry) => entry.tenancy === "directory").map((entry) => entry.name);
+> = freeze(declared.filter((entry) => entry.tenancy === "directory").map((entry) => entry.name));
 
 /** The tables carrying a `"tenantId"` column (every tenancy but `none`). */
-export const stamped: ReadonlyArray<CoreTableName> = declared
-  .filter((entry) => entry.tenancy !== "none")
-  .map((entry) => entry.name);
+export const stamped: ReadonlyArray<CoreTableName> = freeze(
+  declared.filter((entry) => entry.tenancy !== "none").map((entry) => entry.name),
+);
 
 /** The tables `LaggingReplica` mirrors; see `CoreTable.replicated` for what that does not mean. */
-export const replicated: ReadonlyArray<CoreTableName> = declared
-  .filter((entry) => entry.replicated)
-  .map((entry) => entry.name);
+export const replicated: ReadonlyArray<CoreTableName> = freeze(
+  declared.filter((entry) => entry.replicated).map((entry) => entry.name),
+);
 
 /** Whether `name` is a core table carrying a `"tenantId"` column. */
 export const isStamped = (name: string): boolean => stamped.some((table) => table === name);
