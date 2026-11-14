@@ -554,6 +554,7 @@ export const layerMemory: Layer.Layer<
                 enabled.has(row.endpointId) &&
                 millis(row.nextAttemptAt) <= millis(now),
             )
+            // shortcut: ids by locale, not code unit like `byCreation`; the same order for the lowercase uuidv7 ids minted here, so align when ids may be caller-supplied.
             .sort(
               (a, b) =>
                 millis(a.nextAttemptAt) - millis(b.nextAttemptAt) || a.id.localeCompare(b.id),
@@ -787,6 +788,7 @@ export const layerMemory: Layer.Layer<
         Effect.gen(function* () {
           const seen = yield* TenantScoped.visibility();
           const s = yield* Ref.get(state);
+          // shortcut: the sort compares ids by locale while the `before` filter compares by code unit; the same order for minted uuidv7 ids, so align when ids may be caller-supplied.
           return s.deliveries
             .filter(
               (row) =>
