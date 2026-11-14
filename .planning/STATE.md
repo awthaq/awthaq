@@ -4,19 +4,18 @@ milestone: v1.0
 milestone_name: Architecture Deepening, batch 3
 current_phase: 4
 current_phase_name: Connection-lifecycle module
-current_plan: Not started
-status: planning
-stopped_at: Phase 3 complete, ready to plan Phase 4
-last_updated: "2026-11-14T11:07:42.273Z"
+current_plan: 2
+status: executing
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-11-14T12:29:37.301Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 3 complete, transitioned to Phase 4
-state_head: db288f17b532fda67a5147bf788f8e1d0e550e02
+state_head: 5b070b92a1954f26ba7b72c7fc8f749c1ca06e87
 progress:
   total_phases: 7
   completed_phases: 3
-  total_plans: 18
-  completed_plans: 18
-  percent: 43
+  total_plans: 27
+  completed_plans: 19
 ---
 
 # Project State
@@ -31,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 4 — Connection-lifecycle module
-Current Plan: Not started
+Current Plan: 2
 Total Plans in Phase: 9
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-11-14 — Phase 3 complete, transitioned to Phase 4
 
 Progress: [████░░░░░░] 43%
@@ -80,6 +79,7 @@ Progress: [████░░░░░░] 43%
 | Phase 03 P07 | 20min | 2 tasks | 3 files |
 | Phase 03 P08 | 15min | 2 tasks | 3 files |
 | Phase 03 P09 | 25min | 2 tasks | 1 files |
+| Phase 04 P01 | 40min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -110,6 +110,7 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-07: ImpersonationPage is a Keyset.Page alias; AdminApi.LimitSchema bound by Keyset.MIN_LIMIT/MAX_LIMIT; KEY-06 scoped grep at 0
 - [Phase 03]: 03-08: BEH-EA-036 amended in place (Rev 1.14, traceability 1.91); changeset names byCreation, pageLimit, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE as removed
 - [Phase 03]: 03-09: Postgres confirmations recorded as open CI items, not passes; GATE-04 not-run-locally record satisfied, CI pass outstanding
+- [Phase 04]: 04-01: Postgres full-suite record at HEAD is clean (421 files, 6629 tests, no failures); Wave 0 pins import no DomainClaims; SCIM orphan is finding F-04-01 only (CONN-F1); two unit-suite intermittents recorded (passkey ChallengeStore sql, organization TenantMiddleware loopback)
 
 ### Pending Todos
 
@@ -131,6 +132,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T07:22:48.697Z
-Stopped at: Phase 3 complete, ready to plan Phase 4
+Last session: 2026-11-14T12:29:37.225Z
+Stopped at: Completed 04-01-PLAN.md
 Resume file: None
