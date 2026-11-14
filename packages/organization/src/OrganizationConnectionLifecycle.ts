@@ -176,7 +176,10 @@ export class OrganizationConnectionLifecycle extends Context.Service<
       /**
        * `body` in one transaction. `restore` runs inside it when `body` fails (the memory twin gives the claim
        * back there; a real transaction rolls it back too), unless the failure says the connection is gone: then
-       * its claims are released, whatever `restore` would have put back.
+       * its claims are released, whatever `restore` would have put back. A `StoreUnavailable` skips the
+       * compensation: only a real backend raises it, a real transaction rolls back by itself, and after a failed
+       * statement it may be aborted, so the compensation could only fail again and log a second error. A failing
+       * compensation never replaces the original cause (`ignoreCause`).
        */
       const unit = <A, E, R>(
         label: string,
@@ -191,8 +194,19 @@ export class OrganizationConnectionLifecycle extends Context.Service<
             body.pipe(
               Effect.onError((cause) => {
                 const failure = Cause.findErrorOption(cause);
-                const gone = Option.isSome(failure) && protocol.isGone(failure.value);
-                return Effect.ignore(gone ? claims.release(organizationId, connectionId) : restore);
+                if (Option.isSome(failure)) {
+                  if (failure.value instanceof StoreFailure.StoreUnavailable) return Effect.void;
+                  if (protocol.isGone(failure.value)) {
+                    return Effect.ignoreCause(claims.release(organizationId, connectionId), {
+                      log: "Warn",
+                      message: `${label}: releasing the claims of a removed connection failed`,
+                    });
+                  }
+                }
+                return Effect.ignoreCause(restore, {
+                  log: "Warn",
+                  message: `${label}: restoring the previous claims failed`,
+                });
               }),
             ),
           )

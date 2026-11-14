@@ -3,6 +3,8 @@
 // normaliser and the release on organization deletion, driven by a test descriptor on the memory records and on
 // the SQL records (SQLite, or Postgres when AWTHAQ_POSTGRES_URL is set).
 import { AuditLog, Auth, Users } from "@awthaq/core";
+import { StoreFailure } from "@awthaq/sql";
+import type { SqlTransaction } from "@awthaq/ports";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
 import * as Data from "effect/Data";
@@ -73,7 +75,8 @@ type Needs =
   | AuditLog.AuditLog
   | DomainClaims.DomainClaims
   | OrganizationConnectionLifecycle.OrganizationConnectionLifecycle
-  | OrganizationDirectory.OrganizationDirectory;
+  | OrganizationDirectory.OrganizationDirectory
+  | SqlTransaction.SqlTransaction;
 
 const suite = <E>(leg: string, Live: Layer.Layer<Needs, E>) => {
   const run = <A, E2>(effect: Effect.Effect<A, E2, Needs>) =>
@@ -427,6 +430,98 @@ const suite = <E>(leg: string, Live: Layer.Layer<Needs, E>) => {
         }),
       ),
     );
+  });
+
+  describe(`compensation (${leg})`, () => {
+    /** The lifecycle over a `DomainClaims` that counts `claim` calls and makes the nth one (from 1) die. */
+    const spied = (dieOnCall: number | undefined) => {
+      const calls = { claim: 0 };
+      const spy = Layer.effect(
+        DomainClaims.DomainClaims,
+        Effect.map(DomainClaims.DomainClaims, (inner) => ({
+          ...inner,
+          claim: (input: DomainClaims.DomainClaim) =>
+            Effect.suspend(() => {
+              calls.claim += 1;
+              return calls.claim === dieOnCall ? Effect.die("claim defect") : inner.claim(input);
+            }),
+        })),
+      );
+      const withSpy = <A, E2>(effect: Effect.Effect<A, E2, Needs>) =>
+        effect.pipe(
+          // `fresh`: the layer is memoised by reference, and the one `Live` built already holds the real claims.
+          Effect.provide(
+            Layer.fresh(
+              OrganizationConnectionLifecycle.OrganizationConnectionLifecycle.layer.pipe(
+                Layer.provide(spy),
+              ),
+            ),
+          ),
+          TestAuth.withoutRequest,
+          Effect.provide(Live),
+        );
+      return { calls, withSpy };
+    };
+    const updateWith = (write: Effect.Effect<void, WriteFailed | StoreFailure.StoreUnavailable>) =>
+      Effect.gen(function* () {
+        const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
+        const a = yield* makeOrganization("a");
+        return yield* lifecycle
+          .update(
+            protocol,
+            a.id,
+            Effect.succeed({
+              connectionId: "c1",
+              domains: ["new.example"],
+              previous: ["old.example"],
+              write,
+            }),
+          )
+          .pipe(Effect.flip);
+      });
+
+    it.effect(
+      "a failed write restores the previous claim: one claim for the update, one to restore",
+      () => {
+        const { calls, withSpy } = spied(undefined);
+        return withSpy(updateWith(Effect.fail(new WriteFailed({ step: "row" })))).pipe(
+          Effect.tap((failure) =>
+            Effect.sync(() => {
+              assert.deepStrictEqual(failure, new WriteFailed({ step: "row" }));
+              assert.strictEqual(calls.claim, 2);
+            }),
+          ),
+        );
+      },
+    );
+
+    it.effect(
+      "a store outage in the write skips the compensation and is the failure returned",
+      () => {
+        const { calls, withSpy } = spied(undefined);
+        const outage = new StoreFailure.StoreUnavailable({ operation: "write" });
+        return withSpy(updateWith(Effect.fail(outage))).pipe(
+          Effect.tap((failure) =>
+            Effect.sync(() => {
+              assert.deepStrictEqual(failure, outage);
+              assert.strictEqual(calls.claim, 1);
+            }),
+          ),
+        );
+      },
+    );
+
+    it.effect("a compensation that dies does not replace the write's own failure", () => {
+      const { calls, withSpy } = spied(2);
+      return withSpy(updateWith(Effect.fail(new WriteFailed({ step: "row" })))).pipe(
+        Effect.tap((failure) =>
+          Effect.sync(() => {
+            assert.deepStrictEqual(failure, new WriteFailed({ step: "row" }));
+            assert.strictEqual(calls.claim, 2);
+          }),
+        ),
+      );
+    });
   });
 
   describe(`remove (${leg})`, () => {
