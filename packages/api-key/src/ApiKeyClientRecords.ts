@@ -161,8 +161,7 @@ export const layerSql = Layer.effect(
   ApiKeyClientRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`ApiKeyClientRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("ApiKeyClientRecords");
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const Row = makeRow(wire);
 

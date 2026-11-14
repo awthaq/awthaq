@@ -203,8 +203,7 @@ export const layerSql = Layer.effect(
   ApiKeyRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`ApiKeyRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("ApiKeyRecords");
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const Row = makeRow(wire);
