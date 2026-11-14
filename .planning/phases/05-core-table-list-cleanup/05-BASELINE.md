@@ -241,3 +241,84 @@ Mutations seen to fail and reverted:
 - P8: dropping "users" from the `includeDirectory` literal failed "RLS covers exactly the stamped core tables, never auth_relay_cursor" on Postgres (Tests 1 failed | 10 passed in that file); reverted, 11 pass (run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)).
 
 `git diff --quiet ea56a16f -- packages/sql/src packages/core/src packages/test/src spec features examples .changeset` exits 0 at each Wave 0 commit (05-01 and both 05-02 commits); `git diff ea56a16f -- <file> | grep -c '^-[^-]'` prints 0 for `AuthTenancy.test.ts` and `TenantScope.postgres.test.ts`.
+
+## Phase close
+
+**HEAD at close:** `53d7037d` (branch `architecture/deepening-batch-3`, phase base `ea56a16f`), 2026-11-14. Every command run from the worktree root, output verbatim.
+
+### Census
+
+| Command | 05-01 value | Now | Expect | Verdict |
+|---------|-------------|-----|--------|---------|
+| `grep -rnE '"verification_reservations"' packages/*/src features/step-definitions \| wc -l` | 4 lines | 2 lines | == 2 | MET |
+| `grep -c 'STAMPED_TABLES' features/step-definitions/TenancySteps.ts` | 2 | 0 | == 0 | MET |
+| `grep -c 'coreTables' packages/core/src/Auth.ts` | 2 | 0 | == 0 | MET |
+| `grep -c 'as const' packages/sql/src/TenantScope.ts` | 2 | 0 | == 0 | MET |
+| `grep -cE '^  "(users\|accounts\|sessions\|verification_tokens\|verification_reservations\|auth_audit_log)",$' packages/test/src/LaggingReplica.ts` | 6 | 0 | == 0 | MET |
+| `grep -c 'export \* as CoreTables' packages/sql/src/index.ts` | 0 | 1 | == 1 | MET |
+| `grep -cE '"(auth_relay_cursor\|rate_limit_buckets)"' packages/sql/src/CoreTables.ts` | 0 (grep exit 1 in the four lists) | 2 | >= 2 | MET |
+
+The quoted `verification_reservations` grep before (the 05-01 record, 4 lines):
+
+```text
+packages/test/src/LaggingReplica.ts:36:  "verification_reservations",
+features/step-definitions/TenancySteps.ts:75:  "verification_reservations",
+features/step-definitions/TenancySteps.ts:482:      case "verification_reservations":
+packages/sql/src/TenantScope.ts:48:  "verification_reservations",
+```
+
+After (this close, 2 lines):
+
+```text
+packages/sql/src/CoreTables.ts:26:  { name: "verification_reservations", tenancy: "partitioned", replicated: true },
+features/step-definitions/TenancySteps.ts:473:      case "verification_reservations":
+```
+
+The two lines left are the catalogue row (the one place the table is classified) and the `case` label of the BDD per-table insert switch (behaviour, not a list). No hand-kept core-table list remains in `Auth.ts`, `LaggingReplica.ts`, `TenancySteps.ts` or `TenantScope.ts`. The catalogue classifies both formerly unlisted tables (2 matching rows in `CoreTables.ts`).
+
+### CAT-04 closure
+
+Disposition (from "CAT-04 disposition" above): the roadmap's minimal-fix branch (fix only the `LaggingReplica` copy and stop) applied only if the `LaggingReplica` copy were the one real duplicate. The re-grep found a second real copy (the BDD step file's private six-name list `STAMPED_TABLES`) and two core tables in no list (`auth_relay_cursor`, `rate_limit_buckets`), so the minimal-fix branch was not taken and the candidate closes with the catalogue (CAT-01 to CAT-03).
+
+Evidence: the census pair, 4 lines of the quoted `verification_reservations` grep at 05-01 and 2 at close, plus the hand-list counts 2 / 2 / 2 / 6 going to 0 / 0 / 0 / 0 and the barrel export going 0 to 1. The candidate is closed with this disposition recorded.
+
+### Path allowlist
+
+`git diff --name-only ea56a16f HEAD` lists 34 paths; piped through `grep -vE` with the allowlist regex of "Phase-close comparison rule" it prints nothing (grep exit 1). The 16 non-planning paths:
+
+```text
+.changeset/core-table-catalogue.md
+features/step-definitions/TenancySteps.ts
+packages/core/src/Auth.ts
+packages/core/test/AuthTenancy.test.ts
+packages/sql/README.md
+packages/sql/src/CoreTables.ts
+packages/sql/src/TenantScope.ts
+packages/sql/src/index.ts
+packages/sql/test/CoreTablePins.test.ts
+packages/sql/test/CoreTables.test.ts
+packages/sql/test/TenantScope.postgres.test.ts
+packages/test/src/LaggingReplica.ts
+packages/test/test/LaggingReplica.test.ts
+spec/behaviors/28-tenancy.md
+spec/overview.md
+spec/traceability.md
+```
+
+The other 18 are under `.planning/`.
+
+### Wave 0 oracle integrity
+
+- `git log --format=%h ea56a16f..HEAD -- packages/sql/test/CoreTablePins.test.ts` prints `7720a413` (one commit, its add commit).
+- `git log --format=%h ea56a16f..HEAD -- packages/test/test/LaggingReplica.test.ts` prints `31385d7b` (one commit, its add commit).
+- `git diff ea56a16f HEAD -- packages/core/test/AuthTenancy.test.ts packages/sql/test/TenantScope.postgres.test.ts | grep -c '^-[^-]'` prints `0` (additions only).
+
+### Dependencies
+
+`git diff --stat ea56a16f HEAD -- packages/*/package.json features/package.json pnpm-lock.yaml` prints nothing. The three `@awthaq/sql` edges are unchanged (identical to the 05-01 census):
+
+```text
+packages/core/package.json:34:    "@awthaq/sql": "workspace:*"
+features/package.json:33:    "@awthaq/sql": "workspace:*",
+packages/test/package.json:36:    "@awthaq/sql": "workspace:*",
+```
