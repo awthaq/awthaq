@@ -82,9 +82,9 @@ export const partitionedTables: ReadonlyArray<
 > = declared.filter((entry) => entry.tenancy === "partitioned").map((entry) => entry.name);
 
 /** The tables whose `"tenantId"` is a membership stamp resolved across tenants. */
-export const directoryTables: ReadonlyArray<"users" | "accounts"> = declared
-  .filter((entry) => entry.tenancy === "directory")
-  .map((entry) => entry.name);
+export const directoryTables: ReadonlyArray<
+  Extract<Declared, { readonly tenancy: "directory" }>["name"]
+> = declared.filter((entry) => entry.tenancy === "directory").map((entry) => entry.name);
 
 /** The tables carrying a `"tenantId"` column (every tenancy but `none`). */
 export const stamped: ReadonlyArray<CoreTableName> = declared
