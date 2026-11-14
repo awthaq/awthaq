@@ -1,7 +1,0 @@
----
-"@awthaq/test": minor
----
-
-New `RecordsContract` (plan 25, ADR-EA-041 decision 9): the record-store contract, the plugin-side twin of `StoreContract`. A plugin writes one `RecordsContract.suite(Store, { operations, sql?, tenancy? })` per record store; every operation of the store's interface carries a verdict (`read`, `write`, `atomic` with at least one `race` case, or `exempt` with a reason), so an operation added without one does not compile. `RecordsContract.run` reads the adapters from `Plugin.records`, runs every case on memory and on SQL (SQLite `:memory:`, a Postgres schema under `AWTHAQ_POSTGRES_URL`) with a fresh adapter per case, checks that every store the bundle provides has a suite, and runs a suite's tenancy cases through `runTenantIsolationTests` over the same adapters. `runPluginContractTests` gains a `records` option: required by the compiler when the plugin's bundle provides a store (`RecordsContract.Suites<P>` names every key), forbidden when it provides none, optional for a hand-built `AuthPlugin.Any`. `RecordsContract.pending(ticket)` stands in for a plugin whose suites are not written yet. `pnpm check:contract-tests` now also fails when a `Contract.test.ts` that passes `records` is missing from `scripts/test-pg.sh`.
-
-Migration: `runPluginContractTests` requires `records: { suite, suites }` for a plugin whose `records` bundle provides a store; write one `RecordsContract.suite` per store (see docs/plugin-authoring.md), or pass `suites: RecordsContract.pending("<ticket>")` until you do.

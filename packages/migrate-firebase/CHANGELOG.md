@@ -1,0 +1,106 @@
+# @awthaq/migrate-firebase
+
+## 0.2.0
+
+### Minor Changes
+
+- 349acb4: awthaq now builds on stable effect 4.1 and takes effect, `@effect/*`, qadi and React from the host application instead of bundling them.
+  
+  - **effect 4.0.0-rc.116 → 4.1.2, qadi 0.8 → 0.11.** Module paths follow effect's stable layout (`effect/http`, `effect/http-api`, `effect/sql`, `effect/encoding/*`).
+  - **Peer dependencies.** Every package except `@awthaq/cli` declares `effect` (and, where used, `@effect/*`, `@qadi/*`, React) as `peerDependencies` with a range (`effect: ^4.1.0`, `@qadi/*: ^0.11.0`), so an application has exactly one copy of each. Install them next to awthaq. `pnpm package:smoke` now fails a package that bundles one of them or publishes an exact or prerelease peer.
+  - **Crypto services (breaking).** effect 4.1 removed the `Crypto` service. Layers now require effect's `SecureRandom`, `Digest` and/or `Mac` (`effect/crypto/*`) instead; `NodeCrypto.layer` provides all of them, and `@awthaq/ports`' `WebCrypto.layer` now provides the same three over `globalThis.crypto` (`WebCrypto.Services`). Helpers that took a `Crypto` take the specific service: `Hmac.hmacSha256(mac, ...)`, `SecretHash.digest(hasher, ...)`, `Totp.hotp/totp/verifyTotp(mac, ...)`, `RecoveryCodes.generate(random, ...)`, `UserCode.generate(random)` / `hash(hasher, ...)`, and `VerificationLink.issue`/`EmailChange.request` deps take `random` instead of `crypto`. Random bytes and digests no longer fail, so the `PlatformError` → `StoreUnavailable` paths they fed are gone.
+  - **`@awthaq/react`** re-exports qadi 0.11's seeded-decision API (`DecisionOutcome`, `SeededAllow`, `SeededDeny`, `isSeeded`, `outcomeOf`, `permits`, `ClientDecision`, `SeededDecision`); the new gate-registry instrumentation (`makeGateRegistry`, `useGateInstances`) is left to `@qadi/react`.
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies [a95959c]
+- Updated dependencies [1cef4be]
+- Updated dependencies [1cef4be]
+- Updated dependencies [d7351b7]
+- Updated dependencies [b97c8c2]
+- Updated dependencies [9416e17]
+- Updated dependencies [fe9dc94]
+- Updated dependencies [2706762]
+- Updated dependencies [50a23f8]
+- Updated dependencies [1cef4be]
+- Updated dependencies [2c3c400]
+- Updated dependencies [3514b28]
+- Updated dependencies [349acb4]
+- Updated dependencies [cb155d4]
+- Updated dependencies [3b99770]
+- Updated dependencies [14bc1bc]
+- Updated dependencies [2dff755]
+- Updated dependencies [f831b6c]
+- Updated dependencies [1cef4be]
+- Updated dependencies [1cef4be]
+- Updated dependencies [6070f7f]
+- Updated dependencies [e073887]
+- Updated dependencies [a305c26]
+- Updated dependencies [3917b38]
+- Updated dependencies [81d4323]
+- Updated dependencies [f4cf736]
+- Updated dependencies
+- Updated dependencies [7f3f6bf]
+- Updated dependencies [273f910]
+- Updated dependencies [8eef209]
+- Updated dependencies [5a3998d]
+- Updated dependencies [8fda479]
+- Updated dependencies [40c84f1]
+- Updated dependencies [4f65d9e]
+- Updated dependencies [6355450]
+- Updated dependencies [fcdb168]
+- Updated dependencies [f0f2f3e]
+- Updated dependencies [2e56459]
+- Updated dependencies [ef9846c]
+- Updated dependencies [72a2e78]
+- Updated dependencies [ae1175d]
+- Updated dependencies [161d66c]
+- Updated dependencies [d3a548f]
+- Updated dependencies [93f2469]
+- Updated dependencies [f005a91]
+- Updated dependencies [75cc655]
+- Updated dependencies [4379a62]
+- Updated dependencies [9e6302f]
+- Updated dependencies [4688890]
+- Updated dependencies [3d00f58]
+- Updated dependencies
+- Updated dependencies [38ca611]
+- Updated dependencies [4d9fed1]
+- Updated dependencies [6a28c4d]
+- Updated dependencies [1c0d1a7]
+- Updated dependencies [6cebb31]
+- Updated dependencies [28a78b0]
+- Updated dependencies [0e74d59]
+- Updated dependencies [36951f5]
+- Updated dependencies [7e9834e]
+- Updated dependencies [01b82ea]
+- Updated dependencies [1a206af]
+- Updated dependencies [401a719]
+- Updated dependencies [2be1097]
+- Updated dependencies [4cd6174]
+- Updated dependencies [6a06f06]
+- Updated dependencies [6d797b0]
+- Updated dependencies [b0b6a4d]
+- Updated dependencies [5d5b3c6]
+- Updated dependencies [f58b51f]
+- Updated dependencies [0304c39]
+- Updated dependencies [79909fa]
+- Updated dependencies [e3cf8fe]
+- Updated dependencies [896a1de]
+- Updated dependencies [1c01e7f]
+- Updated dependencies [942e1d8]
+- Updated dependencies [2f1b966]
+- Updated dependencies [b4ab289]
+- Updated dependencies [2ab9920]
+- Updated dependencies [b4b0de9]
+- Updated dependencies [40a32a1]
+- Updated dependencies [1cef4be]
+- Updated dependencies
+- Updated dependencies [e6c3620]
+- Updated dependencies [37e5cdd]
+- Updated dependencies [c0e7bd9]
+- Updated dependencies [020abf8]
+- Updated dependencies [9cdebdd]
+  - @awthaq/core@0.2.0
+  - @awthaq/ports@0.2.0
