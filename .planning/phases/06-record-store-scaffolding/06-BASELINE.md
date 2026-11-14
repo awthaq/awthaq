@@ -297,3 +297,98 @@ Checks: `npx tsc -b tsconfig.json` exit 0; `npx vitest run examples/plugin-templ
 Spec: `spec/overview.md` 1.19 -> 1.20 (the `Keyset` row names `chronological`); `spec/traceability.md` 1.94 -> 1.95 (the `StoreFailure.test.ts` row names `labelled(store)`, the `Keyset.test.ts` row names `chronological`); Effective Date 2026-11-14, Change History entries added. `pnpm spec:verify:strict`: `PASS: 32   FAIL: 0   SKIP: 0`; `allocate-req-ea.py --check`: 1361 scenario rows, manifest current.
 
 Changeset: `.changeset/record-store-helpers.md` (ports and sql minor, eight adopting packages patch, one `Migration:` line); `pnpm format:check` and `pnpm workspace:check` pass.
+
+## Phase close
+
+**HEAD at close:** `6fd1e73b2d2781ab2b29baf182b32ec90db9d386` (branch `architecture/deepening-batch-3`; phase base `3be32564`, plan base `6fd1e73b`). **Date:** 2026-11-14. Precondition: `git status --porcelain -- packages spec docs examples .changeset | grep -c .` printed 0. Raw outputs of the structural checks saved outside the repo.
+
+### Census
+
+F16 = the 16 `*Records.ts` modules of 06-SPIKE.md `SPIKE-ADOPTERS unavailable-label`, concatenated with `cat` into a scratch file; each pattern counted with `grep -c` (lines) unless stated. Value at `b2a00c5e` is the planner's probe.
+
+| Measure | Pattern | at `b2a00c5e` | now | expected | Verdict |
+|---------|---------|---------------|-----|----------|---------|
+| closure shape | `` StoreFailure\.orStoreUnavailable\(`[A-Za-z]+\.\$\{(operation|method)\}`\) `` | 16 | 0 | 0 | MET |
+| `StoreFailure.labelled("` | `grep -cF` | 0 | 16 | 16 | MET |
+| binding calls | `(unavailable|failing)\("` | 154 | 154 | 154 | MET |
+| comparator anchor lines | `toEpochMillis\((a|b)\.createdAt\)|(a|b)\.createdAt\.epochMilliseconds|millis\(a\.createdAt\)` | 13 (11 files) | 2 (2 files) | 2 | MET |
+| `Keyset.chronological(` | `grep -cF` | 0 | 11 | 11 | MET |
+| `localeCompare` | `grep -c` | 8 | 2 | 2 | MET |
+| files naming `Keyset.` | `grep -l 'Keyset\.'` | 2 | 11 | 11 | MET |
+| MembershipRecords `reverse()` | `grep -c` | 1 | 0 | 0 | MET |
+| `export const labelled` in `StoreFailure.ts` | `grep -c` | 0 | 1 | 1 | MET |
+| `export const chronological` in `Keyset.ts` | `grep -c` | 0 | 1 | 1 | MET |
+| F16 total lines | `wc -l` | 10664 | 10676 | recorded | recorded (+12) |
+
+The two remaining comparator anchor lines (the full list, verbatim):
+
+```text
+packages/device-authorization/src/DeviceGrantRecords.ts:215:              .toSorted((a, b) => millis(a.createdAt) - millis(b.createdAt)),
+packages/jwt/src/SigningKeyRecords.ts:172:    (a, b) => DateTime.toEpochMillis(b.createdAt) - DateTime.toEpochMillis(a.createdAt),
+```
+
+These are exactly F1 (`DeviceGrantRecords`) and F2 (`SigningKeyRecords`), see "Findings". The two `localeCompare` lines are in `packages/webhooks/src/WebhookRecords.ts` only (`:559` an `id` tie-break after `nextAttemptAt` and `:798` a descending `id` sort; neither is a `createdAt` comparator).
+
+### REC-03 closure
+
+Scaffolded (the two helpers that passed the spike, each with one test): `Keyset.chronological` in `@awthaq/ports` (`packages/ports/src/Keyset.ts`, test `packages/ports/test/Keyset.test.ts`) and `StoreFailure.labelled` in `@awthaq/sql` (`packages/sql/src/StoreFailure.ts`, test `packages/sql/test/StoreFailure.test.ts`).
+
+Not pursued, quoted verbatim from 06-SPIKE.md (the spike's reason closes each piece):
+
+```text
+SPIKE-NOT-PURSUED tenant-visibility: criterion (a) fails: 2 of 16 files carry a copy (ImpersonationRecords, WebhookRecords) against at least 5; TenantScoped already is the shared helper
+SPIKE-NOT-PURSUED wire-row: criterion (b) fails: removed=14 added=24 net=-10 and the 14 adopter copies are one spelling (D6 not met)
+SPIKE-NOT-PURSUED sqlstore-make: criterion (b) fails: removed=198 added=247 net=-49 and the 16 closures differ only in names (D6 not met)
+```
+
+Nothing for `tenant-visibility`, `wire-row` or `sqlstore-make` was scaffolded: none of those names appears in the 30 non-planning paths below.
+
+### REC-04 closure
+
+Adopted: 16 of 16 per-file label closures (closure shape 0, `StoreFailure.labelled("` 16, binding calls 154 unchanged) and 11 of 11 comparator sites of the 11-site map in "Wave 0 pins" 06-06 (comparator anchor lines 13 -> 2, `Keyset.chronological(` 0 -> 11; the two left are F1 and F2, which are not among the 11 pinned sites because they have no tie-break and are recorded as findings). Behaviour preserved: the five Wave 0 pin files, written green against untouched `src`, are unedited since their add commits; every contract verdict file has an empty diff; the 16 declaration hashes are identical; no dependency changed (all below).
+
+### Findings
+
+- **F1 (open, not fixed):** `packages/device-authorization/src/DeviceGrantRecords.ts:213-215`, the in-memory `listByUser` sorts by `createdAt` with no tie-break, while the SQL implementation orders by `createdAt, id`. Adopting `Keyset.chronological` would add a tie-break to the memory path, a behaviour change; REC-04 is behaviour-preserving, so the site was left alone. Memory and SQL can order equal-`createdAt` rows differently. Out of scope for this phase.
+- **F2 (noted):** `packages/jwt/src/SigningKeyRecords.ts:168-173`, the same shape (a descending `createdAt` comparator with no tie-break). Noted, not changed, for the same reason.
+- **F-06-01 (fixed):** the `OrganizationConnectionLifecycle.sql.test.ts` race case counted advisory waiters database-wide; fixed in 06-04 (`935cb822`, key-scoped count), see "Amendments". Removed from the known-intermittent list from 06-04 on.
+- **F-06-03 (open, load sensitivity, not fixed here):** the admin `ImpersonationRecords (sql)` pair `create [atomic]: an interrupted create leaves its row and its link together, or neither` and `create [race]: 8 creates racing verifyChain never report a break` can time out at 5 s in a full-suite Postgres run (`RecordsContract.ts:282` budget); never alone. Listed as known intermittent 3 by the orchestrator decision after 06-04; the budget belongs to the contract suite, outside this phase.
+
+### Spike margins
+
+Recorded as measured, not re-judged. The spike's margin sentence (06-SPIKE.md): "`comparators` passes (b) only through the divergent-copies branch (by line count it adds 59 lines more than it removes); `unavailable-label` passes (b) by a net of one line, and a test case wrapped in its own `describe` (2 more lines) would make it net -1 and fail. Neither margin was adjusted to reach the verdict."
+
+| Helper | Spike line (verbatim) | Measured line (verbatim, "Adoption deltas") |
+|--------|------------------------|---------------------------------------------|
+| comparators | `SPIKE-DELTA comparators: removed=44 added=103 net=-59` | `ADOPTION-DELTA comparators: removed=45 added=103 net=-58` |
+| unavailable-label | `SPIKE-DELTA unavailable-label: removed=31 added=30 net=1` | `ADOPTION-DELTA unavailable-label: removed=31 added=33 net=-2` |
+
+`comparators` passed criterion (b) only through the divergent-copies branch (the line count alone says no: the helper and its callers add 58 more lines than they remove). `unavailable-label` was projected at net +1 and ended at net -2 (the helper grew by 2 lines for the explicit `typeof orStoreUnavailable` return type and formatter breaks, and its test by 1); it is kept because the closure now lives in one place (locality), not because it shrank the code.
+
+### Path allowlist
+
+```text
+^(spec/decisions/041-domain-store-ports\.md$|\.planning/|packages/organization/test/OrganizationConnectionLifecycle\.sql\.test\.ts$|packages/sql/test/RecordsScaffoldPins\.test\.ts$|packages/(organization|saml|scim|webhooks)/test/RecordOrderPins\.test\.ts$|packages/sql/src/StoreFailure\.ts$|packages/sql/test/StoreFailure\.test\.ts$|packages/ports/src/Keyset\.ts$|packages/ports/test/Keyset\.test\.ts$|packages/admin/src/ImpersonationRecords\.ts$|packages/api-key/src/ApiKey(Client)?Records\.ts$|packages/device-authorization/src/Device(Client|Grant)Records\.ts$|packages/jwt/src/SigningKeyRecords\.ts$|packages/organization/src/(ActiveContext|Connection|Invitation|Membership|Organization|OrgRole|Team)Records\.ts$|packages/saml/src/SamlRecords\.ts$|packages/scim/src/ScimRecords\.ts$|packages/webhooks/src/WebhookRecords\.ts$|spec/(overview|traceability)\.md$|\.changeset/record-store-helpers\.md$)
+```
+
+`git diff --name-only 3be32564 HEAD | grep -vE '<regex>'`: prints nothing (residue 0). `git diff --name-only 3be32564 HEAD | grep -vc '^\.planning/'`: 30, as expected (06-11 took its no-edit branch, so no guide or template path). The 30: `spec/decisions/041-domain-store-ports.md`, `packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts`, `packages/sql/test/RecordsScaffoldPins.test.ts`, the four `RecordOrderPins.test.ts` (organization, saml, scim, webhooks), `packages/sql/src/StoreFailure.ts`, `packages/sql/test/StoreFailure.test.ts`, `packages/ports/src/Keyset.ts`, `packages/ports/test/Keyset.test.ts`, the 16 records modules (`admin` ImpersonationRecords; `api-key` ApiKeyClientRecords, ApiKeyRecords; `device-authorization` DeviceClientRecords, DeviceGrantRecords; `jwt` SigningKeyRecords; `organization` ActiveContext, Connection, Invitation, Membership, Organization, OrgRole, Team; `saml` SamlRecords; `scim` ScimRecords; `webhooks` WebhookRecords), `spec/overview.md`, `spec/traceability.md`, `.changeset/record-store-helpers.md`.
+
+### Wave 0 oracle integrity
+
+`git log --format=%h --name-only 3be32564..HEAD -- <the five pin files> | grep -c 'Pins\.test\.ts$'`: 5. Each file appears in exactly one commit: `e47f02e2` (`packages/sql/test/RecordsScaffoldPins.test.ts`), `3b75b1ea` (`packages/organization/test/RecordOrderPins.test.ts`), `726235f8` (the saml, scim and webhooks `RecordOrderPins.test.ts`). None edited after its add commit.
+
+### Contract verdict files
+
+`git diff --name-only 3be32564 HEAD --` over `packages/test/src/RecordsContract.ts`, `examples/plugin-template/test/contract`, and the `test/contract` directories of `admin`, `api-key`, `device-authorization`, `jwt`, `organization`, `saml`, `scim`, `webhooks` (every named file in the plan's list lives in one of these): empty (0 lines).
+
+### Declarations
+
+`npx tsc -b tsconfig.json` exit 0, then `shasum -a 256 -c .planning/phases/06-record-store-scaffolding/06-SHAPE-DTS.sha256 | grep -c ': OK$'`: 16 (no line other than OK). No `*Shape`, layer or record type changed.
+
+### Dependencies
+
+`git diff --stat 3be32564 HEAD -- 'packages/*/package.json' features/package.json 'examples/*/package.json' pnpm-lock.yaml`: empty (0 lines).
+
+### Docs last
+
+`git log --reverse --format=%h --name-only 3be32564..HEAD -- 'packages/*/src' spec/overview.md spec/traceability.md .changeset docs examples` filtered to the code paths and piped to the awk order check: `bad=0`. Order of the non-source paths: `spec/overview.md`, `spec/traceability.md`, `.changeset/record-store-helpers.md`, all after the last `packages/*/src` commit. `docs/` and `examples/` have no change.
