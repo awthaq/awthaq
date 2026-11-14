@@ -139,7 +139,7 @@ Sort sites outside the 13 census anchors (read, not counted as copies and not ad
 
 ### unavailable-label: 16 files: pass
 
-Every file defines the same closure: 15 files `const unavailable = (operation: string) => StoreFailure.orStoreUnavailable(\`<Store>.${operation}\`);` over 2 lines, `WebhookRecords.ts:1137` the one-line `const failing = (method: string) => ...` (only a name differs; closure=16, closure-def-lines 2 x 15 + 1). 156 call sites (154 `("literal")` plus two `unavailable(operation)` in `ActiveContextRecords.ts:308,325`). 16 >= 5: pass.
+Every file defines the same closure: 15 files ``const unavailable = (operation: string) => StoreFailure.orStoreUnavailable(`<Store>.${operation}`);`` over 2 lines, `WebhookRecords.ts:1137` the one-line `const failing = (method: string) => ...` (only a name differs; closure=16, closure-def-lines 2 x 15 + 1). 156 call sites (154 `("literal")` plus two `unavailable(operation)` in `ActiveContextRecords.ts:308,325`). 16 >= 5: pass.
 
 ### wire-row: 16 files carry the wire value, 14 are adoptable: pass
 
@@ -172,7 +172,243 @@ The closure it replaces is the unavailable-label closure (16 files). `SqlStore.m
 
 ## Measurements
 
-_Filled by Task 2._
+Method (plan protocol P1-P6): each prototype lived under the session scratchpad (`proto-06/<helper id>/{orig,proto}`), was formatted with `npx oxfmt` run from the worktree root, and was counted with `diff -ruN orig proto | grep -cE '^-([^-]|$)'` (removed) and `'^\+([^+]|$)'` (added); no type-check was run (P5). Test convention (D5): one `it` case with one input, placed in an existing `describe` of the helper module's existing test file, one one-line doc comment per new helper. The prototype is deleted at the end of this task (see "Prototype discard").
+
+Sensitivity of the convention: the test case is the only free layout choice. A test case wrapped in a `describe` block of its own costs 2 more lines (measured for unavailable-label: net -1 instead of +1); this is reported again under that helper because it flips its sign.
+
+### comparators
+
+Lives in: `packages/ports/src/Keyset.ts` (additive export `Keyset.chronological`, no new module), `@awthaq/ports`, stratum 2 (every adopter package already depends on `@awthaq/ports`).
+
+Interface used by the prototype:
+
+```ts
+/** The `(createdAt, id)` order of a record listing, ids by code unit; `desc` is its flip. */
+export const chronological = <Row>(spec: {
+  readonly createdAt: (row: Row) => DateTime.Utc;
+  readonly id: (row: Row) => string;
+  readonly direction: Direction;
+}): Order.Order<Row> => {
+  const asc = Order.combine(
+    Order.mapInput(DateTime.Order, spec.createdAt),
+    Order.mapInput(Order.String, spec.id),
+  );
+  return spec.direction === "desc" ? Order.flip(asc) : asc;
+};
+```
+
+(c) first, per site (D3, D4). Installed `effect` 4.1.2 (`packages/ports/node_modules/effect/dist`): `Order.make` returns `self === that ? 0 : compare(self, that)` (`Order.js:52`); `Order.String` is `make((self, that) => self < that ? -1 : 1)` (`Order.js:83`), the code-unit order; `Order.flip(O)` is `make((self, that) => O(that, self))` (`Order.js:208`); `Order.combine` returns the first non-zero result (`Order.js:254`); `Order.mapInput` applies the projection to both operands (`Order.js:381`); `DateTime.Order` compares `epochMilliseconds` with `<` and `>` (`internal/dateTime.js:174`). For finite epoch milliseconds the sign of that comparison equals the sign of the sites' `toEpochMillis(a) - toEpochMillis(b)` (and of `a.createdAt.epochMilliseconds - b.createdAt.epochMilliseconds`), so the combined order has the same sign as each site's comparator when the tie-break compares the same way. `MembershipRecords.applySort` sorts ascending and `.reverse()`s for `desc`; ids are primary keys, hence unique, so `(createdAt, id)` is a total order with no equal elements and the reverse of its sort equals the sort by the flipped order.
+
+| Site | Tie-break field and where its value is minted | Today's tie-break | Helper's | D3 class | (c) |
+|------|-----------------------------------------------|-------------------|----------|----------|-----|
+| DeviceClientRecords `clientId` | `` input.clientId ?? `dc_${yield* random.uuidV7()}` `` (`DeviceAuthorization.ts:809`); may be operator-supplied | code unit (`<`) | code unit | any string is canonical | identical for every string |
+| ApiKeyClientRecords `clientId` | `` `svc_${yield* random.uuidV7()}` `` (`ApiKey.ts:1016`) | code unit | code unit | canonical | identical for every string |
+| ApiKeyRecords `id` | `random.uuidV7()` (`ApiKey.ts:859`) | code unit | code unit | canonical | identical for every string |
+| MembershipRecords `id` | `random.uuidV7()` (`MembershipRecords.ts:242`, `:560`) | code unit | code unit | canonical | identical for every string |
+| TeamRecords `id` (`:469`) | `random.uuidV7()` (`TeamRecords.ts:302`) | code unit | code unit | canonical | identical for every string |
+| TeamRecords `id` (`:364`) | same | `localeCompare` | code unit | canonical | same sign (probe: 0 of 20000 differ) |
+| ConnectionRecords `id` | `random.uuidV7()` (`OrganizationConnections.ts:433`) | `localeCompare` | code unit | canonical | same sign |
+| SamlRecords connection `id` | `random.uuidV7()` (`SamlConnections.ts:355`) | `localeCompare` | code unit | canonical | same sign |
+| SamlRecords sp-key `id` | `random.uuidV7()` (`SamlSpKeys.ts:97`) | `localeCompare` | code unit | canonical | same sign |
+| ScimRecords `row.id` (connections) | `random.uuidV7()` (`ScimConnections.ts:94`) | `localeCompare` | code unit | canonical | same sign |
+| ScimRecords `row.resourceId` (links) | the linked user or team id: `user.id` (`Scim.ts:987`, minted by core `Users.ts:598` with `uuidV7`), `made.id` (`Scim.ts:1381`, `TeamRecords.ts:302`) | `localeCompare` | code unit | canonical, but minted by core and organization, not by the scim plugin | same sign |
+| ScimRecords `row.connectionId` (links) | the scim connection id, as above | `localeCompare` | code unit | canonical | same sign |
+| WebhookRecords `id` (endpoints, deliveries) | `random.uuidV7()` (`Webhooks.ts:602`, `WebhookDelivery.ts:119`) | `localeCompare` | code unit | canonical | same sign |
+
+Adopter set (D4): all 11 sites of the 9 files above (13 census anchors minus the 2 no-tie-break sites, `DeviceGrantRecords:215` and `SigningKeyRecords:168-173`). No `localeCompare` site's tie-break field can hold an externally supplied string, so none leaves the set. Not adopted: `DeviceGrantRecords:215` (no tie-break: adopting would add one, a behaviour change, finding F1), `SigningKeyRecords:168-173` (no tie-break, finding F2), and the four sort sites listed under (a) (other keys). (a) re-checked on the adopter set: still 9 files.
+
+Collation probe (`probe-collation.mjs`, run with node; it prints the canonical-uuidv7 mismatch line, then four non-canonical pairs with both signs, then the collator locale):
+
+```text
+canonical-uuidv7 mismatches: 0 of 20000
+pair ("B", "a"): localeCompare=1 codeUnit=-1
+pair ("Z", "a"): localeCompare=1 codeUnit=-1
+pair ("A1DE5995-C372-7CB4-B57B-49E3AC5F6C8A", "a1de5995-c372-7cb4-b57b-49e3ac5f6c8a"): localeCompare=1 codeUnit=-1
+pair ("a-b", "ab"): localeCompare=-1 codeUnit=-1
+en-US
+```
+
+Canonical lowercase UUIDv7 pairs order identically by `localeCompare` and by code unit (0 of 20000 differ on this ICU, locale `en-US`); mixed-case and punctuation pairs do not. So the helper preserves canonical ordering exactly, and would change `localeCompare` sites only for a non-canonical id, which no site's own code can mint (BEH-EA-036 states the same equivalence).
+
+Prototype (adopters: the 9 files, 11 sites; the helper in the proto `Keyset.ts` with the added `DateTime` import; one `it` in the proto `Keyset.test.ts`, which already imports `DateTime`, `Option` and `Order`). Named functions and their callers were kept; only the comparator at each site changed.
+
+| File | removed | added |
+|------|---------|-------|
+| `packages/api-key/src/ApiKeyClientRecords.ts` | 5 | 8 |
+| `packages/api-key/src/ApiKeyRecords.ts` | 5 | 8 |
+| `packages/device-authorization/src/DeviceClientRecords.ts` | 4 | 8 |
+| `packages/organization/src/ConnectionRecords.ts` | 4 | 6 |
+| `packages/organization/src/MembershipRecords.ts` | 5 | 7 |
+| `packages/organization/src/TeamRecords.ts` (2 sites) | 6 | 11 |
+| `packages/saml/src/SamlRecords.ts` (2 sites) | 7 | 11 |
+| `packages/scim/src/ScimRecords.ts` | 4 | 6 |
+| `packages/webhooks/src/WebhookRecords.ts` | 4 | 6 |
+| `packages/ports/src/Keyset.ts` (helper) | 0 | 14 |
+| `packages/ports/test/Keyset.test.ts` (one `it`) | 0 | 18 |
+| Total | 44 | 103 |
+
+removed=44 added=103 net=-59. One adopted site (`MembershipRecords.applySort`) after the change:
+
+```ts
+  const direction = input?.sortDirection ?? "asc";
+  return [...records].sort(
+    Keyset.chronological({
+      createdAt: (record: MembershipRecord) => record.createdAt,
+      id: (record) => record.id,
+      direction,
+    }),
+  );
+```
+
+(b): first branch fails (net -59: each site still spells its `createdAt` and `id` selectors, which costs more lines than the comparator body it replaces). Second branch (D6): the 11 sites are spelled three ways: a `byTime !== 0 ? byTime : a.x < b.x ? -1 : ...` ternary chain (DeviceClient, ApiKeyClient, ApiKey), `||` then a `<` chain (Membership, Team `:469`), and `||` then `localeCompare` (Connection, Team `:364`, Saml x2, Scim, Webhook); plus `.reverse()` for descending (Membership) and `epochMilliseconds` against `toEpochMillis` as the time read. Each states the ordering itself and none calls a shared function. The `<` chains and the `localeCompare` calls are not even the same rule off the canonical ids (probe above), so these are divergent copies of one rule: second branch holds, (b) passes by that branch. Divergent copies: yes. Removes or moves (D8): moves (net -59: adds more lines than it removes).
+
+(c): holds (table above). Verdict for the rule: (a) 9 files pass, (b) pass via divergent copies (net -59, thin in the sense that the line count alone says no), (c) pass.
+
+### tenant-visibility
+
+Lives in: none new; `TenantScoped.visibility/matches/predicate/stamp/lift/liftOn` already exist in `packages/sql/src/TenantScoped.ts`, `@awthaq/sql`, stratum 3, and already are the shared helper (10 files call it). (a) fails (2 files, `ImpersonationRecords` and `WebhookRecords`), so by D7: (b) `n/e ((a) fails)`, (c) `n/e ((a) fails)`, adopter set none, removed/added/net `n/e`, divergent copies `n/e`, removes or moves `n/e`.
+
+### unavailable-label
+
+Lives in: `packages/sql/src/StoreFailure.ts` (additive export `StoreFailure.labelled`), `@awthaq/sql`, stratum 3 (every plugin that owns a `*Records` file already imports `@awthaq/sql`).
+
+Interface used by the prototype:
+
+```ts
+/** `orStoreUnavailable` for one store: `labelled("Store")("op")` names the operation `Store.op`. */
+export const labelled = (store: string) => (operation: string) =>
+  orStoreUnavailable(`${store}.${operation}`);
+```
+
+Adopter set: all 16 files, one closure each. Adopted site (`DeviceClientRecords`; call sites unchanged):
+
+```ts
+    const unavailable = StoreFailure.labelled("DeviceClientRecords");
+```
+
+In `WebhookRecords` the bound name stays `failing`, in `ActiveContextRecords` the two `unavailable(operation)` calls (`:308`, `:325`) are unchanged.
+
+| File | removed | added |
+|------|---------|-------|
+| 15 `*Records.ts` files (the two-line closure becomes one line) | 2 each (30) | 1 each (15) |
+| `packages/webhooks/src/WebhookRecords.ts` (one line to one line) | 1 | 1 |
+| `packages/sql/src/StoreFailure.ts` (helper) | 0 | 4 |
+| `packages/sql/test/StoreFailure.test.ts` (one `it` inside the existing `describe("StoreFailure.orStoreUnavailable")`) | 0 | 10 |
+| Total | 31 | 30 |
+
+removed=31 added=30 net=1. Sensitivity: the first prototype put the test in a `describe` of its own (12 added lines) and measured removed=31 added=32 net=-1. Under D5's convention (an `it` case, no new `describe`) the measured value is net=+1, and that is the value the rule uses, but the sign depends on two test lines.
+
+(b): first branch holds with net=+1 (one line). Divergent copies: no (the 16 closures differ only in names: the store name, `unavailable` against `failing`, `operation` against `method`, and each calls the shared `StoreFailure.orStoreUnavailable`, so D6 does not hold). Removes or moves (D8): removes (net=1), by one line.
+
+(c): `labelled(store)(operation)` builds the label by the same template `<Store>.<operation>` and hands it to the same `orStoreUnavailable` (`StoreFailure.ts:91-96`), so every `StoreUnavailable.operation` string, the defect paths and the logging are byte-identical; the returned function keeps `orStoreUnavailable`'s own generic signature, so no call site's inferred `E` changes. Holds.
+
+Verdict for the rule: (a) 16 pass, (b) pass by net=+1 (thin: one line, and two test lines would flip it), (c) pass.
+
+### wire-row
+
+Lives in: `packages/sql/src/Models.ts` (additive export `Models.wireOf`, beside `resolveDialect` at `:207`), `@awthaq/sql`, stratum 3.
+
+Interface used by the prototype:
+
+```ts
+/** The wire codecs of the client's own dialect: `dialectFields` of `resolveDialect`. */
+export const wireOf = (sql: SqlClient.SqlClient) => Effect.map(resolveDialect(sql), dialectFields);
+```
+
+Adopter set: the 14 files with the verbatim line; `SamlRecords` and `WebhookRecords` are not adopted (their `dialect` binding has another use, see (a)). Adopted site (one line to one line):
+
+```ts
+    const wire = yield* SqlModels.wireOf(sql);
+```
+
+| File | removed | added |
+|------|---------|-------|
+| 14 `*Records.ts` files | 1 each (14) | 1 each (14) |
+| `packages/sql/src/Models.ts` (helper) | 0 | 3 |
+| `packages/sql/test/Models.test.ts` (one `it.effect` with a stub client) | 0 | 7 |
+| Total | 14 | 24 |
+
+removed=14 added=24 net=-10. (b): first branch fails (net -10); second branch fails (the 14 adopter copies are one spelling, and each calls the shared `dialectFields` and `resolveDialect`, D6). Divergent copies: no. Removes or moves (D8): moves. The row-to-record mapping has no shared candidate (see (a)). (c): holds: `Effect.map(resolveDialect(sql), dialectFields)` yields the same value as `dialectFields(yield* resolveDialect(sql))`, and the layer reads the dialect at the same point (layer construction). Verdict for the rule: (a) 14 pass, (b) fail, (c) pass.
+
+### sqlstore-make
+
+Lives in: `packages/sql/src/SqlStore.ts` (exists: `SqlStore.make(sql)` returns `{ write, read, once: read }` at `:82-109`), `@awthaq/sql`, stratum 3. No helper and no test lines (D5).
+
+(c) first. `read(operation)` is `orStoreUnavailable(operation)(options?.capture === true ? ReadRouting.captureTokenOn(sql)(self) : self)` (`SqlStore.ts:102-107`) and `once` is the same function (`:109`). With no `options`, `read(operation)(self)` is exactly `StoreFailure.orStoreUnavailable(operation)(self)` (`StoreFailure.ts:91-96`), which is what `unavailable(operation)` is today: the same `StoreUnavailable.operation` string when the relabelled string equals today's, the same defect paths (a `SchemaError` or a `RETURNING` that returned no row dies, a refused statement is a defect), no retry, and nothing logged or traced differently (the one `Effect.logWarning`/`logError` is inside `storeUnavailable`, shared). Only `write` adds behaviour: `retryTransient()` when not inside a transaction (`:87-95`). So adopting `write` for any operation is a behaviour change (a transient failure is retried at the top level); the behaviour-preserving variant uses `read` and `once` only, which makes the helper a rename of `unavailable` with a prefix moved into the call sites. (c) holds for that variant, for every adopter.
+
+Idempotency classification of the 29 operations of the four spike files, from each `layerSql` statement (the table whose rows start `| <Store>.<operation> |`; "contract" is the kind of case the operation's `RecordsContract` stanza uses):
+
+| Operation | Statement shape | Class | Reason |
+|-----------|-----------------|-------|--------|
+| DeviceClientRecords.insert | `INSERT ... ON CONFLICT DO NOTHING RETURNING "clientId"` (contract atomic, race) | once | a repetition after a lost acknowledgement answers `false`, not the first call's `true` |
+| DeviceClientRecords.findById | `SELECT * ... WHERE "clientId" =` | read | no write |
+| DeviceClientRecords.list | `SELECT * ... ORDER BY "createdAt" ASC, "clientId" ASC` | read | no write |
+| DeviceClientRecords.revoke | `UPDATE ... SET "revokedAt" WHERE ... "revokedAt" IS NULL RETURNING` (atomic, race) | once | the repetition answers `false` |
+| ApiKeyClientRecords.insert | `INSERT` without `ON CONFLICT`, unique violation becomes a defect | once | a repetition hits the primary key and dies |
+| ApiKeyClientRecords.findById | `SELECT * ... WHERE "clientId" =` | read | no write |
+| ApiKeyClientRecords.listByOwner | `SELECT * ... ORDER BY "createdAt" DESC, "clientId" DESC` | read | no write |
+| ApiKeyClientRecords.revoke | `UPDATE ... WHERE "revokedAt" IS NULL RETURNING` (atomic, race) | once | the repetition answers `false` |
+| ApiKeyClientRecords.rotateSecret | one `UPDATE` moving `"secretHash"` to `"previousSecretHash"` | once | a repetition copies the new hash into `previous`, losing the earlier previous hash |
+| ApiKeyClientRecords.deleteByOwner | `DELETE ... WHERE "ownerId" =` (void) | write | repeat-safe: the second delete finds nothing and the answer is `void` |
+| ApiKeyRecords.insert | `INSERT` without `ON CONFLICT`, unique violation becomes a defect | once | a repetition dies on the primary key |
+| ApiKeyRecords.findById | `SELECT * ... WHERE id =` | read | no write |
+| ApiKeyRecords.listByOwner | `SELECT * ... ORDER BY "createdAt" DESC, id DESC` | read | no write |
+| ApiKeyRecords.revoke | `UPDATE ... WHERE id = AND "revokedAt" IS NULL RETURNING id` (atomic, race) | once | the repetition answers `false` |
+| ApiKeyRecords.rotate | transaction: conditional `UPDATE` capping the predecessor, then `INSERT` of the successor (atomic, race) | once | a repetition inserts the successor again (primary key) or answers `notLive` |
+| ApiKeyRecords.touch | `UPDATE ... SET "lastUsedAt" = ${at}` (void) | write | sets the same value; repeat-safe |
+| ApiKeyRecords.deleteByOwner | `DELETE ... WHERE "ownerId" =` (void) | write | repeat-safe |
+| DeviceGrantRecords.insert | `INSERT ... ON CONFLICT DO NOTHING RETURNING id` (atomic, race) | once | the repetition answers `false` |
+| DeviceGrantRecords.findByDeviceHash | `SELECT * ... WHERE "deviceCodeHash" =` | read | no write |
+| DeviceGrantRecords.findByUserHash | `SELECT * ... WHERE "userCodeHash" =` | read | no write |
+| DeviceGrantRecords.claim | `UPDATE ... SET "userId" WHERE status = 'pending' AND "userId" IS NULL RETURNING id` (atomic, race) | once | compare-and-swap; the repetition answers `false` |
+| DeviceGrantRecords.decide | `UPDATE ... SET status, amr WHERE status = 'pending' AND ... RETURNING id` (atomic, race) | once | compare-and-swap; the repetition answers `false` |
+| DeviceGrantRecords.touchPoll | `UPDATE ... SET "lastPolledAt" = ${now}` (void) | write | sets the same value; repeat-safe |
+| DeviceGrantRecords.raiseInterval | `UPDATE ... SET "pollInterval" = "pollInterval" + ${seconds}` (atomic, race) | once | a repetition adds the seconds twice |
+| DeviceGrantRecords.consume | `DELETE ... WHERE status = 'approved' ... RETURNING *` (atomic, race) | once | the redemption answer `Some` is lost on a repetition (`None`) |
+| DeviceGrantRecords.remove | `DELETE ... WHERE id =` (void) | write | repeat-safe |
+| DeviceGrantRecords.purgeExpired | `DELETE ... WHERE "expiresAt" < ${before} RETURNING id`, answer is the row count | once | a repetition answers `0` |
+| DeviceGrantRecords.listByUser | `SELECT * ... ORDER BY "createdAt" ASC, id ASC` | read | no write |
+| DeviceGrantRecords.deleteByUser | `DELETE ... WHERE "userId" =` (void) | write | repeat-safe |
+
+Totals: 9 read, 6 write, 14 once. Only the 6 `write` operations would gain a retry if `write` were used, which is a behaviour change (and is why the variant measured here relabels them `once`).
+
+Prototype (variant of `read` and `once` only; adopters: all 16 files): each two-line closure becomes `const { read, once } = SqlStore.make(sql);`, each `unavailable("op")` / `failing("op")` becomes `once("<Store>.op")` or `read("<Store>.op")` (the four spike files by the table, `find`/`list`/`get`/`count` names read and the rest once elsewhere), and `SqlStore` is added to the `@awthaq/sql` import where absent (11 files; the other five already import it). The relabelled call is longer than the one it replaces (the store name moves into the string), so oxfmt re-wraps lines and the "same length" assumption of the plan does not hold; this is part of the measured result. `SamlRecords` also grows its import from one line to a wrapped block.
+
+| File | removed | added |
+|------|---------|-------|
+| `packages/admin/src/ImpersonationRecords.ts` | 9 | 11 |
+| `packages/api-key/src/ApiKeyClientRecords.ts` | 9 | 12 |
+| `packages/api-key/src/ApiKeyRecords.ts` | 10 | 10 |
+| `packages/device-authorization/src/DeviceClientRecords.ts` | 7 | 12 |
+| `packages/device-authorization/src/DeviceGrantRecords.ts` | 15 | 24 |
+| `packages/jwt/src/SigningKeyRecords.ts` | 9 | 11 |
+| `packages/organization/src/ActiveContextRecords.ts` | 10 | 9 |
+| `packages/organization/src/ConnectionRecords.ts` | 10 | 19 |
+| `packages/organization/src/InvitationRecords.ts` | 16 | 21 |
+| `packages/organization/src/MembershipRecords.ts` | 11 | 10 |
+| `packages/organization/src/OrganizationRecords.ts` | 10 | 15 |
+| `packages/organization/src/OrgRoleRecords.ts` | 8 | 7 |
+| `packages/organization/src/TeamRecords.ts` | 17 | 16 |
+| `packages/saml/src/SamlRecords.ts` | 17 | 25 |
+| `packages/scim/src/ScimRecords.ts` | 15 | 14 |
+| `packages/webhooks/src/WebhookRecords.ts` | 25 | 31 |
+| Total | 198 | 247 |
+
+removed=198 added=247 net=-49. One adopted site (`DeviceClientRecords`):
+
+```ts
+    const { read, once } = SqlStore.make(sql);
+    ...
+        }).pipe(Effect.map(Option.isSome), once("DeviceClientRecords.insert")),
+```
+
+(b): first branch fails (net -49); second branch fails (the 16 copies differ only in names, each calls the shared `StoreFailure.orStoreUnavailable`, D6). Divergent copies: no. Removes or moves (D8): moves. (c) holds for the `read`/`once` variant. Verdict for the rule: (a) 16 pass, (b) fail, (c) pass.
+
+D9: `sqlstore-make` does not pass, so `unavailable-label` is the only helper on the label closure and there is no conflict.
+
+### Prototype discard
+
+`rm -rf` of the prototype directory was run after the numbers above were pasted; `test ! -e` on it is recorded in the Task 2 commit verification, and `git status --porcelain -- packages features examples docs spec .changeset` prints nothing.
 
 ## Findings
 
