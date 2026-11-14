@@ -17,7 +17,7 @@
 // to a connection, they do not authenticate anyone — the connection's IdP still
 // has to.
 
-import { Defects, type Encryption, SqlTransaction } from "@awthaq/ports";
+import { Defects, type Encryption, Keyset, SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels, SealedColumn, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -337,9 +337,11 @@ export const layerMemory: Layer.Layer<
           Array.from(HashMap.values(s))
             .filter((row) => row.organizationId === organizationId)
             .sort(
-              (a, b) =>
-                DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt) ||
-                a.id.localeCompare(b.id),
+              Keyset.chronological({
+                createdAt: (row: StoredConnection) => row.createdAt,
+                id: (row) => row.id,
+                direction: "asc",
+              }),
             )
             .map(toRecord),
         ),

@@ -24,7 +24,7 @@
 // derives the same answers by walking parent pointers. Hierarchy is structure
 // only: it grants no permission inheritance (OHS-004).
 
-import { SqlTransaction } from "@awthaq/ports";
+import { Keyset, SqlTransaction } from "@awthaq/ports";
 import { Users } from "@awthaq/core";
 import { Models as SqlModels, SqlStore, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
@@ -363,8 +363,11 @@ export const layerMemory = Layer.effect(
 
     const descendantsIn = (teams: HashMap.HashMap<string, TeamRecord>, start: TeamRecord) => {
       const all = Array.from(HashMap.values(teams)).sort(
-        (a, b) =>
-          a.createdAt.epochMilliseconds - b.createdAt.epochMilliseconds || a.id.localeCompare(b.id),
+        Keyset.chronological({
+          createdAt: (team: TeamRecord) => team.createdAt,
+          id: (team) => team.id,
+          direction: "asc",
+        }),
       );
       const out: Array<TeamRecord> = [];
       let level: ReadonlyArray<string> = [start.id];
@@ -467,9 +470,11 @@ export const layerMemory = Layer.effect(
           Array.from(HashMap.values(s.teams))
             .filter((row) => row.organizationId === organizationId)
             .sort(
-              (a, b) =>
-                a.createdAt.epochMilliseconds - b.createdAt.epochMilliseconds ||
-                (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+              Keyset.chronological({
+                createdAt: (row: TeamRecord) => row.createdAt,
+                id: (row) => row.id,
+                direction: "asc",
+              }),
             ),
         ),
       );
