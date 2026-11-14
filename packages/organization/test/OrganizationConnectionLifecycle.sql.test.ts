@@ -174,18 +174,21 @@ const withLatchTrigger =
       );
     });
 
-/** Resolves once `count` sessions wait on an advisory lock (the latch trigger, then the create's organization lock). */
-const waitForAdvisoryWaiters = (count: number) =>
+/** Resolves once a session waits on the advisory lock `key` (a number is the raw key, a string is hashed as `SqlStore.atomically` does), ignoring other test files' waiters in the shared database. */
+const waitForAdvisoryWaiter = (key: number | string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const rows = yield* sql
-      .unsafe<{
-        readonly n: number | string;
-      }>(`SELECT COUNT(*) AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`)
-      .pipe(Effect.orDie);
-    return Number(rows[0]?.n ?? 0);
+    const hash = typeof key === "string" ? sql`hashtextextended(${key}, 0)` : sql`${key}::bigint`;
+    const rows = yield* sql<{ readonly n: number }>`
+      WITH k AS (SELECT ${hash} AS h)
+      SELECT count(*)::int AS n FROM pg_locks, k
+      WHERE locktype = 'advisory' AND objsubid = 1 AND NOT granted
+        AND classid::bigint = ((k.h >> 32) & 4294967295) AND objid::bigint = (k.h & 4294967295)`.pipe(
+      Effect.orDie,
+    );
+    return rows[0]?.n ?? 0;
   }).pipe(
-    Effect.repeat({ until: (waiting) => waiting >= count, schedule: Schedule.spaced("20 millis") }),
+    Effect.repeat({ until: (waiting) => waiting >= 1, schedule: Schedule.spaced("20 millis") }),
     Effect.timeout("10 seconds"),
     Effect.orDie,
     Effect.asVoid,
@@ -338,11 +341,11 @@ describe.skipIf(process.env["AWTHAQ_POSTGRES_URL"] === undefined)(
               const deleting = yield* Effect.forkChild(
                 Effect.exit(directory.delete(actor, { organizationId: org.id })),
               );
-              yield* waitForAdvisoryWaiters(1);
+              yield* waitForAdvisoryWaiter(LATCH_KEY);
               const creating = yield* Effect.forkChild(
                 Effect.exit(create(org.id, ["acme.example"])),
               );
-              yield* waitForAdvisoryWaiters(2);
+              yield* waitForAdvisoryWaiter(`organization_domain_claim:org:${org.id}`);
               yield* latch.release;
               return [yield* Fiber.join(deleting), yield* Fiber.join(creating)] as const;
             }).pipe(Effect.ensuring(latch.release)),
