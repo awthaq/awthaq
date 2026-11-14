@@ -158,6 +158,7 @@ This set covers both spike outcomes for the work planned now: plans 06-01 to 06-
 #### Go-branch additions
 
 - 06-04: packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts
+- 06-05: packages/sql/test/RecordsScaffoldPins.test.ts
 
 ### Go-branch obligations
 
@@ -193,3 +194,42 @@ Each full run started from an empty database (container recreated with `--shm-si
 **Open finding, not added to the list by this plan.** The admin `ImpersonationRecords (sql)` pair `create [atomic]: an interrupted create leaves its row and its link together, or neither` and `create [race]: 8 creates racing verifyChain never report a break` timed out at 5 s in 2 of 5 full Postgres runs (8, 11) and passed in the other three and alone. It is outside this plan's file and is unrelated to the advisory-waiter helper (it is in a different package and contract). Whether it joins the known-intermittent list is for the phase close to decide; until then a later plan meeting it re-runs once and records it.
 
 **Orchestrator decision (2026-11-14, after 06-04).** The pair joins the known-intermittent list as intermittent 3 (the list is again three entries: passkey ChallengeStore, `TenantMiddleware` "a suspended organization still resolves", and this pair): both are `Test timed out in 5000ms` cases of the admin `ImpersonationRecords (sql)` contract (`RecordsContract.ts:282`) that fire only in a full-suite Postgres run (2 of 5 such runs here; the first attempt on the bloated container hit them too), never alone (3 of 3 green, 126 tests), and no source changed. The allowance is the same as for the others: re-run at most twice and record every run; any other failure is real. The container must be recreated with `pg-fresh.sh` before each full Postgres run, because the test layers leak a schema per layer build and a loaded database makes 5-second budgets flaky. The phase close lists the pair as a load-sensitivity finding (F-06-03, not fixed here: the budget is the contract suite's).
+
+## Wave 0 pins
+
+### 06-05: source-scan pin and declaration hashes
+
+PLAN_BASE `112ccb36`. Pin file `packages/sql/test/RecordsScaffoldPins.test.ts`, add commit `e47f02e2` (the only commit touching it; never edited afterwards). It reads the sixteen record stores, `DomainClaims`, `UserClaims`, `TwoFactorStore` and the plugin template as text and imports none of them, so it has no Postgres leg (a source scan: nothing to run against a database). Four cases, all green on `src` unchanged since `3be32564`:
+
+1. the scanner accepts today's template closure and `StoreFailure.labelled("<Store>")` and refuses a third spelling (a `+` concatenation);
+2. every record store's labels, frozen as inline sorted literals (16 modules, 176 strings; the module name is in each assertion message);
+3. every `layerMemory`'s `Ref.make` and `Semaphore.make` count;
+4. the 11 `SqlStore.atomically` lock-key template literals of 9 files, byte for byte.
+
+Measured per module (labels = calls + writes + direct; Ref, Semaphore as counted; non-literal = calls of the binding whose argument is not a string literal):
+
+| Module | binding | calls | writes | direct | labels | non-literal | Ref | Sem |
+|--------|---------|-------|--------|--------|--------|-------------|-----|-----|
+| ImpersonationRecords | unavailable | 6 | 0 | 0 | 6 | 0 | 2 | 1 |
+| ApiKeyClientRecords | unavailable | 6 | 0 | 1 | 7 | 0 | 1 | 0 |
+| ApiKeyRecords | unavailable | 7 | 0 | 1 | 8 | 0 | 1 | 0 |
+| DeviceClientRecords | unavailable | 4 | 0 | 0 | 4 | 0 | 1 | 0 |
+| DeviceGrantRecords | unavailable | 12 | 0 | 0 | 12 | 0 | 1 | 0 |
+| SigningKeyRecords | unavailable | 6 | 0 | 1 | 7 | 0 | 1 | 0 |
+| ActiveContextRecords | unavailable | 5 | 4 | 0 | 9 | 2 | 1 | 0 |
+| ConnectionRecords | unavailable | 7 | 0 | 4 | 11 | 0 | 1 | 0 |
+| InvitationRecords | unavailable | 14 | 0 | 0 | 14 | 0 | 1 | 0 |
+| MembershipRecords | unavailable | 9 | 0 | 1 | 10 | 0 | 1 | 0 |
+| OrganizationRecords | unavailable | 7 | 0 | 2 | 9 | 0 | 1 | 0 |
+| OrgRoleRecords | unavailable | 6 | 0 | 1 | 7 | 0 | 1 | 0 |
+| TeamRecords | unavailable | 15 | 0 | 5 | 20 | 0 | 1 | 0 |
+| SamlRecords | unavailable | 14 | 0 | 0 | 14 | 0 | 1 | 0 |
+| ScimRecords | unavailable | 12 | 0 | 2 | 14 | 0 | 1 | 0 |
+| WebhookRecords | failing | 24 | 0 | 0 | 24 | 0 | 1 | 0 |
+| Total | | 154 | 4 | 18 | 176 | 2 | 17 | 1 |
+
+Identical to the planner's table. Lock keys (11, 9 files): `organization_team:org:${organizationId}` (TeamRecords); `organization_membership:org:${input.organizationId}`, `organization_membership:owner:${input.userId}`, `organization_membership:org:${organizationId}` (MembershipRecords); `organization_invitation:inviter:${input.inviterId}` (InvitationRecords); `organization_role:org:${input.organizationId}` (OrgRoleRecords); `webhooks_endpoint:tenant:${stamped.tenantId ?? "-"}` (WebhookRecords); `organization_domain_claim:org:${organizationId}` (DomainClaims); `qadi_claims:user:${userId}` (UserClaims); `two_factor_recovery_code:user:${userId}` (TwoFactorStore); `notes_note:owner:${input.owner}` (plugin template).
+
+Results (run locally; the pin has no database leg): `npx tsc -b tsconfig.json` and `npx tsc -p tsconfig.test.json` clean; `npx vitest run packages/sql/test/RecordsScaffoldPins.test.ts`: `Test Files 1 passed (1)`, `Tests 4 passed (4)`; `pnpm lint` prints no warning for the file and `pnpm format:check` is clean. Mutation check: changing one label literal in the test's own table (`WebhookRecords.claimDue` to `WebhookRecords.claimDu`, a scratch edit before the add commit) turned the labels case red (`Tests 1 failed | 3 passed (4)`), then was restored byte for byte. `grep -cE 'from "(\.\./src/|@awthaq/)'` on the file: 0. `git diff --name-only 3be32564 -- packages examples | grep -c '/src/'` at the add commit: 0.
+
+Declaration hashes: `.planning/phases/06-record-store-scaffolding/06-SHAPE-DTS.sha256` holds `shasum -a 256` of the 16 emitted `packages/<pkg>/lib/<Store>.d.ts` after `npx tsc -b tsconfig.json` on unchanged `src`; `shasum -a 256 -c` prints 16 OK. The `DeviceClientRecords.d.ts` line equals the planner's hash (`a7a3443d...10791`), so no toolchain difference. Every later plan runs `npx tsc -b tsconfig.json` then `shasum -a 256 -c .planning/phases/06-record-store-scaffolding/06-SHAPE-DTS.sha256` and needs 16 OK (no `*Shape`, layer or record type changed).
