@@ -278,3 +278,11 @@ ADOPTION-DELTA unavailable-label: removed=31 added=33 net=-2
 Command: `git diff --numstat 312ab409a8c891baf66332371940ca8be334d3b9 HEAD -- packages` (06-07 PLAN_BASE `312ab409` to HEAD `4df927bc`, the last 06-08 task commit). Per file: 15 adopters at 1 added / 2 removed, `WebhookRecords.ts` 1 / 1 (the closure was already one line), `StoreFailure.ts` 6 / 0, `StoreFailure.test.ts` 11 / 0.
 
 Spike (06-SPIKE.md): `SPIKE-DELTA unavailable-label: removed=31 added=30 net=1` (sites removed 31 and added 16, helper added 4, test added 10). The sites match exactly (31 removed, 16 added); the helper grew by 2 lines (the explicit `typeof orStoreUnavailable` return type and the formatter's line breaks) and its test by 1, hence net=-2 against the spike's net=1. Recorded, not gated.
+
+### comparators (06-09 and 06-10)
+
+ADOPTION-DELTA comparators: removed=45 added=103 net=-58
+
+Command: `git diff --numstat 940aa7a25649040d4954f4412751a901eae8ad9b HEAD -- packages` (06-09 PLAN_BASE `940aa7a2` to HEAD `fb8ecf18`, the last 06-10 source commit). Per file (added / removed): `Keyset.ts` 14 / 0, `Keyset.test.ts` 17 / 0, `ApiKeyClientRecords.ts` 8 / 5, `ApiKeyRecords.ts` 8 / 5, `DeviceClientRecords.ts` 8 / 4, `ConnectionRecords.ts` 6 / 4, `MembershipRecords.ts` 8 / 6, `TeamRecords.ts` 11 / 6, `SamlRecords.ts` 11 / 7, `ScimRecords.ts` 6 / 4, `WebhookRecords.ts` 6 / 4.
+
+Spike (06-SPIKE.md): `SPIKE-DELTA comparators: removed=44 added=103 net=-59`. Added matches exactly (103); removed is one line higher (45), hence net=-58 against the spike's net=-59. Recorded, not gated. This helper passed criterion (b) only through the divergent-copies branch (06-SPIKE.md margins): the line count alone says no (net is negative, i.e. it adds more than it removes).
