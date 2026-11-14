@@ -4,18 +4,18 @@ milestone: v1.0
 milestone_name: Architecture Deepening, batch 3
 current_phase: 3
 current_phase_name: Keyset-page module
-current_plan: 7
+current_plan: 8
 status: executing
-stopped_at: Completed 03-06-PLAN.md
-last_updated: "2026-11-14T06:59:44.943Z"
+stopped_at: Completed 03-07-PLAN.md
+last_updated: "2026-11-14T07:03:50.531Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 2 complete, transitioned to Phase 3
-state_head: b5bc1360d351e210b241a4877d37963f24b6c943
+state_head: 421a0568fe75eb29124c7513af3dae0e1a3672c2
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 18
-  completed_plans: 15
+  completed_plans: 16
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 3 — Keyset-page module
-Current Plan: 7
+Current Plan: 8
 Total Plans in Phase: 9
 Status: Ready to execute
 Last activity: 2026-11-14 — Completed 03-02 (Wave 0 pins)
@@ -75,6 +75,7 @@ Progress: [███░░░░░░░] 29%
 | Phase 03 P04 | 15min | 2 tasks | 3 files |
 | Phase 03 P05 | 20min | 2 tasks | 6 files |
 | Phase 03 P06 | 25 min | 2 tasks | 5 files |
+| Phase 03 P07 | 20min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -102,6 +103,7 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-04: KeysetSql refuses mixed-direction declarations with Defects.InvalidConfiguration at make (setting 'keyset order'); wrong cursor arity is Defects.InvariantViolation at after
 - [Phase 03]: 03-05: Users.UserCursor and Users.UsersPage kept as names, now aliases of UserStore.UserCursor and Keyset.Page; usersPage SQL is one template via sql.and over an optional KeysetSql seek
 - [Phase 03]: 03-06: OrganizationCursor defined in OrganizationRecords, aliased by OrganizationDirectory and AdminTenants; the admin gate stays in AdminTenants.listOrganizations
+- [Phase 03]: 03-07: ImpersonationPage is a Keyset.Page alias; AdminApi.LimitSchema bound by Keyset.MIN_LIMIT/MAX_LIMIT; KEY-06 scoped grep at 0
 
 ### Pending Todos
 
@@ -123,6 +125,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T06:59:44.789Z
-Stopped at: Completed 03-06-PLAN.md
+Last session: 2026-11-14T07:03:50.380Z
+Stopped at: Completed 03-07-PLAN.md
 Resume file: None
