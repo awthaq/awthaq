@@ -8,6 +8,7 @@
 // code review (IN-03): the deletion-vs-create case now gates its interleaving on advisory-lock waiters instead of
 // wall-clock sleeps and asserts the create's outcome. The two cases that still race on `pg_sleep` margins assert
 // outcome classes and final row counts that hold on either side of the race.
+import { randomInt } from "node:crypto";
 import { Auth, Users } from "@awthaq/core";
 import { TestAuth } from "@awthaq/test";
 import { assert, describe, it } from "@effect/vitest";
@@ -119,8 +120,8 @@ const withSleepTrigger =
       );
     });
 
-/** The advisory-lock key the latch trigger waits on (a plain number, never one `SqlStore.atomically` derives: those hash text keys). */
-const LATCH_KEY = 4_040_404;
+/** The advisory-lock key the latch trigger waits on: a plain number drawn per run, so two runs against one database never share it (and never one `SqlStore.atomically` derives: those hash text keys). */
+const LATCH_KEY = randomInt(1, 2 ** 31);
 
 /** A transaction that holds the latch key until `release`, so a latch trigger blocks until the test lets it go. */
 const holdLatch = Effect.gen(function* () {
