@@ -160,6 +160,7 @@ This set covers both spike outcomes for the work planned now: plans 06-01 to 06-
 - 06-04: packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts
 - 06-05: packages/sql/test/RecordsScaffoldPins.test.ts
 - 06-06: packages/organization/test/RecordOrderPins.test.ts, packages/saml/test/RecordOrderPins.test.ts, packages/scim/test/RecordOrderPins.test.ts, packages/webhooks/test/RecordOrderPins.test.ts
+- 06-07: packages/sql/src/StoreFailure.ts, packages/sql/test/StoreFailure.test.ts, packages/device-authorization/src/DeviceClientRecords.ts, packages/device-authorization/src/DeviceGrantRecords.ts, packages/api-key/src/ApiKeyClientRecords.ts, packages/api-key/src/ApiKeyRecords.ts, packages/jwt/src/SigningKeyRecords.ts, packages/admin/src/ImpersonationRecords.ts
 
 ### Go-branch obligations
 
