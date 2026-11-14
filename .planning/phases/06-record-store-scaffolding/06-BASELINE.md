@@ -161,6 +161,7 @@ This set covers both spike outcomes for the work planned now: plans 06-01 to 06-
 - 06-05: packages/sql/test/RecordsScaffoldPins.test.ts
 - 06-06: packages/organization/test/RecordOrderPins.test.ts, packages/saml/test/RecordOrderPins.test.ts, packages/scim/test/RecordOrderPins.test.ts, packages/webhooks/test/RecordOrderPins.test.ts
 - 06-07: packages/sql/src/StoreFailure.ts, packages/sql/test/StoreFailure.test.ts, packages/device-authorization/src/DeviceClientRecords.ts, packages/device-authorization/src/DeviceGrantRecords.ts, packages/api-key/src/ApiKeyClientRecords.ts, packages/api-key/src/ApiKeyRecords.ts, packages/jwt/src/SigningKeyRecords.ts, packages/admin/src/ImpersonationRecords.ts
+- 06-08: packages/organization/src/ActiveContextRecords.ts, packages/organization/src/ConnectionRecords.ts, packages/organization/src/InvitationRecords.ts, packages/organization/src/MembershipRecords.ts, packages/organization/src/OrganizationRecords.ts, packages/organization/src/OrgRoleRecords.ts, packages/organization/src/TeamRecords.ts, packages/saml/src/SamlRecords.ts, packages/scim/src/ScimRecords.ts, packages/webhooks/src/WebhookRecords.ts
 
 ### Go-branch obligations
 
@@ -266,3 +267,13 @@ The 11 comparator sites and the case that pins each (the "re-read" cases were re
 | 11 | `packages/webhooks/src/WebhookRecords.ts:314-321` `byCreation` | `listEndpoints`, `listEnabledEndpoints`, `listBySubject` | asc, `id` | new: `packages/webhooks/test/RecordOrderPins.test.ts` "WebhookRecords.listEndpoints: ...", "WebhookRecords.listEnabledEndpoints: ...", "WebhookRecords.listBySubject: ..." (each "time first, then id, ascending") |
 
 All 11 sites are pinned; none of the five reused contract cases is a gap. Site 5's tie rests on the test clock not advancing between the three creates (the case asserts the order, not the timestamps), so a future harness that ticks the clock per call would weaken it silently; the Membership contract is unchanged in this phase.
+
+## Adoption deltas
+
+### unavailable-label (06-07 and 06-08)
+
+ADOPTION-DELTA unavailable-label: removed=31 added=33 net=-2
+
+Command: `git diff --numstat 312ab409a8c891baf66332371940ca8be334d3b9 HEAD -- packages` (06-07 PLAN_BASE `312ab409` to HEAD `4df927bc`, the last 06-08 task commit). Per file: 15 adopters at 1 added / 2 removed, `WebhookRecords.ts` 1 / 1 (the closure was already one line), `StoreFailure.ts` 6 / 0, `StoreFailure.test.ts` 11 / 0.
+
+Spike (06-SPIKE.md): `SPIKE-DELTA unavailable-label: removed=31 added=30 net=1` (sites removed 31 and added 16, helper added 4, test added 10). The sites match exactly (31 removed, 16 added); the helper grew by 2 lines (the explicit `typeof orStoreUnavailable` return type and the formatter's line breaks) and its test by 1, hence net=-2 against the spike's net=1. Recorded, not gated.
