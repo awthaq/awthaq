@@ -126,13 +126,13 @@ Plans:
   3. A Postgres update-vs-remove race case asserts outcome counts and passes in CI, recorded as "not run locally".
   4. `DomainClaims` is no longer exported from the organization root, `organization` imports no SAML types, protocol error tags and `onTaken` are preserved, and `pnpm check:transactions` and `pnpm check:error-tags` pass; ADR-EA-040 carries a revision line and a changeset with a `Migration:` line exists.
   5. SCIM is unchanged except for the shared active-organization gate and deletion hook, and the SCIM `createConnection` orphan case is recorded as a finding.
-**Plans**: 5/9 plans executed
+**Plans**: 6/9 plans executed
 - [x] 04-01-PLAN.md
 - [x] 04-02-PLAN.md
 - [x] 04-03-PLAN.md
 - [x] 04-04-PLAN.md
 - [x] 04-05-PLAN.md
-- [ ] 04-06-PLAN.md
+- [x] 04-06-PLAN.md
 - [ ] 04-07-PLAN.md
 - [ ] 04-08-PLAN.md
 - [ ] 04-09-PLAN.md
@@ -195,7 +195,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7. Phases 1
 | 1. CLI views and ConfigList removal | 4/4 | Complete    | 2026-11-14 |
 | 2. Split TestAuth | 5/5 | Complete    | 2026-11-14 |
 | 3. Keyset-page module | 9/9 | Complete    | 2026-11-14 |
-| 4. Connection-lifecycle module | 5/9 | In Progress | - |
+| 4. Connection-lifecycle module | 6/9 | In Progress | - |
 | 5. Core-table list cleanup | 0/TBD | Not started | - |
 | 6. Record-store scaffolding (gated) | 0/TBD | Not started | - |
 | 7. World scaffold and Credentials split (optional) | 0/TBD | Not started | - |

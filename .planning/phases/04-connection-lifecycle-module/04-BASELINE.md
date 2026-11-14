@@ -300,3 +300,13 @@ run locally on the CI image (Debian postgres:16), CI confirmation open (no git r
 ### 04-05 gates
 
 `tsc -b` and `tsc -p tsconfig.test.json` clean (only the pre-existing TS377149 warnings); `pnpm check:transactions`, `pnpm circular`, `pnpm lint`, `pnpm format:check` exit 0; `pnpm check:error-tags`: 163 internal / 137 wire. `pnpm test`: 421 files, 6649 tests passed (1 expected fail, 21 skipped). `pnpm knip`: exit 1 for the baseline reasons only (3 `readme-quickstart.ts` unlisted dependencies plus untracked `.claude/` files), no row under `packages/organization`. `pnpm test:bdd`: `Tests  3 failed | 1577 passed | 44 skipped (1624)`, red by exactly the three 04-02 SAML rows (REQ-EA-1569, 1570, 1571) until 04-06; no other failure.
+
+## 04-06 Postgres and gates
+
+Plan 04-06 (SAML store over the lifecycle). Postgres results: run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote). `AWTHAQ_POSTGRES_URL=postgres://postgres:pw@localhost:55433/awthaq` passed explicitly.
+
+- `npx vitest run packages/saml/test/SamlLifecyclePins.test.ts packages/saml/test/SamlDomainClaims.test.ts packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts`: exit 0, `Test Files  3 passed (3)`, `Tests  13 passed (13)`.
+
+### 04-06 gates
+
+`tsc -b` and `tsc -p tsconfig.test.json` clean (only the pre-existing TS377149 warnings); `pnpm check:transactions`, `pnpm circular`, `pnpm lint` (warnings only under untracked `.claude/`), `pnpm format:check` exit 0; `pnpm check:error-tags`: 163 internal / 137 wire. `pnpm test`: 421 files, 6649 tests passed (1 expected fail, 21 skipped). `pnpm knip`: exit 1 for the baseline reasons only (3 `readme-quickstart.ts` unlisted dependencies plus untracked `.claude/` files), no row under `packages/`. `pnpm test:bdd`: `Tests  1580 passed | 44 skipped (1624)`, 0 failed: the BDD red window is closed.
