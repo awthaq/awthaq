@@ -1,6 +1,6 @@
 {
   "name": "@awthaq/admin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Impersonation: off by default, admin-gated, reason required, hard expiry, dual identity, fully audited (NFR-EA-007).",
   "license": "MIT",
