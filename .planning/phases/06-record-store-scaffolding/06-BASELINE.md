@@ -163,6 +163,7 @@ This set covers both spike outcomes for the work planned now: plans 06-01 to 06-
 - 06-07: packages/sql/src/StoreFailure.ts, packages/sql/test/StoreFailure.test.ts, packages/device-authorization/src/DeviceClientRecords.ts, packages/device-authorization/src/DeviceGrantRecords.ts, packages/api-key/src/ApiKeyClientRecords.ts, packages/api-key/src/ApiKeyRecords.ts, packages/jwt/src/SigningKeyRecords.ts, packages/admin/src/ImpersonationRecords.ts
 - 06-08: packages/organization/src/ActiveContextRecords.ts, packages/organization/src/ConnectionRecords.ts, packages/organization/src/InvitationRecords.ts, packages/organization/src/MembershipRecords.ts, packages/organization/src/OrganizationRecords.ts, packages/organization/src/OrgRoleRecords.ts, packages/organization/src/TeamRecords.ts, packages/saml/src/SamlRecords.ts, packages/scim/src/ScimRecords.ts, packages/webhooks/src/WebhookRecords.ts
 - 06-09: packages/ports/src/Keyset.ts, packages/ports/test/Keyset.test.ts
+- 06-11: spec/overview.md, spec/traceability.md, .changeset/record-store-helpers.md
 
 ### Go-branch obligations
 
@@ -286,3 +287,13 @@ ADOPTION-DELTA comparators: removed=45 added=103 net=-58
 Command: `git diff --numstat 940aa7a25649040d4954f4412751a901eae8ad9b HEAD -- packages` (06-09 PLAN_BASE `940aa7a2` to HEAD `fb8ecf18`, the last 06-10 source commit). Per file (added / removed): `Keyset.ts` 14 / 0, `Keyset.test.ts` 17 / 0, `ApiKeyClientRecords.ts` 8 / 5, `ApiKeyRecords.ts` 8 / 5, `DeviceClientRecords.ts` 8 / 4, `ConnectionRecords.ts` 6 / 4, `MembershipRecords.ts` 8 / 6, `TeamRecords.ts` 11 / 6, `SamlRecords.ts` 11 / 7, `ScimRecords.ts` 6 / 4, `WebhookRecords.ts` 6 / 4.
 
 Spike (06-SPIKE.md): `SPIKE-DELTA comparators: removed=44 added=103 net=-59`. Added matches exactly (103); removed is one line higher (45), hence net=-58 against the spike's net=-59. Recorded, not gated. This helper passed criterion (b) only through the divergent-copies branch (06-SPIKE.md margins): the line count alone says no (net is negative, i.e. it adds more than it removes).
+
+### 06-11: docs, spec and changeset
+
+Docs check (`cat examples/plugin-template/src/*.ts docs/plugin-authoring.md | grep -cE` closure and comparator spellings): 0. Literal-label pipes (`orStoreUnavailable("`): 3. Branch taken: no edit. Neither `docs/plugin-authoring.md` (line 29 pipes each method through a literal label) nor `examples/plugin-template/src/Template.ts` (lines 266 and 273, literal labels) teaches the per-file label closure or a hand-written `createdAt` comparator, so neither meets the edit condition; both are untouched.
+
+Checks: `npx tsc -b tsconfig.json` exit 0; `npx vitest run examples/plugin-template`: `Tests  55 passed (55)`; `pnpm check:readmes`: `readme-status: every package README matches its package's shipped state`.
+
+Spec: `spec/overview.md` 1.19 -> 1.20 (the `Keyset` row names `chronological`); `spec/traceability.md` 1.94 -> 1.95 (the `StoreFailure.test.ts` row names `labelled(store)`, the `Keyset.test.ts` row names `chronological`); Effective Date 2026-11-14, Change History entries added. `pnpm spec:verify:strict`: `PASS: 32   FAIL: 0   SKIP: 0`; `allocate-req-ea.py --check`: 1361 scenario rows, manifest current.
+
+Changeset: `.changeset/record-store-helpers.md` (ports and sql minor, eight adopting packages patch, one `Migration:` line); `pnpm format:check` and `pnpm workspace:check` pass.
