@@ -19,9 +19,9 @@
 //
 // Every statement reads across organizations by nature (that is the rule), so the module presents one
 // `CrossTenant` witness for the claim read; the writes are keyed by the claiming organization.
-// A claim is written inside the caller's transaction (`SqlTransaction`) beside the connection row: a refused
-// claim rolls the connection write back. The memory twin is atomic per `Ref`; the caller there releases on a
-// failed write.
+// The claim unit is owned by `OrganizationConnectionLifecycle`, which runs the claim and the connection write
+// in one `SqlTransaction` (a refused claim rolls the write back) and compensates on the memory twin, which is
+// atomic per `Ref` but has no transaction. This store only claims, releases and releases-all.
 //
 // Claim, release and release-all are serialised per organization by an advisory lock (`SqlStore.atomically`,
 // key `organization_domain_claim:org:<organizationId>`, Postgres only; SQLite has one writer). With claims-first
@@ -30,7 +30,6 @@
 // each other's owner rows either.
 
 import { SqlStore, StoreFailure, TenantScoped } from "@awthaq/sql";
-import { SqlTransaction } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -219,43 +218,3 @@ export const layerSql = Layer.effect(
     return { claim, release, releaseAllForOrganization };
   }),
 );
-
-// ---- the write seam ------------------------------------------------------------
-
-/**
- * Runs `write` (the connection's own row) and claims `input.domains` as one unit: inside the caller's
- * `SqlTransaction` a refused claim, or a failed write, rolls both back. Where the transaction is a no-op
- * (the memory twin) a failed write releases the claim again, or restores `previous` (the domains the
- * connection claimed before this update; `undefined` for a creation). The claim comes first so a taken
- * domain is refused before anything is written. A taken domain is `onTaken`'s value: the caller's own protocol error.
- */
-export const withClaim = <A, E, R, Taken>(
-  claims: DomainClaimsShape,
-  transaction: SqlTransaction.SqlTransactionShape,
-  input: DomainClaim,
-  previous: ReadonlyArray<string> | undefined,
-  write: Effect.Effect<A, E, R>,
-  onTaken: (domain: string) => Taken,
-) =>
-  transaction.withTransaction(Effect.andThen(claims.claim(input), write)).pipe(
-    Effect.onError(() =>
-      (previous === undefined
-        ? claims.release(input.organizationId, input.connectionId)
-        : claims.claim({ ...input, domains: previous })
-      ).pipe(Effect.ignore),
-    ),
-    Effect.mapError((error) => (error instanceof DomainClaimTaken ? onTaken(error.domain) : error)),
-    Effect.catchTag("SqlError", StoreFailure.storeUnavailable("DomainClaims.withClaim")),
-  );
-
-/** Deletes a connection and releases its claim as one unit (the same transaction rule as `withClaim`). */
-export const withRelease = <A, E, R>(
-  claims: DomainClaimsShape,
-  transaction: SqlTransaction.SqlTransactionShape,
-  organizationId: string,
-  connectionId: string,
-  remove: Effect.Effect<A, E, R>,
-) =>
-  transaction
-    .withTransaction(Effect.andThen(remove, claims.release(organizationId, connectionId)))
-    .pipe(Effect.catchTag("SqlError", StoreFailure.storeUnavailable("DomainClaims.withRelease")));
