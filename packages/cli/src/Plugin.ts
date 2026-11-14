@@ -22,12 +22,14 @@
 // ADR-EA-049: `--events` prints `manifest.events`, every event of the composition (core's, then each
 // plugin's declared `events` in link order) with its owner, who acts, its personal-data fields and its
 // lane (an attempt is recorded whether or not its unit of work commits).
+//
+// BEH-EA-202: each view below is a `PluginViews.View` (rows builder, text renderer and, for the
+// graph and the plain list, a DOT renderer); `PluginViews.render` resolves `--format` and the
+// global `--json` once, so this module never reads either flag.
 
 import type { TenantScoped } from "@awthaq/sql";
 import * as Duration from "effect/Duration";
-import * as Effect from "effect/Effect";
 import type { LoadedAuth } from "./Config.ts";
-import * as Output from "./Output.ts";
 import * as PluginViews from "./PluginViews.ts";
 
 export type Format = PluginViews.Format;
@@ -254,6 +256,26 @@ export const renderEvents = (rows: ReadonlyArray<EventRow>) => {
 
 const hooksView: PluginViews.View<ReadonlyArray<HookChain>> = { rows: hooks, text: renderHooks };
 
+const rulesView: PluginViews.View<ReadonlyArray<RuleRow>> = { rows: rules, text: renderRules };
+
+const eventsView: PluginViews.View<ReadonlyArray<EventRow>> = {
+  rows: events,
+  text: renderEvents,
+};
+
+const graphView: PluginViews.View<ReadonlyArray<GraphNode>> = {
+  rows: graph,
+  text: renderText,
+  dot: renderDot,
+};
+
+/** The plain `plugin list`: ids in link order. */
+const listView: PluginViews.View<ReadonlyArray<GraphNode>> = {
+  rows: graph,
+  text: (nodes) => nodes.map((node) => `${node.order}. ${node.id}`),
+  dot: renderDot,
+};
+
 /** `plugin list` (ids in link order), `--graph` with edges, ports and taps, `--hooks` with the resolved tap chains, `--rules` with the declared rate limits, or `--events` with the composition's events, as text, JSON or DOT. */
 export const show = (
   auth: LoadedAuth,
@@ -264,25 +286,10 @@ export const show = (
     readonly events?: boolean | undefined;
     readonly format: Format;
   },
-) =>
-  Effect.gen(function* () {
-    const out = yield* Output.Output;
-    if (options.hooks === true) return yield* PluginViews.render(hooksView, auth, options.format);
-    if (options.rules === true) {
-      if (options.format === "json" || out.json) return yield* out.document(rules(auth));
-      return yield* Effect.forEach(renderRules(rules(auth)), out.line, { discard: true });
-    }
-    if (options.events === true) {
-      if (options.format === "json" || out.json) return yield* out.document(events(auth));
-      return yield* Effect.forEach(renderEvents(events(auth)), out.line, { discard: true });
-    }
-    const nodes = graph(auth);
-    if (options.format === "dot") {
-      return yield* Effect.forEach(renderDot(nodes), out.line, { discard: true });
-    }
-    if (options.format === "json" || out.json) return yield* out.document(nodes);
-    if (options.graph) return yield* Effect.forEach(renderText(nodes), out.line, { discard: true });
-    yield* Effect.forEach(nodes, (node) => out.line(`${node.order}. ${node.id}`), {
-      discard: true,
-    });
-  });
+) => {
+  if (options.hooks === true) return PluginViews.render(hooksView, auth, options.format);
+  if (options.rules === true) return PluginViews.render(rulesView, auth, options.format);
+  if (options.events === true) return PluginViews.render(eventsView, auth, options.format);
+  if (options.graph) return PluginViews.render(graphView, auth, options.format);
+  return PluginViews.render(listView, auth, options.format);
+};
