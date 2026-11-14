@@ -4,18 +4,18 @@ milestone: v1.0
 milestone_name: Architecture Deepening, batch 3
 current_phase: 5
 current_phase_name: Core-table list cleanup
-current_plan: 4
+current_plan: 5
 status: executing
-stopped_at: Completed 05-03-PLAN.md
-last_updated: "2026-11-14T15:41:17.049Z"
+stopped_at: Completed 05-04-PLAN.md
+last_updated: "2026-11-14T15:46:42.948Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 5 execution started
-state_head: 4bf14a22ed42b0592ebb9cb670185c00d3014757
+state_head: be5d9b8d5dbd3c038b81694c69c5c186d7d24df4
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 33
-  completed_plans: 30
+  completed_plans: 31
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 5 (Core-table list cleanup) — EXECUTING
-Current Plan: 4
+Current Plan: 5
 Total Plans in Phase: 6
 Status: Ready to execute
 Last activity: 2026-11-14 — Phase 5 execution started
@@ -92,6 +92,7 @@ Progress: [██████░░░░] 57%
 | Phase 05 P01 | 17min | 2 tasks | 2 files |
 | Phase 05 P02 | 10min | 2 tasks | 4 files |
 | Phase 05 P03 | 12min | 2 tasks | 3 files |
+| Phase 05 P04 | 8min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -133,6 +134,7 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-09: phase-close gates recorded in 04-BASELINE.md; every gate meets the baseline; Postgres run locally on the CI image, CI confirmation open (no git remote)
 - [Phase 05]: CAT-04 minimal-fix branch not taken: the BDD STAMPED_TABLES literal is a second real copy and auth_relay_cursor and rate_limit_buckets are in no list; the candidate closes with the catalogue (CAT-01..03)
 - [Phase 05]: 05-03: partitionedTables typed via Extract over the declared tuple so the quoted reservations name stays on one line; replicated documented as LaggingReplica mirror set, not the ADR-EA-024 read set
+- [Phase 05]: 05-04: TenantScope exports annotated typeof CoreTables views; Auth.ts projects the stamped view (UnknownParent wording now 'tenant-stamped core table')
 
 ### Pending Todos
 
@@ -154,6 +156,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T15:41:16.930Z
-Stopped at: Completed 05-03-PLAN.md
+Last session: 2026-11-14T15:46:42.852Z
+Stopped at: Completed 05-04-PLAN.md
 Resume file: None
