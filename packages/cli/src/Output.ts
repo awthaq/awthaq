@@ -76,11 +76,19 @@ export const capture = (json: boolean) =>
     return { captured, layer };
   });
 
-/** Prints `value` as a JSON document under `--json`, otherwise the lines `render` builds. */
-export const report = <A>(value: A, render: (value: A) => ReadonlyArray<string>) =>
+/**
+ * Prints `value` as a JSON document under `--json`, otherwise the lines `render` builds. A command
+ * with its own `--format` flag resolves the mode itself and passes it as `options.json`; an absent
+ * option keeps the global `--json` behaviour.
+ */
+export const report = <A>(
+  value: A,
+  render: (value: A) => ReadonlyArray<string>,
+  options?: { readonly json?: boolean | undefined },
+) =>
   Effect.gen(function* () {
     const out = yield* Output;
-    if (out.json) return yield* out.document(value);
+    if (options?.json ?? out.json) return yield* out.document(value);
     yield* Effect.forEach(render(value), out.line, { discard: true });
   });
 

@@ -28,8 +28,9 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type { LoadedAuth } from "./Config.ts";
 import * as Output from "./Output.ts";
+import * as PluginViews from "./PluginViews.ts";
 
-export type Format = "text" | "json" | "dot";
+export type Format = PluginViews.Format;
 
 export interface GraphNode {
   /** 1-based position in the linker's order. */
@@ -251,6 +252,8 @@ export const renderEvents = (rows: ReadonlyArray<EventRow>) => {
   );
 };
 
+const hooksView: PluginViews.View<ReadonlyArray<HookChain>> = { rows: hooks, text: renderHooks };
+
 /** `plugin list` (ids in link order), `--graph` with edges, ports and taps, `--hooks` with the resolved tap chains, `--rules` with the declared rate limits, or `--events` with the composition's events, as text, JSON or DOT. */
 export const show = (
   auth: LoadedAuth,
@@ -264,10 +267,7 @@ export const show = (
 ) =>
   Effect.gen(function* () {
     const out = yield* Output.Output;
-    if (options.hooks === true) {
-      if (options.format === "json" || out.json) return yield* out.document(hooks(auth));
-      return yield* Effect.forEach(renderHooks(hooks(auth)), out.line, { discard: true });
-    }
+    if (options.hooks === true) return yield* PluginViews.render(hooksView, auth, options.format);
     if (options.rules === true) {
       if (options.format === "json" || out.json) return yield* out.document(rules(auth));
       return yield* Effect.forEach(renderRules(rules(auth)), out.line, { discard: true });
