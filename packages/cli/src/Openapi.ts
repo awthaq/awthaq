@@ -30,6 +30,8 @@ export const emit = (auth: LoadedAuth, options: { readonly out: string | undefin
   Effect.gen(function* () {
     const spec = yield* document(auth);
     const text = JSON.stringify(spec, null, 2);
+    // Same `JSON.stringify(spec, null, 2)` bytes as `Output.stringify` (pinned by the BEH-EA-205
+    // parity test in Inspection.test.ts), so `--json` and text print identical stdout.
     if (options.out === undefined) return yield* Output.report(spec, () => [text]);
     const fs = yield* FileSystem.FileSystem;
     yield* fs
