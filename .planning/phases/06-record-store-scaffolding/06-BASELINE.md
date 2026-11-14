@@ -468,3 +468,11 @@ None fired. Every command ran once and passed first time: SQLite `pnpm test` and
 7. Path allowlist: MET (residue 0, 30 non-planning paths; see "Path allowlist").
 
 Every rule holds (no rule failed). GATE-01 and GATE-04 hold for the phase.
+
+### Amendments after the close (review fix WR-01, 2026-11-14)
+
+Review fix WR-01 (`7f711b0b`) rewrote `packages/sql/test/RecordsScaffoldPins.test.ts` after the close above. The close's oracle-integrity statements therefore read as follows:
+
+- Only the four `RecordOrderPins.test.ts` files (organization, saml, scim, webhooks) are single-commit and unedited. `RecordsScaffoldPins.test.ts` appears in `e47f02e2` and `7f711b0b`; its transition-oracle cases (176 labels, `Ref`/`Semaphore` counts, lock keys) were deleted once the adoption was proven by the empty call-site diff, and it now holds one durable per-module rule (exactly one `StoreFailure.labelled("<own file name>")`, no `orStoreUnavailable(`).
+- "Five pin files unedited" in the REC-04 closure should read four.
+- Counts grew with the review fixes: `RecordsScaffoldPins` 4 → 17 tests, new tests 28 → 41, unit about 6727 → about 6740 (derived, not re-run). Accepted as AR-06-05 in `06-SECURITY.md`.
