@@ -392,3 +392,79 @@ Recorded as measured, not re-judged. The spike's margin sentence (06-SPIKE.md): 
 ### Docs last
 
 `git log --reverse --format=%h --name-only 3be32564..HEAD -- 'packages/*/src' spec/overview.md spec/traceability.md .changeset docs examples` filtered to the code paths and piped to the awk order check: `bad=0`. Order of the non-source paths: `spec/overview.md`, `spec/traceability.md`, `.changeset/record-store-helpers.md`, all after the last `packages/*/src` commit. `docs/` and `examples/` have no change.
+
+### Gate results at close (SQLite)
+
+Method as in "Gate results": each gate on its own from the worktree root, `AWTHAQ_POSTGRES_URL` unset, exit code from the command, wall time by `date +%s` (whole seconds; machine load varies and is not a signal), output saved outside the repo. Same order as the baseline. HEAD `95c28775` (the Task 1 commit; only `.planning/` changed since `6fd1e73b`).
+
+| Gate | Command | Exit | Summary line printed | Wall time | Baseline | Verdict |
+|------|---------|------|----------------------|-----------|----------|---------|
+| tsc -b | `npx tsc -b tsconfig.json` | 0 | (no output), 0 `error TS` | 1 s | 0 | MET |
+| tests typecheck | `npx tsc -p tsconfig.test.json` | 0 | 0 `error TS`; the same 2 pre-existing `warning TS377149` in `features/step-definitions/TestingHarnessSteps.ts` (851, 853) | 4 s | 0 | MET |
+| circular | `pnpm circular` | 0 | `$ node scripts/circular.mjs` (no findings) | 4 s | 0 | MET |
+| error tags | `pnpm check:error-tags` | 0 | `error-tags: 163 internal and 137 wire error tags, none shared` | 1 s | 163 / 137 | MET |
+| transactions | `pnpm check:transactions` | 0 | `check-transactions: no bare sql.withTransaction in packages/*/src` | 0 s | 0 | MET |
+| contract tests | `pnpm check:contract-tests` | 0 | `contract-tests: all 21 plugin classes run the contract suite; @awthaq/test stays dev-only` | 1 s | 21 | MET |
+| lint | `pnpm lint` | 0 | oxlint warnings only: 87 under untracked `.claude/`, 7 in `features/step-definitions/RequestContextSteps.ts`, none under `packages/`, no errors | 1 s | same 87 + 7 | MET |
+| format | `pnpm format:check` | 0 | `All matched files use the correct format. Finished in 55ms on 1233 files` | 0 s | 1228 files | MET (5 new files) |
+| readmes | `pnpm check:readmes` | 0 | `readme-status: every package README matches its package's shipped state` | 0 s | 0 | MET |
+| workspace | `pnpm workspace:check` | 0 | `sync-workspace: 29 packages and 3 examples match every roster` | 0 s | 0 | MET |
+| bdd | `pnpm test:bdd` | 0 | Test Files 39 passed (39); Tests 1580 passed, 44 skipped (1624) | 9 s | 39 / 1580 / 44 | MET (equal) |
+| unit | `pnpm test` | 0 (first run, no intermittent fired) | Test Files 428 passed, 6 skipped (434); Tests 6727 passed, 1 expected fail, 23 skipped (6751) | 93 s | 423 + 6 / 6699 | MET (+5 files, +28 tests) |
+| coverage | `pnpm coverage` | 0 (first run, no intermittent fired) | Statements 91.81, Branches 85.31, Functions 87.13, Lines 92.33 (floors 89 / 83 / 84 / 90); same 428 + 6 skipped files, 6727 / 1 expected fail / 23 skipped tests | 90 s | 91.80 / 85.23 / 87.12 / 92.32 | MET (each axis +0.01 to +0.08) |
+| spec | `pnpm spec:verify:strict` | 0 | `PASS: 32   FAIL: 0   SKIP: 0 (strict: skips count as failures)` | 93 s | PASS 32 | MET |
+| knip | `pnpm knip` | **1 (pre-existing)** | `Unused files (39)` (all under untracked `.claude/`), `Unlisted dependencies (3)` | 74 s | exit 1, same | MET |
+| package smoke | `pnpm package:smoke` | 0 | `package:smoke: PASS <pkg>` for each of the 30 packages (30 PASS, 0 other) | 58 s | 30 PASS | MET |
+
+The phase adds 28 tests that run on both backends (RecordsScaffoldPins 4, RecordOrderPins 22, one `labelled` case, one `chronological` case) in 5 new files: 6699 + 28 = 6727 and 423 + 5 = 428 files on SQLite, exactly the expected counts.
+
+knip, filtered (`pnpm knip 2>&1 | grep -v '^\.claude/' | grep -v '^\.reports/'`, trailing whitespace trimmed), identical to the baseline block:
+
+```text
+$ knip
+Unused files (39)
+Unlisted dependencies (3)
+@awthaq/core      packages/sql/test/fixtures/readme-quickstart.ts:2:10
+@awthaq/password  packages/sql/test/fixtures/readme-quickstart.ts:11:10
+@awthaq/server    packages/sql/test/fixtures/readme-quickstart.ts:12:10
+[ELIFECYCLE] Command failed with exit code 1.
+```
+
+Residual rows after removing the banner, headings, the three `readme-quickstart.ts` rows and ELIFECYCLE: 0; `readme-quickstart.ts` rows: 3; `.claude/` rows 39; `git diff --stat knip.json | grep -c .`: 0.
+
+### RC9 and phase files
+
+| Run | Backend | Command | Exit | Summary line printed | Wall time |
+|-----|---------|---------|------|----------------------|-----------|
+| RC9 | SQLite | the RC9 command ("Phase pins") | 0 | Test Files 9 passed (9); Tests 1334 passed (1334) | 7 s |
+| phase files | SQLite | `npx vitest run packages/sql/test/RecordsScaffoldPins.test.ts packages/organization/test/RecordOrderPins.test.ts packages/saml/test/RecordOrderPins.test.ts packages/scim/test/RecordOrderPins.test.ts packages/webhooks/test/RecordOrderPins.test.ts packages/sql/test/StoreFailure.test.ts packages/ports/test/Keyset.test.ts` | 0 | Test Files 7 passed (7); Tests 52 passed (52) | 3 s |
+
+### Postgres at close
+
+Container `awthaq-p3-pg`, Debian `postgres:16`, `--shm-size=1g`, `postgres://postgres:pw@localhost:55433/awthaq` (the throwaway local credential the baseline records), `AWTHAQ_POSTGRES_URL` passed explicitly on each command, `npx tsc -b tsconfig.json` first. The container was recreated empty (`pg-fresh.sh`) before each run. run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)
+
+| Run | Command | Exit | Summary line printed | Failing tests | Wall time |
+|-----|---------|------|----------------------|---------------|-----------|
+| RC9 (nine suites) | the RC9 command with the URL prefixed | 0 | Test Files 9 passed (9); Tests 1346 passed (1346) | none | 47 s |
+| phase files + `OrganizationConnectionLifecycle.sql.test.ts` | the seven phase files of the SQLite row plus `packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts` | 0 | Test Files 8 passed (8); Tests 55 passed (55) | none | 8 s |
+| RC9 + the five pin files (the plan's verify) | RC9 command plus the five Wave 0 pin files | 0 | Test Files 14 passed (14); Tests 1372 passed (1372) | none | not timed |
+| full unit | `pnpm test` | 0 (first run, no intermittent fired) | Test Files 434 passed (434); Tests 6770 passed, 1 expected fail, 1 skipped (6772) | none | 120 s |
+| full bdd | `pnpm test:bdd` | 0 | Test Files 39 passed (39); Tests 1580 passed, 44 skipped (1624) | none | 17 s |
+
+Postgres full unit 6770 = 6742 + 28 and 434 = 429 + 5 files, as expected; the failing list is empty (it did not grow from the baseline's empty record). `grep -ciE 'server closed|segfault|terminated unexpectedly|shared memory'` over every Postgres log: 0. `git diff --quiet`-equivalent check after the runs: `git status --short | grep -v '^??'` shows only `.planning/state.json` (an orchestrator file, never staged) and nothing under `packages`, `spec`, `docs`, `examples`, `.changeset`.
+
+### Known-intermittent re-runs
+
+None fired. Every command ran once and passed first time: SQLite `pnpm test` and `pnpm coverage` (passkey `ChallengeStore consume [atomic]`, `TenantMiddleware` "a suspended organization still resolves": neither failed), Postgres full unit (the admin `ImpersonationRecords (sql)` pair F-06-03 did not time out on this run, but remains an open load-sensitivity finding). No re-run was needed, so none is recorded.
+
+### Comparison rule verdicts
+
+1. Every gate exits as in the baseline (all 0 except `pnpm knip`, which exits 1 only for the pre-existing findings): MET. 16 SQLite gates, exit codes in the table above; knip exit 1 with the filtered output identical to the baseline.
+2. Counts only grow, coverage at or above the floors, spec PASS at or above 32 with FAIL 0 and SKIP 0: MET. Unit 6727 passed (baseline 6699) and 428 + 6 skipped files (423 + 6); bdd 1580 / 44 skipped (equal); coverage 91.81 / 85.31 / 87.13 / 92.33 against floors 89 / 83 / 84 / 90 and the baseline 91.80 / 85.23 / 87.12 / 92.32; spec `PASS: 32   FAIL: 0   SKIP: 0`.
+3. `check:error-tags` 163 / 137, `check:contract-tests` 21 plugin classes, and `check:readmes`, `circular`, `check:transactions` exit 0: MET.
+4. knip's filtered output gains nothing, `knip.json` unchanged: MET (residual rows 0, three `readme-quickstart.ts` rows, `git diff --stat knip.json` empty).
+5. RC9 passes on SQLite (1334) and on Postgres (1346), and the Postgres full-suite failing list did not grow: MET. Postgres full unit and bdd both green on the first run, failing list empty; "run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)".
+6. No new dependency: MET (`git diff --stat 3be32564 HEAD -- 'packages/*/package.json' features/package.json 'examples/*/package.json' pnpm-lock.yaml` empty).
+7. Path allowlist: MET (residue 0, 30 non-planning paths; see "Path allowlist").
+
+Every rule holds (no rule failed). GATE-01 and GATE-04 hold for the phase.
