@@ -128,9 +128,9 @@ run locally on the CI image (Debian postgres:16), CI confirmation open (no git r
 
 1. `packages/passkey/test/Contract.test.ts` > `runPluginContractTests` > `RecordsContract: passkey` > `RecordsContract: awthaq/passkey/records/ChallengeStore (memory or sql variant)` > `consume [atomic]: false for any other value, a tampered one included`. **Fired in this capture** on the first `pnpm coverage` run (the memory variant): `Test Files 1 failed | 422 passed | 6 skipped (429)`, `Tests 1 failed | 6698 passed | 1 expected fail | 23 skipped (6723)`, exit 1, 84 s; it was that run's only failure. The one re-run was green (exit 0, 106 s, the coverage numbers in the gate table). The first `pnpm test` run (run before coverage) was green first time.
 2. `packages/organization/test/TenantMiddleware.test.ts` > `... a suspended organization still resolves (the plugin's own gate refuses it)`. Did not fire in this capture.
-3. **New, finding F-06-01:** `packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts` > "OIDC connection lifecycle races (real Postgres, CONN-03/CONN-05)" > "an organization deletion racing a create for it leaves no connection, claim or owner row behind, and the create is refused" (Postgres only, under parallel load). **Fired in this capture** on the first full Postgres `pnpm test` (assertion, not a timeout: received `create: "ok"` where `create: "InvalidConnection"` was expected; the row counts were all 0). Root cause: the test's helper `waitForAdvisoryWaiters` (`OrganizationConnectionLifecycle.sql.test.ts:178-192`) counts `pg_locks WHERE locktype = 'advisory' AND NOT granted` across the whole database, not for this test's lock key; test files run in parallel against one database, so foreign advisory waiters (for example the `OrganizationMembers` race tests) can satisfy the count early and let the create commit before the delete. It is a defect in the Phase 4 test, not a regression: no `packages` file changed since the Phase 5 close, where the full Postgres run was green. The file passes alone 3 of 3 (3 tests each), and the second full Postgres `pnpm test` was green. A fix scoping the count to the lock key is planned after this phase (not edited here).
+3. **New, finding F-06-01:** `packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts` > "OIDC connection lifecycle races (real Postgres, CONN-03/CONN-05)" > "an organization deletion racing a create for it leaves no connection, claim or owner row behind, and the create is refused" (Postgres only, under parallel load). **Fired in this capture** on the first full Postgres `pnpm test` (assertion, not a timeout: received `create: "ok"` where `create: "InvalidConnection"` was expected; the row counts were all 0). Root cause: the test's helper `waitForAdvisoryWaiters` (`OrganizationConnectionLifecycle.sql.test.ts:178-192`) counts `pg_locks WHERE locktype = 'advisory' AND NOT granted` across the whole database, not for this test's lock key; test files run in parallel against one database, so foreign advisory waiters (for example the `OrganizationMembers` race tests) can satisfy the count early and let the create commit before the delete. It is a defect in the Phase 4 test, not a regression: no `packages` file changed since the Phase 5 close, where the full Postgres run was green. The file passes alone 3 of 3 (3 tests each), and the second full Postgres `pnpm test` was green. A fix scoping the count to the lock key is planned after this phase (not edited here). Fixed by 06-04 (`935cb822`, see Amendments): from 06-04 on a failure of this test is a regression, not an intermittent.
 
-Rule for later plans: a command whose only failures are one of these three cases is re-run (at most twice) and every run is recorded; any other failure is a real regression. Runs here: coverage run 1 (exit 1, intermittent 1), coverage run 2 (exit 0); Postgres full unit run 1 (exit 1, intermittent 3), run 2 (exit 0); every other gate ran once.
+Rule for later plans: a command whose only failures are one of these three cases (two cases from 06-04 on: F-06-01 is fixed, see Amendments) is re-run (at most twice) and every run is recorded; any other failure is a real regression. Runs here: coverage run 1 (exit 1, intermittent 1), coverage run 2 (exit 0); Postgres full unit run 1 (exit 1, intermittent 3), run 2 (exit 0); every other gate ran once.
 
 ## Phase-close comparison rule
 
@@ -140,7 +140,7 @@ Every gate exits as it did here, and the comparison is made on a tree where `git
 2. Test, file and coverage counts may only grow; coverage stays at or above the floors 89 / 83 / 84 / 90; `pnpm spec:verify:strict` stays `FAIL 0` and `SKIP 0`, with PASS at or above 32 (this capture).
 3. `pnpm check:error-tags` and `pnpm check:contract-tests` print the same numbers as here (163 / 137, 21 plugin classes), and `pnpm check:readmes`, `pnpm circular` and `pnpm check:transactions` exit 0.
 4. knip's filtered output gains nothing: only the banner, the headings, the three `readme-quickstart.ts` rows and the ELIFECYCLE line, no row under `packages/` besides them; `git diff --stat knip.json` stays empty.
-5. RC9 passes on SQLite and on Postgres (full command and the nine suite paths in "Phase pins" above), and the Postgres full-suite failing list does not grow (empty here; the three known intermittents each allow up to two recorded re-runs, the third being F-06-01; record again as "run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)").
+5. RC9 passes on SQLite and on Postgres (full command and the nine suite paths in "Phase pins" above), and the Postgres full-suite failing list does not grow (empty here; the three known intermittents each allow up to two recorded re-runs, the third being F-06-01 (F-06-01 removed by 06-04, see Amendments); record again as "run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)").
 6. No new dependency: `git diff --stat 3be32564 HEAD -- packages/*/package.json features/package.json examples/*/package.json pnpm-lock.yaml` prints nothing.
 
 ### Path allowlist
@@ -155,6 +155,39 @@ and on a no-go, `git diff --quiet 3be32564 HEAD -- packages features examples do
 
 This set covers both spike outcomes for the work planned now: plans 06-01 to 06-03 touch only `.planning/` and, at most, `spec/decisions/041-domain-store-ports.md`. A go-branch plan, written only after `06-SPIKE.md` says go, may widen the set solely by appending the exact paths it names: the adopting `packages/*/src/*Records.ts`, the helper module and its test, its Wave 0 pin file, one `.changeset/<name>.md`, `docs/plugin-authoring.md`, `examples/plugin-template/` files, and `spec/overview.md` / `spec/traceability.md` only if the public surface changes. A path not named by such a plan stays outside the allowlist.
 
+#### Go-branch additions
+
+- 06-04: packages/organization/test/OrganizationConnectionLifecycle.sql.test.ts
+
 ### Go-branch obligations
 
 Quoting 06-CONTEXT: before any `src` change the go branch pins today's behaviour for every file it touches (operation labels, lock keys, verdicts, ordering/comparator results, tenant visibility) and freezes each module's current `Ref` count rather than asserting one (`ImpersonationRecords` keeps two `Ref`s and a `Semaphore`), and `docs/plugin-authoring.md` and `examples/plugin-template/` update last. The Wave 0 pin files are written and green against untouched `packages/*/src` (`git diff --quiet 3be32564 -- packages/*/src` exits 0 at each Wave 0 commit), every expected value an inline literal.
+
+## Amendments
+
+### 06-04: F-06-01 scoped to its lock keys
+
+PLAN_BASE `f9a0600f`; fix commit `935cb822` (test only: `waitForAdvisoryWaiter(key)` replaces the database-wide `waitForAdvisoryWaiters(count)`; no assertion line changed; the two call sites wait on `LATCH_KEY`, then on `organization_domain_claim:org:<org id>` hashed with `hashtextextended(key, 0)` as `SqlStore.atomically` hashes it).
+
+**Step A, predicate probe (Debian postgres:16.16 container).** One holder session took session advisory locks on `4040405`, `-4040405`, `hashtextextended('probe06:org:x', 0)` and `hashtextextended('probe06:other', 0)`; four waiter sessions, one per key. The key-scoped count (`objsubid = 1 AND NOT granted AND classid/objid = the key's high/low 32 bits`) printed 1 for each of the first three keys; the unscoped `locktype = 'advisory' AND NOT granted` count printed 4. Probe sessions terminated, unscoped count back to 0.
+
+**Step B, pre-fix reproduction at PLAN_BASE** (file alone on Postgres with two foreign waiters on key 606060606 held throughout, harness check 2): FAILED, 1 of 3 tests, the race case, `create: "ok"` received where `"InvalidConnection"` was expected, row counts 0. The planted waiters reproduce F-06-01 deterministically.
+
+**Post-fix runs** (run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)):
+
+| # | Run | Result |
+|---|-----|--------|
+| 1-3 | file alone on Postgres, no foreign waiters | 3 of 3 green, 3 tests each |
+| 4-6 | file alone on Postgres, 2 foreign waiters held throughout (check 2 before and after) | 3 of 3 green, 3 tests each |
+| 7 | file alone without `AWTHAQ_POSTGRES_URL` (SQLite) | skipped, as before |
+| 8 | full `pnpm test` on Postgres, bloated container (1.8 GB, 2492 leaked schemas) | NOT a valid run: 424 s, 3 five-second timeouts (admin ImpersonationRecords `create [atomic]` and `create [race]`, organization `OrganizationMembers` natural race); F-06-01 test passed; not counted |
+| 9 | full run, fresh container | exit 1, 1 failed, 6741 passed: only passkey `ChallengeStore consume [atomic]` (known intermittent 1); F-06-01 test passed; 222 s; re-run |
+| 10 | full run, fresh container (re-run of 9) | exit 0, 429 files, 6742 passed, 1 expected fail, 1 skipped; 299 s |
+| 11 | full run, fresh container | exit 1, 2 failed, 6740 passed: admin `ImpersonationRecords (sql)` `create [atomic]` and `create [race]`, both 5 s timeouts, not a known intermittent; F-06-01 test passed; 165 s; `packages/admin/test/Contract.test.ts` alone on Postgres 3 of 3 green (126 tests) afterwards |
+| 12 | full run, fresh container (re-run of 11) | exit 0, 429 files, 6742 passed, 1 expected fail, 1 skipped; 97 s |
+
+Each full run started from an empty database (container recreated with `--shm-size=1g`) except run 8. The F-06-01 test passed in every post-fix run.
+
+**Decision.** F-06-01 is fixed and removed from the known-intermittent list from 06-04 on: the alone runs (6 of 6 green, 3 of them under planted foreign waiters) and two clean full Postgres runs (10 and 12) support it, and no post-fix run failed the F-06-01 test.
+
+**Open finding, not added to the list by this plan.** The admin `ImpersonationRecords (sql)` pair `create [atomic]: an interrupted create leaves its row and its link together, or neither` and `create [race]: 8 creates racing verifyChain never report a break` timed out at 5 s in 2 of 5 full Postgres runs (8, 11) and passed in the other three and alone. It is outside this plan's file and is unrelated to the advisory-waiter helper (it is in a different package and contract). Whether it joins the known-intermittent list is for the phase close to decide; until then a later plan meeting it re-runs once and records it.
