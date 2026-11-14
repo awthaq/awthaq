@@ -311,6 +311,42 @@ export const organizationRecords = RecordsContract.suite(OrganizationRecords.Org
           }),
         },
         {
+          name: "KEY-05: an exactly-full final page answers no cursor; one more row answers one",
+          run: Effect.gen(function* () {
+            const records = yield* OrganizationRecords.OrganizationRecords;
+            for (const slug of ["a", "b", "c", "d", "e"])
+              yield* records.create({ name: slug, slug });
+            const full = yield* records.listPage(grant, { after: Option.none(), limit: 5 });
+            assert.strictEqual(full.items.length, 5);
+            assert.isTrue(Option.isNone(full.nextCursor));
+            const first = yield* records.listPage(grant, { after: Option.none(), limit: 4 });
+            assert.strictEqual(first.items.length, 4);
+            assert.isTrue(Option.isSome(first.nextCursor));
+            const last = yield* records.listPage(grant, { after: first.nextCursor, limit: 4 });
+            assert.strictEqual(last.items.length, 1);
+            assert.isTrue(Option.isNone(last.nextCursor));
+          }),
+        },
+        {
+          name: "KEY-05: a requested limit is normalised (0, -3, 2.5, NaN, 10_000)",
+          run: Effect.gen(function* () {
+            const records = yield* OrganizationRecords.OrganizationRecords;
+            for (const slug of ["a", "b", "c"]) yield* records.create({ name: slug, slug });
+            const seen: Array<readonly [number, boolean]> = [];
+            for (const limit of [0, -3, 2.5, Number.NaN, 10_000]) {
+              const page = yield* records.listPage(grant, { after: Option.none(), limit });
+              seen.push([page.items.length, Option.isSome(page.nextCursor)]);
+            }
+            assert.deepStrictEqual(seen, [
+              [1, true],
+              [1, true],
+              [2, true],
+              [3, false],
+              [3, false],
+            ]);
+          }),
+        },
+        {
           name: "ESS-006/EP-003: every page size traverses the exact declared order across ties",
           run: Effect.gen(function* () {
             const records = yield* OrganizationRecords.OrganizationRecords;

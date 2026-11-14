@@ -4,8 +4,10 @@
 import { Api } from "@awthaq/api";
 import { AuditChain, Auth, CurrentUser, Migrations, Users } from "@awthaq/core";
 import { Organization } from "@awthaq/organization";
+import { OrganizationRecords } from "@awthaq/organization/records";
 import { UserStore } from "@awthaq/ports";
 import { CoreMigrations, UserStoreSql } from "@awthaq/sql";
+import { TenantScoped } from "@awthaq/sql";
 import { TestAuth, TestSql } from "@awthaq/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
@@ -474,3 +476,85 @@ const organizationCases = (
 
 organizationCases("memory", organizationMemory);
 organizationCases("sql records", organizationSql);
+
+// ---- organizations, records level: the two cursors of today's code ---------------------------------------------
+
+/** `OrganizationCursorSchema` over `{ T0, c }` and `{ T0 + 2 ms, f }` of the seeded creation ids (captured from the code before the keyset module). */
+const ORG_N1 =
+  "eyJjcmVhdGVkQXQiOiIyMDI2LTAzLTAxVDAwOjAwOjAwLjAwMFoiLCJpZCI6IjAxOWNhNmIxLWRjMDAtNzBiZi1iOWI4LWVlYjY3NjY1M2RhNiJ9";
+const ORG_N2 =
+  "eyJjcmVhdGVkQXQiOiIyMDI2LTAzLTAxVDAwOjAwOjAwLjAwMloiLCJpZCI6IjAxOWNhNmIxLWRjMDItNzRiZC04YmI3LWM3YzExYzA5MGZmOCJ9";
+
+const organizationRecordsBase = Layer.sync(SecureRandom.SecureRandom, () =>
+  SecureRandom.make(seededBytes()),
+);
+
+const organizationRecordsMemory: Layer.Layer<OrganizationRecords.OrganizationRecords, unknown> =
+  OrganizationRecords.layerMemory.pipe(Layer.provide(organizationRecordsBase));
+
+const organizationRecordsSql: Layer.Layer<OrganizationRecords.OrganizationRecords, unknown> =
+  OrganizationRecords.layerSql.pipe(
+    Layer.provide(organizationRecordsBase),
+    Layer.provide(
+      Layer.effectDiscard(
+        Effect.gen(function* () {
+          yield* Migrator.make({})({
+            loader: CoreMigrations.coreMigrations,
+            table: "effect_sql_migrations",
+          });
+          yield* Migrations.run(Auth.make([Organization.Organization]).migrations);
+        }),
+      ).pipe(Layer.provideMerge(TestSql.layer("keyset_cursors_org_records"))),
+    ),
+  );
+
+const organizationsGrant = TenantScoped.crossTenant("keyset cursors test: the platform listing");
+
+const organizationRecordsCases = (
+  leg: string,
+  layer: Layer.Layer<OrganizationRecords.OrganizationRecords, unknown>,
+) => {
+  describe(`organizations, records level (ORG_N1, ORG_N2 from today's code) (${leg})`, () => {
+    it.effect("limit 3 over seven seeded ids gives [a,b,c] ORG_N1, [d,e,f] ORG_N2, [g] none", () =>
+      Effect.gen(function* () {
+        const records = yield* OrganizationRecords.OrganizationRecords;
+        const ids: Array<string> = [];
+        for (const [group, slugs] of organizationGroups) {
+          yield* TestClock.setTime(T0 + group);
+          for (const slug of slugs) {
+            ids.push((yield* records.create({ name: slug, slug })).id);
+          }
+        }
+        // A mismatch here points at the fixture (the seeded generator), not at the cursor bytes.
+        assert.deepStrictEqual(ids, CREATION_IDS);
+
+        const pages: Array<{
+          readonly ids: ReadonlyArray<string>;
+          readonly cursor: string | null;
+        }> = [];
+        let after: Option.Option<OrganizationRecords.OrganizationCursor> = Option.none();
+        for (;;) {
+          const page = yield* records.listPage(organizationsGrant, { after, limit: 3 });
+          pages.push({
+            ids: page.items.map((row) => row.id),
+            cursor: Option.isSome(page.nextCursor)
+              ? Schema.encodeSync(AdminTenantsApi.OrganizationCursorSchema)(page.nextCursor.value)
+              : null,
+          });
+          if (Option.isNone(page.nextCursor)) break;
+          after = page.nextCursor;
+        }
+        assert.deepStrictEqual(pages, [
+          { ids: CREATION_IDS.slice(0, 3), cursor: ORG_N1 },
+          { ids: CREATION_IDS.slice(3, 6), cursor: ORG_N2 },
+          { ids: CREATION_IDS.slice(6), cursor: null },
+        ]);
+        assert.strictEqual(ORG_N1, derive({ createdAt: iso(T0), id: CREATION_IDS[2] }));
+        assert.strictEqual(ORG_N2, derive({ createdAt: iso(T0 + 2), id: CREATION_IDS[5] }));
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+};
+
+organizationRecordsCases("memory", organizationRecordsMemory);
+organizationRecordsCases("sql", organizationRecordsSql);
