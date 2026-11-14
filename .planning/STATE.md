@@ -4,18 +4,18 @@ milestone: v1.0
 milestone_name: Architecture Deepening, batch 3
 current_phase: 4
 current_phase_name: Connection-lifecycle module
-current_plan: 4
+current_plan: 5
 status: executing
-stopped_at: Completed 04-03-PLAN.md
-last_updated: "2026-11-14T12:44:37.704Z"
+stopped_at: Completed 04-04-PLAN.md
+last_updated: "2026-11-14T12:54:23.814Z"
 last_activity: 2026-11-14
 last_activity_desc: Phase 3 complete, transitioned to Phase 4
-state_head: 3f6511e77972c0bd893303c7b6886b2611e7c700
+state_head: c10b321df6aae94ab029d4042609584f1e342576
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 27
-  completed_plans: 21
+  completed_plans: 22
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-11-14)
 ## Current Position
 
 Phase: 4 — Connection-lifecycle module
-Current Plan: 4
+Current Plan: 5
 Total Plans in Phase: 9
 Status: Ready to execute
 Last activity: 2026-11-14 — Phase 3 complete, transitioned to Phase 4
@@ -82,6 +82,7 @@ Progress: [████░░░░░░] 43%
 | Phase 04 P01 | 40min | 3 tasks | 6 files |
 | Phase 04 P02 | 25min | 2 tasks | 6 files |
 | Phase 04 P03 | 25min | 2 tasks | 4 files |
+| Phase 04 P04 | 15min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -115,6 +116,7 @@ Recent decisions affecting current work:
 - [Phase 04]: 04-01: Postgres full-suite record at HEAD is clean (421 files, 6629 tests, no failures); Wave 0 pins import no DomainClaims; SCIM orphan is finding F-04-01 only (CONN-F1); two unit-suite intermittents recorded (passkey ChallengeStore sql, organization TenantMiddleware loopback)
 - [Phase 04]: 04-02: suspension step uses OrganizationRecords.setSuspended (AppServices widened by one type member in SamlWorld.ts); race cases assert one observed-counts object each so the red output shows every divergent count
 - [Phase 04]: 04-03: DomainClaims lock key is organization-level (organization_domain_claim:org:<id>) via SqlStore.atomically; owner rows inserted sorted, read in input order
+- [Phase 04]: 04-04: OrganizationConnectionLifecycle exposed (key awthaq/plugin/organization/ConnectionLifecycle); taken-domain mapping on the claim call, compensation inside the SqlTransaction effect
 
 ### Pending Todos
 
@@ -136,6 +138,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-14T12:44:37.627Z
-Stopped at: Completed 04-03-PLAN.md
+Last session: 2026-11-14T12:54:23.729Z
+Stopped at: Completed 04-04-PLAN.md
 Resume file: None
