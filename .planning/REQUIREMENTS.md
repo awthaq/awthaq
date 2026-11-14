@@ -26,10 +26,10 @@ Milestone "Architecture Deepening, batch 3". Each maps to roadmap phases. Resear
 - [ ] **KEY-01**: A keyset-page module in `@awthaq/ports` owns limit clamp (1..200, default 50), `limit + 1` handling, next-cursor derivation and the in-memory comparator derived from the declared order
 - [ ] **KEY-02**: Users, organizations and impersonations adopt it, with one page contract (the store primitive owns `+1`; `OrganizationRecords.listPage` and `AdminTenants` change in one commit)
 - [ ] **KEY-03**: A SQL row-value predicate builder in `@awthaq/sql` replaces the expanded-`OR` spellings and refuses mixed-direction orders
-- [x] **KEY-04**: Cursors stay byte-identical per listing (`startedAt` vs `createdAt`), proven by a golden test against today's three schemas
+- [ ] **KEY-04**: Cursors stay byte-identical per listing (`startedAt` vs `createdAt`), proven by a golden test against today's three schemas
 - [ ] **KEY-05**: `StoreContract`/`RecordsContract` gain page-order cases (ties by id, exactly-full final page, sub-millisecond timestamps, mixed-case ids) and `pnpm test:pg` passes in CI
-- [x] **KEY-06**: Duplicate `pageLimit`/`listLimit`/`MAX_PAGE_SIZE` copies are deleted (verified by grep), and the post-page admin gate stays in the caller
-- [x] **KEY-07**: Membership offset paging, `SessionStore.listLive`, SCIM paging, audit log and webhook deliveries are explicitly untouched
+- [ ] **KEY-06**: Duplicate `pageLimit`/`listLimit`/`MAX_PAGE_SIZE` copies are deleted (verified by grep), and the post-page admin gate stays in the caller
+- [ ] **KEY-07**: Membership offset paging, `SessionStore.listLive`, SCIM paging, audit log and webhook deliveries are explicitly untouched
 - [ ] **KEY-08**: `spec/overview.md` `surface:ports` lists the module; BEH-EA-036 is amended to scope "store ports" to core ports; keyset id ordering is declared collation-stable by construction with a mixed-case `test:pg` case
 
 ### Connection lifecycle (C2)
@@ -69,7 +69,7 @@ Milestone "Architecture Deepening, batch 3". Each maps to roadmap phases. Resear
 - [x] **GATE-01**: Every phase passes `tsc -b`, `pnpm test`, `pnpm test:bdd`, `pnpm circular`, `pnpm spec:verify:strict`, `pnpm check:error-tags`, `pnpm check:transactions`, `pnpm coverage` floors and `pnpm knip` against the recorded baseline; `tsc -b` runs before every cross-package vitest run
 - [x] **GATE-02**: The knip baseline (3 unlisted deps in `packages/sql/test/fixtures/readme-quickstart.ts`, `.reports/`, untracked `.claude/`) is recorded before Phase 1
 - [x] **GATE-03**: Every package-visible change ships one changeset per candidate with a `Migration:` line for breaking exports; spec Revision and Change History are bumped together
-- [x] **GATE-04**: Phases touching SQL (keyset, lifecycle, record scaffolding) are verified on Postgres in CI and record "not run locally"
+- [ ] **GATE-04**: Phases touching SQL (keyset, lifecycle, record scaffolding) are verified on Postgres in CI and record "not run locally"
 
 ## Future Requirements
 
@@ -112,10 +112,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | KEY-01 | Phase 3 | Pending |
 | KEY-02 | Phase 3 | Pending |
 | KEY-03 | Phase 3 | Pending |
-| KEY-04 | Phase 3 | Complete |
+| KEY-04 | Phase 3 | Pending |
 | KEY-05 | Phase 3 | Pending |
-| KEY-06 | Phase 3 | Complete |
-| KEY-07 | Phase 3 | Complete |
+| KEY-06 | Phase 3 | Pending |
+| KEY-07 | Phase 3 | Pending |
 | KEY-08 | Phase 3 | Pending |
 | CONN-01 | Phase 4 | Pending |
 | CONN-02 | Phase 4 | Pending |
@@ -137,7 +137,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | GATE-01 | Phase 1 | Complete |
 | GATE-02 | Phase 1 | Complete |
 | GATE-03 | Phase 1 | Complete |
-| GATE-04 | Phase 3 | Complete |
+| GATE-04 | Phase 3 | Pending |
 
 **Coverage:**
 - v1.0 requirements: 37 total
