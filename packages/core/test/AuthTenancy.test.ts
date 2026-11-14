@@ -47,6 +47,26 @@ describe("Auth.make validates tenancy declarations (BEH-EA-328)", () => {
     assert.strictEqual(Auth.make([p] as never).tenancy.length, 1);
   });
 
+  it("accepts every tenant-stamped core table as a Derived parent", () => {
+    for (const parent of [
+      "users",
+      "accounts",
+      "verification_tokens",
+      "verification_reservations",
+      "auth_audit_log",
+    ]) {
+      const p = plugin("ctx", { [`ctx_${parent}`]: T.derived(parent, "parentId") });
+      assert.strictEqual(Auth.make([p] as never).tenancy.length, 1, parent);
+    }
+  });
+
+  it("refuses a core table with no tenant column as a Derived parent", () => {
+    for (const parent of ["auth_relay_cursor", "rate_limit_buckets"]) {
+      const p = plugin("ctx", { [`ctx_${parent}`]: T.derived(parent, "parentId") });
+      assert.strictEqual(refusal([p])?.cause, "UnknownParent", parent);
+    }
+  });
+
   it("refuses an identifier that is not a plain SQL identifier", () => {
     const error = refusal([plugin("bad", { bad_x: T.partitioned('tenant"; DROP') })]);
     assert.strictEqual(error?.cause, "Identifier");
