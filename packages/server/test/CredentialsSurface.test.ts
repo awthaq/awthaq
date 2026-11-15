@@ -1,8 +1,10 @@
 // CRED-01, architecture deepening batch 3 phase 7: freezes the Credentials namespace behind its facade, green
 // before and after the split into internal/. Values: `Object.keys` at runtime. Type names: the facade source
 // (no compiler API here, the TypeScript JS API is not a dependency), so an added `export type`, `export *` or
-// inline export fails the test. Shapes of `Rotation`, `Scope` and `Resolved`: type-level equality, checked by
-// `tsc -p tsconfig.test.json` (nothing runs). Shapes of the other types are not pinned here.
+// inline export fails the test. Shapes of all 12 types: type-level equality, checked by `tsc -p tsconfig.test.json`
+// (nothing runs). None of the 12 is a service tag (`PrincipalResolver` and `CredentialResolvers` are values, their
+// shapes are the `*Shape` interfaces pinned here), so every shape is expressible without a probe. `Tier` is generic and
+// pinned at `Api.UserPrincipal`.
 import { readFileSync } from "node:fs";
 import type { Api } from "@awthaq/api";
 import type { Sessions } from "@awthaq/core";
@@ -10,13 +12,21 @@ import { assert, it } from "@effect/vitest";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
 import type * as Redacted from "effect/Redacted";
+import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as Credentials from "../src/Credentials.ts";
 import type {
+  Carrier,
   ClaimCarrier,
+  CredentialResolverContribution,
+  CredentialResolversShape,
+  Presented,
+  PrincipalResolverShape,
   Resolved,
   Rotation,
   Scope,
   SessionCarrier,
+  Source,
+  Tier,
 } from "../src/Credentials.ts";
 
 type Equal<A, B> =
@@ -64,6 +74,94 @@ export type ResolvedShape = Expect<
         readonly carrier: ClaimCarrier;
         readonly principal: Api.UserPrincipal;
       }
+  >
+>;
+
+export type CarrierShape = Expect<Equal<Carrier, "impersonation" | "cookie" | "apiKey" | "bearer">>;
+
+export type SessionCarrierShape = Expect<
+  Equal<SessionCarrier, "impersonation" | "cookie" | "bearer">
+>;
+
+export type ClaimCarrierShape = Expect<Equal<ClaimCarrier, "bearer" | "apiKey">>;
+
+export type PresentedShape = Expect<
+  Equal<
+    Presented,
+    {
+      readonly impersonation: Option.Option<Redacted.Redacted<string>>;
+      readonly cookie: Option.Option<Redacted.Redacted<string>>;
+      readonly apiKey: Option.Option<Redacted.Redacted<string>>;
+      readonly bearer: Option.Option<Redacted.Redacted<string>>;
+    }
+  >
+>;
+
+export type SourceShape = Expect<
+  Equal<
+    Source,
+    {
+      readonly cookie: (name: string) => string | undefined;
+      readonly header: (name: string) => string | undefined;
+    }
+  >
+>;
+
+export type TierShape = Expect<
+  Equal<
+    Tier<Api.UserPrincipal>,
+    {
+      readonly carriers: ReadonlyArray<Carrier>;
+      readonly admits: (principal: Api.Principal) => principal is Api.UserPrincipal;
+    }
+  >
+>;
+
+export type PrincipalResolverShapeShape = Expect<
+  Equal<
+    PrincipalResolverShape,
+    {
+      readonly resolve: (
+        session: Sessions.SessionView,
+      ) => Effect.Effect<Api.Principal, Api.StoreUnavailable>;
+    }
+  >
+>;
+
+export type CredentialResolverContributionShape = Expect<
+  Equal<
+    CredentialResolverContribution,
+    {
+      readonly id: string;
+      readonly order?: number;
+      readonly claims: (credential: string) => boolean;
+      readonly resolve: (
+        credential: Redacted.Redacted<string>,
+      ) => Effect.Effect<
+        Api.Principal,
+        Api.Unauthenticated | Api.StoreUnavailable,
+        HttpServerRequest.HttpServerRequest | Api.AuthRequestContext
+      >;
+    }
+  >
+>;
+
+export type CredentialResolversShapeShape = Expect<
+  Equal<
+    CredentialResolversShape,
+    {
+      readonly register: (
+        carrier: ClaimCarrier,
+        contribution: CredentialResolverContribution,
+      ) => Effect.Effect<
+        void,
+        | InstanceType<typeof Credentials.DuplicateCredentialResolver>
+        | InstanceType<typeof Credentials.CredentialResolversFrozen>
+      >;
+      readonly resolvers: (
+        carrier: ClaimCarrier,
+      ) => Effect.Effect<ReadonlyArray<CredentialResolverContribution>>;
+    }
   >
 >;
 
