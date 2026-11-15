@@ -127,15 +127,35 @@ No unused exports, no unused dependencies, nothing under `packages/` other than 
 
 ## Postgres
 
-(Filled by Task 3 of plan 07-01.)
+Container `awthaq-p3-pg`, image Debian `postgres:16` (`PostgreSQL 16.16 (Debian 16.16-1.pgdg13+1) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit`; `pg_isready`: `/var/run/postgresql:5432 - accepting connections`), `postgres://postgres:pw@localhost:55433/awthaq` (a throwaway local credential). This is the image CI uses (`.github/workflows/check.yml` runs `postgres:16`), not `scripts/test-pg.sh`'s alpine image. `AWTHAQ_POSTGRES_URL` was passed explicitly on each command. **The container was recreated with `--shm-size=1g` (empty database) before every recorded full run** (`pg-fresh.sh`), and `npx tsc -b tsconfig.json` ran first each time (exit 0, 0 to 1 s). Tree: HEAD `a3f92d65` equivalent to the capture tree (the pin plus `.planning/` files only).
+
+| Run | Command | Exit | Summary line printed | Failing tests | Wall time |
+|-----|---------|------|----------------------|---------------|-----------|
+| full unit, run 1 | `pnpm test` | 1 | Test Files 2 failed, 433 passed (435); Tests 3 failed, 6781 passed, 1 expected fail, 1 skipped (6786) | (a) `packages/admin/test/Contract.test.ts` ... `ImpersonationRecords (sql)` "create [atomic]: an interrupted create leaves its row and its link together, or neither" (5007 ms timeout); (b) the same file, "create [race]: 8 creates racing verifyChain never report a break" (5003 ms timeout); (c) `packages/organization/test/TenantMiddleware.test.ts` "Organization.tenantMiddlewareWithRls: the database is the backstop (real Postgres) > a request under tenant A that runs an unfiltered query sees only A's organization-keyed rows" (`Test timed out in 5000ms`, `InterruptError` logged) | 218 s |
+| the run-1 file alone, 3 runs | `npx vitest run packages/organization/test/TenantMiddleware.test.ts` (Postgres URL prefixed) | 0, 0, 0 | Test Files 1 passed (1); Tests 7 passed (7), each run | none | each under 10 s |
+| full unit, run 2 | `pnpm test` (fresh container) | 1 | Test Files 2 failed, 433 passed (435); Tests 2 failed, 6782 passed, 1 expected fail, 1 skipped (6786) | (d) `packages/passkey/test/Contract.test.ts` `ChallengeStore (sql)` "consume [atomic]: false for any other value, a tampered one included" (`expected true to be false`, known intermittent 1, the sql variant); (e) `packages/test/test/StoreContract.sql.test.ts` "StoreContract: RateLimiterStore (SQL) > the sweeper deletes expired rows" (`1 !== 0` at `packages/test/src/internal/storeContract/rateLimiterStore.ts:94`) | 203 s |
+| the run-2 files alone, 3 runs | `npx vitest run packages/test/test/StoreContract.sql.test.ts packages/passkey/test/Contract.test.ts` (Postgres URL prefixed) | 0, 0, 0 | Test Files 2 passed (2); Tests 219 passed (219), each run | none | each under 10 s |
+| full unit, run 3 (the baseline unit row) | `pnpm test` (fresh container) | 0 | Test Files 435 passed (435); Tests 6784 passed, 1 expected fail, 1 skipped (6786) | none | 101 s |
+| full bdd | `pnpm test:bdd` (fresh container) | 0 | Test Files 39 passed (39); Tests 1580 passed, 44 skipped (1624) | none | 13 s |
+
+Failing-test list for the Postgres full-suite record: empty on run 3 (the unit baseline) and on the bdd run. Every run is listed. Of the five distinct failures across runs 1 and 2: (a), (b) and (d) are known intermittents 3 and 1. **(c) and (e) are not on the known list.** Both are timing-dependent: (c) is a `Test timed out in 5000ms` of a test in the file that holds known intermittent 2 (a different case of `TenantMiddleware.test.ts`), (e) is a sweeper assertion that depends on the sweeper fiber having run before a `TestClock.adjust` (the one test in the file that does); both passed alone 3 of 3 and in the third full run, no source changed between runs. They are recorded here as candidate additions for the known-intermittent list (orchestrator's decision), not fixed in this phase. Run 3 (green) is the third full run, so no further re-run was spent.
+
+Postgres versus SQLite: unit on Postgres 435 files, 6784 passed, 1 skipped, against 429 files + 6 skipped and 6741 passed, 23 skipped on SQLite (the Postgres-only files stop skipping and their cases run); bdd identical (39 files, 1580 passed, 44 skipped) on both. Log symptoms: 0 matches for `server closed|segfault|terminated unexpectedly|shared memory` across the four Postgres logs (`--shm-size=1g`).
+
+Leak-guard on Postgres: the five `[leak-guard]` lines of the three Worlds' feature files, and in fact all 39 sorted `[leak-guard]` lines, equal `07-LEAK-GUARD-BEFORE.txt` byte for byte (`diff` empty): every line `apps=0 sqlClients=0`.
+
+run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)
+
+`git diff --name-only ee8b80a1 HEAD -- packages spec features examples docs .changeset knip.json scripts | grep -vc 'packages/server/test/CredentialsSurface\.test\.ts'` re-checked after the Postgres runs: 0.
 
 ## Known intermittents
 
-1. `packages/passkey/test/Contract.test.ts` > `runPluginContractTests` > `RecordsContract: passkey` > `RecordsContract: awthaq/passkey/records/ChallengeStore (memory or sql variant)` > `consume [atomic]: false for any other value, a tampered one included`. Did not fire in this capture.
+1. `packages/passkey/test/Contract.test.ts` > `runPluginContractTests` > `RecordsContract: passkey` > `RecordsContract: awthaq/passkey/records/ChallengeStore (memory or sql variant)` > `consume [atomic]: false for any other value, a tampered one included`. **Fired in this capture** in Postgres full unit run 2 (the sql variant; the SQLite legs did not fire it).
 2. `packages/organization/test/TenantMiddleware.test.ts` > `... a suspended organization still resolves (the plugin's own gate refuses it)`. Did not fire in this capture.
-3. The admin `ImpersonationRecords (sql)` pair: `create [atomic]: an interrupted create leaves its row and its link together, or neither` and `create [race]: 8 creates racing verifyChain never report a break` (`Test timed out in 5000ms`; fire only in a full-suite Postgres run, never alone). Did not fire in this capture (SQLite legs).
+3. The admin `ImpersonationRecords (sql)` pair: `create [atomic]: an interrupted create leaves its row and its link together, or neither` and `create [race]: 8 creates racing verifyChain never report a break` (`Test timed out in 5000ms`; fire only in a full-suite Postgres run, never alone). **Fired in this capture** in Postgres full unit run 1 (both cases, 5 s timeouts).
+4. **Candidates found in this capture, not yet on the list (orchestrator's decision):** `packages/organization/test/TenantMiddleware.test.ts` "Organization.tenantMiddlewareWithRls: the database is the backstop (real Postgres) > a request under tenant A that runs an unfiltered query sees only A's organization-keyed rows" (5 s timeout, Postgres run 1) and `packages/test/test/StoreContract.sql.test.ts` "StoreContract: RateLimiterStore (SQL) > the sweeper deletes expired rows" (`1 !== 0`, Postgres run 2). Each passed alone 3 of 3 and in the next full run; see "Postgres".
 
-Rule for later plans: a command whose only failures are these cases is re-run (at most twice) and every run is recorded; any other failure is a real regression. The Postgres container is recreated with `pg-fresh.sh` before each full Postgres run. Runs here: every SQLite gate ran once and passed (no re-run needed).
+Rule for later plans: a command whose only failures are these cases is re-run (at most twice) and every run is recorded; any other failure is a real regression. The Postgres container is recreated with `pg-fresh.sh` before each full Postgres run. Runs here: every SQLite gate ran once and passed (no re-run needed); Postgres full unit ran three times (run 1 failed on 3 and run 2 on 2 intermittent-or-candidate cases, run 3 green), bdd once (green).
 
 ## Expected deltas
 
