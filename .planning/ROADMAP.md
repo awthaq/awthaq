@@ -22,7 +22,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 4: Connection-lifecycle module** - SAML and OIDC share one exposed lifecycle service in `organization` with a single suspended-org policy (completed 2026-11-14)
 - [x] **Phase 5: Core-table list cleanup** - One core-table list in `@awthaq/sql` projected to `Auth.ts`, `LaggingReplica` and `TenantScope.coverage` (completed 2026-11-14)
 - [x] **Phase 6: Record-store scaffolding (gated)** - Preconditions recorded, spike with go/no-go, scaffolding only if the spike pays (completed 2026-11-15)
-- [ ] **Phase 7: World scaffold and Credentials split (optional)** - Shared World tail scaffold in `features/` and a pure file split of `server/Credentials.ts`
+- [x] **Phase 7: World scaffold and Credentials split (optional)** - Shared World tail scaffold in `features/` and a pure file split of `server/Credentials.ts` (completed 2026-11-15)
 
 ## Phase Details
 
@@ -189,7 +189,7 @@ Plans:
   1. A table classifies every World as scaffolded or exempt, and a scaffold in `features/step-definitions/shared/` composing with `TestAuth.layer` (not re-wrapping it) supplies the one repeated tail piece, the `AuthEvents` capture layer (`lazyApp` and `TestClock` are already single `TestAuth` calls/options), to the Worlds that repeat it (census: Admin, Password, Domain); `pnpm test:bdd` passes with the same scenario count.
   2. The five hand-wired exempt Worlds are untouched, no second host composer exists, `LeakGuard` accounting is unchanged, and omitting a required service from a scaffolded World (measured on `DomainWorld`: dropping `NoBreachHttpClient` from `services` fails at `TestAuth.serve`) is still a compile error.
   3. `server/src/Credentials.ts` is split into files under `server/src/internal/`; every `Credentials.*` name is still on the public namespace (export-name diff is empty), ADR-EA-042 is untouched, and `api-key`, `jwt`, `qadi`, `web` and `test` compile without edits.
-**Plans**: 7/7 plans executed
+**Plans**: 7/7 plans complete
 - [x] 07-01-PLAN.md
 - [x] 07-02-PLAN.md
 - [x] 07-03-PLAN.md
@@ -223,4 +223,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7. Phases 1
 | 4. Connection-lifecycle module | 9/9 | Complete    | 2026-11-14 |
 | 5. Core-table list cleanup | 6/6 | Complete    | 2026-11-14 |
 | 6. Record-store scaffolding (gated) | 12/12 | Complete    | 2026-11-15 |
-| 7. World scaffold and Credentials split (optional) | 7/7 | In Progress | - |
+| 7. World scaffold and Credentials split (optional) | 7/7 | Complete    | 2026-11-15 |

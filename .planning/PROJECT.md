@@ -59,6 +59,7 @@ Composition is checked by the compiler: a missing plugin, port or duplicate slot
 | `DomainClaims` leaves the organization root export (stays on `@awthaq/organization/records`); SCIM is untouched and its `createConnection` orphan is recorded as F-04-01 | The claim table is a records boundary, not a plugin surface; SCIM has no domains or update | ✓ Phase 4 |
 | One `CoreTables` catalogue in `@awthaq/sql` (name, owner, tenancy `partitioned|directory|none`, `replicated`, sealed view over `CoreSealedColumns`, optional reason; no column types or DDL) is the single list; `TenantScope` lists, `Auth.ts` Derived-parent check (stamped view), `LaggingReplica.coreTables` and the BDD stamped-table assertion project from it; `auth_relay_cursor` and `rate_limit_buckets` are classified `none`, not replicated, with reasons | Two real hand copies and two unclassified core tables remained, so the roadmap's minimal-fix branch did not apply; a drift guard (SQLite and Postgres) fails when a core migration creates an unclassified table, and the sealed AADs are pinned by inline literals | ✓ Phase 5 |
 | Record-store scaffolding: `StoreFailure.labelled(store)` (16 modules) and `Keyset.chronological` (11 sites) shipped; `tenant-visibility`, `wire-row` and `sqlstore-make` not pursued; Track A closed in ADR-EA-041 Rev 1.7 and ADR-EA-046 released; `*Shape`, labels, `Ref` counts and lock keys unchanged | A per-helper go/no-go rule fixed before measurement (at least 5 files, deletion test, behaviour-preserving) kept only the helpers that earn their place; declaration hashes and order pins prove no contract change; memory-twin id order is now code-unit (canonical uuidv7 ids identical), accepted by the user; F1/F2 tie-break gaps recorded open | ✓ Phase 6 |
+| World scaffold is a small `captureEvents` helper (Admin, Password, Domain) composing with `TestAuth.layer`, not a wrapper; all 31 Worlds classified (3 scaffolded, 5 hand-wired exempt, 23 no repeated tail) and guarded; `server/Credentials.ts` split into five `internal/` modules behind a 30-name facade | Census showed `lazyApp` and `TestClock` were already single `TestAuth` calls and a wrapper would restate 8 type parameters and risk erasing the missing-service compile error; the facade split is verbatim (probe diff empty, runtime-name pin, behavioural suites unedited); WORLD-01 wording reworded after research and accepted by the user; helper kept for locality (net about +1 line) | ✓ Phase 7 |
 
 ## Current Milestone: v1.0 Architecture Deepening, batch 3
 
@@ -92,4 +93,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-11-15 after Phase 6*
+*Last updated: 2026-11-15 after Phase 7*

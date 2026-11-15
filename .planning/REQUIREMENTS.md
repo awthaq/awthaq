@@ -57,12 +57,12 @@ Milestone "Architecture Deepening, batch 3". Each maps to roadmap phases. Resear
 
 ### World scaffold (C3)
 
-- [ ] **WORLD-01**: All Worlds are classified; a scaffold in `features/step-definitions/shared/` composes with `TestAuth.layer` (without re-wrapping it) for the shared tail that truly repeats (census: the `AuthEvents` capture layer; `lazyApp` and `TestClock` are already single `TestAuth` calls/options) in the Worlds that repeat it
-- [ ] **WORLD-02**: The five hand-wired exempt Worlds are not migrated; `LeakGuard` accounting and the compile-error-on-missing-service gate (measured: dropping a required service from a scaffolded World fails at `TestAuth.serve`) are kept; no second host composer is created
+- [x] **WORLD-01**: All Worlds are classified; a scaffold in `features/step-definitions/shared/` composes with `TestAuth.layer` (without re-wrapping it) for the shared tail that truly repeats (census: the `AuthEvents` capture layer; `lazyApp` and `TestClock` are already single `TestAuth` calls/options) in the Worlds that repeat it
+- [x] **WORLD-02**: The five hand-wired exempt Worlds are not migrated; `LeakGuard` accounting and the compile-error-on-missing-service gate (measured: dropping a required service from a scaffolded World fails at `TestAuth.serve`) are kept; no second host composer is created
 
 ### Credentials (C8)
 
-- [ ] **CRED-01**: `server/src/Credentials.ts` is split into files under `server/src/internal/` with every `Credentials.*` name still on the public namespace and ADR-EA-042 untouched
+- [x] **CRED-01**: `server/src/Credentials.ts` is split into files under `server/src/internal/` with every `Credentials.*` name still on the public namespace and ADR-EA-042 untouched
 
 ### Cross-cutting gates
 
@@ -131,9 +131,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REC-02 | Phase 6 | Complete |
 | REC-03 | Phase 6 | Complete |
 | REC-04 | Phase 6 | Complete |
-| WORLD-01 | Phase 7 | Pending |
-| WORLD-02 | Phase 7 | Pending |
-| CRED-01 | Phase 7 | Pending |
+| WORLD-01 | Phase 7 | Complete |
+| WORLD-02 | Phase 7 | Complete |
+| CRED-01 | Phase 7 | Complete |
 | GATE-01 | Phase 1 | Complete |
 | GATE-02 | Phase 1 | Complete |
 | GATE-03 | Phase 1 | Complete |
