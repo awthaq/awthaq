@@ -647,6 +647,42 @@ const suite = <E>(leg: string, Live: Layer.Layer<Needs, E>) => {
         }),
     );
 
+    // F-04-02 (IN-04): the shared normaliser bounds what one unit may claim, whoever the caller is.
+    it.effect("caps the domain count at 50 (after de-duplication) and each name's length", () =>
+      Effect.gen(function* () {
+        const many = (n: number) => Array.from({ length: n }, (_, i) => `d${i}.example`);
+        const refusal = (domains: ReadonlyArray<string>) =>
+          OrganizationConnectionLifecycle.normalizeDomains(protocol, domains).pipe(
+            Effect.flip,
+            Effect.map((error) => error.reason),
+          );
+        assert.strictEqual(
+          (yield* OrganizationConnectionLifecycle.normalizeDomains(protocol, many(50))).length,
+          50,
+        );
+        assert.strictEqual(
+          (yield* OrganizationConnectionLifecycle.normalizeDomains(protocol, [
+            ...many(50),
+            " D0.example ",
+          ])).length,
+          50,
+        );
+        assert.strictEqual(yield* refusal(many(51)), "at most 50 email domains");
+        const label63 = "a".repeat(63);
+        assert.strictEqual(
+          (yield* OrganizationConnectionLifecycle.normalizeDomains(protocol, [
+            `${label63}.example`,
+          ])).length,
+          1,
+        );
+        const label64 = `${"a".repeat(64)}.example`;
+        assert.strictEqual(yield* refusal([label64]), `"${label64}" is not a valid email domain`);
+        const long = `${[label63, label63, label63, "a".repeat(60)].join(".")}.ex`;
+        assert.isAbove(long.length, 253);
+        assert.strictEqual(yield* refusal([long]), `"${long}" is not a valid email domain`);
+      }),
+    );
+
     it.effect("deleting an organization frees every domain its claims held", () =>
       run(
         Effect.gen(function* () {
