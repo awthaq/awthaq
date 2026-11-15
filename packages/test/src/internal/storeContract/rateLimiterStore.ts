@@ -90,7 +90,12 @@ export const rateLimiterStore = suite(RateLimiter.RateLimiterStore, {
         const sql = yield* SqlClient.SqlClient;
         yield* store.increment("gone", window);
         yield* TestClock.adjust(Duration.seconds(61));
-        const rows = yield* sql`SELECT bucket_key FROM rate_limit_buckets`;
+        // `adjust` only wakes the sweeper's fiber: its DELETE is a real round trip that may still be in flight
+        // (a pooled Postgres connection) when the next statement runs, so read until it lands, within a bound.
+        let rows = yield* sql`SELECT bucket_key FROM rate_limit_buckets`;
+        for (let attempt = 0; rows.length > 0 && attempt < 1000; attempt++) {
+          rows = yield* sql`SELECT bucket_key FROM rate_limit_buckets`;
+        }
         assert.equal(rows.length, 0);
       }),
     },
