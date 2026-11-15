@@ -94,16 +94,30 @@ const GONE = "the organization does not exist";
 
 const DOMAIN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 
-/** Trims, lower-cases and de-duplicates (first-seen order); an invalid domain is the protocol's own refusal. */
+/** The most domains one connection may claim: `claim` runs 3N statements under the organization lock (F-04-02). */
+const MAX_DOMAINS = 50;
+
+const validDomain = (domain: string): boolean =>
+  domain.length <= 253 &&
+  DOMAIN.test(domain) &&
+  domain.split(".").every((label) => label.length <= 63);
+
+/**
+ * Trims, lower-cases and de-duplicates (first-seen order). An invalid domain (RFC 1035 name and label lengths) and
+ * more than 50 distinct domains are the protocol's own refusal.
+ */
 export const normalizeDomains = <Refused, Taken>(
   protocol: ConnectionProtocol<Refused, Taken>,
   domains: ReadonlyArray<string>,
 ): Effect.Effect<ReadonlyArray<string>, Refused> => {
   const normalized = Array.from(new Set(domains.map((domain) => domain.trim().toLowerCase())));
-  const bad = normalized.find((domain) => !DOMAIN.test(domain));
-  return bad === undefined
-    ? Effect.succeed(normalized)
-    : Effect.fail(protocol.refuse(`"${bad}" is not a valid email domain`));
+  const bad = normalized.find((domain) => !validDomain(domain));
+  if (bad !== undefined) {
+    return Effect.fail(protocol.refuse(`"${bad}" is not a valid email domain`));
+  }
+  return normalized.length > MAX_DOMAINS
+    ? Effect.fail(protocol.refuse(`at most ${MAX_DOMAINS} email domains`))
+    : Effect.succeed(normalized);
 };
 
 export interface OrganizationConnectionLifecycleShape {
