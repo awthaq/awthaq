@@ -244,8 +244,11 @@ export const impersonationRecords = RecordsContract.suite(
             run: Effect.gen(function* () {
               const records = yield* ImpersonationRecords.ImpersonationRecords;
               // Interrupt at every point of the write, from before it starts until it has finished.
+              // A yield does not wait for I/O, so over a real database the write needs a load-dependent
+              // 200 to 300 yields to finish (memory: 17), and each depth costs a full create. The depth
+              // therefore grows by a widening stride: every early point, and a bounded sweep of the rest.
               let finished = false;
-              for (let depth = 0; !finished; depth++) {
+              for (let depth = 0; !finished; depth += Math.max(1, depth >> 3)) {
                 const fiber = yield* Effect.forkChild(
                   fineGrained(seed(records, `interrupted-${depth}`)),
                 );
