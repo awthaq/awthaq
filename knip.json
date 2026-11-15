@@ -1,6 +1,9 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignore": [".scratch/**"],
+  "ignoreIssues": {
+    "packages/sql/test/fixtures/readme-quickstart.ts": ["unlisted"]
+  },
   "workspaces": {
     ".": {
       "entry": ["scripts/*.mjs", "spec/scripts/*.mjs"],

@@ -96,9 +96,10 @@ export const challengeStore = RecordsContract.suite(ChallengeStore.ChallengeStor
             assert.isFalse(yield* store.consume("registration:user-3", "not-the-right-value"));
             const scope = "registration:tamper";
             const issued = Redacted.value(yield* store.issue(scope));
-            // Always differs in decoded bytes: the first character carries six real bits. The last one of 32 bytes
-            // carries only two, so a change there decodes to the same bytes about 6% of the time (a flaky "true").
-            const tampered = `${issued.startsWith("A") ? "B" : "A"}${issued.slice(1)}`;
+            // Change the FIRST character: all six of its bits are significant, so the decoded bytes
+            // always differ. The last base64url character carries unused bits that decoding drops,
+            // so changing it can yield the very same challenge.
+            const tampered = `${issued[0] === "A" ? "B" : "A"}${issued.slice(1)}`;
             assert.isFalse(yield* store.consume(scope, tampered));
           }),
         },
