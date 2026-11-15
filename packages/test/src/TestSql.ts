@@ -69,8 +69,9 @@ const postgres = (url: string, suite: string) => {
   );
   const client = PgClient.layer({
     url: Redacted.make(url),
-    // Every statement resolves unqualified names in this suite's own schema.
-    startupParameters: { search_path: schema },
+    // Every statement resolves unqualified names in this suite's own schema. A test database needs no
+    // durability, so a commit does not wait for the WAL flush (each layer build runs hundreds of DDL commits).
+    startupParameters: { search_path: schema, synchronous_commit: "off" },
     maxConnections: 4,
     // The pool reclaims idle connections on the `Clock` every `idleTimeout` (default 10 s), so a test that
     // advances `TestClock` by days replays millions of ticks and times out. A very long timeout keeps that bounded.
