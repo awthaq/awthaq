@@ -126,3 +126,7 @@ Gates re-run at HEAD in this audit: server tests (18 files, 320 passed), Credent
 - [x] `status: verified` set in frontmatter (security gate); the phase is not merge-ready until T-07-23 is fixed or the orchestrator dispositions it
 
 **Approval:** verified 2026-11-15 at `e65e25b2` for the security gate (`threats_open: 0`); T-07-23 is open and non-blocking for that gate but fails `pnpm typecheck`, so it needs the one-line fix (or a recorded decision) before merge; Postgres legs pending CI confirmation (note N3); AR-07-03, AR-07-04 and AR-07-05 are the auditor's recording of review-fix decisions and await orchestrator confirmation
+
+## Addendum (orchestrator, 2026-11-15)
+
+T-07-23 is closed: commit `3f5f9b8a` added `// @effect-diagnostics-next-line missingLayerContext:off` after the `@ts-expect-error` (the `CompileTimeGates.ts` precedent). `npx tsc -b tsconfig.json --force` exits 0 (only the pre-existing TS377149 warnings), and removing the `@ts-expect-error` in a scratch copy gives TS2379 at `TestAuth.serve`, so the gate still fires. The 24 rows are all closed. AR-07-03, AR-07-04 and AR-07-05 were accepted by the user on 2026-11-15 together with the WORLD-01 wording.
