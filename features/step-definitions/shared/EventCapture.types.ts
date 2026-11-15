@@ -27,4 +27,5 @@ const withoutBreachClient = TestAuth.layer(built, { services: Password.config({}
 /** Never called: serving does not compile while the breach `HttpClient` is required and nothing provides it. */
 export const missingServiceDoesNotServe = () =>
   // @ts-expect-error - the breach `HttpClient` is required by `Password` and left out of `services`
+  // @effect-diagnostics-next-line missingLayerContext:off
   TestAuth.serve(withoutBreachClient);

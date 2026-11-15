@@ -467,3 +467,9 @@ Comparison with the baseline Postgres rows:
 run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)
 
 Verdict: every rule of the comparison rule (1 to 8) and the path allowlist (residue 0) is MET on the planned tree; no rule was recorded as not holding. The known intermittents fired as follows and were handled by the re-run rule: passkey `ChallengeStore (sql)` "tampered" once on SQLite (re-run green), the admin `ImpersonationRecords (sql)` "create [atomic]" case in two consecutive Postgres full unit runs (third run green). WORLD-01, WORLD-02 and CRED-01 are closed with the evidence above. The orchestrator completes the requirement and phase bookkeeping (`requirements.mark-complete`, `phase.complete`, ROADMAP, REQUIREMENTS and STATE edits); this plan did not touch them.
+
+### Amendments after the close (review fixes, 2026-11-15)
+
+- Review fix WR-01 (`78bc0444`) introduced a `tsc -b` error (TS377034, Effect `missingLayerContext`) in `EventCapture.types.ts`; the orchestrator fixed it by adding `// @effect-diagnostics-next-line missingLayerContext:off` (the `CompileTimeGates.ts` precedent). `npx tsc -b tsconfig.json --force` is clean again (only the pre-existing TS377149 warnings). The close record's "tsc -b clean" held at the close and again after this fix, not in between.
+- `CredentialsSurface.test.ts` has two commits (`924538e4`, `c94715a5`, WR-03), not one.
+- `Resolution.ts` and `Scopes.ts` gained a header line each (IN-01), so their line counts are +1.
