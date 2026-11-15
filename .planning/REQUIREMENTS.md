@@ -58,7 +58,7 @@ Milestone "Architecture Deepening, batch 3". Each maps to roadmap phases. Resear
 ### World scaffold (C3)
 
 - [ ] **WORLD-01**: All Worlds are classified; a scaffold in `features/step-definitions/shared/` composes with `TestAuth.layer` (without re-wrapping it) for the shared tail that truly repeats (census: the `AuthEvents` capture layer; `lazyApp` and `TestClock` are already single `TestAuth` calls/options) in the Worlds that repeat it
-- [ ] **WORLD-02**: The five hand-wired exempt Worlds are not migrated; `LeakGuard` accounting and the compile-error-on-missing-plugin gate are kept; no second host composer is created
+- [ ] **WORLD-02**: The five hand-wired exempt Worlds are not migrated; `LeakGuard` accounting and the compile-error-on-missing-service gate (measured: dropping a required service from a scaffolded World fails at `TestAuth.serve`) are kept; no second host composer is created
 
 ### Credentials (C8)
 
