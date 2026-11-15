@@ -182,7 +182,7 @@ Plans:
 **Research**: recommended (spike with go/no-go; plan 24 Track A dependency)
 
 ### Phase 7: World scaffold and Credentials split (optional)
-**Goal**: The BDD Worlds that repeat the shared host tail use one scaffold over `TestAuth.layer`, and `server/Credentials.ts` is split into files with its public namespace frozen. Droppable: cut this phase first if scope must shrink.
+**Goal**: The BDD Worlds that repeat the shared host tail use one scaffold (`captureEvents`, composing with `TestAuth.layer` without re-wrapping it), and `server/Credentials.ts` is split into files with its public namespace frozen. Droppable: cut this phase first if scope must shrink.
 **Depends on**: Phase 2 (the World scaffold builds on the split `TestAuth`) and Phase 4 (so the Worlds are recomposed once after the organization/SAML behaviour changes)
 **Requirements**: WORLD-01, WORLD-02, CRED-01
 **Success Criteria** (what must be TRUE):
