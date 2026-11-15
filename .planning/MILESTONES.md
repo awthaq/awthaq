@@ -36,3 +36,5 @@
 - ADR-EA-041 is Revision 1.7: a revision note and alternative (e) record plan 24 Track A (SQLite as the memory adapter) closed and ADR-EA-046 released, with decision text unchanged.
 
 ---
+
+**Follow-up (2026-11-15):** the audit tech-debt items were taken on after the close; outcomes and remaining open items are in `.planning/milestones/v1.0-FOLLOWUP.md`.
