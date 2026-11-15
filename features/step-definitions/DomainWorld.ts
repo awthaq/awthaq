@@ -30,11 +30,11 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as SqlClient from "effect/sql/SqlClient";
 import { Profile } from "./UserFieldsFixture.ts";
+import { captureEvents } from "./shared/EventCapture.ts";
 import { makeNamedRegistry } from "./shared/Harness.ts";
 
 type NamedRegistry<A> = ReturnType<typeof makeNamedRegistry<A>>;
@@ -167,18 +167,6 @@ const probesLayer = (probes: Probes) => {
   return { AccountsProbe, VerificationProbe, SessionsProbe };
 };
 
-/** The one `AuthEvents` subscriber a scenario reads back: registered before anything can publish (`startImmediately`, the AdminWorld lesson). */
-const eventsLayer = (probes: Probes) =>
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      const authEvents = yield* AuthEvents.AuthEvents;
-      yield* authEvents.stream.pipe(
-        Stream.runForEach((event) => Ref.update(probes.events, (existing) => [...existing, event])),
-        Effect.forkScoped({ startImmediately: true }),
-      );
-    }),
-  );
-
 const makeProbes = () => ({
   faults: Ref.makeUnsafe<Faults>({
     failCredentialUpdate: false,
@@ -226,7 +214,7 @@ const buildStack = (probes: Probes) => {
       Password.config({}),
       switchableLimiter(probes),
       ProfileExport,
-      eventsLayer(probes),
+      captureEvents(probes.events),
     ),
     decorate: Layer.mergeAll(AccountsProbe, VerificationProbe, SessionsProbe),
   });
