@@ -373,3 +373,64 @@ Recorded as findings; ROADMAP.md and REQUIREMENTS.md are not edited here.
 5. The `captureEvents` shape actually built is overloads (`captureEvents(into)` and `captureEvents(into, keep)` with a type predicate) over one generic implementation; no two-export fallback.
 6. No changeset, spec, docs or ADR change in the phase (the path allowlist has no such path).
 7. From plan 07-01: two unlisted timing flakes fired on the Postgres full unit runs and are admitted as known intermittents: organization `TenantMiddleware` "a request under tenant A that runs an unfiltered query sees only A's organization-keyed rows" and `packages/test` `StoreContract.sql` "RateLimiterStore (SQL) > the sweeper deletes expired rows".
+
+### Gates on SQLite
+
+HEAD `8aca93c9` (the structural-close commit; the tree under `packages` and `features` is unchanged since `6e747cd8`), `AWTHAQ_POSTGRES_URL` unset, each gate its own command in baseline order, wall time with `date +%s`, full output in the scratch directory. `git diff --stat knip.json` prints nothing.
+
+| Gate | Command | Exit | Summary line printed | Wall | Baseline | Verdict |
+|------|---------|------|----------------------|------|----------|---------|
+| tsc -b | `npx tsc -b tsconfig.json` | 0 | no output, 0 `error TS` | 1 s | 0 | MET |
+| tests typecheck | `npx tsc -p tsconfig.test.json` | 0 | 0 `error TS`; the same 2 pre-existing `warning TS377149` in `TestingHarnessSteps.ts` (851, 853) | 4 s | 0 | MET |
+| circular | `pnpm circular` | 0 | `$ node scripts/circular.mjs` (no findings) | 3 s | 0 | MET |
+| error tags | `pnpm check:error-tags` | 0 | `error-tags: 163 internal and 137 wire error tags, none shared` | 1 s | same | MET |
+| transactions | `pnpm check:transactions` | 0 | `check-transactions: no bare sql.withTransaction in packages/*/src` | 0 s | same | MET |
+| contract tests | `pnpm check:contract-tests` | 0 | `contract-tests: all 21 plugin classes run the contract suite; @awthaq/test stays dev-only` | 1 s | same | MET |
+| lint | `pnpm lint` | 0 | oxlint: 94 warnings, no errors: 87 under untracked `.claude/`, 7 in `features/step-definitions/RequestContextSteps.ts`, none under `packages/` and none in an edited or added file | 0 s | 94, same split | MET |
+| format | `pnpm format:check` | 0 | `All matched files use the correct format. ... on 1242 files` | 1 s | 1234 files | MET (+8, the expected delta) |
+| readmes | `pnpm check:readmes` | 0 | `readme-status: every package README matches its package's shipped state` | 0 s | same | MET |
+| workspace | `pnpm workspace:check` | 0 | `sync-workspace: 29 packages and 3 examples match every roster` | 1 s | same | MET |
+| bdd | `pnpm test:bdd` | 0 | Test Files 40 passed (40); Tests 1581 passed, 44 skipped (1625) | 10 s | 39 / 1580 / 44 | MET (+1 file, +1 passed, skipped unchanged) |
+| unit, run 1 | `pnpm test` | 1 | Test Files 1 failed, 428 passed, 6 skipped (435); Tests 1 failed, 6740 passed, 1 expected fail, 23 skipped (6765) | 49 s | | known intermittent 1, see below |
+| unit, re-run 1 | `pnpm test` | 0 | Test Files 429 passed, 6 skipped (435); Tests 6741 passed, 1 expected fail, 23 skipped (6765) | 139 s | 429 + 6 / 6741 / 1 / 23 | MET (equal) |
+| coverage | `pnpm coverage` | 0 | Statements 91.81 (19854/21625), Branches 85.31 (7300/8557), Functions 87.13 (6448/7400), Lines 92.33 (18506/20043) (floors 89 / 83 / 84 / 90); 429 + 6 skipped files, 6741 / 1 expected fail / 23 skipped tests | 58 s | the same figures | MET (equal) |
+| spec | `pnpm spec:verify:strict` | 0 | `PASS: 32   FAIL: 0   SKIP: 0 (strict: skips count as failures)` | 87 s | PASS 32 | MET |
+| knip | `pnpm knip` | 1 (pre-existing) | `Unused files (39)` (all under untracked `.claude/`), `Unlisted dependencies (3)` | 69 s | exit 1, same | MET |
+| package smoke | `pnpm package:smoke` | 0 | `package:smoke: PASS <pkg>` for 30 packages, 0 other | 44 s | 30 PASS | MET |
+| CP on SQLite | `npx vitest run packages/server packages/qadi packages/web packages/jwt packages/api-key packages/next packages/test` | 0 | Test Files 100 passed (100); Tests 1593 passed, 1 expected fail (1594) | 22 s | 100 / 1593 / 1 | MET (equal) |
+| WP on SQLite | the WP command of "Phase pins" plus `features/_guard/world-table.steps.test.ts` | 0 | Test Files 6 passed (6); Tests 178 passed (178) | 12 s | 5 / 177 | MET (+1 file, +1 test: the guard) |
+
+**Known intermittent fired once on SQLite.** Unit run 1 failed one test: `packages/passkey/test/Contract.test.ts` > `runPluginContractTests` > `RecordsContract: passkey` > `RecordsContract: awthaq/passkey/records/ChallengeStore (sql)` > `consume [atomic]: false for any other value, a tampered one included` (`AssertionError: expected true to be false`, 10 ms; 1 failed, 6740 passed). That is the known intermittent 1; in the baseline capture it fired only on Postgres, here it fired on the SQLite-backed (default) run. Per the rule it was re-run once (`pnpm test`, exit 0, 429 files + 6 skipped, 6741 passed), so no second re-run was spent; the coverage run (which executes the same suite) was green with the same counts.
+
+**knip, filtered** (`grep -v '^\.claude/' | grep -v '^\.reports/'` over the saved output), identical to the baseline block; the verify count of leftover rows is 0, `readme-quickstart.ts` rows 3, `git diff --stat knip.json | grep -c .` 0:
+
+```text
+$ knip
+Unused files (39)
+Unlisted dependencies (3)
+@awthaq/core      packages/sql/test/fixtures/readme-quickstart.ts:2:10
+@awthaq/password  packages/sql/test/fixtures/readme-quickstart.ts:11:10
+@awthaq/server    packages/sql/test/fixtures/readme-quickstart.ts:12:10
+[ELIFECYCLE] Command failed with exit code 1.
+```
+
+**Leak-guard comparison.** The sorted `[leak-guard]` lines of the bdd run: 40 lines, every one ending `apps=0 sqlClients=0`; `diff` against `07-LEAK-GUARD-BEFORE.txt` (39 lines) prints exactly one line, the guard file's:
+
+```text
+2d1
+< [leak-guard] features/_guard/world-table.steps.test.ts apps=0 sqlClients=0
+```
+
+The five lines of the three Worlds' feature files are unchanged.
+
+### Comparison rule verdicts
+
+Rule 5 (the Postgres rule) is judged below with the Postgres legs.
+
+1. MET. Every gate exits as in the baseline: all 0 except `pnpm knip`, exit 1 for the pre-existing findings only (the gate table above; the one unit failure was the known intermittent 1 and its single re-run exited 0).
+2. MET. Counts only grow or stay equal: bdd 40 files / 1581 passed (+1 / +1, the guard), unit 429 + 6 skipped files and 6741 passed (equal), coverage 91.81 / 85.31 / 87.13 / 92.33 (equal, above the floors 89 / 83 / 84 / 90), `spec:verify:strict` PASS 32, FAIL 0, SKIP 0.
+3. MET. `check:error-tags` prints 163 / 137, `check:contract-tests` prints 21 plugin classes; `check:readmes`, `circular` and `check:transactions` exit 0.
+4. MET. knip's filtered output is the banner, the two headings, the three `readme-quickstart.ts` rows and the ELIFECYCLE line; `git diff --stat knip.json` is empty.
+6. MET. `git diff --stat ee8b80a1 HEAD -- 'packages/*/package.json' features/package.json 'examples/*/package.json' pnpm-lock.yaml | grep -c .` prints 0.
+7. MET. The sorted `[leak-guard]` lines equal `07-LEAK-GUARD-BEFORE.txt` plus the single guard-file line; every line ends `apps=0 sqlClients=0`.
+8. MET (evidence in "Integrity" and "CRED-01 closure" above). The surface snapshots diff empty (identical sha) and `CredentialsSurface.test.ts` has one commit since the phase base.
