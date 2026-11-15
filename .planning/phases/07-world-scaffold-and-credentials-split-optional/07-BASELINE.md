@@ -178,6 +178,26 @@ Every gate exits as it did here, and the comparison is made on a tree where `git
 7. The sorted `[leak-guard]` lines are identical to `07-LEAK-GUARD-BEFORE.txt`, apart from the single line of the new guard file (`features/_guard/world-table.steps.test.ts apps=0 sqlClients=0`); every line still ends `apps=0 sqlClients=0`.
 8. The Credentials export-surface probe, re-run on the split `Credentials.ts` with the same script and tsconfig, diffs empty against `07-CRED-SURFACE-BEFORE.txt` (or differs only as the plan that does the split justifies), and `CredentialsSurface.test.ts` has exactly one commit since the phase base.
 
+## CRED-01 closure (plan 07-03)
+
+HEAD `29b590b6` (the Task 2 commit; the Task 1 commit is `89702458`), 2026-11-15.
+
+**Layout (lines).** Before (`0b8c11f0`): `Credentials.ts` 678. After: `Credentials.ts` 52 (header comment, two comment lines, 30 named re-exports), `internal/PrincipalResolver.ts` 86, `internal/CredentialResolvers.ts` 163, `internal/Presented.ts` 97, `internal/Resolution.ts` 255, `internal/Scopes.ts` 107.
+
+**Surface proof.** `07-CRED-SURFACE-BEFORE.txt` and `07-CRED-SURFACE-AFTER.txt`: 81 lines, 30 `## ` headings, sha256 `efbf9b94e28774245a5630cdc2f9b1f3a17ccfe5b810211176af9ac31a7a9a1d` for both; `diff` prints 0 lines; the live probe over the final facade diffs 0 lines against BEFORE. The runtime-name pin `CredentialsSurface.test.ts` is green and has exactly one commit since the phase base (`git log --oneline ee8b80a1..HEAD -- packages/server/test/CredentialsSurface.test.ts | wc -l` prints 1).
+
+**Verbatim proof.** The VM awk check over the facade and the five internal modules prints `OK` (n > 500 original lines, none lost or changed apart from imports and `export`-prefixed twins, no new code line). Its stray-line mutation was recorded in plan 07-02 (`FAIL bad=0 new=1` with `const stray = 1;` appended to `PrincipalResolver.ts`, `OK` once removed). The facade declaration census is 0 (was 45), `^import ` count 0 (was 19), `export *` 0. The divider comments `the seam: a scope` and `the two scopes` moved with their code so the check loses no original line.
+
+**Probe mutation.** `Source` was deleted from the `export type { }` clause of `./internal/Presented.ts` in `Credentials.ts` (then restored from a byte copy; `git diff --stat packages/server/src/Credentials.ts` prints nothing afterwards). Outcomes: `npx tsc -b tsconfig.json` 0 errors (nothing outside the file uses `Source`); `CredentialsSurface.test.ts` green (1 test: a type name is not a runtime key); the probe diff is non-empty and names the missing heading (`> ## Source [type]` with its two members, 4 lines). So the probe diff, not the pin, guards the type names.
+
+**Single-flight.** `grep -c 'new WeakMap'`: 3 in `internal/Resolution.ts`, 3 across `packages/server/src`, 0 in `Credentials.ts`. `sessionMemo`, `claimMemo`, `outages` and `once` are file-private `const`s in `Resolution.ts` (4 matches); `Failure` and `annotatePrincipal` are private as well. No `internal/` file imports `../Credentials`.
+
+**Consumers.** CP on SQLite (`AWTHAQ_POSTGRES_URL` unset): Test Files 100 passed (100); Tests 1593 passed, 1 expected fail (1594), equal to the "Phase pins" CP row; the new internal files add no test file. `git diff --name-only ee8b80a1 HEAD -- packages/api-key packages/jwt packages/qadi packages/web packages/next packages/test features examples spec docs .changeset knip.json | grep -c .` prints 0; manifests and lockfile diff prints 0. The only non-`.planning/` paths changed since the phase base are `Credentials.ts`, the five internal modules and `CredentialsSurface.test.ts`.
+
+**Gates.** `npx tsc -b tsconfig.json` 0 errors; `npx tsc -p tsconfig.test.json` 0 errors; `pnpm circular` exit 0; `pnpm lint` exit 0 (baseline warnings only); `pnpm format:check` clean. `pnpm knip` exit 1 as at baseline: filtered output is the banner, `Unused files (39)` (all `.claude/`), `Unlisted dependencies (3)` with the three `packages/sql/test/fixtures/readme-quickstart.ts` rows and ELIFECYCLE; 0 extra rows; `git diff --stat knip.json` empty.
+
+**Decisions.** No ADR edit: ADR-EA-042 pins a module named `Credentials` in `@awthaq/server` with its members and behaviours, not a path or file layout. No spec or docs edit: no spec or docs line cites `packages/server/src/Credentials.ts` (`grep -rl` over `spec` and `docs` prints nothing). no changeset: `@awthaq/server` exports only `.`, the public surface diff is empty; the published `lib/Credentials.d.ts` text changes to re-export lines but nothing a consumer can import changes (the Phase 2 split of TestAuth recorded the same decision).
+
 ### Path allowlist
 
 Every line of `git diff --name-only ee8b80a1 HEAD` must match:
