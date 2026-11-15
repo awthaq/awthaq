@@ -1,0 +1,81 @@
+## Carrier [type]
+type<>: "impersonation" | "cookie" | "apiKey" | "bearer"
+## ClaimCarrier [type]
+type<>: "apiKey" | "bearer"
+## collecting [value]
+value: Effect<{    scope: {        key: {};        deliver: (rotation: Rotation) => Effect<void, never, never>;        claim: () => Effect<Option<never>, never, never>;    };    rotations: Effect<readonly Rotation[], never, never>;}, never, never>
+## contribute [value]
+value: (carrier: ClaimCarrier, contribution: CredentialResolverContribution) => Layer<never, DuplicateCredentialResolver | CredentialResolversFrozen, CredentialResolvers>
+## CredentialResolverContribution [type]
+type<>: CredentialResolverContribution
+  readonly claims: (credential: string) => boolean
+  readonly id: string
+  readonly order?: number
+  readonly resolve: (credential: Redacted<string>) => Effect<UserPrincipal | ApiKeyPrincipal | ServicePrincipal | AnonymousPrincipal, Unauthenticated | StoreUnavailable, HttpServerRequest | AuthRequestContext>
+## CredentialResolvers [value+type]
+value: typeof CredentialResolvers
+type<>: CredentialResolvers
+## CredentialResolversFrozen [value+type]
+value: typeof CredentialResolversFrozen
+type<>: CredentialResolversFrozen
+## CredentialResolversLive [value]
+value: Layer<CredentialResolvers, never, never>
+## CredentialResolversShape [type]
+type<>: CredentialResolversShape
+  readonly register: (carrier: ClaimCarrier, contribution: CredentialResolverContribution) => Effect<void, DuplicateCredentialResolver | CredentialResolversFrozen, never>
+  readonly resolvers: (carrier: ClaimCarrier) => Effect<readonly CredentialResolverContribution[], never, never>
+## DuplicateCredentialResolver [value+type]
+value: typeof DuplicateCredentialResolver
+type<>: DuplicateCredentialResolver
+## fromRequest [value]
+value: (request: HttpServerRequest) => Effect<{    impersonation: Option<Redacted<string>>;    cookie: Option<Redacted<string>>;    apiKey: Option<Redacted<string>>;    bearer: Option<Redacted<string>>;}, never, never>
+## httpScope [value]
+value: (request: HttpServerRequest, context: RequestFacts | NoRequest) => {    key: object;    deliver: (rotation: Rotation) => Effect<void, never, never>;    claim: (carrier: ClaimCarrier, credential: Redacted<string>) => Effect<Option<UserPrincipal | ApiKeyPrincipal | ServicePrincipal | AnonymousPrincipal>, Unauthenticated | StoreUnavailable, never>;}
+## machineTier [value]
+value: {    carriers: Carrier[];    admits: (principal: UserPrincipal | ApiKeyPrincipal | ServicePrincipal | AnonymousPrincipal) => principal is UserPrincipal | ApiKeyPrincipal | ServicePrincipal | AnonymousPrincipal;}
+## make [value]
+value: Effect<{    step: <P extends Api.Principal>(carrier: Carrier, presentedCredentials: Presented, admission: Tier<P>, scope: Scope) => Effect<{        readonly _tag: "Session";        readonly carrier: SessionCarrier;        readonly principal: P;        readonly session: SessionView;    } | {        readonly _tag: "Claimed";        readonly carrier: ClaimCarrier;        readonly principal: P;        readonly session?: never;    }, Failure, never>;    resolve: <P extends Api.Principal>(presentedCredentials: Presented, admission: Tier<P>, scope: Scope) => Effect<Resolved<P>, Failure, never>;}, never, Sessions | PrincipalResolver>
+## optionalTier [value]
+value: {    carriers: Carrier[];    admits: (principal: UserPrincipal | ApiKeyPrincipal | ServicePrincipal | AnonymousPrincipal) => principal is UserPrincipal;}
+## presented [value]
+value: (source: Source) => Effect<{    impersonation: Option<Redacted<string>>;    cookie: Option<Redacted<string>>;    apiKey: Option<Redacted<string>>;    bearer: Option<Redacted<string>>;}, never, never>
+## Presented [type]
+type<>: {    readonly impersonation: Option<Redacted<string>>;    readonly cookie: Option<Redacted<string>>;    readonly apiKey: Option<Redacted<string>>;    readonly bearer: Option<Redacted<string>>;}
+## principalFields [value]
+value: (principal: UserPrincipal | ApiKeyPrincipal | ServicePrincipal | AnonymousPrincipal) => {    "auth.session.id"?: string;    "auth.principal.type": string;    "auth.principal.ref": string;}
+## PrincipalResolver [value+type]
+value: typeof PrincipalResolver
+type<>: PrincipalResolver
+## PrincipalResolverLive [value]
+value: Layer<PrincipalResolver, never, never>
+## PrincipalResolverShape [type]
+type<>: PrincipalResolverShape
+  readonly resolve: (session: SessionView) => Effect<UserPrincipal | ApiKeyPrincipal | ServicePrincipal | AnonymousPrincipal, StoreUnavailable, never>
+## PrincipalResolverWithUserFactsLive [value]
+value: Layer<PrincipalResolver, never, Users>
+## Resolved [type]
+type<P>: {    readonly _tag: "Session";    readonly carrier: SessionCarrier;    readonly principal: P;    readonly session: SessionView;} | {    readonly _tag: "Claimed";    readonly carrier: ClaimCarrier;    readonly principal: P;}
+## Rotation [type]
+type<>: Rotation
+  readonly carrier: SessionCarrier
+  readonly session: SessionView
+  readonly token: Redacted<string>
+## Scope [type]
+type<>: Scope
+  readonly claim: (carrier: ClaimCarrier, credential: Redacted<string>) => Effect<Option<UserPrincipal | ApiKeyPrincipal | ServicePrincipal | AnonymousPrincipal>, Unauthenticated | StoreUnavailable, never>
+  readonly deliver: (rotation: Rotation) => Effect<void, never, never>
+  readonly key: object
+## SessionCarrier [type]
+type<>: "impersonation" | "cookie" | "bearer"
+## Source [type]
+type<>: Source
+  readonly cookie: (name: string) => string | undefined
+  readonly header: (name: string) => string | undefined
+## tier [value]
+value: <P extends Api.Principal>(declaration: {    readonly security: Readonly<Record<string, HttpApiSecurity>>;}, admits: (principal: UserPrincipal | ApiKeyPrincipal | ServicePrincipal | AnonymousPrincipal) => principal is P) => {    carriers: Carrier[];    admits: (principal: UserPrincipal | ApiKeyPrincipal | ServicePrincipal | AnonymousPrincipal) => principal is P;}
+## Tier [type]
+type<P>: Tier<P>
+  readonly admits: (principal: UserPrincipal | ApiKeyPrincipal | ServicePrincipal | AnonymousPrincipal) => principal is P
+  readonly carriers: readonly Carrier[]
+## userTier [value]
+value: {    carriers: Carrier[];    admits: (principal: UserPrincipal | ApiKeyPrincipal | ServicePrincipal | AnonymousPrincipal) => principal is UserPrincipal;}
