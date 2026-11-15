@@ -18,6 +18,7 @@ import { TestAuth, TestMailbox } from "@awthaq/test";
 import { Api } from "@awthaq/api";
 import { parseCookieHeader } from "@awthaq/web/cookies";
 import { agentOver } from "./shared/Csrf.ts";
+import { captureEvents } from "./shared/EventCapture.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -30,7 +31,6 @@ import * as Exit from "effect/Exit";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
@@ -160,18 +160,6 @@ const buildApp = Effect.fn("features.password.buildApp")(function* (options: App
 
   const events = yield* Ref.make<ReadonlyArray<AuthEvents.PublishedAny>>([]);
   const fault = yield* Ref.make<Fault>("none");
-  const eventsLayer = Layer.effectDiscard(
-    Effect.gen(function* () {
-      const authEvents = yield* AuthEvents.AuthEvents;
-      // `startImmediately`: the stream is a live broadcast, so a publish that beats the
-      // subscription is gone for good (AdminWorld's own reproduced race).
-      yield* authEvents.stream.pipe(
-        // Every event, core's and the password plugin's (ADR-EA-049): this world reads them back by tag.
-        Stream.runForEach((event) => Ref.update(events, (existing) => [...existing, event])),
-        Effect.forkScoped({ startImmediately: true }),
-      );
-    }),
-  );
 
   const common = {
     // The plugin's own configuration, the breach transport, the mailer and the event subscriber are this world's
@@ -181,7 +169,7 @@ const buildApp = Effect.fn("features.password.buildApp")(function* (options: App
       Password.config(options.passwordConfig ?? {}),
       options.breachHttpClient ?? NoBreachHttpClient,
       ...(options.slowMailer === true ? [neverAnsweringMailer] : []),
-      eventsLayer,
+      captureEvents(events),
     ),
     decorate: Layer.mergeAll(
       faultInjectingSessions(fault),
