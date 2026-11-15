@@ -77,11 +77,17 @@ const postgres = (url: string, suite: string) => {
     idleTimeout: Duration.days(100_000),
     types: regclassTypes(),
   });
+  // The schema is dropped again when the layer's scope closes: a layer build is one test's database, and
+  // schemas left behind (hundreds per full run, each with core's partitioned tables) bloat the catalog until
+  // 5 s budgets fail. The name is this suite's and worker's own, so no other worker's schema is ever dropped.
   const reset = Layer.effectDiscard(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-      yield* sql.unsafe(`CREATE SCHEMA ${schema}`);
+      const drop = sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      yield* Effect.acquireRelease(
+        drop.pipe(Effect.andThen(sql.unsafe(`CREATE SCHEMA ${schema}`))),
+        () => Effect.ignore(drop),
+      );
     }),
   );
   return Layer.provideMerge(reset, client);
