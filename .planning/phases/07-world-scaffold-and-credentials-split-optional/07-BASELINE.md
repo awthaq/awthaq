@@ -425,12 +425,45 @@ The five lines of the three Worlds' feature files are unchanged.
 
 ### Comparison rule verdicts
 
-Rule 5 (the Postgres rule) is judged below with the Postgres legs.
+Rule 5 (the Postgres rule) is judged below, in its place, from the Postgres legs.
 
 1. MET. Every gate exits as in the baseline: all 0 except `pnpm knip`, exit 1 for the pre-existing findings only (the gate table above; the one unit failure was the known intermittent 1 and its single re-run exited 0).
 2. MET. Counts only grow or stay equal: bdd 40 files / 1581 passed (+1 / +1, the guard), unit 429 + 6 skipped files and 6741 passed (equal), coverage 91.81 / 85.31 / 87.13 / 92.33 (equal, above the floors 89 / 83 / 84 / 90), `spec:verify:strict` PASS 32, FAIL 0, SKIP 0.
 3. MET. `check:error-tags` prints 163 / 137, `check:contract-tests` prints 21 plugin classes; `check:readmes`, `circular` and `check:transactions` exit 0.
 4. MET. knip's filtered output is the banner, the two headings, the three `readme-quickstart.ts` rows and the ELIFECYCLE line; `git diff --stat knip.json` is empty.
+5. MET (evidence in "Postgres at the close" below): full unit and full bdd pass on Postgres with the failing list not growing; the only failures along the way were the known intermittent 3 (twice, recorded, third run green), and CP and WP pass on SQLite and on Postgres.
 6. MET. `git diff --stat ee8b80a1 HEAD -- 'packages/*/package.json' features/package.json 'examples/*/package.json' pnpm-lock.yaml | grep -c .` prints 0.
 7. MET. The sorted `[leak-guard]` lines equal `07-LEAK-GUARD-BEFORE.txt` plus the single guard-file line; every line ends `apps=0 sqlClients=0`.
 8. MET (evidence in "Integrity" and "CRED-01 closure" above). The surface snapshots diff empty (identical sha) and `CredentialsSurface.test.ts` has one commit since the phase base.
+
+### Postgres at the close
+
+Container `awthaq-p3-pg`, Debian `postgres:16` (`PostgreSQL 16.16 (Debian 16.16-1.pgdg13+1) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit`; `pg_isready`: `/var/run/postgresql:5432 - accepting connections`), `postgres://postgres:pw@localhost:55433/awthaq` (a throwaway local credential), `--shm-size=1g`, recreated with `pg-fresh.sh` (empty database) before every row group below; `AWTHAQ_POSTGRES_URL` passed explicitly on every command; `npx tsc -b tsconfig.json` ran first each time (exit 0, 1 s). Not `scripts/test-pg.sh`. Tree: HEAD `f702dd3a`, unchanged under `packages` and `features` since the baseline source commits (`git status --porcelain -- packages features spec docs examples .changeset | grep -c .` prints 0).
+
+| Run | Command | Exit | Summary line printed | Failing tests | Wall |
+|-----|---------|------|----------------------|---------------|------|
+| CP, group 1 | `npx vitest run packages/server packages/qadi packages/web packages/jwt packages/api-key packages/next packages/test` | 0 | Test Files 100 passed (100); Tests 1596 passed, 1 expected fail (1597) | none | 100 s |
+| WP + guard, group 1 | the WP command of "Phase pins" plus `features/_guard/world-table.steps.test.ts` | 0 | Test Files 6 passed (6); Tests 178 passed (178) | none | 27 s |
+| full unit, run 1 | `pnpm test` | 1 | Test Files 1 failed, 434 passed (435); Tests 1 failed, 6783 passed, 1 expected fail, 1 skipped (6786) | `packages/admin/test/Contract.test.ts` > `RecordsContract: admin` > `ImpersonationRecords (sql)` > "create [atomic]: an interrupted create leaves its row and its link together, or neither" (`Test timed out in 5000ms`): known intermittent 3 | 149 s |
+| CP, group 2 (fresh container) | the CP command | 0 | Test Files 100 passed (100); Tests 1596 passed, 1 expected fail (1597) | none | 39 s |
+| WP + guard, group 2 | the WP + guard command | 0 | Test Files 6 passed (6); Tests 178 passed (178) | none | 17 s |
+| full unit, run 2 (re-run 1) | `pnpm test` | 1 | Test Files 1 failed, 434 passed (435); Tests 1 failed, 6783 passed, 1 expected fail, 1 skipped (6786) | the same `ImpersonationRecords (sql)` "create [atomic]" case, `Test timed out in 5000ms`: known intermittent 3 | 195 s |
+| CP, group 3 (fresh container) | the CP command | 0 | Test Files 100 passed (100); Tests 1596 passed, 1 expected fail (1597) | none | 53 s |
+| WP + guard, group 3 | the WP + guard command | 0 | Test Files 6 passed (6); Tests 178 passed (178) | none | 8 s |
+| full unit, run 3 (re-run 2) | `pnpm test` | 0 | Test Files 435 passed (435); Tests 6784 passed, 1 expected fail, 1 skipped (6786) | empty | 208 s |
+| full bdd (fresh container) | `pnpm test:bdd` | 0 | Test Files 40 passed (40); Tests 1581 passed, 44 skipped (1625) | empty | 43 s |
+
+Failing-test list for the Postgres full-suite record: empty on unit run 3 and on the bdd run. Runs 1 and 2 each failed on one case of the known intermittent 3 (the `create [atomic]` half of the admin `ImpersonationRecords (sql)` pair, a 5 s timeout that fires only in a full-suite Postgres run, never alone; the baseline listed both halves). Per the rule the command was re-run at most twice, each time on a recreated container and each run recorded; the second re-run was green, and no other failure occurred in any of the three runs. No unlisted case fired (the two candidates of plan 07-01 did not fire in this close).
+
+Comparison with the baseline Postgres rows:
+
+- Full unit: 435 files, 6784 passed, 1 expected fail, 1 skipped (6786): equal to the baseline's green run 3 (`Test Files 435 passed (435); Tests 6784 passed, 1 expected fail, 1 skipped (6786)`); the failing list did not grow.
+- Full bdd: 40 files, 1581 passed, 44 skipped (1625): +1 file and +1 passed test against the baseline's 39 / 1580 / 44, skipped unchanged; identical to the SQLite bdd run.
+- CP on Postgres: 100 files, 1596 passed, 1 expected fail (the Postgres-only cases stop skipping); CP on SQLite equals its baseline row (100 / 1593 / 1). WP plus guard: 6 files, 178 passed on both backends (baseline 5 / 177 plus the guard).
+- Leak-guard on Postgres: the sorted `[leak-guard]` lines of the bdd run (40) differ from `07-LEAK-GUARD-BEFORE.txt` by exactly the guard file's line and are byte-equal to the SQLite lines (`diff` 0); the WP run prints the five lines of the three Worlds' feature files plus the guard's, all `apps=0 sqlClients=0`.
+- Log symptoms: 0 matches for `server closed|segfault|terminated unexpectedly|shared memory` across all saved Postgres logs of this close.
+- `git diff --name-only ee8b80a1 HEAD | grep -vE '<allowlist>' | grep -c .` after the closing runs: 0 (no path outside the allowlist changed during the runs).
+
+run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)
+
+Verdict: every rule of the comparison rule (1 to 8) and the path allowlist (residue 0) is MET on the planned tree; no rule was recorded as not holding. The known intermittents fired as follows and were handled by the re-run rule: passkey `ChallengeStore (sql)` "tampered" once on SQLite (re-run green), the admin `ImpersonationRecords (sql)` "create [atomic]" case in two consecutive Postgres full unit runs (third run green). WORLD-01, WORLD-02 and CRED-01 are closed with the evidence above. The orchestrator completes the requirement and phase bookkeeping (`requirements.mark-complete`, `phase.complete`, ROADMAP, REQUIREMENTS and STATE edits); this plan did not touch them.
