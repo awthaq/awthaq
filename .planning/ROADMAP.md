@@ -189,11 +189,11 @@ Plans:
   1. A table classifies every World as scaffolded or exempt, and a scaffold in `features/step-definitions/shared/` composing with `TestAuth.layer` (not re-wrapping it) supplies the one repeated tail piece, the `AuthEvents` capture layer (`lazyApp` and `TestClock` are already single `TestAuth` calls/options), to the Worlds that repeat it (census: Admin, Password, Domain); `pnpm test:bdd` passes with the same scenario count.
   2. The five hand-wired exempt Worlds are untouched, no second host composer exists, `LeakGuard` accounting is unchanged, and omitting a required service from a scaffolded World (measured on `DomainWorld`: dropping `NoBreachHttpClient` from `services` fails at `TestAuth.serve`) is still a compile error.
   3. `server/src/Credentials.ts` is split into files under `server/src/internal/`; every `Credentials.*` name is still on the public namespace (export-name diff is empty), ADR-EA-042 is untouched, and `api-key`, `jwt`, `qadi`, `web` and `test` compile without edits.
-**Plans**: 3/7 plans executed
+**Plans**: 4/7 plans executed
 - [x] 07-01-PLAN.md
 - [x] 07-02-PLAN.md
 - [x] 07-03-PLAN.md
-- [ ] 07-04-PLAN.md
+- [x] 07-04-PLAN.md
 - [ ] 07-05-PLAN.md
 - [ ] 07-06-PLAN.md
 - [ ] 07-07-PLAN.md
@@ -223,4 +223,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7. Phases 1
 | 4. Connection-lifecycle module | 9/9 | Complete    | 2026-11-14 |
 | 5. Core-table list cleanup | 6/6 | Complete    | 2026-11-14 |
 | 6. Record-store scaffolding (gated) | 12/12 | Complete    | 2026-11-15 |
-| 7. World scaffold and Credentials split (optional) | 3/7 | In Progress | - |
+| 7. World scaffold and Credentials split (optional) | 4/7 | In Progress | - |
