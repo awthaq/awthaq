@@ -230,3 +230,40 @@ ADOPTION-DELTA world=AdminWorld removed=22 added=3
 No size win is claimed: the helper is kept for locality of the race fix; the net line count is recorded after plan 07-05.
 
 **bdd and gates.** `pnpm test:bdd` exit 0: Test Files 39 passed (39); Tests 1580 passed, 44 skipped (1624), equal to the bdd row; the sorted `[leak-guard]` lines diff against `07-LEAK-GUARD-BEFORE.txt` prints 0 lines. `npx tsc -b tsconfig.json` and `npx tsc -p tsconfig.test.json` 0 errors; `pnpm lint` exit 0 (baseline warnings only, none in the new or edited files); `pnpm format:check` clean; `pnpm circular` exit 0; `pnpm knip` exit 1 as at baseline (39 `.claude/` unused files, the 3 `readme-quickstart.ts` rows, ELIFECYCLE). `git diff --name-only ee8b80a1 HEAD -- packages/test features/step-definitions/OrganizationWorld.ts` prints nothing.
+
+## World scaffold: adoption (plan 07-05)
+
+HEAD `1aea6d49` (the Password adoption is `5297eb93`, the Domain adoption `1aea6d49`), 2026-11-15. Admin, Password and Domain are now the three scaffolded Worlds; no inline `authEvents.stream` is left in any of them (`grep -c` 0 each).
+
+**Deltas (`git diff --numstat ee8b80a1 HEAD`).**
+
+ADOPTION-DELTA world=AdminWorld removed=22 added=3
+ADOPTION-DELTA world=PasswordWorld removed=14 added=2
+ADOPTION-DELTA world=DomainWorld removed=14 added=2
+
+Helper `EventCapture.ts`: 44 lines. Pin `EventCapture.types.ts`: 43 lines (additive, not counted).
+
+NET removed 50, added 7, helper 44: 50 - 7 - 44 = -1 (the three Worlds shrink by 43 lines; the helper costs 44, so the code base is one line larger, 51 added against 50 removed).
+
+The net is not negative in size, so no size win is claimed: the helper is kept for locality of the reproduced-race fix (`startImmediately`: one copy to read and fix instead of three by reference), not for size. `OrganizationWorld` keeps its own `subscribe` layer.
+
+**Adopters.** Both calls are the no-predicate form at the old position inside the same `Layer.mergeAll`: `captureEvents(events)` last in `PasswordWorld`'s `common.services`, `captureEvents(probes.events)` last in `DomainWorld`'s `services` (the `records: "sql"` composition). `Stream` was the only import left unused in each. Password files (`15-password`, `05-persistence-stratum`): 2 files, 72 passed (72); Domain files (`06-users-accounts`, `08-verification-tokens`): 2 files, 68 passed (68); every `[leak-guard]` line `apps=0 sqlClients=0`.
+
+**Recorded mutations on the scaffolded DomainWorld (each restored from a byte copy; `git diff --stat` empty, tsc green afterwards).**
+- (a) `NoBreachHttpClient` omitted from the `services` merge: `npx tsc -p tsconfig.test.json` red at `DomainWorld.ts(280,39)`, the `TestAuth.serve(appLayer)` call: TS2379 ("Type 'HttpClient' is not assignable to type 'never'") and TS377034 ("Missing 'HttpClient' in the expected Layer context"), plus TS6133 for the now-unused `NoBreachHttpClient` constant. Same codes as measured at `0b8c11f0` on the unscaffolded World.
+- (b) `Password.Password` dropped from the `Auth.make([Profile, Password.Password])` tuple: tsc stays green, as found (and as the planner measured). It contradicts the research's suggested mutation.
+- The surviving compile-time gate in a scaffolded World is therefore a composed plugin's unmet requirement at `TestAuth.serve`: omitting a plugin's required service is red, omitting a plugin that nothing else forces is not. ROADMAP criterion 2's "omitting a plugin" reads that way.
+
+**SQLite.** `npx tsc -b tsconfig.json` and `npx tsc -p tsconfig.test.json` 0 errors (only the pre-existing `TestingHarnessSteps.ts` TS377149 warnings); full `pnpm test:bdd` exit 0: Test Files 39 passed (39); Tests 1580 passed, 44 skipped (1624), equal to the bdd row; the sorted `[leak-guard]` lines diff against `07-LEAK-GUARD-BEFORE.txt` prints 0 lines. `pnpm lint` exit 0 (baseline warnings, none in `PasswordWorld.ts` or `DomainWorld.ts`), `pnpm format:check` clean, `pnpm circular` exit 0, `pnpm knip` exit 1 as at baseline (39 `.claude/` unused files, the 3 `readme-quickstart.ts` rows, ELIFECYCLE).
+
+**Postgres, targeted (the three Worlds' feature files).** Container recreated with `bash pg-fresh.sh` first (Debian `postgres:16`, `PostgreSQL 16.16 (Debian 16.16-1.pgdg13+1)`), `AWTHAQ_POSTGRES_URL=postgres://postgres:pw@localhost:55433/awthaq` passed explicitly, one run, no intermittent fired.
+
+| Command | Exit | Test Files | Tests | Leak-guard |
+|---------|------|------------|-------|------------|
+| `pnpm --filter @awthaq/features exec vitest run` over `27-admin-impersonation`, `15-password`, `05-persistence-stratum`, `06-users-accounts`, `08-verification-tokens` | 0 | 5 passed (5) | 177 passed (177) (37 + 72 + 68, equal to the SQLite counts) | all five `apps=0 sqlClients=0` |
+
+run locally on the CI image (Debian postgres:16), CI confirmation open (no git remote)
+
+The full Postgres bdd and unit legs belong to plan 07-07.
+
+**Integrity (empty diffs since `ee8b80a1`).** The 28 Worlds other than Admin, Password and Domain: `git diff --name-only ... | grep -E 'World\.ts$' | grep -vE '/(AdminWorld|PasswordWorld|DomainWorld)\.ts$' | grep -c .` prints 0. The five hand-wired Worlds (Authentication, ContractStratum, Csrf, QadiBridge, Tenancy) and `OrganizationWorld`: 0 lines. `packages/test`: 0 lines.
