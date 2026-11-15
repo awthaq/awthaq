@@ -10,7 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
-// ---- the principal resolver and the claimed-credential registry (moved from Authentication.ts) ----------
+// ---- the principal resolver (moved from Authentication.ts) ----------------------------------------------
 
 /**
  * BEH-EA-069: derives a `Principal` from a resolved `Session` alone, with no

@@ -1,5 +1,7 @@
-// The two scope adapters of ADR-EA-042 decision 2: `httpScope` and `collecting`. One of the internal modules
-// behind `../Credentials.ts`.
+// @awthaq/server — internal Scopes
+//
+// ADR-EA-042 decision 2: the two scope adapters, `httpScope` and `collecting`, one of the internal modules
+// behind `Credentials.ts`.
 
 import { SessionCookie } from "@awthaq/core";
 import { Api } from "@awthaq/api";

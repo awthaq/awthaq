@@ -1,5 +1,7 @@
-// The resolution engine and the `Scope` seam types (ADR-EA-042 decisions 1, 2 and 5), with the per-request
-// memo tables beside `make`. One of the internal modules behind `../Credentials.ts`.
+// @awthaq/server — internal Resolution
+//
+// ADR-EA-042 decisions 1, 2 and 5: the resolution engine and the `Scope` seam types, with the per-request
+// memo tables beside `make`, one of the internal modules behind `Credentials.ts`.
 
 import { Observability, Sessions } from "@awthaq/core";
 import { Api } from "@awthaq/api";
