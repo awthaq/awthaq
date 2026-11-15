@@ -207,3 +207,26 @@ Every line of `git diff --name-only ee8b80a1 HEAD` must match:
 ```
 
 Plus the empty-diff checks: `git diff --name-only ee8b80a1 HEAD -- packages/test`, the importer packages (`packages/api-key`, `packages/jwt`, `packages/qadi`, `packages/web`, `packages/next`), every other `packages/*/src`, `packages/*/package.json`, `pnpm-lock.yaml`, `knip.json`, `.changeset`, `spec`, `docs`, `examples` print nothing; the 28 Worlds other than Admin, Password and Domain have an empty diff. No changeset, spec, docs, ADR or package.json change is planned (D-08: a pure internal split and a test-suite helper change no `@awthaq/server` output).
+
+## World scaffold: helper and Admin adoption (plan 07-04)
+
+HEAD `c34c34e3`, 2026-11-15, SQLite/memory (`AWTHAQ_POSTGRES_URL` unset).
+
+**Helper shape (as built).** `features/step-definitions/shared/EventCapture.ts`, 44 lines: the overloaded form compiled and linted cleanly on the first probe (no fallback to two exports, no cast). Two overload declarations (`captureEvents(into)` for a `PublishedAny` Ref; `captureEvents(into, keep)` with a type predicate and a Ref of the narrowed type) over one generic implementation whose `keep` defaults to the accept-all predicate `(_event): _event is E => true`. Result type `Layer.Layer<never, never, AuthEvents.AuthEvents>`; imports only `AuthEvents` from `@awthaq/core` and `Effect`, `Layer`, `Ref`, `Stream`. `OrganizationWorld` stays inline (its `subscribe` registration is recorded in the doc comment).
+
+**Pin (`EventCapture.types.ts`, no gate marker).** Claim 1 `needsOnlyAuthEvents` (exact requirement, both directions); claim 2 `stillClosed` (`Layer.Services` of `TestAuth.layer(Auth.make([Password.Password]), { services: Password.config({}) + TestAuth.httpClient.noBreach, taps: helper })` extends `never`; a plain `Layer<unknown, unknown, never>` assignment is rejected by variance, so the `never` form is the closed-composition check); claim 3 `foreignTapDoesNotLaunch` (`@ts-expect-error` on `Layer.launch` over the same composition with `Layer.mergeAll(helper, <undeclared HookPoint tap>)`). The file is checked by `npx tsc -b tsconfig.json` (the `features` project), not only by `tsconfig.test.json`.
+
+**Recorded mutations (each restored from a byte copy, `cmp` clean).**
+- Helper implementation reads `Sessions.Sessions`: tsc red inside `EventCapture.ts` (TS2375, the explicit `Capture` annotation rejects the wider requirement); the pin is not what catches this, the annotation is.
+- Declared requirement widened to `AuthEvents | Sessions` or `AuthEvents | Mailer`: claim 1 red; claim 2 stays green, because the harness provides `Sessions` and `Mailer`.
+- Declared requirement widened to `AuthEvents | Extra` (a service no harness provides): claim 1 and claim 2 both red (TS2322 at `needsOnlyAuthEvents` and `stillClosed`).
+- Claim 3 without its `@ts-expect-error` line: TS2379 (`Effect<never, never, Undeclared>` not assignable to `Effect<never, never, never>`).
+After each restore `npx tsc -b tsconfig.json && npx tsc -p tsconfig.test.json` is clean.
+
+**Admin.** The inline subscriber block is gone (`grep -c 'authEvents.stream' AdminWorld.ts` 0); `taps: captureEvents(events, AuthEvents.is(worldEvents))` sits at the same position; `Stream` was the only import left unused. Admin feature file: 1 file, 37 passed (37), `[leak-guard] ... apps=0 sqlClients=0`.
+
+ADOPTION-DELTA world=AdminWorld removed=22 added=3
+
+No size win is claimed: the helper is kept for locality of the race fix; the net line count is recorded after plan 07-05.
+
+**bdd and gates.** `pnpm test:bdd` exit 0: Test Files 39 passed (39); Tests 1580 passed, 44 skipped (1624), equal to the bdd row; the sorted `[leak-guard]` lines diff against `07-LEAK-GUARD-BEFORE.txt` prints 0 lines. `npx tsc -b tsconfig.json` and `npx tsc -p tsconfig.test.json` 0 errors; `pnpm lint` exit 0 (baseline warnings only, none in the new or edited files); `pnpm format:check` clean; `pnpm circular` exit 0; `pnpm knip` exit 1 as at baseline (39 `.claude/` unused files, the 3 `readme-quickstart.ts` rows, ELIFECYCLE). `git diff --name-only ee8b80a1 HEAD -- packages/test features/step-definitions/OrganizationWorld.ts` prints nothing.
