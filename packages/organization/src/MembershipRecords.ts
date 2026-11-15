@@ -6,6 +6,7 @@
 // JSON-serialized `TEXT` column under `layerSql`, a plain array in memory.
 
 import { Defects, Users } from "@awthaq/core";
+import { Keyset } from "@awthaq/ports";
 import { Models as SqlModels, SqlStore, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Brand from "effect/Brand";
 import * as Context from "effect/Context";
@@ -188,18 +189,19 @@ export class MembershipRecords extends Context.Service<MembershipRecords, Member
 const notFound = (userId: Users.UserId, organizationId: string): MembershipRecordNotFound =>
   new MembershipRecordNotFound({ userId, organizationId });
 
-/** `(createdAt, id)` ascending, reversed for `desc`: the SQL adapter's `ORDER BY` (plan 24 R1/R2). */
+/** `(createdAt, id)` ascending, flipped for `desc`: the SQL adapter's `ORDER BY` (plan 24 R1/R2). */
 const applySort = (
   records: ReadonlyArray<MembershipRecord>,
   input?: ListMembersInput,
 ): ReadonlyArray<MembershipRecord> => {
   const direction = input?.sortDirection ?? "asc";
-  const sorted = [...records].sort(
-    (a, b) =>
-      DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt) ||
-      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  return [...records].sort(
+    Keyset.chronological({
+      createdAt: (record: MembershipRecord) => record.createdAt,
+      id: (record) => record.id,
+      direction,
+    }),
   );
-  return direction === "desc" ? sorted.reverse() : sorted;
 };
 
 const applyPage = (
@@ -448,8 +450,7 @@ export const layerSql = Layer.effect(
   MembershipRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`MembershipRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("MembershipRecords");
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const MembershipRow = makeMembershipRow(wire);

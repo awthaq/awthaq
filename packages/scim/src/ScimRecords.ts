@@ -18,7 +18,7 @@
 //   directory's `userName` for a user (unique per connection); `externalId` is the
 //   directory's own key (unique per connection and kind, when present).
 
-import { SqlTransaction } from "@awthaq/ports";
+import { Keyset, SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -176,9 +176,11 @@ const byCreation = <A extends { readonly createdAt: DateTime.Utc }>(
   tieBreak: (row: A) => string,
 ): ReadonlyArray<A> =>
   [...rows].sort(
-    (a, b) =>
-      DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt) ||
-      tieBreak(a).localeCompare(tieBreak(b)),
+    Keyset.chronological({
+      createdAt: (row: A) => row.createdAt,
+      id: tieBreak,
+      direction: "asc",
+    }),
   );
 
 // ---- layerMemory ------------------------------------------------------------------------
@@ -505,8 +507,7 @@ export const layerSql = Layer.effect(
   ScimRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`ScimRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("ScimRecords");
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const ConnectionRow = makeConnectionRow(wire);

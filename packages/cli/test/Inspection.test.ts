@@ -11,7 +11,8 @@ import * as Output from "../src/Output.ts";
 import * as Plugin from "../src/Plugin.ts";
 import * as Routes from "../src/Routes.ts";
 import { hookedApp } from "./support/HookedApp.ts";
-import { passwordAndRoles } from "./support/TestApp.ts";
+import { runCli } from "./support/RunCli.ts";
+import { configOf, passwordAndRoles } from "./support/TestApp.ts";
 
 const captureStdout = <A, E>(effect: Effect.Effect<A, E, Output.Output>, json = false) =>
   Effect.gen(function* () {
@@ -323,6 +324,24 @@ describe("openapi", () => {
           ? Object.keys(spec.paths)
           : [];
       assert.isTrue(paths.some((path) => path.endsWith("/sign-up")));
+    }),
+  );
+
+  it.effect("BEH-EA-205: --json prints the same bytes as text", () =>
+    Effect.gen(function* () {
+      const plain = yield* runCli(["openapi"], configOf(passwordAndRoles));
+      const json = yield* runCli(["--json", "openapi"], configOf(passwordAndRoles));
+      for (const r of [plain, json]) {
+        assert.strictEqual(r.code, 0);
+        assert.deepStrictEqual(r.stderr, []);
+        assert.strictEqual(r.stdout.length, 1);
+      }
+      assert.deepStrictEqual(json.stdout, plain.stdout);
+      // The same holds one level down, on the command's own function.
+      const emit = Openapi.emit(passwordAndRoles, { out: undefined }).pipe(
+        Effect.provide(NodeFileSystem.layer),
+      );
+      assert.deepStrictEqual(yield* captureStdout(emit, true), yield* captureStdout(emit, false));
     }),
   );
 });

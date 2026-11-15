@@ -203,7 +203,7 @@ Why this order:
 | ADR-EA-043 | Federated identity resolution is a core module | 14 |
 | ADR-EA-044 | One host-composition module derives the servable layer | 15 |
 | ADR-EA-045 | The session lifecycle is declared on the `HttpApi` contract | 21 |
-| ADR-EA-046 | Plugin record stores: one behaviour for memory and SQL | 24 |
+| ADR-EA-046 | Plugin record stores: one behaviour for memory and SQL | 24 (released 2026-11-14 by batch 3 phase 6, REC-01: Track A closed in ADR-EA-041 rev 1.7) |
 
 Several plans amend the same ADR and each wrote the next revision number it saw. **Revision numbers are
 assigned when a plan lands, in landing order**, not as written in the plan:
@@ -338,7 +338,7 @@ Why this order:
 
 | Topic | Plans | Resolution |
 |---|---|---|
-| Plugin memory/SQL parity | 24, 25 | **25 subsumes 24 Track B** (R1–R6, `orConflict`, C1–C10 become contract cases). 24 keeps the Track A spike and ADR-EA-046. **25 Q0 accepted (2026-11-08):** 24 Phases 1–5 are marked superseded. |
+| Plugin memory/SQL parity | 24, 25 | **25 subsumes 24 Track B** (R1–R6, `orConflict`, C1–C10 become contract cases). 24 keeps the Track A spike and ADR-EA-046. **Closed (2026-11-14, batch 3 phase 6, REC-01):** Track A closed in ADR-EA-041 rev 1.7 and ADR-EA-046 released. **25 Q0 accepted (2026-11-08):** 24 Phases 1–5 are marked superseded. |
 | Fold `Repositories` | 16, 28 | 16 did it; 28 is three residual tickets. |
 | Core sealed columns | 17, 30 B | 17 did it; 30 B keeps ticket 21 (re-run proofs) and gates tickets 22–23 (re-key) on a named environment. |
 | Request facts | 11, 20, 21, 26 | 26 deletes 11's `ClientAddress.facts`/`address` helpers; names its brand `Api.UserAgentHeader` to avoid 20's `UserAgent`; shares 21's contract files (second to land rebases). |

@@ -26,7 +26,7 @@
 // and the worker, which run with no tenant and serve every tenant's endpoints, present a
 // `TenantScoped.CrossTenant` witness, so a method that spans tenants says so in its signature.
 
-import { type Encryption, SqlTransaction } from "@awthaq/ports";
+import { type Encryption, Keyset, SqlTransaction } from "@awthaq/ports";
 import {
   Models as SqlModels,
   SealedColumn,
@@ -315,9 +315,11 @@ const byCreation = <A extends { readonly createdAt: DateTime.Utc; readonly id: s
   rows: ReadonlyArray<A>,
 ): ReadonlyArray<A> =>
   [...rows].sort(
-    (a, b) =>
-      DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt) ||
-      a.id.localeCompare(b.id),
+    Keyset.chronological({
+      createdAt: (row: A) => row.createdAt,
+      id: (row) => row.id,
+      direction: "asc",
+    }),
   );
 
 const millis = DateTime.toEpochMillis;
@@ -552,6 +554,7 @@ export const layerMemory: Layer.Layer<
                 enabled.has(row.endpointId) &&
                 millis(row.nextAttemptAt) <= millis(now),
             )
+            // shortcut: ids by locale, not code unit like `byCreation`; the same order for the lowercase uuidv7 ids minted here, so align when ids may be caller-supplied.
             .sort(
               (a, b) =>
                 millis(a.nextAttemptAt) - millis(b.nextAttemptAt) || a.id.localeCompare(b.id),
@@ -785,6 +788,7 @@ export const layerMemory: Layer.Layer<
         Effect.gen(function* () {
           const seen = yield* TenantScoped.visibility();
           const s = yield* Ref.get(state);
+          // shortcut: the sort compares ids by locale while the `before` filter compares by code unit; the same order for minted uuidv7 ids, so align when ids may be caller-supplied.
           return s.deliveries
             .filter(
               (row) =>
@@ -1134,7 +1138,7 @@ export const layerSql: Layer.Layer<
     });
 
     /** `StoreUnavailable` for a store outage, a defect for a row that no longer decodes (ADR-EA-028). */
-    const failing = (method: string) => StoreFailure.orStoreUnavailable(`WebhookRecords.${method}`);
+    const failing = StoreFailure.labelled("WebhookRecords");
     const requireRow =
       <A>(id: string) =>
       (row: Option.Option<A>): Effect.Effect<A, WebhookRecordNotFound> =>

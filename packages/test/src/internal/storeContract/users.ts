@@ -1,9 +1,11 @@
 // @awthaq/test — the users suite of StoreContract (plan 37)
 import assert from "node:assert/strict";
 import { Ids, SqlTransaction, Tenant, UserStore } from "@awthaq/ports";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import { CONCURRENCY, race } from "../contract.ts";
 import { at, makeUserId, opened } from "./fixtures.ts";
 import { suite } from "./suite.ts";
@@ -39,6 +41,8 @@ const newUser = (
     readonly phone?: string;
     readonly name?: string;
     readonly minutes?: number;
+    /** An exact instant; takes precedence over `minutes`. */
+    readonly createdAt?: DateTime.Utc;
   } = {},
 ): UserStore.NewUser => ({
   id: makeUserId(id),
@@ -52,11 +56,30 @@ const newUser = (
   status: "active",
   statusReason: Option.none(),
   suspendedUntil: Option.none(),
-  createdAt: at(options.minutes ?? 0),
-  updatedAt: at(options.minutes ?? 0),
+  createdAt: options.createdAt ?? at(options.minutes ?? 0),
+  updatedAt: options.createdAt ?? at(options.minutes ?? 0),
 });
 
 const userIds = (rows: ReadonlyArray<{ readonly id: string }>) => rows.map((row) => row.id);
+
+/** Code-unit order, written here so the expectations do not come from the declaration under test. */
+const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** Follows `nextCursor` from the first page at `limit`; answers every id in order and how many pages it took. */
+const walk = (store: UserStore.UserStoreShape, limit: number | undefined) =>
+  Effect.gen(function* () {
+    const ids: Array<string> = [];
+    let pages = 0;
+    let after = Option.none<UserStore.UserCursor>();
+    for (;;) {
+      const page = yield* store.listPage({ after, limit });
+      pages++;
+      ids.push(...userIds(page.items));
+      assert.ok(pages <= 20, "the walk does not terminate");
+      if (Option.isNone(page.nextCursor)) return { ids, pages };
+      after = page.nextCursor;
+    }
+  });
 
 const inserted = (outcome: UserStore.InsertOutcome) => outcome._tag === "Inserted";
 
@@ -518,14 +541,120 @@ export const users = suite<
             for (let i = 0; i < 6; i++) {
               const page = yield* store.listPage({ after, limit: 3 });
               collected.push(...userIds(page.items));
-              if (Option.isNone(page.next)) break;
-              after = page.next;
+              if (Option.isNone(page.nextCursor)) break;
+              after = page.nextCursor;
             }
             assert.deepEqual(collected, ["z", "b", "c", "a"]);
             // An exactly-full final page invents no cursor.
             const exact = yield* store.listPage({ after: Option.none(), limit: 4 });
             assert.equal(exact.items.length, 4);
-            assert.equal(Option.isNone(exact.next), true);
+            assert.equal(Option.isNone(exact.nextCursor), true);
+          }),
+        },
+        {
+          name: "listPage walks ties by id at every limit 1..8, in ceil(7 / limit) pages",
+          run: Effect.gen(function* () {
+            const store = yield* UserStore.UserStore;
+            // Tie groups of 3, 1 and 3, inserted out of id order.
+            const rows: ReadonlyArray<readonly [string, number]> = [
+              ["g", 1],
+              ["c", 3],
+              ["f", 3],
+              ["a", 2],
+              ["e", 1],
+              ["b", 3],
+              ["d", 1],
+            ];
+            for (const [id, minutes] of rows) yield* store.insertOrHolder(newUser(id, { minutes }));
+            const expected = rows
+              .toSorted(([x, mx], [y, my]) => mx - my || byCodeUnit(x, y))
+              .map(([id]) => id);
+            for (let limit = 1; limit <= 8; limit++) {
+              const walked = yield* walk(store, limit);
+              assert.deepEqual(walked.ids, expected, `limit ${limit}`);
+              assert.equal(walked.pages, Math.ceil(7 / limit), `limit ${limit}`);
+            }
+          }),
+        },
+        {
+          name: "listPage normalises the limit: 0, negative, fractional, NaN, huge and absent",
+          run: Effect.gen(function* () {
+            const store = yield* UserStore.UserStore;
+            for (const id of ["a", "b", "c"]) yield* store.insertOrHolder(newUser(id));
+            const answered = (limit: number | undefined) =>
+              Effect.map(store.listPage({ after: Option.none(), limit }), (page) => [
+                page.items.length,
+                Option.isSome(page.nextCursor),
+              ]);
+            assert.deepEqual(yield* answered(0), [1, true]);
+            assert.deepEqual(yield* answered(-3), [1, true]);
+            assert.deepEqual(yield* answered(2.5), [2, true]);
+            assert.deepEqual(yield* answered(Number.NaN), [3, false]);
+            assert.deepEqual(yield* answered(10_000), [3, false]);
+            assert.deepEqual(yield* answered(undefined), [3, false]);
+          }),
+        },
+        {
+          name: "listPage: an exactly-full final page has no cursor, one row fewer does",
+          run: Effect.gen(function* () {
+            const store = yield* UserStore.UserStore;
+            for (const id of ["a", "b", "c", "d", "e"]) {
+              yield* store.insertOrHolder(newUser(id, { minutes: 1 }));
+            }
+            const full = yield* store.listPage({ after: Option.none(), limit: 5 });
+            assert.equal(full.items.length, 5);
+            assert.equal(Option.isNone(full.nextCursor), true);
+            const four = yield* store.listPage({ after: Option.none(), limit: 4 });
+            assert.equal(four.items.length, 4);
+            assert.equal(Option.isSome(four.nextCursor), true);
+            const rest = yield* store.listPage({ after: four.nextCursor, limit: 4 });
+            assert.deepEqual(userIds(rest.items), ["e"]);
+            assert.equal(Option.isNone(rest.nextCursor), true);
+          }),
+        },
+        {
+          name: "listPage: instants below a millisecond collapse to one millisecond and order by id",
+          run: Effect.gen(function* () {
+            const store = yield* UserStore.UserStore;
+            const t = 1_700_000_000_000;
+            yield* store.insertOrHolder(newUser("m2", { createdAt: DateTime.makeUnsafe(t + 0.3) }));
+            yield* store.insertOrHolder(newUser("m1", { createdAt: DateTime.makeUnsafe(t + 0.7) }));
+            const first = yield* store.listPage({ after: Option.none(), limit: 1 });
+            assert.deepEqual(userIds(first.items), ["m1"]);
+            const second = yield* store.listPage({ after: first.nextCursor, limit: 1 });
+            assert.deepEqual(userIds(second.items), ["m2"]);
+            assert.equal(Option.isNone(second.nextCursor), true);
+          }),
+        },
+        {
+          name: "listPage pages mixed-case ids completely, without duplicates, and resumably at every page size",
+          run: Effect.gen(function* () {
+            const store = yield* UserStore.UserStore;
+            // Collation decides the order of these (code unit on memory and SQLite, locale on a
+            // Postgres with a locale collation); only self-consistency is the contract.
+            const ids = ["B1", "a1", "_x", "A2", "b0"];
+            for (const id of ids) yield* store.insertOrHolder(newUser(id, { minutes: 4 }));
+            const single = (yield* walk(store, 6)).ids;
+            assert.deepEqual(single.toSorted(), ids.toSorted());
+            for (let limit = 1; limit <= 6; limit++) {
+              const walked = yield* walk(store, limit);
+              assert.deepEqual(walked.ids, single, `limit ${limit}`);
+            }
+          }),
+        },
+        {
+          name: "listPage pages canonical uuidV7 ids in exact code-unit order",
+          run: Effect.gen(function* () {
+            const store = yield* UserStore.UserStore;
+            const ids = ["0a", "0f", "01", "0c", "09", "0b"].map(
+              (tail) => `018f0000-0000-7000-8000-0000000000${tail}`,
+            );
+            for (const id of ids) yield* store.insertOrHolder(newUser(id, { minutes: 4 }));
+            const expected = ids.toSorted(byCodeUnit);
+            for (let limit = 1; limit <= 6; limit++) {
+              const walked = yield* walk(store, limit);
+              assert.deepEqual(walked.ids, expected, `limit ${limit}`);
+            }
           }),
         },
       ],
@@ -657,4 +786,25 @@ export const users = suite<
       ],
     },
   },
+  sql: [
+    {
+      name: "a stored createdAt is a whole millisecond",
+      run: Effect.gen(function* () {
+        const store = yield* UserStore.UserStore;
+        const sql = yield* SqlClient.SqlClient;
+        yield* store.insertOrHolder(
+          newUser("w1", { createdAt: DateTime.makeUnsafe(1_700_000_000_000.7) }),
+        );
+        const rows = yield* sql.onDialectOrElse({
+          pg: () =>
+            sql`SELECT extract(microseconds FROM "createdAt")::bigint % 1000 AS rest FROM users WHERE id = ${"w1"}`,
+          orElse: () => sql`SELECT "createdAt" AS stored FROM users WHERE id = ${"w1"}`,
+        });
+        const [row] = rows;
+        assert.ok(row !== undefined);
+        if ("rest" in row) assert.equal(Number(row["rest"]), 0);
+        else assert.match(String(row["stored"]), /\.\d{3}Z$/);
+      }),
+    },
+  ],
 });

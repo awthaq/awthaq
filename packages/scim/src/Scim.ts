@@ -45,6 +45,7 @@ import {
 import {
   Organization,
   OrganizationActor,
+  type OrganizationConnectionLifecycle,
   OrganizationDeletion,
   OrganizationDirectory,
   OrganizationMembers,
@@ -638,6 +639,9 @@ export const scimExport = DataExport.contribute({
 
 /** Named so the class's inferred `layer` type can be emitted (TS2883 needs the namespace of the absorbed connection store's requirement in scope). */
 export type ConnectionStoreRequirement = OrganizationDirectory.OrganizationDirectory;
+
+/** Named so the plugin layer's inferred type can be emitted (TS2883 needs the `OrganizationConnectionLifecycle` namespace in scope). */
+export type ConnectionLifecycle = OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
 
 export class Scim extends AuthPlugin.Service<Scim, ScimShape>()("scim", {
   apiVersion: 1,

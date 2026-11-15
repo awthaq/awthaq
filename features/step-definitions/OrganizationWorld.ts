@@ -8,10 +8,10 @@
 import { Auth, AuthEvents, SessionCookie, Sessions, Users } from "@awthaq/core";
 import { Admin } from "@awthaq/admin";
 import {
-  DomainClaims,
   Organization,
   OrganizationActiveContext,
   OrganizationAuthority,
+  OrganizationConnectionLifecycle,
   OrganizationDeletion,
   OrganizationDirectory,
   OrganizationHooks,
@@ -23,6 +23,7 @@ import {
 import {
   ActiveContextRecords,
   ConnectionRecords,
+  DomainClaims,
   InvitationRecords,
   MembershipRecords,
   OrganizationRecords,
@@ -33,7 +34,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
-import * as Stream from "effect/Stream";
+import { captureEvents } from "./shared/EventCapture.ts";
 import { makeNamedRegistry } from "./shared/Harness.ts";
 import { snapshot, type Snapshot } from "./shared/WireJson.ts";
 import { TestAuth, TestMailbox, type UserAgent } from "@awthaq/test";
@@ -89,6 +90,7 @@ const buildAppLayer = (
 export type OrganizationServiceNames =
   | OrganizationActiveContext.OrganizationActiveContext
   | OrganizationAuthority.OrganizationAuthority
+  | OrganizationConnectionLifecycle.OrganizationConnectionLifecycle
   | OrganizationDeletion.OrganizationDeletion
   | OrganizationDirectory.OrganizationDirectory
   | OrganizationInvitations.OrganizationInvitations
@@ -111,22 +113,10 @@ export interface AppHandle {
 }
 
 const buildApp = Effect.fn("features.organization.buildApp")(function* (options: AppOptions) {
-  // Subscribing to the real `AuthEvents` stream, as `PasswordWorld` does: the capture cell
-  // lives outside the layer graph so a step can read it after the graph is sealed.
+  // Every event, core's and the organization plugin's (ADR-EA-049): this world reads them back by tag.
+  // The capture cell lives outside the layer graph so a step can read it after the graph is sealed.
   const events = yield* Ref.make<ReadonlyArray<AuthEvents.PublishedAny>>([]);
-  const eventsLayer = Layer.effectDiscard(
-    Effect.gen(function* () {
-      const authEvents = yield* AuthEvents.AuthEvents;
-      // `subscribe` registers the subscription now, in the layer's scope; the lazy `stream`
-      // would register only once the forked fiber first ran, and could miss an early event.
-      const subscription = yield* authEvents.subscribe;
-      yield* subscription.pipe(
-        // Every event, core's and the organization plugin's (ADR-EA-049): this world reads them back by tag.
-        Stream.runForEach((event) => Ref.update(events, (existing) => [...existing, event])),
-        Effect.forkScoped,
-      );
-    }),
-  );
+  const eventsLayer = captureEvents(events);
   const app = yield* TestAuth.serve(buildAppLayer(options, eventsLayer));
   return {
     handler: app.handler,

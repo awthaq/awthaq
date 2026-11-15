@@ -19,7 +19,7 @@ import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as OpenApi from "effect/http-api/OpenApi";
 import type * as SqlClient from "effect/sql/SqlClient";
-import { type SealedColumn, TenantScope, type TenantScoped } from "@awthaq/sql";
+import { CoreTables, type SealedColumn, TenantScope, type TenantScoped } from "@awthaq/sql";
 import * as AuthEventSchemas from "./AuthEventSchemas.ts";
 import * as AuthPlugin from "./AuthPlugin.ts";
 import * as EventDefinition from "./EventDefinition.ts";
@@ -104,8 +104,8 @@ export class UndeclaredTableDependency extends Data.TaggedError("UndeclaredTable
 /**
  * Plan 05 (ADR-EA-018 decision 10, BEH-EA-328): a plugin's `tables` declaration is malformed: an
  * identifier that is not a plain SQL identifier, a Derived table whose parent is not one of its own
- * plugin's tables, a `dependsOn` plugin's, or a core table, a Derived table beneath a Global one, or a
- * Derived chain that loops. Found at link time, never per request.
+ * plugin's tables, a `dependsOn` plugin's, or a tenant-stamped core table, a Derived table beneath a
+ * Global one, or a Derived chain that loops. Found at link time, never per request.
  */
 export class TenancyDeclarationInvalid extends Data.TaggedError("Auth/TenancyDeclarationInvalid")<{
   readonly pluginId: string;
@@ -776,11 +776,6 @@ const checkTableDependencies = (plugins: ReadonlyArray<AuthPlugin.Any>): void =>
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-const coreTables: ReadonlyArray<string> = [
-  ...TenantScope.partitionedTables,
-  ...TenantScope.directoryTables,
-];
-
 /** Plan 05: every plugin table's declaration, in plugin order. */
 const declaredTenancy = (
   order: ReadonlyArray<AuthPlugin.Any>,
@@ -883,11 +878,11 @@ const checkTenancy = (order: ReadonlyArray<AuthPlugin.Any>): void => {
       (candidate) => candidate.table === tenancy.parent && visible.has(candidate.plugin),
     );
     if (parent === undefined) {
-      if (coreTables.includes(tenancy.parent)) continue;
+      if (CoreTables.isStamped(tenancy.parent)) continue;
       throw invalid(
         entry,
         "UnknownParent",
-        `its parent "${tenancy.parent}" is not a table of this plugin, of a plugin in its dependsOn, or a core table`,
+        `its parent "${tenancy.parent}" is not a table of this plugin, of a plugin in its dependsOn, or a tenant-stamped core table`,
       );
     }
     if (parent.tenancy._tag === "Global") {

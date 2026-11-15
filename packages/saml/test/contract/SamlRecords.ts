@@ -148,6 +148,7 @@ const allElsewhere = (table: string): Methods => ({
   listByOrganization: derivedElsewhere(table),
   findByDomain: derivedElsewhere(table),
   update: derivedElsewhere(table),
+  refresh: derivedElsewhere(table),
   remove: derivedElsewhere(table),
   saveSpKey: derivedElsewhere(table),
   listSpKeys: derivedElsewhere(table),
@@ -191,6 +192,17 @@ const connectionMethods: Methods = {
       run: (row, as) =>
         using((records) =>
           records.update(orgOf(row, as), row.id, { name: "renamed" }).pipe(
+            Effect.as(true),
+            Effect.catchTag("SamlRecordNotFound", () => Effect.succeed(false)),
+          ),
+        ),
+    },
+  },
+  refresh: {
+    keyed: {
+      run: (row, as) =>
+        using((records) =>
+          records.refresh(orgOf(row, as), row.id, { name: "renamed" }).pipe(
             Effect.as(true),
             Effect.catchTag("SamlRecordNotFound", () => Effect.succeed(false)),
           ),
@@ -559,6 +571,56 @@ export const samlRecords = RecordsContract.suite(SamlRecords.SamlRecords, {
             }
             // Every domain is free again.
             yield* records.create(input("c2", "org-2", ["a.example", "moved-0.example"]));
+          }),
+        },
+      ],
+    },
+    refresh: {
+      atomic: [
+        {
+          name: "rewrites what it names, keeps the domains, and an unknown or foreign connection is SamlRecordNotFound",
+          run: Effect.gen(function* () {
+            const records = yield* SamlRecords.SamlRecords;
+            yield* records.create(input("c1", "org-1", ["b.example", "a.example"]));
+            const refreshed = yield* records.refresh("org-1", "c1", {
+              ssoUrl: "https://idp-new.example.com/sso",
+              idpCertificates: [certificate(idpNext)],
+              sloUrl: null,
+            });
+            assert.strictEqual(refreshed.ssoUrl, "https://idp-new.example.com/sso");
+            assert.deepStrictEqual(
+              refreshed.idpCertificates.map((entry) => entry.fingerprint),
+              [idpNext.fingerprint],
+            );
+            assert.isTrue(Option.isNone(refreshed.sloUrl));
+            assert.strictEqual(refreshed.name, "connection c1");
+            assert.deepStrictEqual(refreshed.emailDomains, ["a.example", "b.example"]);
+            const stored = Option.getOrThrow(yield* records.findById(grant, "c1"));
+            assert.deepStrictEqual(stored, refreshed);
+            const missing = yield* records
+              .refresh("org-1", "nope", { name: "x" })
+              .pipe(Effect.flip);
+            assert.strictEqual(missing._tag, "SamlRecordNotFound");
+            const foreign = yield* records.refresh("org-2", "c1", { name: "x" }).pipe(Effect.flip);
+            assert.strictEqual(foreign._tag, "SamlRecordNotFound");
+          }),
+        },
+      ],
+      race: [
+        {
+          name: "refreshes racing the connection's removal never bring it back, and never fail otherwise",
+          run: Effect.gen(function* () {
+            const records = yield* SamlRecords.SamlRecords;
+            yield* records.create(input("c1", "org-1", ["a.example"]));
+            const outcomes = yield* raced([
+              ...many((n) => records.refresh("org-1", "c1", { name: `refreshed-${n}` })),
+              records.remove("org-1", "c1"),
+            ]);
+            for (const outcome of outcomes) {
+              assert.include(["", "SamlRecordNotFound"], failedWith(outcome));
+            }
+            assert.isFalse(yield* exists("c1"));
+            assert.isTrue(Option.isNone(yield* domainOwner("a.example")));
           }),
         },
       ],

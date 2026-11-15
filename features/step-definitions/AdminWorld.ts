@@ -26,8 +26,8 @@ import * as Redacted from "effect/Redacted";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Stream from "effect/Stream";
 import { TestAuth, type UserAgent } from "@awthaq/test";
+import { captureEvents } from "./shared/EventCapture.ts";
 import { resolveCredential } from "./shared/ResolveCredential.ts";
 
 /** What this world reads back by tag: core's events and the admin plugins' own (ADR-EA-049). */
@@ -86,26 +86,6 @@ export interface AppOptions {
 const built = Auth.make([Admin.Admin]);
 
 const buildAppLayer = (options: AppOptions, events: Ref.Ref<ReadonlyArray<WorldEvent>>) => {
-  const eventsLayer = Layer.effectDiscard(
-    Effect.gen(function* () {
-      const authEvents = yield* AuthEvents.AuthEvents;
-      // `startImmediately`: without it the fork is merely scheduled, and
-      // the very first request through this app could publish before the
-      // subscription has actually registered with the underlying
-      // `PubSub.bounded` — a live broadcast, not a replay log, so a missed
-      // publish is gone for good. Real, reproduced bug (an empty
-      // `publishedEvents()` after a real impersonate call), not
-      // hypothetical — see `packages/core/test/AuthEvents.test.ts`'s own
-      // identical fix and its own comment on exactly this race.
-      yield* authEvents.stream.pipe(
-        // Core's events and the admin plugins' own (the bus is typed open, ADR-EA-049).
-        Stream.filter(AuthEvents.is(worldEvents)),
-        Stream.runForEach((event) => Ref.update(events, (existing) => [...existing, event])),
-        Effect.forkScoped({ startImmediately: true }),
-      );
-    }),
-  );
-
   // `options.canImpersonate` omitted reconstructs `AdminConfig`'s own
   // fail-closed default (`() => Effect.succeed(false)`) explicitly —
   // behaviorally identical to not providing `Admin.config(...)` at all
@@ -121,7 +101,8 @@ const buildAppLayer = (options: AppOptions, events: Ref.Ref<ReadonlyArray<WorldE
       ...(options.canManageUsers === undefined ? {} : { canManageUsers: options.canManageUsers }),
     }),
     decorate: UsersLive,
-    taps: eventsLayer,
+    // Core's events and the admin plugins' own (the bus is typed open, ADR-EA-049); the race fix lives in the helper.
+    taps: captureEvents(events, AuthEvents.is(worldEvents)),
   });
 };
 

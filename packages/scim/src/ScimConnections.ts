@@ -17,12 +17,13 @@
 
 import type { Api } from "@awthaq/api";
 import { TenantScoped } from "@awthaq/sql";
-import { OrganizationDirectory } from "@awthaq/organization";
+import { OrganizationConnectionLifecycle, OrganizationDirectory } from "@awthaq/organization";
 import { SecretHash } from "@awthaq/core";
 import { Hmac } from "@awthaq/ports";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -37,6 +38,28 @@ const TOKEN_PREFIX = "scim_";
 
 /** The bearer token's hash is the capability: the connection is found before any tenant is known. */
 const tokenGrant = TenantScoped.crossTenant("scim: the bearer token hash is the capability");
+
+/** A connection is refused: the organization does not exist or is suspended (`reason` says which rule). */
+export class InvalidScimConnection extends Data.TaggedError("InvalidScimConnection")<{
+  readonly reason: string;
+}> {}
+
+const invalid = (reason: string) => new InvalidScimConnection({ reason });
+
+/**
+ * What the connection lifecycle needs to know about SCIM: it claims no email domain (`taken` is never reached) and
+ * only ever creates, so no write says "gone". The lifecycle still gives create its gate, the organization lock and
+ * the in-lock re-check, so a deletion that commits meanwhile cannot leave a connection behind (F-04-01).
+ */
+const scimProtocol: OrganizationConnectionLifecycle.ConnectionProtocol<
+  InvalidScimConnection,
+  InvalidScimConnection
+> = {
+  protocol: "scim",
+  refuse: invalid,
+  taken: (domain) => invalid(`"${domain}" is taken`),
+  isGone: () => false,
+};
 
 /** What a caller sees of a connection: never the token, never its hash. */
 export interface ScimConnectionView {
@@ -65,7 +88,7 @@ export interface ScimConnectionStoreShape {
       readonly connection: ScimConnectionView;
       readonly token: Redacted.Redacted<string>;
     },
-    Api.StoreUnavailable
+    InvalidScimConnection | Api.StoreUnavailable
   >;
   readonly list: (
     organizationId: string,
@@ -82,25 +105,42 @@ export class ScimConnectionStore extends Context.Service<
   ScimConnectionStoreShape
 >()("awthaq/scim/ScimConnectionStore") {}
 
-/** Requires `ScimRecords`, `SecureRandom` and `Digest`. */
+/** Requires `ScimRecords`, the exposed `OrganizationConnectionLifecycle`, `SecureRandom` and `Digest`. */
 export const layerStore = Layer.effect(
   ScimConnectionStore,
   Effect.gen(function* () {
     const records = yield* ScimRecords.ScimRecords;
     const random = yield* SecureRandom.SecureRandom;
     const hasher = yield* Digest.Digest;
+    const lifecycle = yield* OrganizationConnectionLifecycle.OrganizationConnectionLifecycle;
 
-    const create: ScimConnectionStoreShape["create"] = Effect.fnUntraced(function* (input) {
-      const id = yield* random.uuidV7();
-      const token = `${TOKEN_PREFIX}${Hmac.toHex(yield* random.randomBytes(32))}`;
-      const record = yield* records.createConnection({
-        id,
-        organizationId: input.organizationId,
-        name: input.name.trim(),
-        tokenHash: yield* SecretHash.digest(hasher, token),
-      });
-      return { connection: toView(record), token: Redacted.make(token) };
-    });
+    const create: ScimConnectionStoreShape["create"] = (input) =>
+      lifecycle.create(
+        scimProtocol,
+        input.organizationId,
+        Effect.gen(function* () {
+          const id = yield* random.uuidV7();
+          const token = `${TOKEN_PREFIX}${Hmac.toHex(yield* random.randomBytes(32))}`;
+          const tokenHash = yield* SecretHash.digest(hasher, token);
+          return {
+            connectionId: id,
+            domains: [],
+            write: records
+              .createConnection({
+                id,
+                organizationId: input.organizationId,
+                name: input.name.trim(),
+                tokenHash,
+              })
+              .pipe(
+                Effect.map((record) => ({
+                  connection: toView(record),
+                  token: Redacted.make(token),
+                })),
+              ),
+          };
+        }),
+      );
 
     const list: ScimConnectionStoreShape["list"] = (organizationId) =>
       records.listConnections(organizationId).pipe(Effect.map((rows) => rows.map(toView)));

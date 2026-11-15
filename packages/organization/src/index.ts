@@ -8,10 +8,10 @@
 // See spec/overview.md for the full package map.
 
 export * as Organization from "./Organization.ts";
-export * as DomainClaims from "./DomainClaims.ts";
 export * as OrganizationActor from "./OrganizationActor.ts";
 export * as OrganizationActiveContext from "./OrganizationActiveContext.ts";
 export * as OrganizationAuthority from "./OrganizationAuthority.ts";
+export * as OrganizationConnectionLifecycle from "./OrganizationConnectionLifecycle.ts";
 export * as OrganizationConnections from "./OrganizationConnections.ts";
 export * as OrganizationDeletion from "./OrganizationDeletion.ts";
 export * as OrganizationDirectory from "./OrganizationDirectory.ts";

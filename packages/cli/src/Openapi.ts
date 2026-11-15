@@ -5,7 +5,8 @@
 // (`OpenApi.fromApi`) — a team that never imports `effect` runs `openapi-typescript`, `hey-api`
 // or `orval` over this file and never assembles per-plugin documents. `--out <file>` writes it
 // with the platform FileSystem; otherwise it goes to stdout so `awthaq openapi > openapi.json`
-// works. The output is always the JSON document (the `--json` flag changes nothing here).
+// works. The output is always the JSON document (the `--json` flag changes nothing here): stdout goes
+// through `Output.report`, whose `--json` document is the same bytes as the text line.
 
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -29,10 +30,9 @@ export const emit = (auth: LoadedAuth, options: { readonly out: string | undefin
   Effect.gen(function* () {
     const spec = yield* document(auth);
     const text = JSON.stringify(spec, null, 2);
-    if (options.out === undefined) {
-      const out = yield* Output.Output;
-      return yield* out.line(text);
-    }
+    // Same `JSON.stringify(spec, null, 2)` bytes as `Output.stringify` (pinned by the BEH-EA-205
+    // parity test in Inspection.test.ts), so `--json` and text print identical stdout.
+    if (options.out === undefined) return yield* Output.report(spec, () => [text]);
     const fs = yield* FileSystem.FileSystem;
     yield* fs
       .writeFileString(options.out, `${text}\n`)

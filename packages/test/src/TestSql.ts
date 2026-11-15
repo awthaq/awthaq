@@ -69,19 +69,26 @@ const postgres = (url: string, suite: string) => {
   );
   const client = PgClient.layer({
     url: Redacted.make(url),
-    // Every statement resolves unqualified names in this suite's own schema.
-    startupParameters: { search_path: schema },
+    // Every statement resolves unqualified names in this suite's own schema. A test database needs no
+    // durability, so a commit does not wait for the WAL flush (each layer build runs hundreds of DDL commits).
+    startupParameters: { search_path: schema, synchronous_commit: "off" },
     maxConnections: 4,
     // The pool reclaims idle connections on the `Clock` every `idleTimeout` (default 10 s), so a test that
     // advances `TestClock` by days replays millions of ticks and times out. A very long timeout keeps that bounded.
     idleTimeout: Duration.days(100_000),
     types: regclassTypes(),
   });
+  // The schema is dropped again when the layer's scope closes: a layer build is one test's database, and
+  // schemas left behind (hundreds per full run, each with core's partitioned tables) bloat the catalog until
+  // 5 s budgets fail. The name is this suite's and worker's own, so no other worker's schema is ever dropped.
   const reset = Layer.effectDiscard(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-      yield* sql.unsafe(`CREATE SCHEMA ${schema}`);
+      const drop = sql.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      yield* Effect.acquireRelease(
+        drop.pipe(Effect.andThen(sql.unsafe(`CREATE SCHEMA ${schema}`))),
+        () => Effect.ignore(drop),
+      );
     }),
   );
   return Layer.provideMerge(reset, client);

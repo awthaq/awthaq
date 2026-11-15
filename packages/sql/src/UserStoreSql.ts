@@ -28,7 +28,15 @@
 //   repeating either after a success whose answer was lost would change it.
 // - Span names are the statements' (`Users.*`, EOTS-008); attributes are ids only.
 
-import { Defects, type Encryption, Sealed, SqlTransaction, Tenant, UserStore } from "@awthaq/ports";
+import {
+  Defects,
+  type Encryption,
+  Keyset,
+  Sealed,
+  SqlTransaction,
+  Tenant,
+  UserStore,
+} from "@awthaq/ports";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -40,10 +48,14 @@ import * as SqlSchema from "effect/sql/SqlSchema";
 import * as CoreSealedColumns from "./CoreSealedColumns.ts";
 import { type ColumnCodec, sealCell, sealedCell } from "./internal/Cells.ts";
 import { traced } from "./internal/traced.ts";
+import * as KeysetSql from "./KeysetSql.ts";
 import { makeModels, resolveDialect, UserId, type User } from "./Models.ts";
 import * as SealedColumn from "./SealedColumn.ts";
 import * as SqlStore from "./SqlStore.ts";
 import { isUniqueViolation, StoreUnavailable } from "./StoreFailure.ts";
+
+/** BEH-EA-036: the row-value seek and ORDER BY of the users page, derived from the one declared order. */
+const seek = KeysetSql.make(UserStore.pageOrder);
 
 /** How many times a user insert is retried when the holder it lost to vanished before it could be read. */
 const INSERT_ATTEMPTS = 3;
@@ -173,22 +185,21 @@ const make = (codec: Option.Option<ColumnCodec>) =>
         sql`INSERT INTO users ${sql.insert(request)} ON CONFLICT DO NOTHING RETURNING *`,
     });
 
-    // BAM-005/BEH-EA-036: keyset page over every user, oldest first. Reads `limit + 1` rows: the
-    // extra one only proves a next page exists, so an exactly-full final page never invents a cursor.
+    // BAM-005/BEH-EA-036: keyset page over every user, oldest first. Reads `take` rows, which
+    // `Keyset.paginate` sets one above the page: the extra one only proves a next page exists, so an
+    // exactly-full final page never invents a cursor.
     const usersPage = SqlSchema.findAll({
       Request: Schema.Struct({
-        cursorCreatedAt: models.wire.nullableDateTime,
-        cursorId: Schema.NullOr(Schema.String),
-        limit: Schema.Int,
+        cursor: Schema.NullOr(
+          Schema.Struct({ createdAt: models.wire.dateTime, id: Schema.String }),
+        ),
+        take: Schema.Int,
       }),
       Result: models.User,
       execute: (request) =>
-        request.cursorCreatedAt === null || request.cursorId === null
-          ? sql`SELECT * FROM users ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit + 1}`
-          : sql`SELECT * FROM users
-                  WHERE "createdAt" > ${request.cursorCreatedAt}
-                     OR ("createdAt" = ${request.cursorCreatedAt} AND id > ${request.cursorId})
-                  ORDER BY "createdAt" ASC, id ASC LIMIT ${request.limit + 1}`,
+        sql`SELECT * FROM users
+              WHERE ${sql.and(request.cursor === null ? [] : [seek.after(sql, request.cursor)])}
+              ORDER BY ${seek.orderBy(sql)} LIMIT ${request.take}`,
     });
 
     // GC-004: one `UPDATE ... RETURNING *` on `name`, and on `metadata`/`image` when given (`null`
@@ -470,26 +481,13 @@ const make = (codec: Option.Option<ColumnCodec>) =>
           write("UserStore.delete"),
         ),
 
-      listPage: ({ after, limit }) =>
-        usersPage({
-          cursorCreatedAt: Option.match(after, { onNone: () => null, onSome: (c) => c.createdAt }),
-          cursorId: Option.match(after, { onNone: () => null, onSome: (c) => c.id }),
-          limit,
-        }).pipe(
-          traced("Users.listPage"),
-          Effect.map((rows) => {
-            const items = rows.slice(0, limit);
-            const last = items.at(-1);
-            return {
-              items: items.map(stored),
-              next:
-                rows.length > limit && last !== undefined
-                  ? Option.some({ createdAt: last.createdAt, id: last.id })
-                  : Option.none(),
-            };
-          }),
-          read("UserStore.listPage"),
-        ),
+      listPage: (request) =>
+        Keyset.paginate(UserStore.pageOrder, request, ({ after, take }) =>
+          usersPage({ cursor: Option.getOrNull(after), take }).pipe(
+            traced("Users.listPage"),
+            Effect.map((rows) => rows.map(stored)),
+          ),
+        ).pipe(read("UserStore.listPage")),
 
       readFields: (id, columns) => readFields(id, columns).pipe(read("UserStore.readFields")),
 

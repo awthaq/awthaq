@@ -47,7 +47,7 @@ describe("Auth.make([Organization])", () => {
     ]);
   });
 
-  it("exposes its eight system modules, in the manifest and without building a layer (ADR-EA-040)", () => {
+  it("exposes its nine system modules, in the manifest and without building a layer (ADR-EA-040)", () => {
     const auth = Auth.make([Organization.Organization]);
     assert.deepStrictEqual(
       auth.manifest.exposes.map((exposed) => [exposed.plugin, exposed.key]),
@@ -60,6 +60,7 @@ describe("Auth.make([Organization])", () => {
         "ActiveContext",
         "Authority",
         "Deletion",
+        "ConnectionLifecycle",
       ].map((name) => ["organization", `awthaq/plugin/organization/${name}`]),
     );
   });

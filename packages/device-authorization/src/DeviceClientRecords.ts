@@ -6,6 +6,7 @@
 // credential — so this row holds only what the approval page shows the user (`name`) and the scopes the
 // client may ask for; an unregistered or revoked `client_id` is refused at `POST /device/code`.
 
+import { Keyset } from "@awthaq/ports";
 import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -53,10 +54,13 @@ export class DeviceClientRecords extends Context.Service<
 // ---- layerMemory ------------------------------------------------------------
 
 const oldestFirst = (records: ReadonlyArray<DeviceClientRecord>) =>
-  records.toSorted((a, b) => {
-    const byTime = DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt);
-    return byTime !== 0 ? byTime : a.clientId < b.clientId ? -1 : a.clientId > b.clientId ? 1 : 0;
-  });
+  records.toSorted(
+    Keyset.chronological({
+      createdAt: (record: DeviceClientRecord) => record.createdAt,
+      id: (record) => record.clientId,
+      direction: "asc",
+    }),
+  );
 
 export const layerMemory = Layer.effect(
   DeviceClientRecords,
@@ -100,8 +104,7 @@ export const layerSql = Layer.effect(
   DeviceClientRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`DeviceClientRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("DeviceClientRecords");
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const Row = makeRow(wire);
     const ClientId = Schema.Struct({ clientId: Schema.String });

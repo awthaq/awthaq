@@ -451,6 +451,21 @@ export const deviceGrantRecords = RecordsContract.suite(DeviceGrantRecords.Devic
             assert.deepStrictEqual(yield* records.listByUser(Users.UserId("nobody")), []);
           }),
         },
+        {
+          name: "rows with an equal createdAt come back by id, ascending, on every adapter",
+          run: Effect.gen(function* () {
+            const records = yield* DeviceGrantRecords.DeviceGrantRecords;
+            const ids = [4, 1, 6, 3, 5, 2].map((n) => `019a8f00-0000-7000-8000-00000000000${n}`);
+            for (const id of ids) {
+              yield* records.insert(grant(id));
+              yield* records.claim(id, owner);
+            }
+            assert.deepStrictEqual(
+              (yield* records.listByUser(owner)).map((record) => record.id),
+              ids.toSorted(),
+            );
+          }),
+        },
       ],
     },
     deleteByUser: {

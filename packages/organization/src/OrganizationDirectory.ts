@@ -12,7 +12,7 @@
 // long-lived decision cache never keeps answering for a suspended organization (BEH-EA-237).
 
 import { AuthEvents, Errors, HookPoint, Users } from "@awthaq/core";
-import { SqlTransaction, Tenant } from "@awthaq/ports";
+import { type Keyset, SqlTransaction, Tenant } from "@awthaq/ports";
 import { TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -33,6 +33,8 @@ import * as OrgRoleRecords from "./OrgRoleRecords.ts";
 import * as TeamRecords from "./TeamRecords.ts";
 
 export type Organization = OrganizationRecords.OrganizationRecord;
+export type OrganizationCursor = OrganizationRecords.OrganizationCursor;
+export type OrganizationPage = Keyset.Page<Organization, OrganizationCursor>;
 
 /** A caller's own memberships, whichever organizations they are in. */
 const ownMembershipsGrant = TenantScoped.crossTenant(
@@ -64,11 +66,10 @@ export interface OrganizationDirectoryShape {
   readonly listForUser: (
     userId: Users.UserId,
   ) => Effect.Effect<ReadonlyArray<Organization>, Errors.StoreUnavailable>;
-  /** EP-003: the platform listing, keyset on `(createdAt, id)`. */
-  readonly listPage: (input: {
-    readonly after: Option.Option<{ readonly createdAt: DateTime.Utc; readonly id: string }>;
-    readonly limit: number;
-  }) => Effect.Effect<ReadonlyArray<Organization>, Errors.StoreUnavailable>;
+  /** EP-003: the platform listing, keyset on `(createdAt, id)`; the records store owns the limit and the next cursor. */
+  readonly listPage: (
+    request: Keyset.Request<OrganizationCursor>,
+  ) => Effect.Effect<OrganizationPage, Errors.StoreUnavailable>;
 
   /**
    * BEH-EA-283: a known region, `organizationLimit` over `owner`'s owned organizations, the veto, then ONE
@@ -215,8 +216,8 @@ export class OrganizationDirectory extends Context.Service<
           ),
         );
 
-      const listPage: OrganizationDirectoryShape["listPage"] = (input) =>
-        orgs.listPage(platformGrant, input);
+      const listPage: OrganizationDirectoryShape["listPage"] = (request) =>
+        orgs.listPage(platformGrant, request);
 
       const create: OrganizationDirectoryShape["create"] = Effect.fnUntraced(
         function* (actor, input) {

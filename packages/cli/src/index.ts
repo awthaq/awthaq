@@ -9,7 +9,6 @@ export * as Browser from "./Browser.ts";
 export * as Cli from "./Cli.ts";
 export * as CliErrors from "./CliErrors.ts";
 export * as Config from "./Config.ts";
-export * as ConfigList from "./ConfigList.ts";
 // P20a: the credential service every session command needs, so an embedder (the BDD suite) can supply its own store.
 export * as CredentialStore from "./CredentialStore.ts";
 export * as Database from "./Database.ts";

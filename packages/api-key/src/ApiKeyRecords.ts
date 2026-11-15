@@ -12,7 +12,7 @@
 // `revoke` answers whether this call is the one that revoked the key.
 
 import { Users } from "@awthaq/core";
-import { Defects, SqlTransaction } from "@awthaq/ports";
+import { Defects, Keyset, SqlTransaction } from "@awthaq/ports";
 import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -96,10 +96,13 @@ export class ApiKeyRecords extends Context.Service<ApiKeyRecords, ApiKeyRecordsS
 // ---- layerMemory ------------------------------------------------------------
 
 const newestFirst = (records: ReadonlyArray<ApiKeyRecord>): ReadonlyArray<ApiKeyRecord> =>
-  [...records].sort((a, b) => {
-    const byTime = DateTime.toEpochMillis(b.createdAt) - DateTime.toEpochMillis(a.createdAt);
-    return byTime !== 0 ? byTime : a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
-  });
+  [...records].sort(
+    Keyset.chronological({
+      createdAt: (record: ApiKeyRecord) => record.createdAt,
+      id: (record) => record.id,
+      direction: "desc",
+    }),
+  );
 
 const millis = DateTime.toEpochMillis;
 
@@ -203,8 +206,7 @@ export const layerSql = Layer.effect(
   ApiKeyRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`ApiKeyRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("ApiKeyRecords");
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const Row = makeRow(wire);

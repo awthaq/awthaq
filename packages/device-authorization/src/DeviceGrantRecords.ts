@@ -19,6 +19,7 @@
 // Only SHA-256 hashes of the device and user codes are stored (`UserCode.hash*`), never a code.
 
 import { Sessions, Users } from "@awthaq/core";
+import { Keyset } from "@awthaq/ports";
 import { Models as SqlModels, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -212,7 +213,13 @@ export const layerMemory = Layer.effect(
           Effect.map((records) =>
             HashMap.toValues(records)
               .filter((record) => Option.exists(record.userId, (owner) => owner === userId))
-              .toSorted((a, b) => millis(a.createdAt) - millis(b.createdAt)),
+              .toSorted(
+                Keyset.chronological({
+                  createdAt: (record: DeviceGrantRecord) => record.createdAt,
+                  id: (record) => record.id,
+                  direction: "asc",
+                }),
+              ),
           ),
         ),
       deleteByUser: (userId) =>
@@ -248,8 +255,7 @@ export const layerSql = Layer.effect(
   DeviceGrantRecords,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`DeviceGrantRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("DeviceGrantRecords");
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const Row = makeRow(wire);
 

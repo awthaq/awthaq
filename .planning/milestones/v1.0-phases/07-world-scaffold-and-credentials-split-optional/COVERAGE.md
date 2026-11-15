@@ -1,0 +1,1 @@
+No external API integration: phase 7 classifies the in-repo BDD Worlds, adds one in-repo test-suite helper and splits the in-repo `@awthaq/server` `Credentials` module into internal files; it integrates no external service, SDK or endpoint.

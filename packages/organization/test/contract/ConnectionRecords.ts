@@ -5,8 +5,10 @@
 import { SealedColumn } from "@awthaq/sql";
 import { RecordsContract, type TestAuth } from "@awthaq/test";
 import { assert } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as ConnectionRecords from "../../src/ConnectionRecords.ts";
@@ -57,6 +59,9 @@ const isolationMethods: {
   >;
 } = {
   create: { insert: true },
+  sealSecret: {
+    derived: "seals a value under the connection's AAD; reads and writes no table",
+  },
   findById: {
     keyed: {
       run: (row, as) =>
@@ -341,6 +346,40 @@ export const connectionRecords = RecordsContract.suite(ConnectionRecords.Connect
             const again = yield* Effect.flip(records.remove("org-1", "c-rm"));
             assert.strictEqual(again._tag, "ConnectionRecordNotFound");
             yield* records.create(input("c-next", "org-2"));
+          }),
+        },
+      ],
+    },
+    sealSecret: {
+      write: [
+        {
+          name: "a secret sealed ahead is stored as sealed, opens to its plaintext, and is refused for another connection",
+          run: Effect.gen(function* () {
+            const records = yield* ConnectionRecords.ConnectionRecords;
+            const sealed = yield* records.sealSecret("c-prep", Redacted.make("prepared-secret"));
+            yield* records.create(input("c-prep", "org-1", { clientSecret: sealed }));
+            const stored = Option.getOrThrow(yield* records.findById("org-1", "c-prep"));
+            assert.strictEqual(
+              yield* openSecret(Option.getOrThrow(stored.clientSecret)),
+              "prepared-secret",
+            );
+            const rotated = yield* records.sealSecret("c-prep", Redacted.make("rotated-secret"));
+            const updated = yield* records.update("org-1", "c-prep", { clientSecret: rotated });
+            assert.strictEqual(
+              yield* openSecret(Option.getOrThrow(updated.clientSecret)),
+              "rotated-secret",
+            );
+            // The envelope is bound to its connection: another id cannot take it (a defect, no row written).
+            const stolen = yield* Effect.exit(
+              records.create(
+                input("c-other", "org-1", {
+                  clientSecret: sealed,
+                  emailDomains: ["other.example"],
+                }),
+              ),
+            );
+            assert.isTrue(Exit.isFailure(stolen) && Cause.hasDies(stolen.cause));
+            assert.isTrue(Option.isNone(yield* records.findById("org-1", "c-other")));
           }),
         },
       ],

@@ -1,7 +1,7 @@
 // BEH-EA-201 (ECS-005, ECS-008, NHS-005): `doctor` over real compositions. Each finding here is
 // produced by the real thing — a real `Auth.make`, a real configuration Layer, a real application
 // Layer — and every output is checked for the canary secrets the fixtures carry.
-import { Auth, SessionCookie } from "@awthaq/core";
+import { Auth, EffectiveConfig, SessionCookie } from "@awthaq/core";
 import { DeviceAuthorization } from "@awthaq/device-authorization";
 import { Password } from "@awthaq/password";
 import { Mailer, RateLimiter } from "@awthaq/ports";
@@ -21,9 +21,9 @@ import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { role } from "@qadi/core";
 import { LinkProblem } from "../src/CliErrors.ts";
-import * as ConfigList from "../src/ConfigList.ts";
 import * as Doctor from "../src/Doctor.ts";
 import * as Output from "../src/Output.ts";
+import { runCli } from "./support/RunCli.ts";
 import { configOf, passwordAndRoles } from "./support/TestApp.ts";
 import { WidgetConfig, widgetOnly } from "./support/WidgetPlugin.ts";
 
@@ -233,9 +233,8 @@ describe("doctor: no secret values (ECS-005)", () => {
         const { text } = yield* finishOutput(report, json);
         for (const canary of CANARIES) assert.notInclude(text, canary);
       }
-      const listed = yield* Output.capture(false);
-      yield* ConfigList.show(config).pipe(Effect.provide(listed.layer));
-      const text = (yield* Ref.get(listed.captured.stdout)).join("\n");
+      const listed = yield* runCli(["config", "list"], config);
+      const text = listed.stdout.join("\n");
       for (const canary of CANARIES) assert.notInclude(text, canary);
       assert.include(text, "clientSecret = <redacted>");
       assert.include(text, "signingKey = <redacted>");
@@ -293,5 +292,35 @@ describe("doctor --build", () => {
         );
         assert.strictEqual(exitCode(exit), 9);
       }),
+  );
+});
+
+describe("config list", () => {
+  // BEH-EA-229: byte-for-byte, text and --json, through the real argv so the pin survives however
+  // the command's three lines are arranged.
+  it.effect("prints every descriptor byte-for-byte, text and --json", () =>
+    Effect.gen(function* () {
+      const config = configOf(passwordAndRoles);
+      const items = EffectiveConfig.read(
+        yield* Doctor.configContext(config),
+        Doctor.descriptorsOf(config),
+      );
+      const lines = items.flatMap((item) => [
+        `${item.owner}  ${item.key}  (${item.source})`,
+        ...item.entries.map((entry) => `  ${entry.path} = ${entry.value}`),
+      ]);
+
+      const text = yield* runCli(["config", "list"], config);
+      assert.strictEqual(text.code, 0);
+      assert.deepStrictEqual(text.stderr, []);
+      assert.deepStrictEqual(text.stdout, lines);
+      assert.strictEqual(text.stdout[0], "password  awthaq/password/Config  (default)");
+      assert.include(text.stdout, "core  awthaq/core/SessionConfig  (default)");
+
+      const json = yield* runCli(["--json", "config", "list"], config);
+      assert.strictEqual(json.code, 0);
+      assert.deepStrictEqual(json.stderr, []);
+      assert.deepStrictEqual(json.stdout, [JSON.stringify(items, null, 2)]);
+    }),
   );
 });

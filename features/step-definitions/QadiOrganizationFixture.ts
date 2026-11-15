@@ -5,10 +5,10 @@
 // steer and observe it.
 import { Auth } from "@awthaq/core";
 import {
-  DomainClaims,
   Organization,
   OrganizationActiveContext,
   OrganizationAuthority,
+  OrganizationConnectionLifecycle,
   OrganizationDeletion,
   OrganizationDirectory,
   OrganizationHooks,
@@ -21,6 +21,7 @@ import {
 import {
   ActiveContextRecords,
   ConnectionRecords,
+  DomainClaims,
   InvitationRecords,
   MembershipRecords,
   OrganizationRecords,
@@ -86,6 +87,7 @@ export const organizationFixture = (probe: WalkProbe) => {
 export type OrganizationServiceNames =
   | OrganizationActiveContext.OrganizationActiveContext
   | OrganizationAuthority.OrganizationAuthority
+  | OrganizationConnectionLifecycle.OrganizationConnectionLifecycle
   | OrganizationDeletion.OrganizationDeletion
   | OrganizationDirectory.OrganizationDirectory
   | OrganizationInvitations.OrganizationInvitations

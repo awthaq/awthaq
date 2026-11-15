@@ -21,6 +21,8 @@
 // migrations, encryption boundary, replicas).
 // SqlDdl.ts: the dialect-specific DDL tokens as fragments, an always-IF-NOT-EXISTS index builder and
 // `only` (plan 22, ADR-EA-004 rev 1.3), which a plugin's migrations are written with.
+// CoreTables.ts: the core-table catalogue (name, owner, tenancy, replication and the sealed view over
+// CoreSealedColumns), proven against the migrations by its drift guard.
 // See spec/overview.md for the full package map.
 
 export * as AccountStoreSql from "./AccountStoreSql.ts";
@@ -28,6 +30,8 @@ export * as AuditLogStoreSql from "./AuditLogStoreSql.ts";
 export * as CoreMigrations from "./CoreMigrations.ts";
 export * as CoreSealedColumns from "./CoreSealedColumns.ts";
 export * as CoreStoresSql from "./CoreStoresSql.ts";
+export * as CoreTables from "./CoreTables.ts";
+export * as KeysetSql from "./KeysetSql.ts";
 export * as Models from "./Models.ts";
 export * as RateLimiterStoreSql from "./RateLimiterStoreSql.ts";
 export * as RelayCursorStoreSql from "./RelayCursorStoreSql.ts";

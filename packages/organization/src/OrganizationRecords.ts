@@ -6,7 +6,8 @@
 // `effect/sql`'s `SqlSchema`, owned by this plugin rather than the
 // shared persistence stratum.
 
-import { Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
+import { Keyset } from "@awthaq/ports";
+import { KeysetSql, Models as SqlModels, StoreFailure, TenantScoped } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
@@ -15,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -42,6 +44,33 @@ export interface OrganizationRecord {
   readonly suspendedAt: Option.Option<DateTime.Utc>;
   readonly createdAt: DateTime.Utc;
 }
+
+/** Where an organization page resumes: the last row's position in `pageOrder`. */
+export interface OrganizationCursor {
+  readonly createdAt: DateTime.Utc;
+  readonly id: string;
+}
+
+/** The one order `listPage` answers in on every adapter: `(createdAt, id)` ascending, `id` by code unit. */
+const pageOrder: Keyset.Declaration<OrganizationRecord, OrganizationCursor> = {
+  keys: [
+    Keyset.key({
+      column: "createdAt",
+      direction: "asc",
+      order: DateTime.Order,
+      row: (organization) => organization.createdAt,
+      cursor: (cursor) => cursor.createdAt,
+    }),
+    Keyset.key({
+      column: "id",
+      direction: "asc",
+      order: Order.String,
+      row: (organization) => organization.id,
+      cursor: (cursor) => cursor.id,
+    }),
+  ],
+  cursorOf: (organization) => ({ createdAt: organization.createdAt, id: organization.id }),
+};
 
 export class OrganizationRecordSlugTaken extends Data.TaggedError("OrganizationRecordSlugTaken")<{
   readonly slug: string;
@@ -90,14 +119,18 @@ export interface OrganizationRecordsShape {
     OrganizationRecord,
     OrganizationRecordNotFound | StoreFailure.StoreUnavailable
   >;
-  /** EP-003: every organization, keyset-paginated on `(createdAt, id)` ascending — the platform administrator's listing, never a tenant-scoped read. */
+  /**
+   * EP-003: every organization, `(createdAt, id)` ascending — the platform administrator's listing,
+   * never a tenant-scoped read. `limit` is normalised and one extra row read by `Keyset.paginate`;
+   * `nextCursor` is present only when more follow.
+   */
   readonly listPage: (
     grant: TenantScoped.CrossTenant,
-    input: {
-      readonly after: Option.Option<{ readonly createdAt: DateTime.Utc; readonly id: string }>;
-      readonly limit: number;
-    },
-  ) => Effect.Effect<ReadonlyArray<OrganizationRecord>, StoreFailure.StoreUnavailable>;
+    request: Keyset.Request<OrganizationCursor>,
+  ) => Effect.Effect<
+    Keyset.Page<OrganizationRecord, OrganizationCursor>,
+    StoreFailure.StoreUnavailable
+  >;
   readonly delete: (
     id: string,
   ) => Effect.Effect<void, OrganizationRecordNotFound | StoreFailure.StoreUnavailable>;
@@ -208,28 +241,9 @@ export const layerMemory = Layer.effect(
         },
       ).pipe(Effect.flatMap(Effect.fromResult));
 
-    const listPage: OrganizationRecordsShape["listPage"] = (_grant, { after, limit }) =>
-      Ref.get(state).pipe(
-        Effect.map((s) =>
-          Array.from(HashMap.values(s))
-            .sort(
-              (a, b) =>
-                DateTime.toEpochMillis(a.createdAt) - DateTime.toEpochMillis(b.createdAt) ||
-                (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-            )
-            .filter((row) =>
-              Option.match(after, {
-                onNone: () => true,
-                onSome: (cursor) => {
-                  const delta =
-                    DateTime.toEpochMillis(row.createdAt) -
-                    DateTime.toEpochMillis(cursor.createdAt);
-                  return delta > 0 || (delta === 0 && row.id > cursor.id);
-                },
-              }),
-            )
-            .slice(0, limit),
-        ),
+    const listPage: OrganizationRecordsShape["listPage"] = (_grant, request) =>
+      Keyset.paginate(pageOrder, request, (fetch) =>
+        Effect.map(Ref.get(state), (s) => Keyset.window(pageOrder, HashMap.values(s), fetch)),
       );
 
     const delete_: OrganizationRecordsShape["delete"] = (id) =>
@@ -283,6 +297,9 @@ const toRecord = (row: OrganizationRow): OrganizationRecord => ({
   createdAt: row.createdAt,
 });
 
+/** The row-value seek and ORDER BY of the page, derived from `pageOrder`. */
+const seek = KeysetSql.make(pageOrder);
+
 export const layerSql = Layer.effect(
   OrganizationRecords,
   Effect.gen(function* () {
@@ -291,8 +308,7 @@ export const layerSql = Layer.effect(
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const OrganizationRow = makeOrganizationRow(wire);
     const random = yield* SecureRandom.SecureRandom;
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`OrganizationRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("OrganizationRecords");
 
     const insert = SqlSchema.findOne({
       Request: Schema.Struct({
@@ -411,31 +427,26 @@ export const layerSql = Layer.effect(
       },
     );
 
+    // `Keyset.paginate` sets `take` one above the page, so an exactly-full final page has no cursor.
     const listPageQuery = SqlSchema.findAll({
       Request: Schema.Struct({
-        afterCreatedAt: wire.nullableDateTime,
-        afterId: Schema.NullOr(Schema.String),
-        limit: Schema.Number,
+        cursor: Schema.NullOr(Schema.Struct({ createdAt: wire.dateTime, id: Schema.String })),
+        take: Schema.Int,
       }),
       Result: OrganizationRow,
       execute: (r) =>
-        r.afterCreatedAt === null || r.afterId === null
-          ? sql`SELECT * FROM organization_org ORDER BY "createdAt", id LIMIT ${r.limit}`
-          : sql`SELECT * FROM organization_org
-                WHERE ("createdAt", id) > (${r.afterCreatedAt}, ${r.afterId})
-                ORDER BY "createdAt", id LIMIT ${r.limit}`,
+        sql`SELECT * FROM organization_org
+              WHERE ${sql.and(r.cursor === null ? [] : [seek.after(sql, r.cursor)])}
+              ORDER BY ${seek.orderBy(sql)} LIMIT ${r.take}`,
     });
 
-    const listPage: OrganizationRecordsShape["listPage"] = (grant, { after, limit }) =>
-      listPageQuery({
-        afterCreatedAt: Option.match(after, { onNone: () => null, onSome: (c) => c.createdAt }),
-        afterId: Option.match(after, { onNone: () => null, onSome: (c) => c.id }),
-        limit,
-      }).pipe(
-        TenantScoped.liftOn(sql, grant),
-        Effect.map((rows) => rows.map(toRecord)),
-        unavailable("listPage"),
-      );
+    const listPage: OrganizationRecordsShape["listPage"] = (grant, request) =>
+      Keyset.paginate(pageOrder, request, ({ after, take }) =>
+        listPageQuery({ cursor: Option.getOrNull(after), take }).pipe(
+          TenantScoped.liftOn(sql, grant),
+          Effect.map((rows) => rows.map(toRecord)),
+        ),
+      ).pipe(unavailable("listPage"));
 
     const delete_: OrganizationRecordsShape["delete"] = Effect.fnUntraced(function* (id) {
       const row = yield* deleteQuery(id).pipe(unavailable("delete"));

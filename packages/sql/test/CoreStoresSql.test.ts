@@ -393,8 +393,8 @@ describe("CoreStoresSql timestamps (SEA-005)", () => {
       for (;;) {
         const page = yield* users.listPage({ after, limit: 3 });
         for (const item of page.items) collected.push(DateTime.toEpochMillis(item.createdAt));
-        if (Option.isNone(page.next)) break;
-        after = page.next;
+        if (Option.isNone(page.nextCursor)) break;
+        after = page.nextCursor;
       }
       assert.deepStrictEqual(
         collected,

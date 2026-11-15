@@ -1,0 +1,48 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": "v1.0 — Architecture Deepening, batch 3",
+  "phases": [
+    {
+      "number": "1",
+      "name": "CLI views and ConfigList removal",
+      "status": "complete"
+    },
+    {
+      "number": "2",
+      "name": "Split TestAuth",
+      "status": "complete"
+    },
+    {
+      "number": "3",
+      "name": "Keyset-page module",
+      "status": "complete"
+    },
+    {
+      "number": "4",
+      "name": "Connection-lifecycle module",
+      "status": "pending"
+    },
+    {
+      "number": "5",
+      "name": "Core-table list cleanup",
+      "status": "pending"
+    },
+    {
+      "number": "6",
+      "name": "Record-store scaffolding (gated)",
+      "status": "pending"
+    },
+    {
+      "number": "7",
+      "name": "World scaffold and Credentials split (optional)",
+      "status": "pending"
+    }
+  ],
+  "next": {
+    "command": "/gsd-progress --next",
+    "label": "Advance to the next step (plan phase 4)",
+    "reason": "Phase 4 of 7 — needs a plan"
+  },
+  "updated_at": "2026-11-14T11:07:42.289Z"
+}

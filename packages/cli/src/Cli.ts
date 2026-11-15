@@ -2,7 +2,9 @@
 //
 // ADR-EA-027: the command tree, declared with `effect/cli`. This file is only
 // *declaration and wiring*: every command body is a plain Effect function in its own module
-// (`Doctor.ts`, `Routes.ts`, `Migration.ts`, ...), taking typed arguments. That seam is what
+// (`Doctor.ts`, `Routes.ts`, `Migration.ts`, ...), taking typed arguments; `config list` is the one
+// exception, three lines of glue over `Doctor.configContext` and core's `EffectiveConfig`, kept
+// inline below. That seam is what
 // isolates the release-candidate churn of the unstable CLI API — when `Command`/`Flag` change, only
 // the thin declarations here do — and it is what the tests call directly.
 //
@@ -25,6 +27,7 @@
 // and a refused write never share a status (BEH-EA-225).
 
 import { EmailContract } from "@awthaq/api";
+import { EffectiveConfig } from "@awthaq/core";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Logger from "effect/Logger";
@@ -37,7 +40,6 @@ import * as Prompt from "effect/cli/Prompt";
 import type * as CliErrors from "./CliErrors.ts";
 import { isCliError, UsageError } from "./CliErrors.ts";
 import * as CliConfig from "./Config.ts";
-import * as ConfigList from "./ConfigList.ts";
 import * as Database from "./Database.ts";
 import * as Doctor from "./Doctor.ts";
 import * as Import from "./Import.ts";
@@ -148,8 +150,29 @@ const doctor = Command.make(
   ),
 );
 
+/**
+ * BEH-EA-229 (ECS-008, EP-009), BEH-EA-208 class 1: a configuration input's owner, key and source,
+ * then its entries. A sensitive or `Redacted` value prints as `<redacted>` and is never unwrapped
+ * (BEH-EA-201).
+ */
+const renderConfigItems = (items: ReadonlyArray<EffectiveConfig.Item>) =>
+  items.flatMap((item) => [
+    `${item.owner}  ${item.key}  (${item.source})`,
+    ...item.entries.map((entry) => `  ${entry.path} = ${entry.value}`),
+  ]);
+
 const configList = Command.make("list", {}, () =>
-  withOutput(load.pipe(Effect.flatMap(ConfigList.show))),
+  withOutput(
+    load.pipe(
+      Effect.flatMap((config) =>
+        Effect.gen(function* () {
+          const context = yield* Doctor.configContext(config);
+          const items = EffectiveConfig.read(context, Doctor.descriptorsOf(config));
+          yield* Output.report(items, renderConfigItems);
+        }),
+      ),
+    ),
+  ),
 ).pipe(
   Command.withDescription(
     "List every declared configuration input, its default and its override (secrets redacted)",

@@ -7,6 +7,7 @@
 // again by `AdminConfig.canImpersonate` inside the handler itself.
 
 import { AccountContract, Api, SessionContract, SessionLifecycle } from "@awthaq/api";
+import { Keyset } from "@awthaq/ports";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
@@ -156,10 +157,12 @@ export const CursorSchema = Schema.StringFromBase64Url.pipe(
   ),
 );
 
-/** ESS-006: page size bounds on the wire; the server default (50) applies when omitted. */
-export const MAX_PAGE_SIZE = 200;
+/** ESS-006: page size bounds on the wire are the keyset module's bounds (HTTP refuses what the store would clamp); the server default (50) applies when omitted. */
 export const LimitSchema = Schema.NumberFromString.pipe(
-  Schema.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: MAX_PAGE_SIZE })),
+  Schema.check(
+    Schema.isInt(),
+    Schema.isBetween({ minimum: Keyset.MIN_LIMIT, maximum: Keyset.MAX_LIMIT }),
+  ),
 );
 
 /** BAM-005: `Users.list`'s keyset position `(createdAt, id)`, opaque on the wire like `CursorSchema`. */

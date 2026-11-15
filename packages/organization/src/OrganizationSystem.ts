@@ -10,6 +10,7 @@ import type { AuthEvents, Users } from "@awthaq/core";
 import type { Mailer, SqlTransaction } from "@awthaq/ports";
 import * as OrganizationActiveContext from "./OrganizationActiveContext.ts";
 import * as OrganizationAuthority from "./OrganizationAuthority.ts";
+import * as OrganizationConnectionLifecycle from "./OrganizationConnectionLifecycle.ts";
 import * as OrganizationDeletion from "./OrganizationDeletion.ts";
 import * as OrganizationDirectory from "./OrganizationDirectory.ts";
 import * as OrganizationInvitations from "./OrganizationInvitations.ts";
@@ -28,6 +29,7 @@ export const services = [
   OrganizationActiveContext.OrganizationActiveContext,
   OrganizationAuthority.OrganizationAuthority,
   OrganizationDeletion.OrganizationDeletion,
+  OrganizationConnectionLifecycle.OrganizationConnectionLifecycle,
 ] as const;
 
 /** Built once, beneath the plugin's own `make`. */
@@ -37,6 +39,8 @@ export const layer = Layer.mergeAll(
   OrganizationInvitations.OrganizationInvitations.layer,
   OrganizationRoles.OrganizationRoles.layer,
   OrganizationActiveContext.OrganizationActiveContext.layer,
+  OrganizationConnectionLifecycle.OrganizationConnectionLifecycle.layer,
+  OrganizationConnectionLifecycle.claimsOnOrganizationDelete,
 ).pipe(
   Layer.provideMerge(OrganizationAuthority.OrganizationAuthority.layer),
   Layer.provideMerge(OrganizationDirectory.OrganizationDirectory.layer),

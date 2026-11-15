@@ -47,7 +47,7 @@
 // row, current key and sealed private JWK included, and SQL reported the primary-key
 // clash as `CurrentKeyConflict`, which `KeyRing` turned into a defect.)
 
-import { Defects, type Encryption } from "@awthaq/ports";
+import { Defects, type Encryption, Keyset } from "@awthaq/ports";
 import { Models as SqlModels, SealedColumn, StoreFailure } from "@awthaq/sql";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -165,11 +165,15 @@ export class SigningKeyRecords extends Context.Service<SigningKeyRecords, Signin
   "awthaq/jwt/records/SigningKeyRecords",
 ) {}
 
-const newestFirst = <A extends { readonly createdAt: DateTime.Utc }>(
+const newestFirst = <A extends { readonly createdAt: DateTime.Utc; readonly kid: string }>(
   records: ReadonlyArray<A>,
 ): ReadonlyArray<A> =>
   [...records].sort(
-    (a, b) => DateTime.toEpochMillis(b.createdAt) - DateTime.toEpochMillis(a.createdAt),
+    Keyset.chronological({
+      createdAt: (record: A) => record.createdAt,
+      id: (record) => record.kid,
+      direction: "desc",
+    }),
   );
 
 const isVerifiable = (
@@ -397,8 +401,7 @@ export const layerSql: Layer.Layer<
     // TS-001: the row codecs follow the ambient client's dialect (Date on pg, ISO string on SQLite).
     const wire = SqlModels.dialectFields(yield* SqlModels.resolveDialect(sql));
     const SigningKeyRow = makeSigningKeyRow(wire);
-    const unavailable = (operation: string) =>
-      StoreFailure.orStoreUnavailable(`SigningKeyRecords.${operation}`);
+    const unavailable = StoreFailure.labelled("SigningKeyRecords");
     const privateKeys = yield* SealedColumn.codec(
       privateKeyJwkColumn,
       yield* SealedColumn.sqlSwap(privateKeyJwkColumn),
@@ -464,7 +467,7 @@ export const layerSql: Layer.Layer<
       Request: Schema.Void,
       Result: SigningKeyRow,
       execute: () => sql`
-          SELECT * FROM jwt_signing_key WHERE "rotatedAt" IS NULL ORDER BY "createdAt" DESC LIMIT 1
+          SELECT * FROM jwt_signing_key WHERE "rotatedAt" IS NULL ORDER BY "createdAt" DESC, kid DESC LIMIT 1
         `,
     });
 
@@ -474,7 +477,7 @@ export const layerSql: Layer.Layer<
       execute: (now) => sql`
           SELECT * FROM jwt_signing_key
           WHERE "retiresAt" IS NULL OR "retiresAt" > ${now}
-          ORDER BY "createdAt" DESC
+          ORDER BY "createdAt" DESC, kid DESC
         `,
     });
 

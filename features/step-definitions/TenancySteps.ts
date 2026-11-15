@@ -14,7 +14,7 @@ import {
 import { ConnectionRecords, OrganizationRecords } from "@awthaq/organization/records";
 import { Admin, AdminAccounts, AdminTenants } from "@awthaq/admin";
 import { OAuthConnections } from "@awthaq/oauth";
-import { Models, TenantScope, TenantScoped } from "@awthaq/sql";
+import { CoreTables, Models, TenantScope, TenantScoped } from "@awthaq/sql";
 import { defineSteps } from "@effect-cucumber/vitest";
 import { makeResourceId, makeSubjectId, RelationshipResolver } from "@qadi/core";
 import assert from "node:assert/strict";
@@ -66,16 +66,6 @@ const auditTag = (tag: string) => {
 
 const M = Models.makeModels("sqlite");
 
-/** The tables `BEH-EA-231` names; the only identifiers ever spliced into a query. */
-const STAMPED_TABLES = [
-  "users",
-  "accounts",
-  "sessions",
-  "verification_tokens",
-  "verification_reservations",
-  "auth_audit_log",
-];
-
 let sequence = 0;
 const fresh = (label: string) => `${label}-${++sequence}`;
 
@@ -120,7 +110,8 @@ const readTenant = Effect.gen(function* () {
 });
 
 const storedTenants = Effect.fn("features.tenancy.storedTenants")(function* (table: string) {
-  assert.ok(STAMPED_TABLES.includes(table), `"${table}" is not a stamped table`);
+  // Only a stamped core table's name is ever spliced into the query below.
+  assert.ok(CoreTables.isStamped(table), `"${table}" is not a stamped table`);
   return yield* identity(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

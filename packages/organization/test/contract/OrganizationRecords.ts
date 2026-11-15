@@ -94,8 +94,8 @@ const isolationCase: TestAuth.TableCase<
       crossTenant: {
         run: (id) =>
           Effect.flatMap(OrganizationRecords.OrganizationRecords, (records) =>
-            Effect.map(records.listPage(grant, { after: Option.none(), limit: 1_000 }), (rows) =>
-              rows.some((row) => row.id === id),
+            Effect.map(records.listPage(grant, { after: Option.none(), limit: 1_000 }), (page) =>
+              page.items.some((row) => row.id === id),
             ),
           ),
       },
@@ -292,25 +292,58 @@ export const organizationRecords = RecordsContract.suite(OrganizationRecords.Org
               records.create({ name: slug, slug }),
             );
             const first = yield* records.listPage(grant, { after: Option.none(), limit: 2 });
-            assert.strictEqual(first.length, 2);
-            const last = first[first.length - 1];
-            assert.isDefined(last);
+            assert.strictEqual(first.items.length, 2);
+            assert.isTrue(Option.isSome(first.nextCursor));
             const second = yield* records.listPage(grant, {
-              after: Option.some({
-                createdAt: last?.createdAt ?? (yield* DateTime.now),
-                id: last?.id ?? "",
-              }),
+              after: first.nextCursor,
               limit: 10,
             });
-            assert.strictEqual(second.length, 3);
+            assert.strictEqual(second.items.length, 3);
+            assert.isTrue(Option.isNone(second.nextCursor));
             const expected = created
               .map((row) => ({ id: row.id, at: DateTime.toEpochMillis(row.createdAt) }))
               .sort((a, b) => a.at - b.at || codeUnit(a.id, b.id))
               .map((row) => row.id);
             assert.deepStrictEqual(
-              [...first, ...second].map((row) => row.id),
+              [...first.items, ...second.items].map((row) => row.id),
               expected,
             );
+          }),
+        },
+        {
+          name: "KEY-05: an exactly-full final page answers no cursor; one more row answers one",
+          run: Effect.gen(function* () {
+            const records = yield* OrganizationRecords.OrganizationRecords;
+            for (const slug of ["a", "b", "c", "d", "e"])
+              yield* records.create({ name: slug, slug });
+            const full = yield* records.listPage(grant, { after: Option.none(), limit: 5 });
+            assert.strictEqual(full.items.length, 5);
+            assert.isTrue(Option.isNone(full.nextCursor));
+            const first = yield* records.listPage(grant, { after: Option.none(), limit: 4 });
+            assert.strictEqual(first.items.length, 4);
+            assert.isTrue(Option.isSome(first.nextCursor));
+            const last = yield* records.listPage(grant, { after: first.nextCursor, limit: 4 });
+            assert.strictEqual(last.items.length, 1);
+            assert.isTrue(Option.isNone(last.nextCursor));
+          }),
+        },
+        {
+          name: "KEY-05: a requested limit is normalised (0, -3, 2.5, NaN, 10_000)",
+          run: Effect.gen(function* () {
+            const records = yield* OrganizationRecords.OrganizationRecords;
+            for (const slug of ["a", "b", "c"]) yield* records.create({ name: slug, slug });
+            const seen: Array<readonly [number, boolean]> = [];
+            for (const limit of [0, -3, 2.5, Number.NaN, 10_000]) {
+              const page = yield* records.listPage(grant, { after: Option.none(), limit });
+              seen.push([page.items.length, Option.isSome(page.nextCursor)]);
+            }
+            assert.deepStrictEqual(seen, [
+              [1, true],
+              [1, true],
+              [2, true],
+              [3, false],
+              [3, false],
+            ]);
           }),
         },
         {
@@ -329,20 +362,20 @@ export const organizationRecords = RecordsContract.suite(OrganizationRecords.Org
               .map((row) => row.id);
             for (const limit of [1, 2, 3, 4, 5, 6, 7, 8]) {
               const seen: Array<string> = [];
-              let after: Option.Option<{ createdAt: DateTime.Utc; id: string }> = Option.none();
+              let after: Option.Option<OrganizationRecords.OrganizationCursor> = Option.none();
               let pages = 0;
               for (;;) {
                 const page = yield* records.listPage(grant, { after, limit });
                 pages++;
-                assert.isAtMost(page.length, limit);
-                seen.push(...page.map((row) => row.id));
-                const last = page.at(-1);
-                if (page.length < limit || last === undefined) break;
-                after = Option.some({ createdAt: last.createdAt, id: last.id });
+                seen.push(...page.items.map((row) => row.id));
+                if (Option.isNone(page.nextCursor)) break;
+                // Only the last page may be short: the store answers a cursor while more follow.
+                assert.strictEqual(page.items.length, limit, `limit ${limit}`);
+                after = page.nextCursor;
               }
               assert.deepStrictEqual(seen, expected, `limit ${limit}`);
-              // The store has no cursor: a short (or empty) page ends the walk.
-              assert.strictEqual(pages, Math.floor(7 / limit) + 1, `limit ${limit}`);
+              // An exactly-full final page answers no cursor, so the walk takes ceil(7 / limit) pages.
+              assert.strictEqual(pages, Math.ceil(7 / limit), `limit ${limit}`);
             }
           }),
         },
