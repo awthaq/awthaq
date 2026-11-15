@@ -473,3 +473,9 @@ Verdict: every rule of the comparison rule (1 to 8) and the path allowlist (resi
 - Review fix WR-01 (`78bc0444`) introduced a `tsc -b` error (TS377034, Effect `missingLayerContext`) in `EventCapture.types.ts`; the orchestrator fixed it by adding `// @effect-diagnostics-next-line missingLayerContext:off` (the `CompileTimeGates.ts` precedent). `npx tsc -b tsconfig.json --force` is clean again (only the pre-existing TS377149 warnings). The close record's "tsc -b clean" held at the close and again after this fix, not in between.
 - `CredentialsSurface.test.ts` has two commits (`924538e4`, `c94715a5`, WR-03), not one.
 - `Resolution.ts` and `Scopes.ts` gained a header line each (IN-01), so their line counts are +1.
+
+## Post-close: OrganizationWorld adopts captureEvents (finding IN-02 / AR-07-04)
+
+ADOPTION-DELTA world=OrganizationWorld removed=16 added=4
+NET (four adopters) removed 66, added 11, helper 44 (47 after a comment edit): 66 - 11 - 44 = 11 fewer lines.
+Experiment: organization feature 84/84 passed on 3 of 3 runs; full SQLite `pnpm test:bdd` 40 files, 1581 passed, 44 skipped (baseline). No scenario depends on the subscribe timing. Guard mutations (unclassified, misclassified, comment-only import) all red; a comment-only import in a no-tail World stays green; each restored from byte copies. 07-WORLD-TABLE.md edited in this archive directory.

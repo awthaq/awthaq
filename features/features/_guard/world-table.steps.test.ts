@@ -3,9 +3,8 @@
 //
 // Every `*World.ts` is classified: `scaffolded` (its events subscriber is the shared `captureEvents`),
 // `hand-wired` (the wiring is the thing under test; the header says `Hand-wired on purpose`) or
-// `no-tail` (nothing the scaffold must delete here; `OrganizationWorld` keeps its own copy of the capture, a
-// recorded candidate for a fourth adopter, see its table row). The map below is the machine copy of
-// `.planning/phases/07-world-scaffold-and-credentials-split-optional/07-WORLD-TABLE.md`; this guard
+// `no-tail` (nothing the scaffold must delete here). The map below is the machine copy of
+// `.planning/milestones/v1.0-phases/07-world-scaffold-and-credentials-split-optional/07-WORLD-TABLE.md`; this guard
 // deliberately never reads `.planning/`, so the suite does not depend on planning-document layout.
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -30,7 +29,7 @@ const WORLDS = {
   MagicLinkWorld: "no-tail",
   NextSsrWorld: "no-tail",
   OAuthWorld: "no-tail",
-  OrganizationWorld: "no-tail",
+  OrganizationWorld: "scaffolded",
   PasskeyWorld: "no-tail",
   PasswordWorld: "scaffolded",
   PersistenceStratumWorld: "no-tail",

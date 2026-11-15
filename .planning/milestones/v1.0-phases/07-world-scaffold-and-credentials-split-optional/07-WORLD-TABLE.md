@@ -1,6 +1,6 @@
 # 07-WORLD-TABLE: the World classification
 
-HEAD `006a9fa0` (the guard commit of plan 07-06), 2026-11-15. 31 Worlds: scaffolded 3, hand-wired 5, no-tail 23.
+HEAD `006a9fa0` (the guard commit of plan 07-06), 2026-11-15. 31 Worlds: scaffolded 4, hand-wired 5, no-tail 22 (OrganizationWorld reclassified from no-tail after the Phase 7 close; the table was edited here in the archive).
 
 The machine copy of this table is the inline map in `features/features/_guard/world-table.steps.test.ts`. The guard reads only `features/step-definitions/`, never `.planning/`; it fails when the set of `*World.ts` files on disk and the set of classified Worlds disagree, so a World added without a row here and in the map turns the suite red.
 
@@ -13,7 +13,7 @@ The machine copy of this table is the inline map in `features/features/_guard/wo
 
 ## The honest record
 
-The shared tail named in the roadmap does not exist as repeated code: `lazyApp` is one call to the shared `TestAuth.lazyApp` primitive per World and `TestClock` is already an option of `TestAuth` (`serve({ testClock })`, `lazyApp(..., { alignStepClock })`), so only the events subscriber repeats, in three Worlds (Admin, Password, Domain). The outcome is a smaller scaffold plus this table (D-05), recorded and not padded: across the three adopters 50 lines were removed and 7 added, and the helper costs 44, a net of +1 line, kept for locality of the reproduced lost-publish race, not for size.
+The shared tail named in the roadmap does not exist as repeated code: `lazyApp` is one call to the shared `TestAuth.lazyApp` primitive per World and `TestClock` is already an option of `TestAuth` (`serve({ testClock })`, `lazyApp(..., { alignStepClock })`), so only the events subscriber repeats, in four Worlds (Admin, Password, Domain and, after the close, Organization). The outcome is a smaller scaffold plus this table (D-05), recorded and not padded: across the three original adopters 50 lines were removed and 7 added, and the helper costs 44, a net of +1 line; with Organization (16 removed, 4 added) the four adopters remove 66 and add 11, so the net is 66 - 11 - 44 = 11 lines fewer. Kept for locality of the reproduced lost-publish race and now also for size.
 
 ## The table
 
@@ -37,7 +37,7 @@ Composition is how the World reaches `TestAuth` (line numbers measured at this H
 | 14 | `MagicLinkWorld.ts` | no-tail | `TestAuth.layer` :114; `serve` :142 | :172 | `alignStepClock` :172 | none | One `lazyApp` call plus one existing option. |
 | 15 | `NextSsrWorld.ts` | no-tail | `TestAuth.layer` :79; `serve` :89, :135 | none | none | none | Nothing repeated. |
 | 16 | `OAuthWorld.ts` | no-tail | `TestAuth.layer` :116, :138 (no `serve`) | none | ambient `TestClock` | none | Own layering, no tail. |
-| 17 | `OrganizationWorld.ts` | no-tail | `TestAuth.layer` :78; `serve` :132 | :185 | none | `Layer.effectDiscard` subscriber :119 to :131 through `authEvents.subscribe` :124 | The subscriber registers through `subscribe` and forks without `startImmediately`. Both subscribe before the first request, so the registration is not the difference; the consumer's first run is, and a `subscribe` helper with a plain fork failed five AdminWorld scenarios (steps that read the Ref without polling). Whether Organization's steps tolerate the helper's timing was not measured, so it stays inline (D-11) as the one remaining candidate for a fourth adopter, not as proof the capture differs. |
+| 17 | `OrganizationWorld.ts` | scaffolded | `TestAuth.layer` :78; `serve` :120 | :185 | none | `captureEvents(events)` :119, as `services` | Adopted after Phase 7 (finding IN-02/AR-07-04 closed by experiment): the 12-line inline `subscribe` subscriber was removed and 1 added (ADOPTION-DELTA removed=16 added=4 for the whole file, which includes the dropped `Stream` import, the import of the helper and the comment). Measured: the organization feature (84 scenarios) is green 3 of 3 runs and the full SQLite `pnpm test:bdd` is at baseline (40 files, 1581 passed, 44 skipped), so Organization's steps tolerate the helper's `stream` + `startImmediately` timing. The earlier claim that it keeps `subscribe` for a different semantic was never measured and is withdrawn. |
 | 18 | `PasskeyWorld.ts` | no-tail | `TestAuth.layer` :160; `serve` :206 | :216 | none | none | One `lazyApp` call. |
 | 19 | `PasswordWorld.ts` | scaffolded | `TestAuth.layer` :191, :203, :206; `serve` :155, :156 | :239 | none | `captureEvents(events)` :172 | The 14-line inline `eventsLayer` was removed and 2 lines added (ADOPTION-DELTA removed=14 added=2). |
 | 20 | `PersistenceStratumWorld.ts` | no-tail | `TestAuth.memoryFoundation` only (`Layer.effectDiscard` :54, :183 are fixtures) | none | none | none | Nothing repeated; reuses `FoundationsWorld`'s cell. |

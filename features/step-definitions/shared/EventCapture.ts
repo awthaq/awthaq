@@ -12,12 +12,11 @@
 // layer that needs only `AuthEvents`, passed where the inline layer was (`taps` or `services`), so the
 // plugin tuple and its missing-requirement compile error stay in the World (see EventCapture.types.ts).
 //
-// `OrganizationWorld` keeps its own layer (D-11): it registers through `authEvents.subscribe` and forks
-// without `startImmediately`. The registration is not the difference (both subscribe before the first
-// request); the consumer's first run is. Rebuilding this helper on `subscribe` with a plain fork failed five
-// AdminWorld scenarios, whose steps read the Ref without polling; `subscribe` plus `startImmediately`
-// passed but removes nothing, so the helper stays on `stream`. Whether Organization's steps tolerate the
-// helper's timing was not measured, and that World is out of scope, so do not "finish the migration" blind.
+// Four Worlds adopt it (Admin, Password, Domain, Organization). `OrganizationWorld` once registered through
+// `authEvents.subscribe` with a plain fork; its steps tolerate this helper's `stream` + `startImmediately`
+// timing (measured: the organization feature and the full suite stay green), so it moved here. Rebuilding the
+// helper on `subscribe` with a plain fork instead failed five AdminWorld scenarios, whose steps read the Ref
+// without polling.
 import { AuthEvents } from "@awthaq/core";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
