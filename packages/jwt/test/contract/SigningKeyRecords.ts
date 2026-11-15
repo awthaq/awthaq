@@ -315,6 +315,20 @@ export const signingKeyRecords = RecordsContract.suite(SigningKeyRecords.Signing
             assert.deepStrictEqual(yield* kids(10_000), ["c"]);
           }),
         },
+        {
+          name: "keys created at one instant come back by kid, descending, on every adapter",
+          run: Effect.gen(function* () {
+            const records = yield* SigningKeyRecords.SigningKeyRecords;
+            const kids = [4, 1, 6, 3, 5, 2].map((n) => `019a8f00-0000-7000-8000-00000000000${n}`);
+            for (const kid of kids) {
+              yield* records.create({ ...publicKey(kid), ...rotated(0, 2_000) });
+            }
+            assert.deepStrictEqual(
+              (yield* records.listVerifiable(at(0))).map((r) => r.kid),
+              kids.toSorted().toReversed(),
+            );
+          }),
+        },
       ],
     },
     markRotated: {
