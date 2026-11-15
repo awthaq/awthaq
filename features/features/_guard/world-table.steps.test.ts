@@ -3,7 +3,8 @@
 //
 // Every `*World.ts` is classified: `scaffolded` (its events subscriber is the shared `captureEvents`),
 // `hand-wired` (the wiring is the thing under test; the header says `Hand-wired on purpose`) or
-// `no-tail` (nothing repeated to delete). The map below is the machine copy of
+// `no-tail` (nothing the scaffold must delete here; `OrganizationWorld` keeps its own copy of the capture, a
+// recorded candidate for a fourth adopter, see its table row). The map below is the machine copy of
 // `.planning/phases/07-world-scaffold-and-credentials-split-optional/07-WORLD-TABLE.md`; this guard
 // deliberately never reads `.planning/`, so the suite does not depend on planning-document layout.
 import { readdirSync, readFileSync } from "node:fs";
@@ -46,6 +47,37 @@ const WORLDS = {
   WebhooksWorld: "no-tail",
 } as const satisfies Record<string, "scaffolded" | "hand-wired" | "no-tail">;
 
+// Comments may quote the header, the import or a subscription while explaining them; code is what counts.
+// shortcut: one pass that knows strings, templates and both comment forms, but not regex literals or nested
+// templates; upgrade if a World ever trips it (the self-check in the test below fails first).
+const stripComments = (source: string): string => {
+  let code = "";
+  let at = 0;
+  while (at < source.length) {
+    const char = source.charAt(at);
+    const pair = source.slice(at, at + 2);
+    if (pair === "//") {
+      const end = source.indexOf("\n", at);
+      at = end === -1 ? source.length : end;
+    } else if (pair === "/*") {
+      const end = source.indexOf("*/", at + 2);
+      at = end === -1 ? source.length : end + 2;
+      code += " ";
+    } else if (char === '"' || char === "'" || char === "`") {
+      let end = at + 1;
+      while (end < source.length && source.charAt(end) !== char) {
+        end += source.charAt(end) === "\\" ? 2 : 1;
+      }
+      code += source.slice(at, end + 1);
+      at = end + 1;
+    } else {
+      code += char;
+      at += 1;
+    }
+  }
+  return code;
+};
+
 describe("World classification", () => {
   it("classifies every World and pins the hand-wired and scaffolded ones", () => {
     const offenders: Array<string> = [];
@@ -53,6 +85,11 @@ describe("World classification", () => {
       .filter((name) => name.endsWith("World.ts"))
       .map((name) => name.slice(0, -".ts".length));
     const classes: Record<string, string> = WORLDS;
+
+    const sample = stripComments('a /* x */ b // y\nc "//z" d `/*w*/`');
+    if (/[xy]/.test(sample) || !sample.includes('"//z"') || !sample.includes("`/*w*/`")) {
+      offenders.push("stripComments: comments survive or string contents were stripped");
+    }
 
     for (const name of onDisk) if (!(name in classes)) offenders.push(`${name}: unclassified`);
     for (const name of Object.keys(classes)) {
@@ -63,18 +100,24 @@ describe("World classification", () => {
       const kind = classes[name];
       if (kind === undefined) continue;
       const source = readFileSync(`${stepDefinitions}${name}.ts`, "utf8");
-      // Comment lines may quote the header or the subscription while explaining them.
-      const code = source.replace(/^\s*\/\/.*$/gm, "");
+      const code = stripComments(source);
       if (
         kind === "hand-wired" &&
         !source.split("\n").slice(0, 6).join("\n").includes("Hand-wired on purpose")
       ) {
         offenders.push(`${name}: hand-wired but its first six lines lack "Hand-wired on purpose"`);
       }
-      if (kind === "scaffolded" && /\.stream\b/.test(code)) {
-        offenders.push(`${name}: scaffolded but still subscribes inline (\`.stream\`)`);
+      if (kind === "scaffolded" && /\.(stream|subscribe|on|onBatch)\b/.test(code)) {
+        offenders.push(
+          `${name}: scaffolded but still subscribes inline (\`.stream\`, \`.subscribe\`, \`.on\` or \`.onBatch\`)`,
+        );
       }
-      const importsScaffold = code.includes("./shared/EventCapture.ts");
+      if (kind === "scaffolded" && !/\bcaptureEvents\(/.test(code)) {
+        offenders.push(`${name}: scaffolded but never calls captureEvents(`);
+      }
+      const importsScaffold = /\bimport\b[^;]*?\bfrom\s*["']\.\/shared\/EventCapture\.ts["']/.test(
+        code,
+      );
       if (importsScaffold !== (kind === "scaffolded")) {
         offenders.push(
           `${name}: ${kind} but ${importsScaffold ? "imports" : "does not import"} ./shared/EventCapture.ts`,

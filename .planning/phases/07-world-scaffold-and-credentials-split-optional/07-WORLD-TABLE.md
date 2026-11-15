@@ -61,5 +61,5 @@ Composition is how the World reaches `TestAuth` (line numbers measured at this H
 
 1. the set of top-level `*World.ts` files in `features/step-definitions/` equals the key set of the inline map (unclassified, or classified but missing);
 2. every hand-wired World's first six lines contain `Hand-wired on purpose`;
-3. no scaffolded World, comments stripped, subscribes inline (the `.stream` property read of the event bus);
-4. a World imports `./shared/EventCapture.ts` if and only if it is classified scaffolded.
+3. no scaffolded World, line and block comments stripped, subscribes inline (a `.stream`, `.subscribe`, `.on` or `.onBatch` property read), and every scaffolded World calls `captureEvents(`;
+4. a World has an import statement from `./shared/EventCapture.ts` if and only if it is classified scaffolded (a path in a comment does not count).
