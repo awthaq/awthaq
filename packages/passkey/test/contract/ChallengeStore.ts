@@ -96,8 +96,9 @@ export const challengeStore = RecordsContract.suite(ChallengeStore.ChallengeStor
             assert.isFalse(yield* store.consume("registration:user-3", "not-the-right-value"));
             const scope = "registration:tamper";
             const issued = Redacted.value(yield* store.issue(scope));
-            // Always differs from `issued` (a fixed suffix collides when the random value already ends in it).
-            const tampered = `${issued.slice(0, -1)}${issued.endsWith("x") ? "y" : "x"}`;
+            // Always differs in decoded bytes: the first character carries six real bits. The last one of 32 bytes
+            // carries only two, so a change there decodes to the same bytes about 6% of the time (a flaky "true").
+            const tampered = `${issued.startsWith("A") ? "B" : "A"}${issued.slice(1)}`;
             assert.isFalse(yield* store.consume(scope, tampered));
           }),
         },
