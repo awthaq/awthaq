@@ -267,3 +267,109 @@ run locally on the CI image (Debian postgres:16), CI confirmation open (no git r
 The full Postgres bdd and unit legs belong to plan 07-07.
 
 **Integrity (empty diffs since `ee8b80a1`).** The 28 Worlds other than Admin, Password and Domain: `git diff --name-only ... | grep -E 'World\.ts$' | grep -vE '/(AdminWorld|PasswordWorld|DomainWorld)\.ts$' | grep -c .` prints 0. The five hand-wired Worlds (Authentication, ContractStratum, Csrf, QadiBridge, Tenancy) and `OrganizationWorld`: 0 lines. `packages/test`: 0 lines.
+
+## Phase close
+
+HEAD `6e747cd8` at the start of the structural close (the 07-06 completion commit; no `packages`, `features`, `spec`, `docs`, `examples` or `.changeset` path is modified in the working tree: `git status --porcelain -- packages features spec docs examples .changeset | grep -c .` prints 0), 2026-11-15. Phase base `ee8b80a1`. `npx tsc -b tsconfig.json` ran first: exit 0, no output.
+
+### Census
+
+Every command run from the worktree root; "planning" is the value at `0b8c11f0`.
+
+| Check | Command | Planning | Now | Expected | Verdict |
+|-------|---------|---------:|----:|---------:|---------|
+| inline stream subscriptions in the three adopters | `cat features/step-definitions/AdminWorld.ts features/step-definitions/PasswordWorld.ts features/step-definitions/DomainWorld.ts \| grep -c 'authEvents.stream'` | 3 | 0 | 0 | MET |
+| Worlds importing the scaffold | `grep -l 'shared/EventCapture' features/step-definitions/*World.ts \| grep -c .` | 0 | 3 | 3 | MET |
+| Worlds classified | `ls features/step-definitions/*World.ts \| wc -l` | 31 | 31 | 31 (guard and table each classify 31) | MET |
+| bdd test files | `find features -name '*.steps.test.ts' \| wc -l` | 39 | 40 | 40 | MET |
+| OrganizationWorld keeps its own layer | `grep -c 'Layer.effectDiscard' features/step-definitions/OrganizationWorld.ts` | 1 | 1 | 1 | MET |
+| Credentials.ts declarations | `grep -cE '^(export )?((const\|class\|function\|interface) [A-Za-z]\|type [A-Za-z_]+[ <=])' packages/server/src/Credentials.ts` | 45 | 0 | 0 | MET |
+| internal modules | `ls packages/server/src/internal \| grep -cE '^(PrincipalResolver\|CredentialResolvers\|Presented\|Resolution\|Scopes)\.ts$'` | 0 | 5 | 5 | MET |
+| memo tables in Resolution.ts | `grep -c 'new WeakMap' packages/server/src/internal/Resolution.ts` | error (no file) | 3 | 3 | MET |
+| memo tables left in Credentials.ts | `grep -c 'new WeakMap' packages/server/src/Credentials.ts` | 3 | 0 | 0 | MET |
+| non-planning paths changed since the phase base | `git diff --name-only ee8b80a1 HEAD \| grep -vc '^\.planning/'` (run as `grep -v '^\.planning/'`, 13 lines) | 0 | 13 | 13 | MET |
+
+Line counts (`wc -l`): `Credentials.ts` 678 before, 52 now (the facade); `internal/PrincipalResolver.ts` 86, `internal/CredentialResolvers.ts` 163, `internal/Presented.ts` 97, `internal/Resolution.ts` 255, `internal/Scopes.ts` 107 (708 lines across the five modules); `shared/EventCapture.ts` 44, `shared/EventCapture.types.ts` 43.
+
+### WORLD-01 closure
+
+The requirement is read as the orchestrator aligned it in ROADMAP and REQUIREMENTS: the scaffold composes with `TestAuth.layer` without re-wrapping it (D-01, D-09).
+
+- Three Worlds scaffolded, each with its adoption line (`git diff --numstat ee8b80a1 HEAD`):
+
+  ```text
+  ADOPTION-DELTA world=AdminWorld removed=22 added=3
+  ADOPTION-DELTA world=PasswordWorld removed=14 added=2
+  ADOPTION-DELTA world=DomainWorld removed=14 added=2
+  ```
+
+  Census above: 0 inline `authEvents.stream` in the three Worlds (was 3); exactly the three import `shared/EventCapture` (was 0).
+- NET, as measured: the adopters removed 50 lines and added 7; the helper `EventCapture.ts` is 44 lines, so 51 lines were added against 50 removed: a net of +1 line in the code base (50 - 7 - 44 = -1 saved). The pin `EventCapture.types.ts` (43 lines) is counted separately and is additive. Counting the pin the net is +44. No size win is claimed: the helper is kept for locality of the reproduced lost-publish race fix (`startImmediately`: one copy to read and fix instead of three), not for size.
+- The two roadmap pieces not pursued, with their measured reason from "The honest record" of `07-WORLD-TABLE.md`: `lazyApp` is one call to the shared `TestAuth.lazyApp` primitive per World, and `TestClock` is already an option of `TestAuth` (`serve({ testClock })`, `lazyApp(..., { alignStepClock })`); nothing repeats, so the deletion test fails and only the events subscriber (three Worlds) repeats.
+- The table and the guard: `07-WORLD-TABLE.md` (31 rows: 3 scaffolded, 5 hand-wired, 23 no-tail) and `features/features/_guard/world-table.steps.test.ts` (one test, four assertions, inline map of the same 31, shown red for an unclassified World and for a misclassified one in plan 07-06). The guard file is the 40th bdd test file.
+- OrganizationWorld stays inline (`Layer.effectDiscard` 1, a `subscribe` registration with different semantics than the scaffold's `stream`, D-11).
+
+### WORLD-02 closure
+
+- The five hand-wired Worlds (Authentication, ContractStratum, Csrf, QadiBridge, Tenancy) plus `OrganizationWorld`: `git diff --name-only ee8b80a1 HEAD -- <the six files> | grep -c .` prints 0. Every World other than the three adopters: `git diff --name-only ee8b80a1 HEAD | grep -E 'World\.ts$' | grep -vE '/(AdminWorld|PasswordWorld|DomainWorld)\.ts$' | grep -c .` prints 0 (so the 23 no-tail Worlds are untouched as well).
+- LeakGuard accounting unchanged: `features/step-definitions/shared/LeakGuard.ts` is in the empty-diff command (`git diff --name-only ee8b80a1 HEAD -- packages/test ... features/step-definitions/shared/LeakGuard.ts ... | grep -c .` prints 0). Sorted `[leak-guard]` lines: compared in the gate sections below (the capture has 39 lines, the guard adds one).
+- The compile-error gate is kept, with its evidence: the existing gate files compile and the bdd suite is green (gate sections below); the plan 07-04 type pin `EventCapture.types.ts` (claims 1 to 3 and the recorded mutations: a widened requirement turns claim 1 and, for an unprovided service, claim 2 red; a foreign tap fails to launch); the plan 07-05 mutation (a) on the scaffolded DomainWorld: `NoBreachHttpClient` omitted from the services merge is red at `TestAuth.serve(appLayer)` (TS2379 and TS377034). The surviving gate is a composed plugin's unmet requirement at `TestAuth.serve`: mutation (b), dropping `Password.Password` from the `Auth.make` tuple, stays green (see flag 2).
+- No second composer: `git diff --name-only ee8b80a1 HEAD -- packages/test` prints nothing, and the helper imports only `AuthEvents` from `@awthaq/core` and `effect` modules (`grep -nE '^import' EventCapture.ts`: lines 17 to 21); `TestAuth`, `Auth.make` and host names appear only in its header comment (line 11, "What it does not touch").
+
+### CRED-01 closure
+
+- Equal surface snapshots: `diff 07-CRED-SURFACE-BEFORE.txt 07-CRED-SURFACE-AFTER.txt | wc -l` prints 0; `shasum -a 256` of both is `efbf9b94e28774245a5630cdc2f9b1f3a17ccfe5b810211176af9ac31a7a9a1d`. Each snapshot was committed once (`07-CRED-SURFACE-BEFORE.txt` in `a3f92d65`, `07-CRED-SURFACE-AFTER.txt` in `29b590b6`; `07-LEAK-GUARD-BEFORE.txt` in `a3f92d65`).
+- The runtime-name pin has exactly one commit: `git log --format=%h ee8b80a1..HEAD -- packages/server/test/CredentialsSurface.test.ts` prints `924538e4`.
+- VM output: the verbatim check over the facade plus the five internal modules printed `OK` in plan 07-03 and its stray-line mutation printed `FAIL bad=0 new=1` in plan 07-02 (see "CRED-01 closure (plan 07-03)").
+- Single-flight table placement: `Credentials.ts` has 0 `new WeakMap`, `internal/Resolution.ts` has 3 (`sessionMemo`, `claimMemo`, `outages`, with `once`, are file-private there); the facade is 52 lines (30 named re-exports, 0 declarations, was 45), and no `internal/` file imports `../Credentials`.
+- Importers unedited: `git diff --name-only ee8b80a1 HEAD -- packages/api-key packages/jwt packages/qadi packages/web packages/next ... | grep -c .` prints 0 (the empty-diff command above, together with `packages/test`).
+- No ADR, spec, docs or changeset change: `git diff --name-only ee8b80a1 HEAD -- spec docs .changeset` is inside that same empty-diff command (prints 0); ADR-EA-042 pins a module named `Credentials` in `@awthaq/server`, not a file layout, and no changeset is needed because `@awthaq/server` exports only `.` with an empty surface diff (decision recorded in plan 07-03).
+
+### Path allowlist
+
+The regex of "Path allowlist" above: `git diff --name-only ee8b80a1 HEAD | grep -vE '<regex>' | grep -c .` prints 0 (residue 0). The 13 non-planning paths:
+
+```text
+features/features/_guard/world-table.steps.test.ts
+features/step-definitions/AdminWorld.ts
+features/step-definitions/DomainWorld.ts
+features/step-definitions/PasswordWorld.ts
+features/step-definitions/shared/EventCapture.ts
+features/step-definitions/shared/EventCapture.types.ts
+packages/server/src/Credentials.ts
+packages/server/src/internal/CredentialResolvers.ts
+packages/server/src/internal/Presented.ts
+packages/server/src/internal/PrincipalResolver.ts
+packages/server/src/internal/Resolution.ts
+packages/server/src/internal/Scopes.ts
+packages/server/test/CredentialsSurface.test.ts
+```
+
+### Integrity
+
+- `git diff --name-only ee8b80a1 HEAD -- packages/test packages/api-key packages/jwt packages/qadi packages/web packages/next features/step-definitions/shared/LeakGuard.ts spec docs examples .changeset knip.json features/package.json pnpm-lock.yaml | grep -c .`: 0.
+- `git diff --stat ee8b80a1 HEAD -- 'packages/*/package.json' 'examples/*/package.json' | grep -c .`: 0.
+- Hand-wired Worlds and OrganizationWorld: 0; every World other than the three adopters: 0.
+- `CredentialsSurface.test.ts` commits since the phase base: 1 (`924538e4`); surface snapshot `diff` lines: 0.
+
+### Margins
+
+Stated as measured, not re-judged.
+
+- Helper NET (plan 07-05): the three adopters removed 50 and added 7, the helper is 44 lines, so +1 line in the code base without the 43-line pin (51 added against 50 removed) and +44 with it. Kept for locality, not for size.
+- Credentials split: `Credentials.ts` 678 lines became a 52-line facade plus five internal modules of 86 + 163 + 97 + 255 + 107 = 708 lines (760 lines in total, +82 over the original, the cost of five module headers and import blocks; the code lines moved verbatim).
+- Added files: `EventCapture.ts`, `EventCapture.types.ts`, the guard test `world-table.steps.test.ts`, the five internal modules (`format:check` file count +8 is expected from these), plus the pin `CredentialsSurface.test.ts` (already in the baseline counts).
+- Fallbacks: none. `captureEvents` compiled and linted as overloads on the first probe (plan 07-04), no two-export fallback and no cast.
+- Cross-file exports beyond `resolveClaimed` (recorded in plan 07-02, `export const resolveClaimed` in `internal/CredentialResolvers.ts`): none in plan 07-03.
+
+### Flags for the milestone report
+
+Recorded as findings; ROADMAP.md and REQUIREMENTS.md are not edited here.
+
+1. WORLD-01 and ROADMAP criterion 1 say the scaffold "wraps `TestAuth.layer`" and supplies `lazyApp`, `TestClock` and capture layers; per D-09 the shipped scaffold composes with `TestAuth.layer` without re-wrapping it and supplies the capture layer only (`lazyApp` and `TestClock` are single calls or options of `TestAuth`, nothing repeated to delete).
+2. ROADMAP criterion 2's "omitting a plugin is still a compile error": dropping `Password.Password` from the `Auth.make` tuple of the scaffolded DomainWorld compiled green (measured in plan 07-05); the surviving compile-time gate is a composed plugin's unmet requirement at `TestAuth.serve` (omitting `NoBreachHttpClient` is red).
+3. The classification table has three classes (scaffolded 3, hand-wired 5, no-tail 23), not two.
+4. The Postgres legs ran locally on the CI image (Debian `postgres:16`) and CI confirmation is open (no git remote).
+5. The `captureEvents` shape actually built is overloads (`captureEvents(into)` and `captureEvents(into, keep)` with a type predicate) over one generic implementation; no two-export fallback.
+6. No changeset, spec, docs or ADR change in the phase (the path allowlist has no such path).
+7. From plan 07-01: two unlisted timing flakes fired on the Postgres full unit runs and are admitted as known intermittents: organization `TenantMiddleware` "a request under tenant A that runs an unfiltered query sees only A's organization-keyed rows" and `packages/test` `StoreContract.sql` "RateLimiterStore (SQL) > the sweeper deletes expired rows".
