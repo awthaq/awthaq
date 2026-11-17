@@ -40,7 +40,7 @@ catalog:
   typescript: 7.0.2
   "@effect/tsgo": 0.67.4
   "@types/node": ^22.20.4
-  hash-wasm: ^4.12.0
+  hash-wasm: ^4.13.0
   # Same versions qadi's own root catalog (../qadi/pnpm-workspace.yaml) pins
   # for its @qadi/react package — kept identical so both repos exercise one
   # real, matching React version rather than two independently-drifting ones.
