@@ -22,13 +22,13 @@ packages:
 # its http, http-api, sql and crypto modules `@stability unstable`, so a later 4.x minor can
 # change them; when it does, this range is where the supported window is narrowed or moved.
 catalog:
-  effect: ^4.1.2
-  "@effect/platform-node": ^4.1.2
-  "@effect/sql-sqlite-node": ^4.1.2
-  "@effect/sql-pg": ^4.1.2
-  "@effect/sql-libsql": ^4.1.2
-  "@effect/vitest": ^4.1.2
-  "@effect/atom-react": ^4.1.2
+  effect: ^4.1.4
+  "@effect/platform-node": ^4.1.4
+  "@effect/sql-sqlite-node": ^4.1.4
+  "@effect/sql-pg": ^4.1.4
+  "@effect/sql-libsql": ^4.1.4
+  "@effect/vitest": ^4.1.4
+  "@effect/atom-react": ^4.1.4
   "@qadi/core": ^0.12.0
   "@qadi/http": ^0.12.0
   "@qadi/react": ^0.12.0
